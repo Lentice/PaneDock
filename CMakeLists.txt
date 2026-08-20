@@ -1,0 +1,60 @@
+cmake_minimum_required(VERSION 3.25)
+
+project(PaneDock LANGUAGES CXX)
+
+include(CTest)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# MSVC rather than LLVM-MinGW: WRL and the Shell COM headers are MSVC-oriented,
+# and the whole reason for choosing C++ (docs/adr/0001) is to sit directly on the
+# Windows SDK without a translation layer. See docs/development.md.
+if(NOT MSVC)
+    message(WARNING
+        "PaneDock targets MSVC. WRL and Shell COM headers may not be available "
+        "on this toolchain. See docs/development.md for the rationale.")
+endif()
+
+# Warning flags are applied per target rather than globally, so that a target
+# added later cannot silently inherit a weaker set.
+function(panedock_set_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
+
+# ---------------------------------------------------------------------------
+# core — the only automated test seam in this project (docs/testing.md).
+#
+# This target must never link a Windows library and its sources must never
+# include windows.h. AGENTS.md states the rule; the absence of any Windows
+# dependency here is what enforces it at link time.
+# ---------------------------------------------------------------------------
+add_library(panedock_core STATIC
+    # PD-004 adds the model, PD-005 the layout maths, PD-006 the session document.
+    src/core/placeholder.cpp
+)
+target_include_directories(panedock_core PUBLIC src)
+panedock_set_warnings(panedock_core)
+
+# ---------------------------------------------------------------------------
+# Shell-facing modules. These do link Windows libraries; core does not.
+# PD-001 creates explorer_host and app_shell.
+# ---------------------------------------------------------------------------
+# add_library(panedock_shell_core STATIC src/shell_core/...)
+# add_library(panedock_explorer_host STATIC src/explorer_host/...)
+# add_library(panedock_file_operations STATIC src/file_operations/...)
+# add_library(panedock_sidebar STATIC src/sidebar/...)
+
+# add_executable(PaneDock WIN32 src/app_shell/main.cpp)
+# target_link_libraries(PaneDock PRIVATE
+#     panedock_core panedock_explorer_host panedock_shell_core
+#     panedock_file_operations panedock_sidebar
+#     shell32 ole32 oleaut32 comctl32 uuid)
+# panedock_set_warnings(PaneDock)
+
+add_subdirectory(tests)

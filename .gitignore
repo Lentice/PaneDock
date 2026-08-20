@@ -1,0 +1,9 @@
+build/
+build-pd-*/
+.verify/
+.vs/
+out/
+dist/
+*.user
+*.suo
+*.vcxproj.user
