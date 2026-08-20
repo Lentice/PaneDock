@@ -110,3 +110,15 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-20 執行中斷:發現阻斷性缺陷,退回 PD-014
+
+在真實桌面上開始執行本協定,step 1、2 已完成並記錄於下;執行 step 3(跨 pane 拖放)時發現**拖放完全不動作**(pane 對 pane、與外部應用程式雙向皆然),進一步人工測試發現 **Backspace、Alt+Left、Ctrl+C／Ctrl+V 全部沒有反應**。追查後定位為 `src/app_shell/main.cpp` 的兩個宿主層接線缺陷(COM 用 `CoInitializeEx` 而非 `OleInitialize` 導致 OLE 拖放整個失效;訊息迴圈從未呼叫作用中 pane 的 `IShellView::TranslateAcceleratorW` 導致鍵盤 accelerator 沒有轉發)。這牴觸 `docs/design-spec.md` 113 行「pane 內部的一切互動由 Shell view 處理」的既定分工,是宿主層 bug,不是分工未做,超出本 ticket「只做驗證、不長出實作」的範圍,已依 PD-011 規則退回開立獨立 ticket **PD-014**。
+
+已完成並記錄的 step:
+- **Step 1(四個獨立 pane)**:四宮格四個 pane 各自導覽到不同本機資料夾(含一個含真實 jpg 檔案的資料夾),清單內容、原生資料夾圖示、原生縮圖(切換為「大圖示」檢視後確認)均正常渲染。**通過**。
+- **Step 2(原生右鍵選單)**:對空白區與對檔案(`img0.jpg`)分別右鍵,兩者皆為標準 Windows 選單,且可見多個第三方 shell extension 貢獻的項目:Git 系列(Open Git GUI here、Open Git Bash here、Git Clone、Git Create repository、TortoiseGit 子選單)、編輯器系列(Open with Visual Studio、以 Code 開啟、以 Notepad++ 編輯、以 klogg 開啟)、IntelliJ IDEA 專案開啟、FileLocator Pro、Microsoft Defender 掃描、IObit Unlocker。實測機器安裝的第三方 shell extension 至少涵蓋:Git/TortoiseGit、VS Code、Visual Studio、IntelliJ IDEA、Notepad++、klogg、FileLocator Pro、7-Zip、IObit Unlocker。**通過**。
+
+未完成、待 PD-014 修好後由本 ticket 接續執行:step 3(跨 pane 拖放)、step 4(對外雙向拖放),以及需要 Backspace／Alt+Left／Ctrl+C/V 才能驗證的其餘項目。step 5–9(版型輪替、關閉重開、斷線路徑、選取還原可行性、閒置資源)尚未開始。
+
+追蹤狀態:`docs/tickets.md` 已將本 ticket 標為 `blocked`,依賴改為 PD-014;PD-014 完成後把本 ticket 依賴改回可執行狀態,並只重跑受影響的 step,已完成的 step 1、2 不需重做。
