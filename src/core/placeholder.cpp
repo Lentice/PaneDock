@@ -7,7 +7,7 @@
 namespace panedock::core {
 
 // The one property of this module that is worth asserting today: it compiles
-// without windows.h, HWND or any COM type. See AGENTS.md and docs/testing.md.
+// without platform UI or Shell types. See AGENTS.md and docs/testing.md.
 bool core_is_windows_free() { return true; }
 
 }  // namespace panedock::core

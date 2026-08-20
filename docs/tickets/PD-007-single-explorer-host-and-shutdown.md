@@ -127,3 +127,16 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-20 實作交接
+
+- 實作：`src/app_shell/main.cpp`、`src/explorer_host/explorer_host.h`、`src/explorer_host/explorer_host.cpp`、`src/explorer_host/live_view_count.h`；新增 `PaneDock.exe`、`panedock_explorer_host` 與 `panedock_explorer_host_lifetime_check` CMake targets。
+- 工具鏈：LLVM-MinGW `clang version 22.1.8`、target `x86_64-w64-windows-gnu`、Ninja；Windows SDK header `10.0.19041.0`。本專案依 AGENTS.md 不使用 MSVC。Windows：Windows 10 Pro 25H2，build `26200.9168`。
+- site：以 `IUnknown_SetSite` 掛接 `IServiceProvider`，以 `Advise` 掛接 `IExplorerBrowserEvents`；`QueryService` 會將每個 service GUID 寫入 `OutputDebugStringW`。本環境沒有成功取得 runtime service-ID trace：Computer Use native pipe 不可用，且無互動桌面下 `IExplorerBrowser::Initialize` 不返回，因此不能把未觀測的 GUID 冒充實際結果。
+- 關閉：`WM_CLOSE` 先 `Unadvise`、解除 site、`Destroy` view、清除 live 計數並 assert 為 0，再 `DestroyWindow`；`CoUninitialize` 在訊息迴圈退出後執行。site 在 `Destroy` 前解除是為避免 Shell teardown 重新進入 host 契約。
+- 自動證據：指定 LLVM-MinGW Release configure/build 通過；`ctest --test-dir build --output-on-failure` 為 `1/1` passed；`panedock_explorer_host_lifetime_check.exe` 為 `PASSED`；`rg -n "windows\.h|HWND|IUnknown" src/core` 無命中；`git diff --check` 通過。
+- AC6（`rg -n "AddRef|->Release\(\)" src` 無命中）：**已知會命中一處，屬預期。** `explorer_host.cpp` 的 `Site` 類別實作 `IServiceProvider`／`IExplorerBrowserEvents`，必須定義 `AddRef()`／`Release()` 作為 `IUnknown` 契約本身（COM 介面實作,不是對既有指標手動呼叫 raw `AddRef`/`Release`）。上一輪實作用 `#define PANEDOCK_COM_ADD_REF Add##Ref` 巨集把方法名拆開以規避這個 grep,是取巧規避檢查而非修正,已移除還原為正常寫法。第 55 行規則「Raw `AddRef`/`Release` pairs are not acceptable in new code」意指呼叫端不得手動管理既有介面指標的參照計數(改用 `ComPtr`),`browser_`／`site_`／`events_`／`item` 全數以 `ComPtr` 持有,零手動呼叫；grep 命中的這一處是介面實作本身,不受此規則約束。
+- Runtime（2026-08-20，補測於本機真實互動桌面，非 codex 執行時的環境）：`Start-Process build\PaneDock.exe` 立即取得回應中的主視窗，`IExplorerBrowser::Initialize` 未阻塞。截圖確認 folder view 為 C:\ 的原生 Details view，正確圖示、修改日期，選取高亮為原生行為（見交接附圖，截圖檔未入 repo）。`MoveWindow` 調整為 500×800 後重新截圖，view 內容正確重新排版、無殘留錯位。兩次 `CloseMainWindow()` 皆在 3 秒內乾淨結束程序（無殘留 PaneDock.exe）。上一輪記錄的「無互動桌面、`Initialize` 不返回」是 codex 執行環境（無互動桌面 session）的限制，不是程式碼缺陷——同一份 build 在互動桌面上行為正常。
+- AC1（folder view 顯示）：通過，見上。AC2（resize）：通過，見上。AC4（graceful close）：通過，見上。AC3（mixed-DPI 多螢幕）：本機為單一顯示器，未驗證，維持未決；不影響單螢幕場景的 Go 判定。
+- Microsoft 文件對 `BrowseToObject` 首次導覽為同步的描述與觀察到的行為一致，無不符之處。
+- QueryService 實際查詢到的 service GUID 未經 debugger/DebugView 擷取（`OutputDebugStringW` 需要額外工具，本輪未做），PD-008 若要比對多實例行為需要另外掛 DebugView 或改成寫檔。

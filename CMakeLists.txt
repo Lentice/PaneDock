@@ -42,18 +42,40 @@ panedock_set_warnings(panedock_core)
 
 # ---------------------------------------------------------------------------
 # Shell-facing modules. These do link Windows libraries; core does not.
-# PD-001 creates explorer_host and app_shell.
+# PD-007 creates the first single ExplorerBrowser host and app shell.
 # ---------------------------------------------------------------------------
 # add_library(panedock_shell_core STATIC src/shell_core/...)
-# add_library(panedock_explorer_host STATIC src/explorer_host/...)
+add_library(panedock_explorer_host STATIC
+    src/explorer_host/explorer_host.cpp
+)
+target_include_directories(panedock_explorer_host PUBLIC src)
+target_compile_definitions(panedock_explorer_host PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
+)
+target_link_libraries(panedock_explorer_host PRIVATE
+    ole32 shell32 shlwapi user32 uuid
+)
+panedock_set_warnings(panedock_explorer_host)
 # add_library(panedock_file_operations STATIC src/file_operations/...)
 # add_library(panedock_sidebar STATIC src/sidebar/...)
 
-# add_executable(PaneDock WIN32 src/app_shell/main.cpp)
-# target_link_libraries(PaneDock PRIVATE
-#     panedock_core panedock_explorer_host panedock_shell_core
-#     panedock_file_operations panedock_sidebar
-#     shell32 ole32 oleaut32 comctl32 uuid)
-# panedock_set_warnings(PaneDock)
+add_executable(PaneDock WIN32 src/app_shell/main.cpp)
+target_compile_definitions(PaneDock PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
+)
+target_link_options(PaneDock PRIVATE -municode)
+target_link_libraries(PaneDock PRIVATE
+    panedock_core panedock_explorer_host
+    shell32 ole32 shlwapi user32 gdi32 uuid
+)
+panedock_set_warnings(PaneDock)
+
+add_executable(panedock_explorer_host_lifetime_check
+    tests/unit/explorer_host_lifetime_check.cpp
+)
+target_include_directories(panedock_explorer_host_lifetime_check PRIVATE
+    src tests
+)
+panedock_set_warnings(panedock_explorer_host_lifetime_check)
 
 add_subdirectory(tests)
