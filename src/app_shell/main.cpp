@@ -7,17 +7,24 @@
 #define _WIN32_WINNT 0x0A00
 #include <windows.h>
 
+#include <array>
 #include <cassert>
+#include <cstddef>
+#include <string_view>
 
 #include "explorer_host/explorer_host.h"
+#include "app_shell/quadrant_layout.h"
 
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PaneDockMainWindow";
 
 struct AppState {
-    panedock::explorer_host::ExplorerHost explorer;
+    std::array<panedock::explorer_host::ExplorerHost, 4> explorers;
 };
+
+constexpr std::array<std::wstring_view, 4> kPaneLocations{
+    L"C:\\", L"C:\\Windows", L"C:\\Users", L"C:\\Program Files"};
 
 RECT client_rect(HWND window) noexcept {
     RECT rect{};
@@ -25,8 +32,30 @@ RECT client_rect(HWND window) noexcept {
     return rect;
 }
 
-void resize_explorer(HWND window, AppState& state) noexcept {
-    state.explorer.set_rect(client_rect(window));
+void destroy_explorers(AppState& state) noexcept {
+    for (auto& explorer : state.explorers) {
+        explorer.destroy();
+    }
+}
+
+HRESULT initialize_explorers(HWND window, AppState& state, const RECT& rect) {
+    for (std::size_t index = 0; index < state.explorers.size(); ++index) {
+        const HRESULT hr = state.explorers[index].initialize(
+            window, rect, kPaneLocations[index]);
+        if (FAILED(hr)) {
+            destroy_explorers(state);
+            return hr;
+        }
+    }
+    return S_OK;
+}
+
+void resize_explorers(HWND window, AppState& state) noexcept {
+    const auto rects =
+        panedock::app_shell::quadrant_rects(client_rect(window));
+    for (std::size_t index = 0; index < state.explorers.size(); ++index) {
+        state.explorers[index].set_rect(rects[index]);
+    }
 }
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
@@ -44,18 +73,19 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
     switch (message) {
     case WM_CREATE: {
         const RECT rect = client_rect(window);
-        const HRESULT hr = state->explorer.initialize(window, rect, L"C:\\");
+        const HRESULT hr = initialize_explorers(window, *state, rect);
         if (FAILED(hr)) {
             MessageBoxW(window, L"PaneDock could not open the Shell view.",
                         L"PaneDock", MB_ICONERROR | MB_OK);
             return -1;
         }
+        resize_explorers(window, *state);
         return 0;
     }
 
     case WM_SIZE:
         if (state != nullptr) {
-            resize_explorer(window, *state);
+            resize_explorers(window, *state);
         }
         return 0;
 
@@ -66,16 +96,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                      suggested->bottom - suggested->top,
                      SWP_NOZORDER | SWP_NOACTIVATE);
         if (state != nullptr) {
-            resize_explorer(window, *state);
+            resize_explorers(window, *state);
         }
         return 0;
     }
 
     case WM_CLOSE:
         if (state != nullptr) {
-            // The one pane is destroyed before its parent window. Its child
+            // All panes are destroyed before their parent window. Their child
             // Shell view windows are torn down by IExplorerBrowser::Destroy.
-            state->explorer.destroy();
+            destroy_explorers(*state);
             assert(panedock::explorer_host::live_view_count() == 0);
         }
         DestroyWindow(window);
@@ -126,7 +156,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         CW_USEDEFAULT, CW_USEDEFAULT, 1000, 700, nullptr, nullptr, instance,
         &state);
     if (window == nullptr) {
-        state.explorer.destroy();
+        destroy_explorers(state);
         assert(panedock::explorer_host::live_view_count() == 0);
         CoUninitialize();
         return exit_code;
@@ -149,7 +179,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
 
     // WM_CLOSE already performed the ordered view teardown. This also covers
     // any other path that ends the message loop before WM_CLOSE is delivered.
-    state.explorer.destroy();
+    destroy_explorers(state);
     assert(panedock::explorer_host::live_view_count() == 0);
     CoUninitialize();
     return exit_code;

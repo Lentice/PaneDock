@@ -78,4 +78,12 @@ target_include_directories(panedock_explorer_host_lifetime_check PRIVATE
 )
 panedock_set_warnings(panedock_explorer_host_lifetime_check)
 
+add_executable(panedock_quadrant_layout_check
+    tests/unit/quadrant_layout_check.cpp
+)
+target_include_directories(panedock_quadrant_layout_check PRIVATE
+    src tests
+)
+panedock_set_warnings(panedock_quadrant_layout_check)
+
 add_subdirectory(tests)
