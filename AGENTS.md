@@ -57,8 +57,12 @@ Greenfield. No source code exists yet. `docs/roadmap.md` is the authoritative ph
 
 ## Validation
 
+The project uses LLVM-MinGW Clang/LLD targeting `x86_64-w64-windows-gnu`. **MSVC is not used** — do not look for `cl.exe`, and never report a missing MSVC as a blocker. PD-012 records the compatibility evidence; `docs/development.md` records the rationale.
+
+Validation needs `clang++`, `llvm-rc`, `cmake` and `ninja` on `PATH`. On the current development machine they live at `E:\Dev\LLVM-MinGW\bin` and `E:\Dev\Ninja`.
+
 ```powershell
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```

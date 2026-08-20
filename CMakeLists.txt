@@ -8,13 +8,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# MSVC rather than LLVM-MinGW: WRL and the Shell COM headers are MSVC-oriented,
-# and the whole reason for choosing C++ (docs/adr/0001) is to sit directly on the
-# Windows SDK without a translation layer. See docs/development.md.
-if(NOT MSVC)
+# LLVM-MinGW Clang is the validated Windows toolchain; see PD-012 and
+# docs/development.md for the compatibility evidence.
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     message(WARNING
-        "PaneDock targets MSVC. WRL and Shell COM headers may not be available "
-        "on this toolchain. See docs/development.md for the rationale.")
+        "PaneDock is validated with LLVM-MinGW Clang; configure with "
+        "cmake/llvm-mingw.cmake for the supported Windows toolchain. See PD-012.")
 endif()
 
 # Warning flags are applied per target rather than globally, so that a target

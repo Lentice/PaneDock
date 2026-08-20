@@ -44,9 +44,9 @@ No Chinese text in the binary. Documents and conversation are Traditional Chines
 
 ## Build configuration
 
-MSVC, C++20, `/W4 /permissive- /EHsc`, warnings treated seriously. Release for every gate measurement. Ninja generator.
+LLVM-MinGW Clang/LLD targeting `x86_64-w64-windows-gnu`, C++20, `-Wall -Wextra -Wpedantic`, warnings treated seriously. Release for every gate measurement. Ninja generator. Configure with `cmake/llvm-mingw.cmake`.
 
-MSVC rather than LLVM-MinGW: WRL and the Shell COM headers are MSVC-oriented, and the whole point of the language choice (`docs/adr/0001-*.md`) is to sit directly on the Windows SDK without a translation layer.
+The project uses LLVM-MinGW because the development machine has no usable C++20 MSVC toolset. The recorded PD-012 probe confirms that mingw-w64 provides `wrl/client.h` and the Shell COM declarations, and that `IExplorerBrowser` creation, `Initialize`, `BrowseToObject`, and `Destroy` all complete successfully. `Microsoft::WRL::ComPtr` remains the only interface-pointer ownership type.
 
 ## Change workflow
 

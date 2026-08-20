@@ -39,7 +39,8 @@
 | ID | Ticket | Phase | Status | Depends on | 文件 |
 |---|---|---|---|---|---|
 | PD-001 | 四分割 `IExplorerBrowser` 可行性原型 | 0 | `superseded` | — | [PD-001](tickets/PD-001-four-pane-feasibility-prototype.md) |
-| PD-007 | 單一 `IExplorerBrowser` 宿主與關閉序列 | 0 | `ready` | — | [PD-007](tickets/PD-007-single-explorer-host-and-shutdown.md) |
+| PD-012 | 改用 LLVM-MinGW 工具鏈 | 0 | `done` | — | [PD-012](tickets/PD-012-llvm-mingw-toolchain.md) |
+| PD-007 | 單一 `IExplorerBrowser` 宿主與關閉序列 | 0 | `ready` | PD-012 | [PD-007](tickets/PD-007-single-explorer-host-and-shutdown.md) |
 | PD-008 | 四宮格版型與矩形計算 | 0 | `planned` | PD-007 | [PD-008](tickets/PD-008-four-pane-quadrant-layout.md) |
 | PD-009 | active pane 指示與保活式版型切換 | 0 | `planned` | PD-008 | [PD-009](tickets/PD-009-active-pane-and-layout-toggle.md) |
 | PD-010 | 原型的位置持久化與還原 | 0 | `planned` | PD-008 | [PD-010](tickets/PD-010-prototype-location-persistence.md) |
@@ -54,8 +55,9 @@
 
 ```text
 Phase 0 — Go/No-Go gate
-  PD-007 (single host + shutdown sequence)
-    └─ PD-008 (four-pane quadrant layout)
+  PD-012 (LLVM-MinGW toolchain)
+    └─ PD-007 (single host + shutdown sequence)
+         └─ PD-008 (four-pane quadrant layout)
          ├─ PD-009 (active pane + keep-alive layout toggle)
          └─ PD-010 (prototype location persistence)
               PD-009 + PD-010 ─┬─ PD-011 (acceptance protocol + Go/No-Go)
@@ -126,7 +128,7 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 
 **刻意不預先開滿 ticket**。只開到 PD-006(Phase 0 全部 ＋ Phase 1 的三個根 ticket)。PD-001 的 Go/No-Go 結論會決定 Phase 1 以後的 ticket 該怎麼寫;先寫好一批再作廢,就是 NimbleRun 明令禁止的「預留編號」的變體。
 
-**刻意不沿用 LLVM-MinGW toolchain**。NimbleRun 用它,但 WRL 與 Shell COM header 是 MSVC 取向,而本專案選 C++ 的整個理由就是直接坐在 Windows SDK 上、不隔翻譯層。改用 MSVC 並記錄於 `docs/development.md`。
+**採用 LLVM-MinGW toolchain**。開發機沒有可用的 C++20 MSVC toolset,而 PD-012 的實測證明 LLVM-MinGW 可直接使用 Windows SDK、WRL 與 Shell COM；後續建置統一透過 `cmake/llvm-mingw.cmake` 與 Ninja 執行。
 
 ### 2026-08-20 — PD-001 拆分為五片 tracer bullet
 
