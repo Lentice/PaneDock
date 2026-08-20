@@ -120,6 +120,28 @@ HRESULT reset_uninitialized_browser(
     return result;
 }
 
+HWND view_window(IExplorerBrowser* browser) noexcept {
+    if (browser == nullptr) {
+        return nullptr;
+    }
+
+    Microsoft::WRL::ComPtr<IShellView> view;
+    const HRESULT view_result =
+        browser->GetCurrentView(IID_PPV_ARGS(&view));
+    if (FAILED(view_result)) {
+        log_hresult(L"IExplorerBrowser::GetCurrentView", view_result);
+        return nullptr;
+    }
+
+    HWND window = nullptr;
+    const HRESULT window_result = view->GetWindow(&window);
+    if (FAILED(window_result)) {
+        log_hresult(L"IShellView::GetWindow", window_result);
+        return nullptr;
+    }
+    return window;
+}
+
 }  // namespace
 
 ExplorerHost::~ExplorerHost() {
@@ -206,6 +228,48 @@ void ExplorerHost::set_rect(const RECT& rect) noexcept {
     if (initialized_ && browser_ != nullptr) {
         log_hresult(L"IExplorerBrowser::SetRect",
                     browser_->SetRect(nullptr, rect));
+    }
+}
+
+void ExplorerHost::set_visible(bool visible) noexcept {
+    if (!initialized_ || browser_ == nullptr) {
+        return;
+    }
+
+    const HWND window = view_window(browser_.Get());
+    if (window != nullptr) {
+        ShowWindow(window, visible ? SW_SHOW : SW_HIDE);
+    }
+}
+
+void ExplorerHost::set_active(bool active) noexcept {
+    if (!initialized_ || browser_ == nullptr) {
+        return;
+    }
+
+    const HWND window = view_window(browser_.Get());
+    if (window == nullptr) {
+        return;
+    }
+
+    const LONG_PTR style = GetWindowLongPtrW(window, GWL_EXSTYLE);
+    const LONG_PTR desired =
+        active ? style | WS_EX_CLIENTEDGE : style & ~WS_EX_CLIENTEDGE;
+    if (desired == style) {
+        return;
+    }
+
+    SetWindowLongPtrW(window, GWL_EXSTYLE, desired);
+    SetWindowPos(window, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                     SWP_FRAMECHANGED);
+    RedrawWindow(window, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW);
+}
+
+void ExplorerHost::focus() noexcept {
+    if (const HWND window = view_window(browser_.Get()); window != nullptr) {
+        SetFocus(window);
     }
 }
 

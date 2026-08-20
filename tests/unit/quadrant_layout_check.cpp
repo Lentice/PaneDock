@@ -43,6 +43,21 @@ void check_layout(LONG width, LONG height) {
     EXPECT(total_area == area(client));
 }
 
+void check_two_pane_layout(LONG width, LONG height) {
+    const RECT client{0, 0, width, height};
+    const auto rects = panedock::app_shell::two_pane_rects(client);
+
+    EXPECT(rects[0].left == client.left);
+    EXPECT(rects[0].top == client.top);
+    EXPECT(rects[0].right == rects[1].left);
+    EXPECT(rects[1].right == client.right);
+    EXPECT(rects[0].bottom == client.bottom);
+    EXPECT(rects[1].bottom == client.bottom);
+    EXPECT(area(rects[0]) + area(rects[1]) == area(client));
+    EXPECT(area(rects[2]) == 0);
+    EXPECT(area(rects[3]) == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -53,6 +68,7 @@ int main() {
 
     for (const auto dimensions : cases) {
         check_layout(dimensions[0], dimensions[1]);
+        check_two_pane_layout(dimensions[0], dimensions[1]);
     }
 
     return panedock::test::summary("quadrant_layout_check");

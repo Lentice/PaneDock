@@ -28,6 +28,9 @@ public:
     HRESULT initialize(HWND parent, const RECT& rect,
                        std::wstring_view location);
     void set_rect(const RECT& rect) noexcept;
+    void set_visible(bool visible) noexcept;
+    void set_active(bool active) noexcept;
+    void focus() noexcept;
     void destroy() noexcept;
 
 private:

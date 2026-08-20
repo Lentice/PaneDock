@@ -86,4 +86,12 @@ target_include_directories(panedock_quadrant_layout_check PRIVATE
 )
 panedock_set_warnings(panedock_quadrant_layout_check)
 
+add_executable(panedock_layout_state_check
+    tests/unit/layout_state_check.cpp
+)
+target_include_directories(panedock_layout_state_check PRIVATE
+    src tests
+)
+panedock_set_warnings(panedock_layout_state_check)
+
 add_subdirectory(tests)
