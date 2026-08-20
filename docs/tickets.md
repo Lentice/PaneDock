@@ -50,6 +50,7 @@
 | PD-004 | `core` 資料模型與不變式 | 1 | `planned` | PD-011 | [PD-004](tickets/PD-004-core-model-invariants.md) |
 | PD-005 | 五種版型的矩形計算 | 1 | `planned` | PD-004 | [PD-005](tickets/PD-005-layout-rect-computation.md) |
 | PD-006 | session document 序列化與遷移 | 1 | `planned` | PD-004 | [PD-006](tickets/PD-006-session-document-persistence.md) |
+| PD-013 | 設定檔可擴充性慣例(跨 ticket 通用規則) | 1 | `done` | — | [PD-013](tickets/PD-013-config-file-extensibility-convention.md) |
 
 ## Dependency lanes
 
@@ -111,6 +112,7 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | `IShellFolder` 自建清單檢視(fallback) | 僅在 PD-001 判定 No-Go 時開。 |
 | 側邊欄寬度的全域設定持久化 | 若使用者回報每次啟動都要重拖再開;目前預設值可接受。 |
 | Group 圖示與顏色 | Spec 未列為 MVP;若 Group 數量成長到難以用文字辨識再開。 |
+| 每個 pane 的導覽列(上一頁／下一頁／上一層按鈕 ＋ editable path bar) | 對應 `docs/roadmap.md` Phase 3「Per-tab address field, back, forward, parent」的具體 UI 形狀。2026-08-20 使用者提出;Phase 0 目前無 tab、無 Group、無 pane chrome 基礎設施,PD-007 決策 #1 明文排除網址欄,現在寫 self-contained 實作 ticket 會引用到不存在的東西。待 Phase 2/3 app shell 與 tab 基礎設施到位時開票,可能需拆成「導覽按鈕」與「editable path bar」兩張(單張恐超過半天到兩天的尺寸)。 |
 
 ## 計畫決策紀錄
 

@@ -130,6 +130,7 @@ git diff --check
 - 反序列化時不變式驗證的實際行為:是全部驗證後才回報,還是遇到第一個違反就停。
 - `%LOCALAPPDATA%` 路徑由呼叫端傳入的 API 形狀。
 - 新增的測試名稱與註冊位置。
+- 依 `AGENTS.md`「Every persisted config/setting file must be designed for forward extensibility」:目前封閉、固定欄位的 schema 是否需要為「反序列化時遇到不認識的欄位,寫回時原樣保留」預留設計(例如把未知 JSON key 存進一個 side-map)。若判斷不需要,寫出理由。
 
 ## 交接區
 

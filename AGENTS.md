@@ -28,6 +28,7 @@ Platform baseline is Windows 10 22H2 / Windows 11 x64, C++20, native Win32, Shel
 - Per-Monitor-V2 DPI awareness with explicit `WM_DPICHANGED` handling that resizes all panes. Mixed-DPI multi-monitor is a normal case, not an edge case.
 - All user data lives under `%LOCALAPPDATA%\PaneDock`. Write by atomic replace (temp file plus rename) with the previous version retained; never overwrite in place.
 - **Never persist a PIDL or a COM pointer.** Persisted identity is parsing name plus known-folder identity plus a fallback path. Display names are never identifiers.
+- **Every persisted config/setting file must be designed for forward extensibility.** It carries an explicit schema version from its first version. A read that encounters a field it does not recognize preserves that field rather than silently dropping it on the next write-back. A schema change is additive (new optional fields, new migration step) rather than a destructive reinterpretation of an existing field's meaning. This applies to anything meant to survive a restart; it does not apply to a file a ticket has explicitly designed as disposable (e.g. a prototype-only persistence format that a later ticket is known to replace).
 - No network, no telemetry, no third-party runtime, no services, no drivers, no admin elevation.
 - New non-trivial logic needs one focused runnable test or self-check.
 
