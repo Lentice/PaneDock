@@ -34,7 +34,7 @@ void log_service_query(REFGUID service_id) noexcept {
 
 class Site final : public IServiceProvider, public IExplorerBrowserEvents {
 public:
-    Site() noexcept = default;
+    explicit Site(ExplorerHost* host) noexcept : host_(host) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,
                                               void** object) override {
@@ -92,18 +92,25 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE OnNavigationComplete(
-        PCIDLIST_ABSOLUTE) override {
+        PCIDLIST_ABSOLUTE pidl) override {
         log_message(L"ExplorerHost: navigation complete");
+        if (host_ != nullptr) {
+            host_->navigation_complete(pidl);
+        }
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE OnNavigationFailed(PCIDLIST_ABSOLUTE) override {
         log_message(L"ExplorerHost: navigation failed");
+        if (host_ != nullptr) {
+            host_->navigation_failed();
+        }
         return S_OK;
     }
 
 private:
     std::atomic<ULONG> references_{1};
+    ExplorerHost* host_{nullptr};
 };
 
 HRESULT reset_uninitialized_browser(
@@ -154,6 +161,10 @@ HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
         return E_INVALIDARG;
     }
 
+    parent_ = parent;
+    rect_ = rect;
+    location_ = location;
+
     HRESULT hr = CoCreateInstance(CLSID_ExplorerBrowser, nullptr,
                                   CLSCTX_INPROC_SERVER,
                                   IID_PPV_ARGS(&browser_));
@@ -162,7 +173,7 @@ HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
         return hr;
     }
 
-    Site* site = new (std::nothrow) Site();
+    Site* site = new (std::nothrow) Site(this);
     if (site == nullptr) {
         browser_.Reset();
         return E_OUTOFMEMORY;
@@ -206,28 +217,38 @@ HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
     }
     advised_ = true;
 
+    // Initialize/Advise happen before the requested navigation. Keep the
+    // original parsing name until a successful navigation supplies a new one.
+    location_ = location;
     std::wstring location_text(location);
     Microsoft::WRL::ComPtr<IShellItem> item;
     hr = SHCreateItemFromParsingName(location_text.c_str(), nullptr,
                                      IID_PPV_ARGS(&item));
     if (FAILED(hr)) {
         log_hresult(L"SHCreateItemFromParsingName", hr);
-        destroy();
-        return hr;
+        navigation_failed();
+        return S_OK;
     }
 
     hr = browser_->BrowseToObject(item.Get(), SBSP_ABSOLUTE);
     if (FAILED(hr)) {
         log_hresult(L"IExplorerBrowser::BrowseToObject", hr);
-        destroy();
+        location_ = location;
+        navigation_failed();
     }
-    return hr;
+    return S_OK;
 }
 
 void ExplorerHost::set_rect(const RECT& rect) noexcept {
+    rect_ = rect;
     if (initialized_ && browser_ != nullptr) {
         log_hresult(L"IExplorerBrowser::SetRect",
                     browser_->SetRect(nullptr, rect));
+    }
+    if (error_window_ != nullptr) {
+        SetWindowPos(error_window_, HWND_TOP, rect.left, rect.top,
+                     rect.right - rect.left, rect.bottom - rect.top,
+                     SWP_NOACTIVATE);
     }
 }
 
@@ -239,6 +260,9 @@ void ExplorerHost::set_visible(bool visible) noexcept {
     const HWND window = view_window(browser_.Get());
     if (window != nullptr) {
         ShowWindow(window, visible ? SW_SHOW : SW_HIDE);
+    }
+    if (error_window_ != nullptr) {
+        ShowWindow(error_window_, visible && error_visible_ ? SW_SHOW : SW_HIDE);
     }
 }
 
@@ -268,8 +292,63 @@ void ExplorerHost::set_active(bool active) noexcept {
 }
 
 void ExplorerHost::focus() noexcept {
+    if (error_window_ != nullptr && error_visible_) {
+        SetFocus(error_window_);
+        return;
+    }
     if (const HWND window = view_window(browser_.Get()); window != nullptr) {
         SetFocus(window);
+    }
+}
+
+void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
+    if (pidl == nullptr) {
+        return;
+    }
+
+    Microsoft::WRL::ComPtr<IShellItem> item;
+    if (FAILED(SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&item)))) {
+        return;
+    }
+
+    PWSTR parsing_name = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_DESKTOPABSOLUTEPARSING,
+                                    &parsing_name))) {
+        return;
+    }
+    try {
+        location_.assign(parsing_name);
+    } catch (...) {
+        CoTaskMemFree(parsing_name);
+        return;
+    }
+    CoTaskMemFree(parsing_name);
+
+    error_visible_ = false;
+    if (error_window_ != nullptr) {
+        ShowWindow(error_window_, SW_HIDE);
+    }
+}
+
+void ExplorerHost::navigation_failed() noexcept {
+    if (parent_ == nullptr) {
+        return;
+    }
+
+    error_visible_ = true;
+    if (error_window_ == nullptr) {
+        error_window_ = CreateWindowExW(
+            WS_EX_CLIENTEDGE, L"STATIC",
+            L"This location is not available. Reconnect the drive and retry.",
+            WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE, rect_.left,
+            rect_.top, rect_.right - rect_.left, rect_.bottom - rect_.top,
+            parent_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    }
+    if (error_window_ != nullptr) {
+        ShowWindow(error_window_, SW_SHOW);
+        SetWindowPos(error_window_, HWND_TOP, rect_.left, rect_.top,
+                     rect_.right - rect_.left, rect_.bottom - rect_.top,
+                     SWP_NOACTIVATE);
     }
 }
 
@@ -292,12 +371,19 @@ void ExplorerHost::destroy() noexcept {
     // site attached until after Destroy can leave Shell teardown re-entering
     // the host contract.
     (void)IUnknown_SetSite(browser_.Get(), nullptr);
+    if (error_window_ != nullptr) {
+        DestroyWindow(error_window_);
+        error_window_ = nullptr;
+    }
+    error_visible_ = false;
     log_hresult(L"IExplorerBrowser::Destroy", browser_->Destroy());
     live_view_.reset();
 
     events_.Reset();
     site_.Reset();
     browser_.Reset();
+    parent_ = nullptr;
+    location_.clear();
     destroying_ = false;
 }
 

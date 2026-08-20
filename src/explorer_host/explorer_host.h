@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string_view>
+#include <string>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -32,6 +33,10 @@ public:
     void set_active(bool active) noexcept;
     void focus() noexcept;
     void destroy() noexcept;
+    const std::wstring& location() const noexcept { return location_; }
+
+    void navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept;
+    void navigation_failed() noexcept;
 
 private:
     Microsoft::WRL::ComPtr<IExplorerBrowser> browser_;
@@ -42,6 +47,11 @@ private:
     bool advised_{false};
     bool initialized_{false};
     bool destroying_{false};
+    HWND parent_{nullptr};
+    RECT rect_{};
+    HWND error_window_{nullptr};
+    bool error_visible_{false};
+    std::wstring location_;
 };
 
 }  // namespace panedock::explorer_host

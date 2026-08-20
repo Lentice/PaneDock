@@ -43,8 +43,8 @@
 | PD-007 | 單一 `IExplorerBrowser` 宿主與關閉序列 | 0 | `done` | PD-012 | [PD-007](tickets/PD-007-single-explorer-host-and-shutdown.md) |
 | PD-008 | 四宮格版型與矩形計算 | 0 | `done` | PD-007 | [PD-008](tickets/PD-008-four-pane-quadrant-layout.md) |
 | PD-009 | active pane 指示與保活式版型切換 | 0 | `done` | PD-008 | [PD-009](tickets/PD-009-active-pane-and-layout-toggle.md) |
-| PD-010 | 原型的位置持久化與還原 | 0 | `ready` | PD-008 | [PD-010](tickets/PD-010-prototype-location-persistence.md) |
-| PD-011 | 原型驗收協定執行與 Go/No-Go 判定 | 0 | `planned` | PD-009, PD-010 | [PD-011](tickets/PD-011-prototype-acceptance-and-go-no-go.md) |
+| PD-010 | 原型的位置持久化與還原 | 0 | `done` | PD-008 | [PD-010](tickets/PD-010-prototype-location-persistence.md) |
+| PD-011 | 原型驗收協定執行與 Go/No-Go 判定 | 0 | `ready` | PD-009, PD-010 | [PD-011](tickets/PD-011-prototype-acceptance-and-go-no-go.md) |
 | PD-002 | 選取狀態還原可行性判定 | 0 | `planned` | PD-011 | [PD-002](tickets/PD-002-selection-restore-feasibility.md) |
 | PD-003 | 閒置資源量測基準 | 0 | `planned` | PD-011 | [PD-003](tickets/PD-003-idle-resource-baseline.md) |
 | PD-004 | `core` 資料模型與不變式 | 1 | `planned` | PD-011 | [PD-004](tickets/PD-004-core-model-invariants.md) |

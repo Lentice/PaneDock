@@ -26,6 +26,12 @@ public:
         return true;
     }
 
+    void restore(LayoutTemplate layout, std::size_t active_pane) noexcept {
+        layout_ = layout;
+        active_pane_ = 0;
+        (void)set_active_pane(active_pane);
+    }
+
     void toggle_layout() noexcept {
         if (layout_ == LayoutTemplate::four_pane) {
             layout_ = LayoutTemplate::two_pane;
