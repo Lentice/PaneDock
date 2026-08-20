@@ -38,10 +38,15 @@
 
 | ID | Ticket | Phase | Status | Depends on | 文件 |
 |---|---|---|---|---|---|
-| PD-001 | 四分割 `IExplorerBrowser` 可行性原型 | 0 | `ready` | — | [PD-001](tickets/PD-001-four-pane-feasibility-prototype.md) |
-| PD-002 | 選取狀態還原可行性判定 | 0 | `planned` | PD-001 | [PD-002](tickets/PD-002-selection-restore-feasibility.md) |
-| PD-003 | 閒置資源量測基準 | 0 | `planned` | PD-001 | [PD-003](tickets/PD-003-idle-resource-baseline.md) |
-| PD-004 | `core` 資料模型與不變式 | 1 | `planned` | PD-001 | [PD-004](tickets/PD-004-core-model-invariants.md) |
+| PD-001 | 四分割 `IExplorerBrowser` 可行性原型 | 0 | `superseded` | — | [PD-001](tickets/PD-001-four-pane-feasibility-prototype.md) |
+| PD-007 | 單一 `IExplorerBrowser` 宿主與關閉序列 | 0 | `ready` | — | [PD-007](tickets/PD-007-single-explorer-host-and-shutdown.md) |
+| PD-008 | 四宮格版型與矩形計算 | 0 | `planned` | PD-007 | [PD-008](tickets/PD-008-four-pane-quadrant-layout.md) |
+| PD-009 | active pane 指示與保活式版型切換 | 0 | `planned` | PD-008 | [PD-009](tickets/PD-009-active-pane-and-layout-toggle.md) |
+| PD-010 | 原型的位置持久化與還原 | 0 | `planned` | PD-008 | [PD-010](tickets/PD-010-prototype-location-persistence.md) |
+| PD-011 | 原型驗收協定執行與 Go/No-Go 判定 | 0 | `planned` | PD-009, PD-010 | [PD-011](tickets/PD-011-prototype-acceptance-and-go-no-go.md) |
+| PD-002 | 選取狀態還原可行性判定 | 0 | `planned` | PD-011 | [PD-002](tickets/PD-002-selection-restore-feasibility.md) |
+| PD-003 | 閒置資源量測基準 | 0 | `planned` | PD-011 | [PD-003](tickets/PD-003-idle-resource-baseline.md) |
+| PD-004 | `core` 資料模型與不變式 | 1 | `planned` | PD-011 | [PD-004](tickets/PD-004-core-model-invariants.md) |
 | PD-005 | 五種版型的矩形計算 | 1 | `planned` | PD-004 | [PD-005](tickets/PD-005-layout-rect-computation.md) |
 | PD-006 | session document 序列化與遷移 | 1 | `planned` | PD-004 | [PD-006](tickets/PD-006-session-document-persistence.md) |
 
@@ -49,17 +54,21 @@
 
 ```text
 Phase 0 — Go/No-Go gate
-  PD-001 (four-pane prototype)
-    ├─ PD-002 (selection feasibility verdict)
-    └─ PD-003 (idle resource baseline)
+  PD-007 (single host + shutdown sequence)
+    └─ PD-008 (four-pane quadrant layout)
+         ├─ PD-009 (active pane + keep-alive layout toggle)
+         └─ PD-010 (prototype location persistence)
+              PD-009 + PD-010 ─┬─ PD-011 (acceptance protocol + Go/No-Go)
+                               ├─ PD-002 (selection feasibility verdict)
+                               └─ PD-003 (idle resource baseline)
 
-Phase 1 — core, gated on PD-001 passing
+Phase 1 — core, gated on PD-011 returning Go
   PD-004 (model + invariants)
     ├─ PD-005 (layout rects)
     └─ PD-006 (session persistence)
 ```
 
-PD-001 gates everything. A No-Go verdict there redirects Phase 1 onward to the `IShellFolder` fallback in `docs/design-spec.md` §9.1, and the tickets below it must be rewritten rather than adjusted.
+PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `IShellFolder` fallback in `docs/design-spec.md` §9.1, and the tickets below it must be rewritten rather than adjusted.
 
 ## 已否決的方向 — 不要重開
 
@@ -80,12 +89,16 @@ PD-001 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 
 | 順序 | ID | 難度 | 為什麼排這裡 |
 |---|---|---|---|
-| 1 | PD-001 | 高 | 全案 Go/No-Go。在它有結論之前寫任何 Phase 1 以上的實作都可能白費。 |
-| 2 | PD-003 | 低 | 原型還在手上時最容易量;晚做會需要重建原型。 |
-| 3 | PD-002 | 中 | 結論可能砍掉一個需求,越早知道越好,但必須有原型才能試。 |
-| 4 | PD-004 | 中 | Phase 1 的根;PD-005／PD-006 都依賴它的型別。 |
-| 5 | PD-005 | 低 | 純計算,`core` 內最容易測的一塊。 |
-| 6 | PD-006 | 中 | 排在 PD-005 之後:它會定下 schema,而版型欄位是 schema 的一部分,順序顛倒會造成一次無謂的遷移。 |
+| 1 | PD-007 | 中 | repo 的第一段程式碼。它建立 COM 生命週期、site 契約與建置骨架,後面四片全部站在它上面。 |
+| 2 | PD-008 | 高 | 第一次暴露本案的決定性風險——多實例 `IExplorerBrowser` 共存。 |
+| 3 | PD-009 | 高 | 保活式切換是崩潰面與洩漏面。獨立成片才能反覆切換並歸因。 |
+| 4 | PD-010 | 低 | 只依賴 PD-008,可與 PD-009 並行。刻意用最笨的格式,不預先實作 §10 契約。 |
+| 5 | PD-011 | 中 | 全案 Go/No-Go。純驗證,不寫產品程式碼。 |
+| 6 | PD-003 | 低 | 原型還在手上時最容易量;晚做會需要重建原型。 |
+| 7 | PD-002 | 中 | 結論可能砍掉一個需求,越早知道越好,但必須有原型才能試。 |
+| 8 | PD-004 | 中 | Phase 1 的根;PD-005／PD-006 都依賴它的型別。 |
+| 9 | PD-005 | 低 | 純計算,`core` 內最容易測的一塊。 |
+| 10 | PD-006 | 中 | 排在 PD-005 之後:它會定下 schema,而版型欄位是 schema 的一部分,順序顛倒會造成一次無謂的遷移。 |
 
 ### 候選(尚未開 ticket)
 
@@ -114,3 +127,15 @@ PD-001 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 **刻意不預先開滿 ticket**。只開到 PD-006(Phase 0 全部 ＋ Phase 1 的三個根 ticket)。PD-001 的 Go/No-Go 結論會決定 Phase 1 以後的 ticket 該怎麼寫;先寫好一批再作廢,就是 NimbleRun 明令禁止的「預留編號」的變體。
 
 **刻意不沿用 LLVM-MinGW toolchain**。NimbleRun 用它,但 WRL 與 Shell COM header 是 MSVC 取向,而本專案選 C++ 的整個理由就是直接坐在 Windows SDK 上、不隔翻譯層。改用 MSVC 並記錄於 `docs/development.md`。
+
+### 2026-08-20 — PD-001 拆分為五片 tracer bullet
+
+PD-001 以單一 ticket 涵蓋整個四分割原型:scope 十項、acceptance 十條,從「repo 尚無任何程式碼」一路到「寫下 Go/No-Go」。它違反本頁自己訂的「半天到兩天」尺寸規則,也裝不進一個 context window。
+
+拆成 PD-007～PD-011,每片都是縱切:各自穿過視窗、COM、view 生命週期與 self-check,單獨可 demo。切分**不改變任何技術判斷**——PD-001 的產品決策、binding constraints 與否決事項全部原樣沿用,只改變交付顆粒度。
+
+PD-001 標為 `superseded`,文件不動,作為決策軌跡保留。原本依賴 PD-001 的 PD-002／PD-003／PD-004 改依賴 PD-011,因為 Go/No-Go 判定的職責移到了那裡。
+
+刻意讓 PD-010(位置持久化)與 PD-009(保活式切換)並行而非串接:兩者只共同依賴 PD-008,合併會讓 PD-009 同時扛 churn 量測與持久化,handle 數異常時難以歸因。
+
+刻意讓 PD-011 成為不寫產品程式碼的純驗證片:Go/No-Go 是全案閘門,混在實作片裡容易被草率蓋章。
