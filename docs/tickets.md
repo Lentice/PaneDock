@@ -46,7 +46,7 @@
 | PD-010 | 原型的位置持久化與還原 | 0 | `done` | PD-008 | [PD-010](tickets/PD-010-prototype-location-persistence.md) |
 | PD-014 | 修正 explorer_host 的 OLE 初始化與鍵盤 accelerator 轉發 | 0 | `done` | PD-009, PD-010 | [PD-014](tickets/PD-014-explorer-host-ole-and-accelerator-wiring.md) |
 | PD-011 | 原型驗收協定執行與 Go/No-Go 判定 | 0 | `done` | PD-014 | [PD-011](tickets/PD-011-prototype-acceptance-and-go-no-go.md) |
-| PD-002 | 選取狀態還原可行性判定 | 0 | `ready` | PD-011 | [PD-002](tickets/PD-002-selection-restore-feasibility.md) |
+| PD-002 | 選取狀態還原可行性判定 | 0 | `done` | PD-011 | [PD-002](tickets/PD-002-selection-restore-feasibility.md) |
 | PD-003 | 閒置資源量測基準 | 0 | `ready` | PD-011 | [PD-003](tickets/PD-003-idle-resource-baseline.md) |
 | PD-004 | `core` 資料模型與不變式 | 1 | `ready` | PD-011 | [PD-004](tickets/PD-004-core-model-invariants.md) |
 | PD-005 | 五種版型的矩形計算 | 1 | `planned` | PD-004 | [PD-005](tickets/PD-005-layout-rect-computation.md) |

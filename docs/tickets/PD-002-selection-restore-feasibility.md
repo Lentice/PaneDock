@@ -111,3 +111,75 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 PD-002 公開 API 與 LVM 可行性實證交接
+
+**本輪結論：可行但風險不可接受。**
+
+依目前唯一可執行的 Windows build 之實際 probe，標準檔案系統 Shell view 的選取讀寫可以只使用公開 API；但 Control Panel 這類虛擬命名空間的公開 view API 全部不能完成選取讀寫，透過公開 `IShellFolder` 列舉出的 child PIDL 也不能交給 `IShellView::SelectItem`，而該 view 沒有可用的 `SysListView32` 供 `LVM_*` fallback。再加上 `OnNavigationComplete` 實測早於項目列舉完成，不能單獨當作「可以立即還原選取」的 ready 訊號。因此目前可以做出一般檔案系統的 best-effort 實作，但無法給產品需求一個跨 Shell namespace、跨 Windows build 的穩定保證；這符合「可行但風險不可接受」，不是「不可行」的斷言。
+
+#### 實測方法與環境
+
+- 建立 self-contained、暫存於 repo 外產品樹的 probe：LLVM-MinGW Clang C++20，STA `OleInitialize`，建立隱藏 host HWND 與真實 `CLSID_ExplorerBrowser`，以 `IExplorerBrowserEvents` 幫浦導覽；沒有模擬滑鼠或鍵盤，也沒有把 probe 加入產品或 CMake。probe 完成後已刪除，`src` 不留探測碼。
+- 本機 registry 實際回報：`ProductName=Windows 10 Pro`、`DisplayVersion=25H2`、`CurrentBuild=26200`、`UBR=9168`、`OSVersion=10.0.26200.0`。沒有第二個可啟動的 Windows 10 22H2／Windows 11 環境，因此第二 build 的結果**未驗證,需要真實桌面**（或另一個實際 Windows build）。
+- 沒有附加 debugger；沒有互動桌面，所有「選取」寫入都是直接呼叫公開 `SelectItem` 的程式化 probe，不是人工滑鼠／鍵盤選取。
+
+#### 公開 API 實測結果
+
+官方契約參考：[IFolderView2](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-ifolderview2)、[IFolderView2::GetSelectedItem](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifolderview2-getselecteditem)、[IFolderView2::GetSelection](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifolderview2-getselection)、[IFolderView::Items](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifolderview-items)、[IFolderView::SelectItem](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifolderview-selectitem)、[IShellView::GetItemObject](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishellview-getitemobject)。
+
+所有成功的 setup／導航步驟均為 `S_OK (0x00000000)`：`OleInitialize`、`CoCreateInstance(CLSID_ExplorerBrowser)`、`IUnknown_SetSite`、`IExplorerBrowser::Initialize`、`Advise`、`SHCreateItemFromParsingName`、`BrowseToObject`、`GetCurrentView`，以及所有五個 scenario 對 `IShellView` 的 `QueryInterface(IID_IFolderView2)`／`QueryInterface(IID_IFolderView)`。
+
+在沒有選取的檔案系統 view 上，三個讀取族群的實際結果一致：
+
+- `IFolderView::ItemCount(SVGIO_SELECTION)`：`S_OK`，count `0`。
+- `IFolderView2::GetSelectedItem(-1)`：`S_FALSE (0x00000001)`。
+- `IFolderView2::GetSelection(FALSE)`、`IFolderView::Items(SVGIO_SELECTION, IDataObject/IShellItemArray)`、`IShellView::GetItemObject(SVGIO_SELECTION, IDataObject/IShellItemArray)`：`0x80070490` (`HRESULT_FROM_WIN32(ERROR_NOT_FOUND)`)。
+- `IFolderView2::GetSelection(TRUE)`：`S_OK`，回傳的 `IShellItemArray` count `1`，代表「無選取時以 parent folder 代替」的文件語意。
+
+程式化選取第一個 item 後，`IFolderView2::SelectItem(0, flags)` 與 `IShellView::SelectItem(first child PIDL, flags)` 都回 `S_OK`；再讀回時 `ItemCount(SVGIO_SELECTION)` 為 `1`、`GetSelectedItem` 為 `S_OK` index `0`、`GetSelection`／`Items`／`GetItemObject` 的 `IDataObject` 與 `IShellItemArray` 皆為 `S_OK`，array count `1`，`IShellItemArray::GetItemAt(0)` 也為 `S_OK`。這證實公開 API 能讀回可持久化的 Shell item identity 載體，不需要 LVM 才能處理一般檔案系統 view。
+
+#### Scope 3 五種情境
+
+| 情境 | 實際 target／HRESULT 結果 | 公開 API 判定 | 人工狀態 |
+|---|---|---|---|
+| 一般本機資料夾 | `C:\Windows`，`ItemCount(ALLVIEW)=134`；上列所有公開讀寫結果成立 | 程式化讀寫可行 | 真實滑鼠選取與重開還原：**未驗證,需要真實桌面** |
+| 數千項本機資料夾 | `C:\Windows\System32`，`ItemCount(ALLVIEW)=5048`；選取讀寫及 array count `1` 均成功 | 程式化讀寫可行，未見大資料夾特有 HRESULT 差異 | 真實大量項目人工操作：**未驗證,需要真實桌面** |
+| 虛擬命名空間 | `::{21EC2020-3AEA-1069-A2DD-08002B30309D}` Control Panel；`IFolderView`／`IFolderView2` QI 為 `S_OK`，但 `ItemCount(ALLVIEW)`、`ItemCount(SELECTION)`、`GetSelectedItem`、`Items`、`GetItemObject`、`IFolderView2::SelectItem(0)` 都是 `E_FAIL (0x80004005)`。補測 `IFolderView::GetFolder(IShellFolder)`、`EnumObjects`、`IEnumIDList::Next` 都是 `S_OK`，但有效 enumerated child PIDL 交給 `IShellView::SelectItem` 仍是 `E_FAIL (0x80004005)`，讀回亦同值 | 目前 host 上公開 API 不足；這是本輪風險不可接受的主要依據 | 真實 Control Panel 選取行為：**未驗證,需要真實桌面** |
+| OneDrive 佔位檔所在資料夾 | 找到 `D:\OneDrive - via.com.tw`，Shell view item count `1`，一般公開讀寫結果為 `S_OK`；但該目錄實際只確認到 `附件` 與隱藏 metadata，沒有確認到可標記為 OneDrive placeholder 的使用者檔案 | OneDrive root 可行性已做程式化 probe；「佔位檔所在資料夾」本身未達成情境條件 | **未驗證,需要真實桌面**，且需一個明確的 Files On-Demand placeholder |
+| 切換 view mode 後 | `C:\Windows`；`IFolderView::SetCurrentViewMode(DETAILS/ICON)` 與 `IFolderView2::SetViewModeAndIconSize(DETAILS/ICON)` 全部 `S_OK`；保留選取後再讀回，count `1`、index `0`、兩種 array／data object 皆 `S_OK` | 在本 build 的程式化 probe 可行 | 真實 Details／Large Icons 人工選取還原：**未驗證,需要真實桌面** |
+
+#### 未公開 LVM 路徑
+
+因 Control Panel 的公開 API 已實際不足，才進入 `FindWindowEx`／`LVM_*` 評估。五個 scenario 都得到相同結果：`IShellView::GetWindow` 為 `S_OK`，但遞迴搜尋沒有找到 `SysListView32` descendant；因此沒有送出 `LVM_GETNEXTITEM` 或 `LVM_SETITEMSTATE`，結果是 **LVM path unavailable**，不是 LVM 通過。這也表示不能把「用 LVM 硬幹」寫成目前 Windows build 的 fallback。探測程式已刪除，`src` 無 `LVM_`／`FindWindowEx` 命中。
+
+#### 導覽完成時序判定
+
+官方文件定義 `OnNavigationComplete` 為成功導航通知，且事件順序是 `OnNavigationPending → OnViewCreated → OnNavigationComplete`；文件沒有承諾項目列舉已完成（參考 [IExplorerBrowserEvents](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iexplorerbrowserevents)、[OnNavigationComplete](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorerbrowserevents-onnavigationcomplete)、[BrowseToObject](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iexplorerbrowser-browsetoobject)）。本 probe 的實測也支持這個區分：第一次收到 `OnNavigationComplete` 後立即查詢，`C:\Windows` 的 `ItemCount` 為 `0` 且 `Item(0)` 失敗；同一 view 經 3000 ms message pump 後，才得到 `134` 項與可用第一個 PIDL。這不是可接受的產品 polling 解法；目前只能判定 `OnNavigationComplete` 可可靠表示導航成功，**不能單獨可靠表示 selection restore 的 item-ready 時機**。後續實作若要開票，必須先定義不依賴 busy loop／polling timer 的 ready/retry 邊界，否則選取還原風險不可接受。
+
+#### 人工驗證與跨 build 限制
+
+- Scope 3 五項需要 live Shell view 的真實滑鼠／鍵盤選取、切換 view、重新導覽與重開：全部 **未驗證,需要真實桌面**。本次程式化 `SelectItem` 結果不能冒充人工驗收。
+- Windows 10 22H2 與 Windows 11 的雙 build 比對：**未驗證,需要真實桌面**；本環境只有上述 `10.0.26200.0`，沒有第二個 Windows build。
+- 沒有修改 `docs/design-spec.md` 或 `docs/tickets.md`：本輪不是「砍除」結論，且 tracker status 明確留給外部流程處理。
+
+#### Agent checks
+
+- `cmake --build build`：通過（exit code 0，`ninja: no work to do.`）。
+- `ctest --test-dir build --output-on-failure`：通過，1/1 test passed（exit code 0）。
+- `.\build\PaneDock.exe` 及 Scope 3 人工操作：**未驗證,需要真實桌面**；沒有啟動後捏造結果。
+- `rg -n "LVM_|FindWindowEx" src`：無匹配（exit code 1，符合探測碼不留 repo 的預期）。
+- `git diff --check`：通過（exit code 0）。
+- 暫存 public-API probe：以 Clang C++20 編譯無 warning；完整五 scenario probe exit code 0；Control Panel 補測 `IShellFolder::EnumObjects`／`IShellView::SelectItem` 的 probe exit code 0，輸出如上。所有暫存 source／exe 已刪除。
+
+### 2026-08-24 驗證與判定接受
+
+獨立確認:`git status`/`git diff --stat` 只有本文件變動,無探測碼留在 `src` 或建置樹;`rg -n "LVM_|FindWindowEx" src` 無命中(exit 1),與交接一致。
+
+接受本輪「可行但風險不可接受」的判定,不需要依「已確認的產品決策」第 3 點更新 `docs/design-spec.md` §NFR-005／§3.2——該決策只在結論為「砍除」時觸發,而選取狀態依 §NFR-005 本來就已是 best-effort 狀態,不是必要狀態;本輪判定沒有把它從 best-effort 升級成必要,也沒有主張完全砍除,只是把殘餘風險釘死在「一般檔案系統可行、虛擬命名空間公開 API 不足、無穩定的 item-ready 訊號」這三點,供後續實作 ticket 直接引用範圍。
+
+殘餘缺口(環境限制,非缺陷):
+- Scope 3 五種情境的真人滑鼠/鍵盤即時選取與重開驗證未執行——本 session 依使用者指示暫緩鍵盤/滑鼠自動化,且原本這類即時互動驗證即使做也需要人工操作,不適合自動化;待使用者方便時可自行驗證,或留給後續實作 ticket 一併做。
+- 雙 Windows build 比對未完成——本機只有一個可啟動的 Windows build(`10.0.26200.9168`),沒有第二台/第二個 build 可測;若之後有其他機器可用,補測即可,不需要重跑本輪已完成的 API 探測。
+
+PD-002 的三種合法結論之一已產出且有實測 HRESULT 佐證,交接資訊足以讓後續實作 ticket(若要做)直接引用範圍與殘餘風險。判定為完成。
