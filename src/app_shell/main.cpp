@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <optional>
@@ -31,12 +32,25 @@ constexpr std::size_t kExplorerCount = 4;
 const std::array<std::wstring, kExplorerCount> kDefaultLocations{
     L"C:\\", L"C:\\Windows", L"C:\\Users", L"C:\\Program Files"};
 
+struct LayoutMetrics {
+    int minimum_pane_width;
+    int minimum_pane_height;
+    int divider_thickness;
+};
+
+struct Splitter {
+    RECT rect;
+    std::size_t ratio_index;
+    bool vertical;
+};
+
 struct AppState {
     std::array<panedock::explorer_host::ExplorerHost, kExplorerCount> explorers;
     std::array<bool, kExplorerCount> realized{};
     panedock::core::ApplicationState application;
     panedock::core::SessionDocument session_document;
     std::filesystem::path session_directory;
+    std::optional<Splitter> splitter_drag;
 };
 
 std::optional<std::filesystem::path> session_directory() noexcept {
@@ -129,12 +143,72 @@ RECT client_rect(HWND window) noexcept {
     return rect;
 }
 
+LayoutMetrics layout_metrics(HWND window) noexcept {
+    const double scale = static_cast<double>(GetDpiForWindow(window)) / 96.0;
+    const auto scaled = [scale](int value) {
+        return std::max(1, static_cast<int>(std::lround(value * scale)));
+    };
+    return {scaled(panedock::core::kMinimumPaneWidth),
+            scaled(panedock::core::kMinimumPaneHeight),
+            scaled(panedock::core::kDividerThickness)};
+}
+
 std::vector<panedock::core::PaneRect> layout_rects(
     HWND window, const panedock::core::GroupState& group) {
     const RECT client = client_rect(window);
+    const LayoutMetrics metrics = layout_metrics(window);
     return panedock::core::compute_layout_rects(
         client.right - client.left, client.bottom - client.top,
-        group.layout_template, group.divider_ratios);
+        group.layout_template, group.divider_ratios,
+        metrics.minimum_pane_width, metrics.minimum_pane_height,
+        metrics.divider_thickness);
+}
+
+std::vector<Splitter> splitters(HWND window,
+                                const panedock::core::GroupState& group) {
+    const auto rects = layout_rects(window, group);
+    const int thickness = layout_metrics(window).divider_thickness;
+    switch (group.layout_template) {
+        case panedock::core::LayoutTemplate::single:
+            return {};
+        case panedock::core::LayoutTemplate::left_right:
+            return {{{rects[0].x + rects[0].width, rects[0].y,
+                      rects[0].x + rects[0].width + thickness,
+                      rects[0].y + rects[0].height},
+                     0, true}};
+        case panedock::core::LayoutTemplate::top_bottom:
+            return {{{rects[0].x, rects[0].y + rects[0].height,
+                      rects[0].x + rects[0].width,
+                      rects[0].y + rects[0].height + thickness},
+                     0, false}};
+        case panedock::core::LayoutTemplate::three_pane:
+            return {{{rects[0].x + rects[0].width, rects[0].y,
+                      rects[0].x + rects[0].width + thickness,
+                      rects[0].y + rects[0].height},
+                     0, true},
+                    {{rects[1].x, rects[1].y + rects[1].height,
+                      rects[1].x + rects[1].width,
+                      rects[1].y + rects[1].height + thickness},
+                     1, false}};
+        case panedock::core::LayoutTemplate::four_pane_grid:
+            return {{{rects[0].x + rects[0].width, rects[0].y,
+                      rects[0].x + rects[0].width + thickness,
+                      rects[2].y + rects[2].height},
+                     0, true},
+                    {{rects[0].x, rects[0].y + rects[0].height,
+                      rects[1].x + rects[1].width,
+                      rects[0].y + rects[0].height + thickness},
+                     1, false}};
+    }
+    return {};
+}
+
+std::optional<Splitter> splitter_at_point(
+    HWND window, const panedock::core::GroupState& group, POINT point) {
+    for (const Splitter& splitter : splitters(window, group)) {
+        if (PtInRect(&splitter.rect, point)) return splitter;
+    }
+    return std::nullopt;
 }
 
 void capture_locations(AppState& state) {
@@ -199,21 +273,49 @@ void set_active_pane(AppState& state, std::size_t pane) noexcept {
     save_now(state);
 }
 
+panedock::core::LayoutTemplate next_layout(
+    panedock::core::LayoutTemplate layout) noexcept {
+    using panedock::core::LayoutTemplate;
+    switch (layout) {
+        case LayoutTemplate::single: return LayoutTemplate::left_right;
+        case LayoutTemplate::left_right: return LayoutTemplate::top_bottom;
+        case LayoutTemplate::top_bottom: return LayoutTemplate::three_pane;
+        case LayoutTemplate::three_pane:
+            return LayoutTemplate::four_pane_grid;
+        case LayoutTemplate::four_pane_grid: return LayoutTemplate::single;
+    }
+    return LayoutTemplate::single;
+}
+
+std::string unique_tab_id(const panedock::core::GroupState& group,
+                          std::size_t& candidate_index) {
+    for (;;) {
+        const std::string candidate =
+            "tab-" + std::to_string(candidate_index++);
+        const bool exists = std::any_of(
+            group.panes.begin(), group.panes.end(), [&](const auto& pane) {
+                return std::any_of(
+                    pane.tabs.begin(), pane.tabs.end(), [&](const auto& tab) {
+                        return tab.id == candidate;
+                    });
+            });
+        if (!exists) return candidate;
+    }
+}
+
 void toggle_layout(HWND window, AppState& state) noexcept {
     auto& group = active_group(state);
     capture_locations(state);
     const std::size_t previous = active_pane_index(group);
-    const auto target =
-        group.layout_template == panedock::core::LayoutTemplate::four_pane_grid
-            ? panedock::core::LayoutTemplate::left_right
-            : panedock::core::LayoutTemplate::four_pane_grid;
+    const auto target = next_layout(group.layout_template);
 
     std::vector<std::string> pane_ids;
     std::vector<std::string> tab_ids;
     const std::size_t target_count = panedock::core::pane_count(target);
+    std::size_t tab_candidate = 0;
     for (std::size_t index = group.panes.size(); index < target_count; ++index) {
         pane_ids.push_back("pane-" + std::to_string(index));
-        tab_ids.push_back("tab-" + std::to_string(index));
+        tab_ids.push_back(unique_tab_id(group, tab_candidate));
     }
     if (!panedock::core::switch_layout(group, target,
                                        location(kDefaultLocations.front()),
@@ -234,6 +336,26 @@ void toggle_layout(HWND window, AppState& state) noexcept {
     }
     state.explorers[active].focus();
     save_now(state);
+}
+
+void update_splitter_drag(HWND window, AppState& state, POINT point) {
+    if (!state.splitter_drag.has_value()) return;
+    auto& group = active_group(state);
+    const Splitter& drag = *state.splitter_drag;
+    if (drag.ratio_index >= group.divider_ratios.size()) return;
+
+    const RECT client = client_rect(window);
+    const int size = drag.vertical ? client.right - client.left
+                                   : client.bottom - client.top;
+    const int divider = layout_metrics(window).divider_thickness;
+    const int available = std::max(size, divider) - divider;
+    if (available <= 0) return;
+    const int position = drag.vertical ? point.x : point.y;
+    group.divider_ratios[drag.ratio_index] = std::clamp(
+        static_cast<double>(position) / static_cast<double>(available),
+        0.0, 1.0);
+    if (FAILED(apply_layout(window, state)))
+        OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
 }
 
 std::size_t pane_at_point(HWND window, const AppState& state,
@@ -267,6 +389,11 @@ const wchar_t* session_source_name(panedock::core::SessionSource source) {
             return L"default_state";
     }
     return L"unknown";
+}
+
+POINT point_from_lparam(LPARAM lparam) noexcept {
+    return {static_cast<short>(LOWORD(lparam)),
+            static_cast<short>(HIWORD(lparam))};
 }
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
@@ -315,6 +442,48 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
             return 0;
         }
+        case WM_LBUTTONDOWN:
+            if (state != nullptr) {
+                state->splitter_drag = splitter_at_point(
+                    window, active_group(*state), point_from_lparam(lparam));
+                if (state->splitter_drag.has_value()) {
+                    SetCapture(window);
+                    return 0;
+                }
+            }
+            break;
+        case WM_MOUSEMOVE:
+            if (state != nullptr && state->splitter_drag.has_value() &&
+                (wparam & MK_LBUTTON) != 0) {
+                update_splitter_drag(window, *state,
+                                     point_from_lparam(lparam));
+                return 0;
+            }
+            break;
+        case WM_LBUTTONUP:
+            if (state != nullptr && state->splitter_drag.has_value()) {
+                update_splitter_drag(window, *state,
+                                     point_from_lparam(lparam));
+                state->splitter_drag.reset();
+                save_now(*state);
+                ReleaseCapture();
+                return 0;
+            }
+            break;
+        case WM_SETCURSOR:
+            if (state != nullptr && LOWORD(lparam) == HTCLIENT) {
+                POINT point{};
+                GetCursorPos(&point);
+                ScreenToClient(window, &point);
+                const auto splitter =
+                    splitter_at_point(window, active_group(*state), point);
+                if (splitter.has_value()) {
+                    SetCursor(LoadCursorW(
+                        nullptr, splitter->vertical ? IDC_SIZEWE : IDC_SIZENS));
+                    return TRUE;
+                }
+            }
+            break;
         case WM_PARENTNOTIFY:
             if (state != nullptr && LOWORD(wparam) == WM_LBUTTONDOWN) {
                 POINT point{};
@@ -342,9 +511,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             UnregisterHotKey(window, kLayoutToggleHotkeyId);
             PostQuitMessage(0);
             return 0;
-        default:
-            return DefWindowProcW(window, message, wparam, lparam);
+        default: break;
     }
+    return DefWindowProcW(window, message, wparam, lparam);
 }
 
 bool register_window_class(HINSTANCE instance) noexcept {
@@ -413,6 +582,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         const std::size_t active = active_pane_index(active_group(state));
         if (state.explorers[active].translate_accelerator(&message) == S_OK)
             continue;
+        if (message.message == WM_KEYDOWN && message.wParam == VK_F6) {
+            const std::size_t count = active_group(state).panes.size();
+            const bool reverse = GetKeyState(VK_SHIFT) < 0;
+            const std::size_t next = reverse ? (active + count - 1) % count
+                                             : (active + 1) % count;
+            set_active_pane(state, next);
+            continue;
+        }
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
