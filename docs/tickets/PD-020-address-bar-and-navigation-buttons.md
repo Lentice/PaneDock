@@ -118,3 +118,50 @@ Get-Process PaneDock | Select-Object Responding
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 實作交接
+
+#### 完成內容
+
+- `ExplorerHost` 的最終新增公開介面位於 `src/explorer_host/explorer_host.h`：
+  ```cpp
+  HRESULT navigate_up() noexcept;
+  void set_navigation_callback(
+      std::function<void(std::wstring_view)> callback);
+  ```
+  `navigate_up()` 目前完全依 ticket 決策呼叫 `browser_->BrowseToObject(nullptr, SBSP_PARENT)`，沒有搭配其他 `SBSP_*` flag。失敗時沿用 `navigation_failed()` 顯示 pane 內錯誤。`navigation_complete()` 在成功取得並存入 canonical parsing name、隱藏錯誤 UI 後呼叫 callback；callback exception 會被 host 邊界捕捉並寫 debug 訊息，避免 exception 穿越 COM callback。`destroy()` 會在 browser/site teardown 後清除 callback。
+- `AppState` 已加入四組 `address_bars`、`back_buttons`、`forward_buttons`、`up_buttons` HWND，以及每 pane 一個 `suppress_history_record`。每組 UI 使用原生單行 `EDIT` 與三個 `BUTTON`（`<`、`>`、`Up`），全部 App UI 文字為英文/符號。
+- pane chrome 最終由上而下是：PD-019 `kTabStripHeight = 24` logical px、PD-020 `kNavigationBarHeight = 28` logical px、剩餘 Shell view。兩者都用既有 `scaled_value(window, logical_pixels)`，即 `MulDiv(value, GetDpiForWindow(window), 96)` 並至少 1 px。導覽按鈕基準寬 `kNavigationButtonWidth = 32` logical px；窄 pane 時限制為 pane width 的四分之一，三顆按鈕後的剩餘寬度全部給 address bar。不可見 pane/零 Group 會一起 hide tab strip、四個 navigation controls 與 ExplorerHost。
+- address bar 以 `SetWindowSubclass` 攔截 Enter，讀取文字後原樣傳給該 pane 的 `ExplorerHost::navigate()`；同時攔下後續 `WM_CHAR/VK_RETURN`，避免單行 EDIT beep。message loop 在 address bar 持有 focus 時不把 keydown 轉送 Shell view 的 `TranslateAcceleratorW`，因此輸入、貼上與 Enter 留在 EDIT。沒有路徑預驗證、自動修正、`IAutoComplete2` 或下拉建議。
+- 每個 ExplorerHost 在成功 initialize 後裝上對應 pane callback。成功的新導覽（address Enter、Shell view 內部導覽、Up）呼叫 `core::record_navigation`；back/forward 則先由 core 移動 history index，設 `suppress_history_record[pane] = true`，再呼叫同一 host 的 `navigate()`，完成 callback 清旗標且不 push 新 history。callback 最後重建 tab label、同步 address text、依 `can_navigate_tab_back/forward` 更新 EnableWindow，並 `save_now`。
+- back/forward pending 時兩顆 history button 會暫時停用，handler 也有同一旗標 guard，避免使用者在第一次 async completion 前快速連點第二次而讓單一 bool 無法分辨兩個 pending request。完成後依新的 history index 重新啟用。Up 與 address 不設 suppression，因為兩者按 PD-018 語意是會截斷 forward branch 的新導覽。
+- PD-018 不變式維護：successful back/forward completion 會用 callback 的 canonical parsing name 同步 `tab.location` 與 `history[history_index]`；既有 `capture_pane_location` 也在 history 非空時同步目前 entry。這避免後續 `save_now` 只更新 location 而造成 `tab.location != history[history_index]`。沒有修改 `src/core/model.h/.cpp` 簽章或 session schema；history 仍是 runtime-only。
+- tab/Group/layout refresh 已透過既有 `refresh_tab_strip(s)` 連帶更新 address bar 與 navigation button state，因此切換 active tab、Group、新增/關閉 tab、刪除 Group及變更 layout 後，四組 chrome 都以目前 active tab 為準。
+
+#### 非同步事件與已知風險
+
+- 針對「快速連點兩次 Back」：此實作不依賴未明文保證的跨-request completion ordering，而是在第一個 back/forward pending 期間停用並 guard 兩顆 history button，所以 UI 路徑同一 pane 最多一個受 suppression 的 history navigation。Microsoft 文件只說首次導覽同步、後續導覽非同步，事件典型順序為 Pending → ViewCreated → Complete/Failed，沒有在查得文字中保證多個 concurrent navigation 的 completion 一定依呼叫順序。PD-021 若新增鍵盤 history shortcut，必須重用 `navigate_tab_history`，不可繞過 pending guard。
+- ticket 規定的單一 bool 仍有邊界：若 pending back/forward 最終收到 `OnNavigationFailed` 而非 Complete，目前沒有 failure callback 可清旗標，history buttons 會保持停用；或使用者在 pending 期間從 Up/address/tab/Group 發起另一導覽，bool 仍無 request identity 可關聯。Scope 只授權 completion callback 與每-pane bool，未擴充 request token/failure callback。Reviewer 應特別人工測試 unavailable history destination 與 pending 中切 tab/Group；若可重現，後續修正應把 suppression 擴充為可關聯成功/失敗事件的 pending-navigation state，而不是再加 location 字串猜測。
+- 依 find-docs skill 查得的 Microsoft `IExplorerBrowser::BrowseToObject` 官方頁面同時列出 `SBSP_PARENT`「忽略 PIDL」以及 Remarks「`punk` cannot be NULL」。這與 ticket 已確認決策 `BrowseToObject(nullptr, SBSP_PARENT)` 有直接文字衝突。本次依使用者要求照 ticket 實作，編譯成功，但無互動桌面可證明 runtime 接受 null。Reviewer 必須在一般 filesystem 與 virtual namespace 各測 Up；若回傳 `E_INVALIDARG`，需由產品/技術 review 明確允許改用能合法表達 parent navigation 的 Shell API/非 null browsable object，不能把目前 build green 當成功證據。
+- address navigation 無法解析時不會收到 successful completion callback，因此不會 `record_navigation` 或覆寫 EDIT；使用者輸入保持原樣，pane 由既有 `navigation_failed()` 顯示可復原錯誤。自動完成仍刻意不做；是否影響實際輸入體感需人工試用後再決定是否重開候選 ticket。
+- Ponytail 原則的具體影響：沿用既有 pane arrays、`apply_layout`、tab refresh 與 native EDIT/BUTTON/subclass；沒有新增 navigation-bar module、自動完成 COM 物件、history UI 或 PD-021 快速鍵。
+
+#### Agent checks
+
+- `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`：成功。
+- `cmake --build build`：成功；本 ticket 修改的 app shell/ExplorerHost 編譯單元無警告。
+- `ctest --test-dir build --output-on-failure`：3/3 通過（`panedock_core_model`、`panedock_core_layout`、`panedock_core_session`）。
+- `rg -n "windows\.h|SBSP_PARENT|std::function" src\core`：無命中，callback/Win32/Shell flags 未洩漏 core。
+- `git diff --check`：通過。
+- 啟動檢查：`Start-Process .\build\PaneDock.exe -PassThru`，2 秒後 `Responding=True`，隨後終止測試 process。
+- 沒有互動式桌面，因此 Acceptance 1–6 的真實 chrome 視覺、address Enter、Shell double-click、Back/Forward、filesystem/virtual Up、錯誤文字保留與 tab 切換 UI 均未宣稱人工通過；上列 code-path 與 build/test 是本 session 可驗證的範圍。
+- 未修改 `docs/tickets.md`，未 commit；工作開始前既有未追蹤 `.claude/` 未觸碰。
+
+### 2026-08-24 Reviewer 修正(獨立驗證後發現的兩個真實缺陷)
+
+- **`navigate_up()` API 誤用已修正。** 查證 Microsoft 官方文件確認 `IExplorerBrowser::BrowseToObject` 的 `punk` 參數不可為 NULL(文件明文:"requires a non-NULL punk parameter"),`BrowseToObject(nullptr, SBSP_PARENT)` 在真實桌面極可能回傳 `E_INVALIDARG` 而非成功。`IExplorerBrowser::BrowseToIDList` 才是文件記載允許 NULL pidl 搭配 `SBSP_PARENT`/`SBSP_NAVIGATEBACK`/`SBSP_NAVIGATEFORWARD` 的 API。已將 `src/explorer_host/explorer_host.cpp` 的 `navigate_up()` 改為 `browser_->BrowseToIDList(nullptr, SBSP_PARENT)`,行為語意不變(仍是導覽到父資料夾),簽章不變。原本 ticket 決策 3 的文字是誤判,不是實作 agent 的錯——已在此更正,未回頭改 ticket 本文的決策段落(依專案規則,完成的 ticket 文件只 append)。
+- **Back/Forward 導覽失敗會永久卡住的缺陷已修正。** 原實作只在 `navigate()` 同步失敗時清除 `suppress_history_record[pane_index]`,但 `ExplorerHost::navigate()` 的兩個同步失敗路徑(`SHCreateItemFromParsingName` 失敗、`BrowseToObject` 立即失敗)都呼叫 `navigation_failed()` 後仍 `return S_OK`,因此呼叫端永遠拿不到 FAILED HRESULT;非同步失敗(`OnNavigationFailed` 事件)更是完全没有回呼通知 app_shell。任一種情況都會讓該 pane 的 back/forward 按鈕永久停用,直到程式重啟。這正是實作 agent 在交接區列為「必須人工測試」的風險,現已在程式層面修正,不需要留給人工驗證才發現:
+  - `ExplorerHost` 新增 `set_navigation_failed_callback(std::function<void()>)`,`navigation_failed()` 尾端呼叫它(比照既有 `navigation_callback_` 的 try/catch 邊界保護),`destroy()` 一併清除。
+  - `main.cpp` 新增 `handle_navigation_failed(AppState&, std::size_t)`:清除該 pane 的 `suppress_history_record` 並呼叫 `refresh_navigation_chrome`。在 `apply_layout` 設定 `set_navigation_callback` 的同一位置,一併呼叫 `set_navigation_failed_callback` 掛上這個處理函式。
+  - 交接區原文列出的「pending 中從 Up/address/tab/Group 發起另一導覽,bool 仍無 request identity 可關聯」這個更深的競態仍未解決,維持原交接區的紀錄與 PD-021 的警語(重用 `navigate_tab_history`、不可繞過 pending guard),留給後續真正遇到才處理,不在本次一併擴充。
+- 已重新執行完整 Agent checks(build/CTest/rg boundary/`git diff --check`/啟動 Responding=True),全數通過,無新增警告。

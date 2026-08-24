@@ -35,6 +35,12 @@ constexpr int kLayoutToggleHotkeyId = 1;
 constexpr std::size_t kExplorerCount = 4;
 constexpr int kTabStripHeight = 24;
 constexpr int kTabStripIdBase = 200;
+constexpr int kNavigationBarHeight = 28;
+constexpr int kNavigationButtonWidth = 32;
+constexpr int kBackButtonIdBase = 300;
+constexpr int kForwardButtonIdBase = 310;
+constexpr int kUpButtonIdBase = 320;
+constexpr int kAddressBarIdBase = 330;
 constexpr int kGroupListId = 100;
 constexpr int kNewGroupId = 101;
 constexpr int kDuplicateGroupId = 102;
@@ -74,6 +80,11 @@ struct AppState {
     std::array<HWND, kButtonIds.size()> sidebar_buttons{};
     HWND empty_message{nullptr};
     std::array<HWND, kExplorerCount> tab_strips{};
+    std::array<HWND, kExplorerCount> address_bars{};
+    std::array<HWND, kExplorerCount> back_buttons{};
+    std::array<HWND, kExplorerCount> forward_buttons{};
+    std::array<HWND, kExplorerCount> up_buttons{};
+    std::array<bool, kExplorerCount> suppress_history_record{};
 };
 
 std::optional<std::filesystem::path> session_directory() noexcept {
@@ -254,6 +265,38 @@ std::optional<Splitter> splitter_at_point(
     return std::nullopt;
 }
 
+void refresh_navigation_buttons(AppState& state, std::size_t pane_index) {
+    if (pane_index >= kExplorerCount) return;
+    const bool visible = has_active_group(state) &&
+                         pane_index < active_group(state).panes.size();
+    if (!visible) {
+        EnableWindow(state.back_buttons[pane_index], FALSE);
+        EnableWindow(state.forward_buttons[pane_index], FALSE);
+        EnableWindow(state.up_buttons[pane_index], FALSE);
+        return;
+    }
+    const auto& tab = active_tab(active_group(state).panes[pane_index]);
+    EnableWindow(state.back_buttons[pane_index],
+                 !state.suppress_history_record[pane_index] &&
+                     panedock::core::can_navigate_tab_back(tab));
+    EnableWindow(state.forward_buttons[pane_index],
+                 !state.suppress_history_record[pane_index] &&
+                     panedock::core::can_navigate_tab_forward(tab));
+    EnableWindow(state.up_buttons[pane_index], TRUE);
+}
+
+void refresh_navigation_chrome(AppState& state, std::size_t pane_index) {
+    if (pane_index >= kExplorerCount) return;
+    refresh_navigation_buttons(state, pane_index);
+    const wchar_t* text = L"";
+    if (has_active_group(state) &&
+        pane_index < active_group(state).panes.size()) {
+        text = active_tab(active_group(state).panes[pane_index])
+                   .location.parsing_name.c_str();
+    }
+    SetWindowTextW(state.address_bars[pane_index], text);
+}
+
 std::wstring tab_display_text(const panedock::core::TabState& tab) {
     const auto& parsing_name = tab.location.parsing_name;
     const std::size_t separator = parsing_name.find_last_of(L"\\/");
@@ -267,7 +310,10 @@ void refresh_tab_strip(AppState& state, std::size_t pane_index) {
     const HWND strip = state.tab_strips[pane_index];
     SendMessageW(strip, TCM_DELETEALLITEMS, 0, 0);
     if (!has_active_group(state) ||
-        pane_index >= active_group(state).panes.size()) return;
+        pane_index >= active_group(state).panes.size()) {
+        refresh_navigation_chrome(state, pane_index);
+        return;
+    }
 
     const auto& pane = active_group(state).panes[pane_index];
     std::size_t active_index = 0;
@@ -287,6 +333,7 @@ void refresh_tab_strip(AppState& state, std::size_t pane_index) {
     SendMessageW(strip, TCM_INSERTITEMW, pane.tabs.size(),
                  reinterpret_cast<LPARAM>(&add_item));
     SendMessageW(strip, TCM_SETCURSEL, active_index, 0);
+    refresh_navigation_chrome(state, pane_index);
 }
 
 void refresh_tab_strips(AppState& state) {
@@ -299,8 +346,11 @@ void capture_pane_location(AppState& state, std::size_t pane_index) {
     auto& group = active_group(state);
     if (pane_index >= group.panes.size() || !state.realized[pane_index] ||
         state.explorers[pane_index].location().empty()) return;
-    active_tab(group.panes[pane_index]).location.parsing_name =
-        state.explorers[pane_index].location();
+    auto& tab = active_tab(group.panes[pane_index]);
+    tab.location.parsing_name = state.explorers[pane_index].location();
+    if (!tab.history.empty() && tab.history_index < tab.history.size()) {
+        tab.history[tab.history_index] = tab.location;
+    }
 }
 
 void capture_locations(AppState& state) {
@@ -372,6 +422,33 @@ void save_now(AppState& state) noexcept {
     }
 }
 
+void handle_navigation_complete(AppState& state, std::size_t pane_index,
+                                std::wstring_view new_location) {
+    if (!has_active_group(state) ||
+        pane_index >= active_group(state).panes.size()) return;
+    auto& tab = active_tab(active_group(state).panes[pane_index]);
+    auto completed_location = location(std::wstring(new_location));
+    if (state.suppress_history_record[pane_index]) {
+        state.suppress_history_record[pane_index] = false;
+        tab.location = std::move(completed_location);
+        if (!tab.history.empty() && tab.history_index < tab.history.size()) {
+            tab.history[tab.history_index] = tab.location;
+        }
+    } else {
+        panedock::core::record_navigation(tab, std::move(completed_location));
+    }
+    refresh_tab_strip(state, pane_index);
+    save_now(state);
+}
+
+void handle_navigation_failed(AppState& state, std::size_t pane_index) {
+    if (pane_index >= kExplorerCount) return;
+    // A pending back/forward navigation that fails asynchronously must still
+    // release the suppression flag, or those buttons stay disabled forever.
+    state.suppress_history_record[pane_index] = false;
+    refresh_navigation_chrome(state, pane_index);
+}
+
 void destroy_explorers(AppState& state) noexcept {
     for (auto& explorer : state.explorers) {
         explorer.destroy();
@@ -385,6 +462,10 @@ HRESULT apply_layout(HWND window, AppState& state) {
         for (std::size_t index = 0; index < state.explorers.size(); ++index) {
             state.explorers[index].set_visible(false);
             ShowWindow(state.tab_strips[index], SW_HIDE);
+            ShowWindow(state.back_buttons[index], SW_HIDE);
+            ShowWindow(state.forward_buttons[index], SW_HIDE);
+            ShowWindow(state.up_buttons[index], SW_HIDE);
+            ShowWindow(state.address_bars[index], SW_HIDE);
         }
         ShowWindow(state.empty_message, SW_SHOW);
         return S_OK;
@@ -397,15 +478,42 @@ HRESULT apply_layout(HWND window, AppState& state) {
         if (visible) {
             const RECT pane_rect = to_win32_rect(rects[index]);
             const int strip_height = scaled_value(window, kTabStripHeight);
+            const int actual_strip_height =
+                std::min(strip_height, static_cast<int>(pane_rect.bottom -
+                                                        pane_rect.top));
             SetWindowPos(state.tab_strips[index], nullptr, pane_rect.left,
                          pane_rect.top, pane_rect.right - pane_rect.left,
-                         std::min(strip_height,
-                                  static_cast<int>(pane_rect.bottom -
-                                                   pane_rect.top)),
+                         actual_strip_height,
                          SWP_NOZORDER | SWP_NOACTIVATE);
             ShowWindow(state.tab_strips[index], SW_SHOW);
+
+            const int navigation_top = pane_rect.top + actual_strip_height;
+            const int navigation_height = std::min(
+                scaled_value(window, kNavigationBarHeight),
+                std::max(0, static_cast<int>(pane_rect.bottom) -
+                                navigation_top));
+            const int pane_width = pane_rect.right - pane_rect.left;
+            const int button_width = std::min(
+                scaled_value(window, kNavigationButtonWidth), pane_width / 4);
+            const std::array<HWND, 3> buttons{
+                state.back_buttons[index], state.forward_buttons[index],
+                state.up_buttons[index]};
+            int x = pane_rect.left;
+            for (HWND button : buttons) {
+                SetWindowPos(button, nullptr, x, navigation_top, button_width,
+                             navigation_height,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+                ShowWindow(button, SW_SHOW);
+                x += button_width;
+            }
+            SetWindowPos(state.address_bars[index], nullptr, x, navigation_top,
+                         std::max(0, static_cast<int>(pane_rect.right) - x),
+                         navigation_height,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            ShowWindow(state.address_bars[index], SW_SHOW);
+
             RECT rect = pane_rect;
-            rect.top = std::min(rect.bottom, rect.top + strip_height);
+            rect.top = navigation_top + navigation_height;
             if (!state.realized[index]) {
                 const HRESULT hr = state.explorers[index].initialize(
                     window, rect,
@@ -414,11 +522,28 @@ HRESULT apply_layout(HWND window, AppState& state) {
                     return hr;
                 }
                 state.realized[index] = true;
+                try {
+                    state.explorers[index].set_navigation_callback(
+                        [&state, index](std::wstring_view new_location) {
+                            handle_navigation_complete(state, index,
+                                                       new_location);
+                        });
+                    state.explorers[index].set_navigation_failed_callback(
+                        [&state, index]() {
+                            handle_navigation_failed(state, index);
+                        });
+                } catch (...) {
+                    return E_OUTOFMEMORY;
+                }
             } else {
                 state.explorers[index].set_rect(rect);
             }
         } else {
             ShowWindow(state.tab_strips[index], SW_HIDE);
+            ShowWindow(state.back_buttons[index], SW_HIDE);
+            ShowWindow(state.forward_buttons[index], SW_HIDE);
+            ShowWindow(state.up_buttons[index], SW_HIDE);
+            ShowWindow(state.address_bars[index], SW_HIDE);
         }
         state.explorers[index].set_visible(visible);
     }
@@ -686,6 +811,53 @@ void close_tab_in_pane(HWND, AppState& state, std::size_t pane_index,
     save_now(state);
 }
 
+void navigate_tab_history(AppState& state, std::size_t pane_index, bool back) {
+    if (!has_active_group(state) ||
+        pane_index >= active_group(state).panes.size() ||
+        state.suppress_history_record[pane_index]) return;
+    auto& tab = active_tab(active_group(state).panes[pane_index]);
+    const bool moved = back ? panedock::core::navigate_tab_back(tab)
+                            : panedock::core::navigate_tab_forward(tab);
+    if (!moved) return;
+    state.suppress_history_record[pane_index] = true;
+    const HRESULT hr = state.explorers[pane_index].navigate(
+        tab.location.parsing_name);
+    if (FAILED(hr)) state.suppress_history_record[pane_index] = false;
+    refresh_navigation_chrome(state, pane_index);
+}
+
+void navigate_up(AppState& state, std::size_t pane_index) {
+    if (!has_active_group(state) ||
+        pane_index >= active_group(state).panes.size()) return;
+    state.explorers[pane_index].navigate_up();
+}
+
+void submit_address(AppState& state, std::size_t pane_index) {
+    if (!has_active_group(state) ||
+        pane_index >= active_group(state).panes.size()) return;
+    const HWND edit = state.address_bars[pane_index];
+    const int length = GetWindowTextLengthW(edit);
+    std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
+    GetWindowTextW(edit, text.data(), length + 1);
+    text.resize(static_cast<std::size_t>(length));
+    state.explorers[pane_index].navigate(text);
+}
+
+LRESULT CALLBACK address_edit_proc(HWND window, UINT message, WPARAM wparam,
+                                   LPARAM lparam, UINT_PTR pane_index,
+                                   DWORD_PTR reference_data) {
+    auto* state = reinterpret_cast<AppState*>(reference_data);
+    if (message == WM_KEYDOWN && wparam == VK_RETURN && state != nullptr) {
+        submit_address(*state, static_cast<std::size_t>(pane_index));
+        return 0;
+    }
+    if (message == WM_CHAR && wparam == VK_RETURN) return 0;
+    if (message == WM_NCDESTROY) {
+        RemoveWindowSubclass(window, address_edit_proc, pane_index);
+    }
+    return DefSubclassProc(window, message, wparam, lparam);
+}
+
 void toggle_layout(HWND window, AppState& state) noexcept {
     if (!has_active_group(state)) return;
     auto& group = active_group(state);
@@ -791,6 +963,12 @@ std::optional<std::size_t> tab_strip_index(const AppState& state,
     return static_cast<std::size_t>(found - state.tab_strips.begin());
 }
 
+bool address_bar_has_focus(const AppState& state) noexcept {
+    const HWND focused = GetFocus();
+    return std::find(state.address_bars.begin(), state.address_bars.end(),
+                     focused) != state.address_bars.end();
+}
+
 void close_tab_at_point(HWND window, AppState& state, POINT point) {
     const std::size_t pane_index = pane_at_point(window, state, point);
     if (pane_index >= state.tab_strips.size() ||
@@ -856,6 +1034,42 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     GetModuleHandleW(nullptr), nullptr);
                 if (state->tab_strips[index] == nullptr) return -1;
                 SendMessageW(state->tab_strips[index], WM_SETFONT,
+                             reinterpret_cast<WPARAM>(
+                                 GetStockObject(DEFAULT_GUI_FONT)),
+                             TRUE);
+                const std::array<const wchar_t*, 3> labels{L"<", L">", L"Up"};
+                const std::array<int, 3> ids{
+                    kBackButtonIdBase + static_cast<int>(index),
+                    kForwardButtonIdBase + static_cast<int>(index),
+                    kUpButtonIdBase + static_cast<int>(index)};
+                const std::array<HWND*, 3> destinations{
+                    &state->back_buttons[index],
+                    &state->forward_buttons[index], &state->up_buttons[index]};
+                for (std::size_t button = 0; button < labels.size(); ++button) {
+                    *destinations[button] = CreateWindowExW(
+                        0, L"BUTTON", labels[button],
+                        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0,
+                        window, reinterpret_cast<HMENU>(ids[button]),
+                        GetModuleHandleW(nullptr), nullptr);
+                    if (*destinations[button] == nullptr) return -1;
+                    SendMessageW(*destinations[button], WM_SETFONT,
+                                 reinterpret_cast<WPARAM>(
+                                     GetStockObject(DEFAULT_GUI_FONT)),
+                                 TRUE);
+                }
+                state->address_bars[index] = CreateWindowExW(
+                    WS_EX_CLIENTEDGE, L"EDIT", nullptr,
+                    WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0,
+                    window,
+                    reinterpret_cast<HMENU>(kAddressBarIdBase +
+                                             static_cast<int>(index)),
+                    GetModuleHandleW(nullptr), nullptr);
+                if (state->address_bars[index] == nullptr ||
+                    !SetWindowSubclass(state->address_bars[index],
+                                       address_edit_proc, index,
+                                       reinterpret_cast<DWORD_PTR>(state)))
+                    return -1;
+                SendMessageW(state->address_bars[index], WM_SETFONT,
                              reinterpret_cast<WPARAM>(
                                  GetStockObject(DEFAULT_GUI_FONT)),
                              TRUE);
@@ -926,6 +1140,30 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 return 0;
             }
             if (HIWORD(wparam) == BN_CLICKED) {
+                const int id = LOWORD(wparam);
+                if (id >= kBackButtonIdBase &&
+                    id < kBackButtonIdBase + static_cast<int>(kExplorerCount)) {
+                    navigate_tab_history(*state,
+                                         static_cast<std::size_t>(
+                                             id - kBackButtonIdBase),
+                                         true);
+                    return 0;
+                }
+                if (id >= kForwardButtonIdBase &&
+                    id < kForwardButtonIdBase +
+                             static_cast<int>(kExplorerCount)) {
+                    navigate_tab_history(*state,
+                                         static_cast<std::size_t>(
+                                             id - kForwardButtonIdBase),
+                                         false);
+                    return 0;
+                }
+                if (id >= kUpButtonIdBase &&
+                    id < kUpButtonIdBase + static_cast<int>(kExplorerCount)) {
+                    navigate_up(*state,
+                                static_cast<std::size_t>(id - kUpButtonIdBase));
+                    return 0;
+                }
                 switch (LOWORD(wparam)) {
                     case kNewGroupId: add_group(window, *state); return 0;
                     case kDuplicateGroupId: duplicate_group(window, *state); return 0;
@@ -1115,7 +1353,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     while ((result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
         if (has_active_group(state)) {
             const std::size_t active = active_pane_index(active_group(state));
-            if (state.explorers[active].translate_accelerator(&message) == S_OK)
+            if (!address_bar_has_focus(state) &&
+                state.explorers[active].translate_accelerator(&message) == S_OK)
                 continue;
             if (message.message == WM_KEYDOWN && message.wParam == VK_F6) {
                 const std::size_t count = active_group(state).panes.size();

@@ -1,7 +1,8 @@
 #pragma once
 
-#include <string_view>
+#include <functional>
 #include <string>
+#include <string_view>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -29,6 +30,10 @@ public:
     HRESULT initialize(HWND parent, const RECT& rect,
                        std::wstring_view location);
     HRESULT navigate(std::wstring_view location);
+    HRESULT navigate_up() noexcept;
+    void set_navigation_callback(
+        std::function<void(std::wstring_view)> callback);
+    void set_navigation_failed_callback(std::function<void()> callback);
     void set_rect(const RECT& rect) noexcept;
     void set_visible(bool visible) noexcept;
     void set_active(bool active) noexcept;
@@ -54,6 +59,8 @@ private:
     HWND error_window_{nullptr};
     bool error_visible_{false};
     std::wstring location_;
+    std::function<void(std::wstring_view)> navigation_callback_;
+    std::function<void()> navigation_failed_callback_;
 };
 
 }  // namespace panedock::explorer_host

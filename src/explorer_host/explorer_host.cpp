@@ -3,6 +3,7 @@
 #include <atomic>
 #include <new>
 #include <string>
+#include <utility>
 
 #include <shlwapi.h>
 
@@ -245,6 +246,28 @@ HRESULT ExplorerHost::navigate(std::wstring_view location) {
     return S_OK;
 }
 
+HRESULT ExplorerHost::navigate_up() noexcept {
+    if (!initialized_ || browser_ == nullptr) return E_UNEXPECTED;
+    // BrowseToObject requires a non-null punk; BrowseToIDList is the
+    // documented way to pass a null pidl with SBSP_PARENT.
+    const HRESULT hr = browser_->BrowseToIDList(nullptr, SBSP_PARENT);
+    if (FAILED(hr)) {
+        log_hresult(L"IExplorerBrowser::BrowseToIDList(SBSP_PARENT)", hr);
+        navigation_failed();
+    }
+    return hr;
+}
+
+void ExplorerHost::set_navigation_callback(
+    std::function<void(std::wstring_view)> callback) {
+    navigation_callback_ = std::move(callback);
+}
+
+void ExplorerHost::set_navigation_failed_callback(
+    std::function<void()> callback) {
+    navigation_failed_callback_ = std::move(callback);
+}
+
 void ExplorerHost::set_rect(const RECT& rect) noexcept {
     rect_ = rect;
     if (initialized_ && browser_ != nullptr) {
@@ -355,6 +378,13 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
     if (error_window_ != nullptr) {
         ShowWindow(error_window_, SW_HIDE);
     }
+    if (navigation_callback_) {
+        try {
+            navigation_callback_(location_);
+        } catch (...) {
+            log_message(L"ExplorerHost: navigation callback failed");
+        }
+    }
 }
 
 void ExplorerHost::navigation_failed() noexcept {
@@ -376,6 +406,13 @@ void ExplorerHost::navigation_failed() noexcept {
         SetWindowPos(error_window_, HWND_TOP, rect_.left, rect_.top,
                      rect_.right - rect_.left, rect_.bottom - rect_.top,
                      SWP_NOACTIVATE);
+    }
+    if (navigation_failed_callback_) {
+        try {
+            navigation_failed_callback_();
+        } catch (...) {
+            log_message(L"ExplorerHost: navigation failed callback failed");
+        }
     }
 }
 
@@ -411,6 +448,8 @@ void ExplorerHost::destroy() noexcept {
     browser_.Reset();
     parent_ = nullptr;
     location_.clear();
+    navigation_callback_ = {};
+    navigation_failed_callback_ = {};
     destroying_ = false;
 }
 
