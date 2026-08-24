@@ -36,6 +36,7 @@ endfunction()
 add_library(panedock_core STATIC
     src/core/layout.cpp
     src/core/model.cpp
+    src/core/session.cpp
 )
 target_include_directories(panedock_core PUBLIC src)
 panedock_set_warnings(panedock_core)

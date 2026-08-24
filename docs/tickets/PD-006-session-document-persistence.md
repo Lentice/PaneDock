@@ -135,3 +135,19 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 — PD-006 實作
+
+- 新增 `src/core/session.h`／`session.cpp`。schema version 常數為 `1`；v1 根物件欄位為 `schema_version`、`groups`、`active_group_id`、`window_placement`。`window_placement` 為 `x`、`y`、`width`、`height`、`maximized`；每個 Group 為 `id`、`name`、`layout_template`、`divider_ratios`、`panes`、`active_pane_id`；每個 pane 為 `id`、`tabs`、`active_tab_id`；每個 tab 為 `id`、`shell_location`、`view_mode`、`sort_column`、`sort_ascending`；`shell_location` 為 `parsing_name`、`known_folder_identity`、`fallback_path`。五個 `layout_template` 字串與列舉同名：`single`、`left_right`、`top_bottom`、`three_pane`、`four_pane_grid`。
+- 未引入 JSON 程式庫。手寫實作為 `session.cpp` 約 530 行（含完整 JSON value/parser/writer、UTF-8/UTF-16 轉換、schema 映射、遷移入口與檔案 I/O），聚焦測試約 131 行、5 個 test function 覆蓋 scope 指定的 10 個情境及未知欄位保留。相較之下，引入通用 JSON 套件會新增並維護第三方原始碼／授權／更新面；目前封閉 schema 只需要這一個 translation unit，故維持零相依。若 schema 成長到第二個持久化文件或 parser 維護成本實際超過套件治理成本，再重評。
+- 原子寫入順序：建立呼叫端提供的目錄、清除同名 stale temp、以 `std::ofstream` binary/truncate 寫入 `session.json.tmp`、`flush` 並關閉；若 `session.json` 已存在，以 `copy_file(...overwrite_existing)` 產生單一 `session.json.bak`；最後以 `std::filesystem::rename` 將同目錄 temp 原子替換主檔。LLVM-MinGW 的實測可直接替換既有目標。建立目錄、開啟／寫入／flush、查詢主檔、備份複製或 rename 任一步失敗皆回傳 `false` 並清除 temp；rename 失敗時主檔未被事先刪除，仍保持原狀。備份可能已更新為該主檔內容，這正是下一次讀取可用的上一個良好版本。
+- `SessionReadResult` 以 `SessionSource::{primary, backup, default_state}` 表達資料來源，另以 `recovered_from_corruption` 區分「因既有損壞檔退回」與「首次啟動、檔案不存在」。`app_shell` 只需在來源為 backup 或該旗標為真時決定 FR-013 的英文 UI 提示；本票未加入 UI。
+- 反序列化先完成 JSON 型別與必填欄位檢查、version 1 migration step，再組成六個 core 型別，最後呼叫 PD-004 的 `is_valid(ApplicationState)`；遇到第一個解析、型別、版本或模型不變式錯誤即停止並回傳 `std::nullopt`，不會暴露部分狀態。未知 schema version 由 migration `switch` 拒絕；version 1 是明確 no-op 分支，未預寫未來 migration。
+- `%LOCALAPPDATA%` 不在 core 解析。`write_session(const std::filesystem::path& directory, ...)` 與 `read_session(const std::filesystem::path& directory, ...)` 均由呼叫端傳入已解析的 PaneDock 目錄；檔名由 `kSessionFileName`、`kSessionBackupFileName`、`kSessionTemporaryFileName` 固定。
+- 依 PD-013，未知 JSON **欄位需要且已實作保留**。`SessionDocument::preserved_json` 保存成功載入的原文件；寫回時先解析它，再覆寫所有 v1 已知欄位。根物件、window placement、Group、pane、tab、Shell location 的未知 key 均原樣保留；集合成員以既有 `id` 配對，重新排序不會把未知欄位移到別的 Group/pane/tab。新建或已刪除的成員不繼承／保留舊成員欄位。此設計沒有修改 PD-004 的六個產品型別，也沒有把 JSON DOM 暴露到公開 API。
+- 新測試為 `tests/unit/core_session_test.cpp`，在 `tests/CMakeLists.txt` 的 `PANEDOCK_TESTS` 表註冊為 `panedock_core_session`。涵蓋完整與空狀態往返、截斷 JSON、合法 JSON 違反 pane 數不變式、未知 version、primary 損壞轉 backup、兩份皆損壞轉 default、首次啟動不誤報 corruption、temp 無法建立時主檔不變、純文字且無 PIDL/blob、每次成功覆寫前的單一備份，以及未知欄位寫回保留。
+- Agent checks（Release，LLVM-MinGW/Ninja）：`cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release` 成功；`cmake --build build` 成功；`ctest --test-dir build -R 'session|persist' --output-on-failure` 1/1 通過；完整 `ctest --test-dir build --output-on-failure` 3/3 通過；Win32/PIDL leakage `rg` 無命中；`ofstream|filesystem::rename` `rg` 僅命中 `src/core/session.cpp` 的標準函式庫 I/O；`git diff --check` 通過。
+
+### 2026-08-24 驗證
+
+獨立重跑 build 與完整 `ctest`(3/3 通過)、兩個邊界 `rg`、`git diff --check`,結果一致。已讀 `src/core/session.h`／`session.cpp`／`tests/unit/core_session_test.cpp` 全文:手寫 JSON parser/writer 正確處理跳脫字元、UTF-16 surrogate pair、UTF-8/UTF-16 互轉;原子寫入的溫、備、主檔順序與失敗清理正確;`read_session` 的三段退回與 `recovered_from_corruption` 語意經逐案核對與 §FR-013 一致(首次啟動不誤判、單一檔損壞轉移、兩者皆損壞轉預設均正確標示來源)。`test_atomic_write_and_backup` 用「在 temp 路徑預先建立同名目錄」這個手法逼 `std::ofstream` 開檔失敗,是驗證 AC3(暫存檔建立失敗時主檔不變)的乾淨做法。未知欄位保留(PD-013 慣例)以 `preserved_json` 往返並用 `id` 配對集合成員,測試 `test_unknown_fields_survive_write_back` 直接證明根層與巢狀 `shell_location` 的未知欄位都能存活寫回。判定為完成。
