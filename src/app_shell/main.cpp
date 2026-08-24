@@ -433,9 +433,10 @@ void layout_sidebar(HWND window, AppState& state) noexcept {
                  SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-void save_now(AppState& state) noexcept {
+void save_now(AppState& state, bool clean_shutdown = false) noexcept {
     capture_locations(state);
     state.session_document.application = state.application;
+    state.session_document.clean_shutdown = clean_shutdown;
     if (!panedock::core::write_session(state.session_directory,
                                        state.session_document)) {
         OutputDebugStringW(L"PaneDock: session persistence failed\n");
@@ -1312,7 +1313,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state != nullptr) {
                 UnregisterHotKey(window, kLayoutToggleHotkeyId);
                 capture_window_placement(window, *state);
-                save_now(*state);
+                save_now(*state, true);
                 destroy_explorers(*state);
                 assert(panedock::explorer_host::live_view_count() == 0);
             }
@@ -1384,15 +1385,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     state.session_directory = *directory;
     auto loaded = panedock::core::read_session(
         state.session_directory, default_application_state());
-    if (loaded.recovered_from_corruption) {
+    const bool recovered_from_corruption = loaded.recovered_from_corruption;
+    const auto session_source = loaded.source;
+    const bool clean_shutdown = loaded.document.clean_shutdown;
+    if (recovered_from_corruption) {
         OutputDebugStringW(L"PaneDock: session recovery source=");
-        OutputDebugStringW(session_source_name(loaded.source));
-        OutputDebugStringW(
-            L"\nTODO: surface session recovery in application chrome\n");
+        OutputDebugStringW(session_source_name(session_source));
+        OutputDebugStringW(L"\n");
     }
     state.session_document = std::move(loaded.document);
     state.application = state.session_document.application;
     assert(panedock::core::is_valid(state.application));
+    save_now(state);
 
     const auto& placement = state.application.window_placement;
     const wchar_t* const title = diagnostic_mode
@@ -1410,6 +1414,31 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     }
     ShowWindow(window, placement.maximized ? SW_SHOWMAXIMIZED : show_command);
     UpdateWindow(window);
+    if (recovered_from_corruption &&
+        session_source == panedock::core::SessionSource::backup) {
+        MessageBoxW(
+            window,
+            L"PaneDock could not read its saved session and restored the "
+            L"previous good version. Some recent changes may be missing.",
+            L"PaneDock", MB_OK | MB_ICONWARNING);
+    }
+    if (recovered_from_corruption &&
+        session_source == panedock::core::SessionSource::default_state) {
+        MessageBoxW(
+            window,
+            L"PaneDock could not read its saved session or its backup and "
+            L"started with a default Group. Your previous Groups could not "
+            L"be recovered.",
+            L"PaneDock", MB_OK | MB_ICONWARNING);
+    }
+    if (!clean_shutdown) {
+        MessageBoxW(
+            window,
+            L"PaneDock did not shut down cleanly last time. If this keeps "
+            L"happening, start it with --diagnostic to run without "
+            L"third-party shell extensions.",
+            L"PaneDock", MB_OK | MB_ICONWARNING);
+    }
     MSG message{};
     int result = 0;
     while ((result = GetMessageW(&message, nullptr, 0, 0)) > 0) {

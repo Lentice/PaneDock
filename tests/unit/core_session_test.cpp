@@ -50,19 +50,27 @@ std::string read_text(const std::filesystem::path& path) {
 }
 
 void test_round_trip_and_plain_json() {
-    const SessionDocument original{sample(), {}};
+    const SessionDocument original{sample(), {}, false};
     const std::string json = serialize_session(original);
     const auto restored = deserialize_session(json);
     EXPECT(restored.has_value());
     EXPECT(restored->application == original.application);
+    EXPECT(!restored->clean_shutdown);
+    EXPECT(json.find("\"clean_shutdown\":false") != std::string::npos);
     EXPECT(json.front() == '{');
     EXPECT(json.find("PIDL") == std::string::npos);
     EXPECT(json.find("blob") == std::string::npos);
     EXPECT(json.find("工作") != std::string::npos);
 
+    const auto clean = deserialize_session(serialize_session(
+        SessionDocument{sample(), {}, true}));
+    EXPECT(clean.has_value());
+    EXPECT(clean->clean_shutdown);
+
     const auto empty = deserialize_session(serialize_session({ApplicationState{}, {}}));
     EXPECT(empty.has_value());
     EXPECT(empty->application == ApplicationState{});
+    EXPECT(empty->clean_shutdown);
 }
 
 void test_corrupt_and_invalid_documents() {
@@ -83,16 +91,33 @@ void test_corrupt_and_invalid_documents() {
 }
 
 void test_unknown_fields_survive_write_back() {
-    std::string json = serialize_session({sample(), {}});
+    std::string json = serialize_session({sample(), {}, true});
+    const auto clean_field = json.find("\"clean_shutdown\":true,");
+    EXPECT(clean_field != std::string::npos);
+    if (clean_field == std::string::npos) return;
+    json.erase(clean_field, std::string("\"clean_shutdown\":true,").size());
     json.insert(json.find('{') + 1, "\"future_root\":{\"enabled\":true},");
     const auto location = json.find("\"shell_location\":{");
     json.insert(location + std::string("\"shell_location\":{").size(),
                 "\"future_location\":[1,2,3],");
     const auto document = deserialize_session(json);
     EXPECT(document.has_value());
+    EXPECT(document->clean_shutdown);
     const std::string rewritten = serialize_session(*document);
     EXPECT(rewritten.find("\"future_root\":{\"enabled\":true}") != std::string::npos);
     EXPECT(rewritten.find("\"future_location\":[1,2,3]") != std::string::npos);
+}
+
+void test_clean_shutdown_type_mismatch_defaults_true() {
+    std::string json = serialize_session({sample(), {}, false});
+    const auto clean_field = json.find("\"clean_shutdown\":false");
+    EXPECT(clean_field != std::string::npos);
+    if (clean_field == std::string::npos) return;
+    json.replace(clean_field, std::string("\"clean_shutdown\":false").size(),
+                 "\"clean_shutdown\":\"unexpected\"");
+    const auto document = deserialize_session(json);
+    EXPECT(document.has_value());
+    EXPECT(document->clean_shutdown);
 }
 
 void test_read_fallbacks() {
@@ -140,13 +165,34 @@ void test_atomic_write_and_backup() {
     EXPECT(read_text(directory.path / kSessionFileName) == unchanged);
 }
 
+void test_corrupt_primary_does_not_replace_good_backup() {
+    TemporaryDirectory directory;
+    SessionDocument document{sample(), {}, true};
+    EXPECT(write_session(directory.path, document));
+    document.application.window_placement.width = 1440;
+    EXPECT(write_session(directory.path, document));
+    const std::string good_backup =
+        read_text(directory.path / kSessionBackupFileName);
+    EXPECT(deserialize_session(good_backup).has_value());
+
+    write_text(directory.path / kSessionFileName, "not json at all");
+    document.application.window_placement.width = 1600;
+    EXPECT(write_session(directory.path, document));
+    EXPECT(read_text(directory.path / kSessionBackupFileName) == good_backup);
+    EXPECT(deserialize_session(
+               read_text(directory.path / kSessionBackupFileName))
+               .has_value());
+}
+
 }  // namespace
 
 int main() {
     test_round_trip_and_plain_json();
     test_corrupt_and_invalid_documents();
     test_unknown_fields_survive_write_back();
+    test_clean_shutdown_type_mismatch_defaults_true();
     test_read_fallbacks();
     test_atomic_write_and_backup();
+    test_corrupt_primary_does_not_replace_good_backup();
     return panedock::test::summary("core_session");
 }

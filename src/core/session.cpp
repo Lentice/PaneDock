@@ -344,7 +344,8 @@ bool migrate(Json&, int version) {
     }
 }
 
-Json encode(const ApplicationState& application, Json root) {
+Json encode(const ApplicationState& application, Json root,
+            bool clean_shutdown) {
     Json::Object result = object(root) ? std::move(*object(root)) : Json::Object{};
     result["schema_version"] = Json{static_cast<double>(kSessionSchemaVersion)};
     result["active_group_id"] = Json{application.active_group_id};
@@ -394,6 +395,7 @@ Json encode(const ApplicationState& application, Json root) {
         groups.push_back(Json{std::move(encoded)});
     }
     result["groups"] = Json{std::move(groups)};
+    result["clean_shutdown"] = Json{clean_shutdown};
     Json::Object placement;
     if (const Json* old = field(result, "window_placement"); old && object(*old)) placement = *object(*old);
     placement["x"] = Json{static_cast<double>(application.window_placement.x)};
@@ -497,7 +499,8 @@ std::string serialize_session(const SessionDocument& document) {
     if (!document.preserved_json.empty()) {
         if (auto parsed = Parser(document.preserved_json).parse()) root = std::move(*parsed);
     }
-    return dump(encode(document.application, std::move(root))) + '\n';
+    return dump(encode(document.application, std::move(root),
+                       document.clean_shutdown)) + '\n';
 }
 
 std::optional<SessionDocument> deserialize_session(std::string_view json) {
@@ -505,7 +508,13 @@ std::optional<SessionDocument> deserialize_session(std::string_view json) {
     if (!parsed) return std::nullopt;
     auto application = decode(*parsed);
     if (!application) return std::nullopt;
-    return SessionDocument{std::move(*application), std::string(json)};
+    bool clean_shutdown = true;
+    if (const auto* root = object(*parsed)) {
+        if (const auto* value = as<bool>(*root, "clean_shutdown"))
+            clean_shutdown = *value;
+    }
+    return SessionDocument{std::move(*application), std::string(json),
+                           clean_shutdown};
 }
 
 bool write_session(const std::filesystem::path& directory,
@@ -528,9 +537,16 @@ bool write_session(const std::filesystem::path& directory,
     const bool had_primary = std::filesystem::exists(primary, error);
     if (error) { std::filesystem::remove(temporary, error); return false; }
     if (had_primary) {
-        std::filesystem::copy_file(primary, backup,
-                                   std::filesystem::copy_options::overwrite_existing, error);
-        if (error) { std::filesystem::remove(temporary, error); return false; }
+        // A corrupt primary must never replace the last known-good backup.
+        if (read_file(primary)) {
+            std::filesystem::copy_file(
+                primary, backup,
+                std::filesystem::copy_options::overwrite_existing, error);
+            if (error) {
+                std::filesystem::remove(temporary, error);
+                return false;
+            }
+        }
     }
     std::filesystem::rename(temporary, primary, error);
     if (!error) return true;

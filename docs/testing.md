@@ -90,6 +90,34 @@ Run manually on a real Windows desktop in a Release build. Use the four-pane lay
 16. Copy once inside a OneDrive placeholder folder. Expected: placeholder semantics remain intact without an unexpected forced local download, or record the exact observed hydration behavior.
 17. On both a mapped network drive and a USB volume, perform one copy and one delete. Expected: native Shell behavior completes correctly for each location type.
 
+## Crash recovery acceptance protocol (Phase 5, FR-013)
+
+Run manually on a real Windows desktop in a Release build. Before changing
+anything, copy `%LOCALAPPDATA%\PaneDock\session.json` and
+`session.json.bak` to a safe temporary directory so the original user state
+can be restored after the check. Record each warning as `PASS`, `FAIL`, or
+`未驗證,需真實桌面` in PD-025's 交接區; do not infer a MessageBox result from
+the source code.
+
+1. Start PaneDock, wait for the normal window, then close it normally. Confirm
+   `session.json` contains `"clean_shutdown":true`. Start it again, wait five
+   seconds, and confirm the running file contains `"clean_shutdown":false`.
+   Stop that process with `Stop-Process -Force`, start PaneDock again, and
+   confirm the warning says it did not shut down cleanly. Dismiss the warning
+   and verify all Groups, panes, tabs, and locations remain present.
+2. With PaneDock closed, replace `session.json` with `not json at all` while
+   leaving a known-good `session.json.bak`. Start the app and confirm the
+   warning says it restored the previous good version. Dismiss it and verify
+   the restored Groups and locations come from the backup.
+3. While the recovered app is running, perform an operation that calls
+   `save_now` (for example, add a tab), then close normally. Parse
+   `session.json.bak` as JSON and confirm it is not the garbage primary and
+   still contains a valid session document.
+4. Replace both `session.json` and `session.json.bak` with invalid text, start
+   PaneDock, and confirm the warning says it started with a default Group.
+   Dismiss it and verify the default Group is usable and the process remains
+   stable. Restore the saved files from the safe temporary directory.
+
 ## MVP acceptance checklist
 
 - [ ] AC-001 four-pane stability, no unhandled COM exceptions

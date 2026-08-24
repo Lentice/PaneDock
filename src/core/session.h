@@ -17,6 +17,7 @@ inline constexpr std::string_view kSessionTemporaryFileName = "session.json.tmp"
 struct SessionDocument final {
     ApplicationState application;
     std::string preserved_json;
+    bool clean_shutdown{true};
 };
 
 enum class SessionSource { primary, backup, default_state };
