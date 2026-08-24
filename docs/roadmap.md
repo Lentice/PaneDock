@@ -19,7 +19,7 @@ Done means every step of the prototype acceptance protocol in `docs/testing.md` 
 
 **Verdict: Go.** Recorded in PD-011's 交接區 (`docs/tickets/PD-011-prototype-acceptance-and-go-no-go.md`). The decisive risk — stable multi-instance `IExplorerBrowser` behavior across independent navigation, native context menus with third-party shell extensions, keep-alive layout switching, and bidirectional cross-pane/external drag and drop — held up on the real interactive desktop. Selection-restoration feasibility got a preliminary written verdict (feasible, likely via public `IFolderView2`/`IShellView` APIs without undocumented `LVM_*` messages); the deep multi-scenario, multi-Windows-build validation is PD-002's job. Layout-churn handle-count verification (protocol step 5) was not executed — the user paused keyboard/mouse automation testing mid-session — and is an open item to close before Phase 1 finishes, not a Phase 0 blocker. Idle CPU/memory/handle-count got one raw reading (PD-011); the formal idle baseline and thresholds are PD-003's job.
 
-## Phase 1 — Core model and persistence
+## Phase 1 — Core model and persistence (done, 2026-08-24)
 
 - `core` data model with its invariants
 - Layout rectangle computation for all five templates
@@ -28,7 +28,9 @@ Done means every step of the prototype acceptance protocol in `docs/testing.md` 
 
 Done means a session document survives a round trip, a schema migration, and a corrupt-file fallback, all under test, with no COM dependency in `core`.
 
-## Phase 2 — Application shell
+Delivered by PD-004 (data model), PD-005 (layout rects), and PD-006 (session persistence). All three have automated `core` test coverage (`panedock_core_model`, `panedock_core_layout`, `panedock_core_session`) plus independent re-verification recorded in each ticket's 交接區. PD-002 (selection-restoration feasibility) and PD-003 (idle resource baseline) remain open alongside Phase 1/2 — PD-002 is done (feasible but unacceptable risk outside plain filesystem folders), PD-003 is `blocked` pending a human running `tests/release/release_evidence.ps1 -CollectMeasurements` on a real interactive desktop.
+
+## Phase 2 — Application shell (done, 2026-08-24)
 
 - Main window, STA setup, message loop, Per-Monitor-V2 DPI
 - Group sidebar with create / rename / duplicate / delete / reorder
@@ -36,6 +38,8 @@ Done means a session document survives a round trip, a schema migration, and a c
 - Active-pane indication and focus routing
 
 Done means a user can create Groups, switch between them, and see the correct pane arrangement restored each time.
+
+Delivered by PD-015 (app_shell wired to `core::ApplicationState` and session persistence, replacing the Phase 0 prototype's ad hoc state), PD-016 (all five layout templates, draggable splitters, DPI-scaled layout constants, F6/Shift+F6 pane-focus cycling), and PD-017 (Group sidebar: create/rename/duplicate/delete/reorder/switch, keep-alive Group switching via a new `ExplorerHost::navigate()`). All three built and passed automated checks (build, existing `core` CTest suite, boundary greps, `git diff --check`) with independent re-verification and a minimal real-desktop launch/close smoke test recorded in each ticket's 交接區. The deeper interactive acceptance items (mouse-drag splitter feel, actual DPI-switch visuals, F6 focus cycling, sidebar button clicks and owner-draw rendering) still need a human to confirm on the real desktop — this session paused keyboard/mouse automation mid-project after a privacy-adjacent stale-window screenshot incident (see PD-015's 交接區), so those are documented as pending rather than claimed.
 
 ## Phase 3 — Tabs and navigation
 
