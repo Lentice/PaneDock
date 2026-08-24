@@ -48,6 +48,8 @@ LLVM-MinGW Clang/LLD targeting `x86_64-w64-windows-gnu`, C++20, `-Wall -Wextra -
 
 The project uses LLVM-MinGW because the development machine has no usable C++20 MSVC toolset. The recorded PD-012 probe confirms that mingw-w64 provides `wrl/client.h` and the Shell COM declarations, and that `IExplorerBrowser` creation, `Initialize`, `BrowseToObject`, and `Destroy` all complete successfully. `Microsoft::WRL::ComPtr` remains the only interface-pointer ownership type.
 
+For Shell-extension troubleshooting, start the same `PaneDock.exe` process with `--diagnostic` (or `/diagnostic`), for example `.\build\PaneDock.exe --diagnostic`. This applies the per-process Microsoft-signed-only DLL policy before OLE initialization and labels the window `PaneDock — Diagnostic Mode` when the policy succeeds; it does not persist a setting or change machine-wide policy.
+
 ## Change workflow
 
 1. Read the ticket, then the `docs/design-spec.md` clauses it quotes, then this file.

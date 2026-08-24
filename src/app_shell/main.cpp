@@ -21,7 +21,9 @@
 #include <vector>
 
 #include <shlobj.h>
+#include <shellapi.h>
 
+#include "app_shell/diagnostic_mode.h"
 #include "core/layout.h"
 #include "core/model.h"
 #include "core/session.h"
@@ -1318,6 +1320,27 @@ bool register_window_class(HINSTANCE instance) noexcept {
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
+    bool diagnostic_mode = false;
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv != nullptr) {
+        const bool requested = panedock::app_shell::diagnostic_requested(
+            argc, argv);
+        LocalFree(argv);
+        if (requested) {
+            PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY policy{};
+            policy.MicrosoftSignedOnly = 1;
+            diagnostic_mode = SetProcessMitigationPolicy(
+                                  ProcessSignaturePolicy, &policy,
+                                  sizeof(policy)) != 0;
+            if (!diagnostic_mode) {
+                OutputDebugStringW(
+                    L"PaneDock: diagnostic mode requested but "
+                    L"SetProcessMitigationPolicy failed\n");
+            }
+        }
+    }
+
     const HRESULT com_result = OleInitialize(nullptr);
     if (FAILED(com_result)) return static_cast<int>(com_result);
 
@@ -1351,8 +1374,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     assert(panedock::core::is_valid(state.application));
 
     const auto& placement = state.application.window_placement;
+    const wchar_t* const title = diagnostic_mode
+                                     ? L"PaneDock \x2014 Diagnostic Mode"
+                                     : L"PaneDock";
     HWND window = CreateWindowExW(
-        0, kWindowClassName, L"PaneDock", WS_OVERLAPPEDWINDOW, placement.x,
+        0, kWindowClassName, title, WS_OVERLAPPEDWINDOW, placement.x,
         placement.y, placement.width, placement.height, nullptr, nullptr,
         instance, &state);
     if (window == nullptr) {
@@ -1361,7 +1387,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         OleUninitialize();
         return exit_code;
     }
-
     ShowWindow(window, placement.maximized ? SW_SHOWMAXIMIZED : show_command);
     UpdateWindow(window);
     MSG message{};

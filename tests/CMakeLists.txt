@@ -8,6 +8,7 @@
 # Add a row here rather than writing another add_executable block.
 
 set(PANEDOCK_TESTS
+    "diagnostic_flag|unit/diagnostic_flag_check.cpp|"
     "core_model|unit/core_model_test.cpp|panedock_core"
     "core_layout|unit/core_layout_test.cpp|panedock_core"
     "core_session|unit/core_session_test.cpp|panedock_core"
@@ -22,7 +23,7 @@ foreach(entry IN LISTS PANEDOCK_TESTS)
 
     add_executable(panedock_${test_name}_test ${test_source})
     target_include_directories(panedock_${test_name}_test PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR})
+        ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src)
     target_link_libraries(panedock_${test_name}_test PRIVATE ${test_libs})
     panedock_set_warnings(panedock_${test_name}_test)
 

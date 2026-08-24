@@ -143,3 +143,36 @@ foreach ($args in @('', '--diagnostic')) {
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 實作交接
+
+#### 完成內容
+
+- 新增 `src/app_shell/diagnostic_mode.h` 的純函式最終簽章：`bool panedock::app_shell::diagnostic_requested(int argc, const wchar_t* const* argv) noexcept`。它只用 `std::wstring_view` 與 ASCII 大小寫折疊比較，從 argv[1] 起掃描，接受 `--diagnostic`／`/diagnostic`，大小寫不敏感，其他參數忽略；沒有引入 `windows.h`、COM、core 依賴或配置狀態。
+- `wWinMain` 透過 `CommandLineToArgvW(GetCommandLineW(), &argc)` 取得 argv，呼叫純函式後立即 `LocalFree(argv)`。命中旗標時，在 `OleInitialize(nullptr)` **之前**設定 `PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY.MicrosoftSignedOnly = 1`，只有 `SetProcessMitigationPolicy(ProcessSignaturePolicy, &policy, sizeof(policy)) != 0` 才把 `diagnostic_mode` 設為 true；失敗只寫 `PaneDock: diagnostic mode requested but SetProcessMitigationPolicy failed` 到 `OutputDebugStringW` 並按一般模式繼續。
+- 主視窗建構使用單一 `const wchar_t* const title`：成功 policy 時為 `PaneDock — Diagnostic Mode`，否則為 `PaneDock`。沒有 runtime toggle、session 欄位、log 檔或 registry 寫入。
+- 新增 `tests/unit/diagnostic_flag_check.cpp` 並註冊為 CTest `panedock_diagnostic_flag`；涵蓋無參數、精確 `--diagnostic`、`/diagnostic`、`--DIAGNOSTIC`、不命中 `--diagnostics`、旗標在第三個 argv、含空格 quoted-path argv 後的旗標。測試 table wiring 將 `src` 加到測試 include path，未改 core。
+- 在 `docs/development.md` 新增一次診斷模式用途與啟動方式：`\.\build\PaneDock.exe --diagnostic`（亦接受 `/diagnostic`）。沒有新增第二個 process、surrogate、IPC、registry、machine-global policy 或 administrator requirement。
+
+#### Acceptance 與互動限制
+
+- Acceptance 1（無參數一般模式標題、第三方 extension 正常）：**未驗證,需真實桌面**。本 session 沒有可操作桌面，也沒有觀察右鍵選單或 extension。程序 smoke 只能確認 process 存活；PowerShell 在此無桌面環境的 `MainWindowHandle` 曾指向 `UAC_InputIndicatorOverlayWnd`，因此不能把 `MainWindowTitle` 空值當成 PaneDock 標題結果。
+- Acceptance 2（`--diagnostic` 標題及本機資料夾導覽）：**未驗證,需真實桌面**。命令列 parser self-check 與數次程序啟動已通過，但沒有真實視窗可點擊／導覽；一次 `/diagnostic` smoke 讀到 `PaneDock — Diagnostic Mode` 且 `Responding=True`，其餘 title 讀值受上述無桌面 handle 限制，不能冒充視覺驗收。
+- Acceptance 3（第三方 shell extension 右鍵選單一般／診斷兩次觀察）：**未驗證,需真實桌面**。使用者請在有第三方 extension 的 Windows 機器上：先以 `\.\build\PaneDock.exe` 啟動，於同一個檔案右鍵並記錄 Microsoft／第三方項目；關閉後以 `\.\build\PaneDock.exe --diagnostic`（或 `/diagnostic`）啟動同一路徑，再右鍵同一檔案，逐項記錄消失／保留的 extension 項目與已安裝 extension 清單。兩次必須使用同一檔案、同一 Shell view，結果補回本交接區。
+- Acceptance 4（旗標等效與否命中）：**PASS（self-check）**。`diagnostic_flag_check` 覆蓋上述七組案例；`--diagnostics`、無參數與非旗標路徑不命中。
+- Acceptance 5（強制 policy failure 後一般模式繼續、標題不顯示診斷、debug event）：**未驗證,需真實桌面／受控 policy 環境**。正常 process smoke 未強制製造 `SetProcessMitigationPolicy` failure，也沒有 DebugView／debugger 讀取 `OutputDebugStringW` 的互動工具；failure branch 已存在且不會使啟動 return early。成功呼叫後 `GetLastError()` 沒有可依 Win32 契約解讀的值，未捏造數字。
+- Acceptance 6（診斷啟動／正常關閉後 session schema 與一般模式 round-trip）：**未驗證,需真實桌面**。本 session 只做啟動後程序層級終止，沒有正常 `WM_CLOSE`、session.json snapshot 與一般模式重開比較；程式碼沒有新增持久化欄位，但這不能替代 round-trip 證據。
+- Acceptance 7（build／CTest／self-check）：**PASS**。LLVM-MinGW configure/build 成功；CTest 4/4 通過（新增 `panedock_diagnostic_flag` 加既有三項 core tests）；self-check 輸出 `PASSED: diagnostic_flag_check`。
+- Acceptance 8（core boundary 與 diff check）：**PASS**。`rg -n "windows\.h|HWND|IUnknown" src/core` 無輸出；`rg -n "RegOpenKey|RegSetValue|HKEY_|CreateProcess|ShellExecute" src` 無輸出；`git diff --check` 通過。policy references 只出現在 `src/app_shell/main.cpp` 的 `CommandLineToArgvW`、`MicrosoftSignedOnly`、`SetProcessMitigationPolicy` 路徑。
+
+#### Agent checks
+
+- 程序 smoke 依票據命令嘗試無參數、`--diagnostic`、`/diagnostic`、`--diagnostics` 四次，各 process 均未宣告 crash；結果受無互動 desktop 的 MainWindowHandle／Responding 不穩定限制，已在 Acceptance 1–2 明確降級。一次輸出曾為 `/diagnostic: Responding=True, MainWindowTitle='PaneDock — Diagnostic Mode', Handles=615`；另一次 `--diagnostic` 曾回報 `Responding=False`，後續重跑不一致，因此不作成功或失敗的 UI 證據。
+- 本機環境資訊：Windows NT `10.0.26200.0`、DisplayVersion `25H2`；無法透過 `Get-CimInstance` 取得完整 edition（拒絕存取），不推測。未使用任何測試 volume、network drive、USB 或 OneDrive。
+- 工作開始前已有未追蹤 `.claude/`，本輪未觸碰；未修改 `docs/tickets.md`／`docs/roadmap.md`；未 commit。
+
+### 2026-08-24 最終檢查補記
+
+- 最終 self-check 另補覆蓋 `--diag`（明確不命中）；因此 parser 案例完整包含無參數、`--diagnostic`、`/diagnostic`、大小寫、`--diagnostics`、`--diag`、第三個 argv 與含空格路徑。
+- 追加案例後重跑：`cmake --build build` 成功、CTest 4/4 通過、`panedock_diagnostic_flag_test.exe` 輸出 `PASSED: diagnostic_flag_check`、core/safety boundary grep 無輸出、`git diff --check` 通過。最終 tracked diff 集中於 `src/app_shell/main.cpp`、新增 `src/app_shell/diagnostic_mode.h`、`tests/CMakeLists.txt`、新增 self-check、`docs/development.md` 與本 ticket 交接區。
+- 最後一次程序 smoke：無參數 `Responding=True`（標題欄讀值受無桌面 handle 限制）；`--diagnostic` `Responding=True`、讀到 `PaneDock — Diagnostic Mode`；`/diagnostic` 同樣 `Responding=True` 且讀到診斷標題；`--diagnostics` `Responding=True` 且不進診斷標題。每個測試 process 均於記錄後終止，沒有宣稱這替代互動桌面驗收。
