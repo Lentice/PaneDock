@@ -61,6 +61,10 @@
 | PD-021 | 送往 active pane 的鍵盤快速鍵:切換/新增/關閉 tab、上一頁/下一頁/上層 | 3 | `done` | PD-019, PD-020 | [PD-021](tickets/PD-021-active-pane-keyboard-shortcuts.md) |
 | PD-022 | 不可解析 location 的可復原錯誤狀態與重試 | 4 | `done` | PD-020 | [PD-022](tickets/PD-022-unresolvable-location-error-and-retry.md) |
 | PD-023 | 檔案操作、剪貼簿與拖放的驗收(FR-007／FR-008) | 4 | `done` | PD-019, PD-021, PD-022 | [PD-023](tickets/PD-023-shell-file-operations-acceptance.md) |
+| PD-024 | 診斷模式:抑制第三方 shell extension(NFR-006) | 5 | `ready` | PD-015 | [PD-024](tickets/PD-024-diagnostic-mode-suppressing-shell-extensions.md) |
+| PD-025 | 崩潰復原路徑:不乾淨關閉偵測、退回備份告知、備份保護(FR-013) | 5 | `planned` | PD-024 | [PD-025](tickets/PD-025-crash-recovery-path.md) |
+| PD-026 | release evidence 改為量測完整應用程式而非 Phase 0 原型 | 5 | `ready` | PD-023 | [PD-026](tickets/PD-026-release-evidence-covers-shipped-app.md) |
+| PD-027 | MVP 驗收清單在四種必要環境的執行與發佈閘門判定 | 5 | `planned` | PD-024, PD-025, PD-026 | [PD-027](tickets/PD-027-mvp-acceptance-and-release-gate.md) |
 
 ## Dependency lanes
 
@@ -95,6 +99,15 @@ Phase 4 — shell operations, gated on PD-020/PD-021
        PD-019 + PD-021 + PD-022 ─── PD-023 (file ops / clipboard / drag-drop acceptance)
   註:Phase 4 前三個 roadmap 條列(IFileOperation、剪貼簿、拖放)由原生 Shell view
       直接提供,不重新實作,因此只有一張實作票(PD-022)加一張驗收票(PD-023)。
+
+Phase 5 — release gate,gated on Phase 4 完成
+  PD-015 ─── PD-024 (診斷模式:MicrosoftSignedOnly,同一 process 內抑制 extension)
+                └─ PD-025 (不乾淨關閉偵測 + 退回備份告知 + backup 不被損壞檔覆寫)
+  PD-023 ─── PD-026 (release evidence 與 performance-baseline 對齊完整應用程式)
+       PD-024 + PD-025 + PD-026 ─── PD-027 (MVP 驗收 × 四種環境 + 閘門判定)
+  註:PD-003(閒置資源量測)自 Phase 0 起 `blocked`,阻塞條件是「人類在真實互動桌面
+      執行 `-CollectMeasurements`」。PD-026 只修工具,不解除它;真正解除它的是 PD-027
+      的量測執行。PD-024/026 可並行,兩者都不需要互動桌面即可完成程式碼與工具部分。
 ```
 
 PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `IShellFolder` fallback in `docs/design-spec.md` §9.1, and the tickets below it must be rewritten rather than adjusted.
@@ -113,6 +126,8 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | 任意遞迴 pane 分割 | `docs/design-spec.md` §3.2 | 固定五種版型已涵蓋實際需求,遞迴分割使版型狀態、還原與矩形計算複雜度大幅上升。要重開需先有使用者實際回報五種版型不足的情境。 |
 | 每個 tab 都保留 live `IExplorerBrowser` | `docs/design-spec.md` §NFR-002 | 這是記憶體無上界成長的唯一原因;閒置資源目標與完整 tab 狀態的共存,靠的就是「只有可見 pane 的 active tab 是 live」。要重開必須先量到 realize-on-activation 的延遲對使用者可感知。 |
 | C# UI 殼層 ＋ C++ shell host DLL 混合 | `docs/adr/0001` | 同一 process 仍須付 .NET runtime,RAM 沒有改善,卻多出 ABI、除錯與打包複雜度;本專案 UI 只有側邊欄與固定版型,C# 殼層可省的工作量趨近於零。唯一值得重開的情境是改為**獨立 process** 隔離第三方 extension 崩潰,且需先有實際崩潰紀錄。 |
+
+**2026-08-24 註記(PD-024 撰寫時的界線確認)**:PD-024「診斷模式:抑制第三方 shell extension」**沒有**重開上表最後一列,也沒有重開 `docs/design-spec.md` §3.2／§14 的「以獨立 process 隔離第三方 shell extension」。兩者目標不同:NFR-006 要的是「可**抑制**」——讓 extension 不要載入本 process,用來歸因崩潰;被否決的是「**隔離**」——讓 extension 在另一個 process 崩潰而不影響我們。PD-024 的手段是同一 process 內的 `SetProcessMitigationPolicy(ProcessSignaturePolicy)` `MicrosoftSignedOnly`,不新增 process、不新增 IPC、不寫 registry。若日後真的累積到實際的 extension 崩潰紀錄,要開的是另一張獨立 process 的票,並依本節規則寫出覆寫與新證據。
 
 ### 建議實作順序(open tickets)
 
@@ -133,7 +148,10 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 
 | 候選 | 觸發條件 |
 |---|---|
-| 診斷模式:抑制第三方 shell extension | Phase 5 前必須開;若在 Phase 0 原型就遇到 extension 造成的崩潰則提前。 |
+| ~~診斷模式:抑制第三方 shell extension~~ | **已於 2026-08-24 開票(PD-024),不再是候選。** 手段為同一 process 內的 `MicrosoftSignedOnly` binary signature policy ＋ `--diagnostic` 命令列旗標;與被否決的「獨立 process 隔離」是不同方向,見上節 2026-08-24 註記。 |
+| 以獨立 process 隔離第三方 shell extension | `docs/design-spec.md` §14 保留的方向,目前明確不在範圍。觸發條件不變:**先有實際的 extension 崩潰紀錄**。PD-024 的診斷模式正是產生那份紀錄(「一般模式崩潰、`--diagnostic` 不崩潰」)的工具;累積到具體案例再依 §已否決的方向 的規則開票。 |
+| 產品內的計時儀器(Group 切換／tab realize／cold start 延遲) | PD-026(2026-08-24)刻意排除:三者都沒有 blocking 門檻,加儀器要動產品程式碼。若使用者實際回報切換有感延遲,再開票加 `QueryPerformanceCounter` 量測點,屆時 `docs/performance-baseline.md` 對應列才有數字可填。 |
+| 崩潰迴圈的自動安全模式(連續 N 次不乾淨關閉即自動以 `--diagnostic` 啟動) | PD-025(2026-08-24)刻意排除:沒有真實崩潰資料前 N 是憑空調的,且自動重啟需要 `CreateProcess`,會在單一 process 架構上開一個口子。若使用者實際遇到崩潰迴圈再開票。 |
 | 縮圖 pipeline 的快取與尺寸上限 | 待 PD-003 量出縮圖對記憶體的實際貢獻後再開,避免憑估計調參數。 |
 | `IShellFolder` 自建清單檢視(fallback) | 僅在 PD-001 判定 No-Go 時開。 |
 | 側邊欄寬度的全域設定持久化 | 若使用者回報每次啟動都要重拖再開;目前預設值可接受。 |
