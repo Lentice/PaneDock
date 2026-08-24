@@ -120,3 +120,65 @@ Get-Process PaneDock | Select-Object Responding, HandleCount, WorkingSet64
 - 明確列出「已由 PD-011 在 Phase 0 驗過因此本次略過」的項目,以及略過的理由。
 - 任何 `FAIL` 對應開出的新 ticket 編號。
 - **執行 agent 若沒有互動桌面,就把 A–D 整份協定寫好、把能自動執行的部分(建置、`rg` 檢查、程序層級啟動檢查)做完,然後把 A–D 全部標為「未驗證,需真實桌面」交回,由 reviewer 或使用者補上。這是可接受的完成方式;猜測結果不是。**
+
+## 交接區
+
+<!-- 驗收 agent 填寫,append-only -->
+
+### 2026-08-24 非互動環境驗收交接
+
+#### 產出與執行環境
+
+- 已在 `docs/testing.md` 新增 `Shell file operations acceptance protocol (Phase 4)`，完整列出 A1–A7、B8–B10、C11–C15、D16–D17 的操作、預期結果、四 pane／兩個 volume／disposable test data 前置條件，以及每項只能記錄 `PASS`／`FAIL`／`未驗證,需真實桌面` 的規則。
+- 本 session 可讀得的 OS 資訊為 Windows NT `10.0.26200.0`、DisplayVersion `25H2`、CurrentBuildNumber `26200`；registry 的 ProductName 回報 `Windows 10 Pro`（該欄位在新 Windows build 可能保留舊產品字串，因此只記錄原始讀值，不推測實際 edition）。
+- 本 session 沒有互動桌面，沒有操作任何測試檔、磁碟機或外部應用程式。涉及的磁碟機代號與類型：**未驗證,需真實桌面**；reviewer 執行時必須補記同磁碟與跨磁碟代號、USB、mapped network drive 與 OneDrive 測試位置。
+- 沒有修改任何 `src/` 產品碼、core、session schema、`docs/tickets.md` 或 `docs/roadmap.md`。雖然本輪沒有觀察到 `FAIL`，使用者明確要求不要更新 roadmap，因此 Phase 4 完成紀錄留給有真實 A–D 證據的 reviewing session。
+
+#### A. 檔案操作（FR-007）
+
+- **A1 右鍵 Copy／跨 pane Paste 與原生進度 UI：未驗證,需真實桌面。**
+- **A2 同磁碟 Cut／Paste 移動：未驗證,需真實桌面。**
+- **A3 大量／大檔複製、取消及來源完整性：未驗證,需真實桌面。**
+- **A4 同名衝突 Replace／Skip／Keep both 三選項：未驗證,需真實桌面。**
+- **A5 Recycle Bin Delete 與 `Shift+Delete` 永久刪除確認：未驗證,需真實桌面。**
+- **A6 `F2` 就地 rename、`Esc` 取消及重名提示：未驗證,需真實桌面。**
+- **A7 操作進行中切 Group／tab／拖 splitter 的重入穩定性：未驗證,需真實桌面。**
+
+#### B. 剪貼簿（FR-007）
+
+- **B8 pane 內 `Ctrl+C`／`Ctrl+X`／`Ctrl+V`：未驗證,需真實桌面。**
+- **B9 PaneDock 與 Windows File Explorer 雙向 copy/paste：未驗證,需真實桌面。**
+- **B10 貼至接受檔案的郵件／聊天應用程式：未驗證,需真實桌面。**
+
+#### C. 拖放（FR-008）
+
+- **C11 pane A → pane B，同磁碟預設 move：未驗證,需真實桌面。**
+- **C12 pane A → pane B，跨磁碟預設 copy：未驗證,需真實桌面。**
+- **C13 PaneDock 與外部 File Explorer 雙向拖放：未驗證,需真實桌面。**
+- **C14 drop 至 non-active pane 的落點及 active 行為：未驗證,需真實桌面。**
+- **C15 拖曳移出再返回及 `Esc` 取消後無卡住狀態：未驗證,需真實桌面。**
+
+#### D. 命名空間抽樣（FR-009）
+
+- **D16 OneDrive placeholder folder 內複製及 hydration 語意：未驗證,需真實桌面。**
+- **D17 mapped network drive 與 USB volume 各一次 copy/delete：未驗證,需真實桌面。**
+
+#### PD-011 歷史證據與本輪略過範圍
+
+- PD-011 Phase 0 Step 3 曾在真實桌面確認一般 pane-to-pane drag/drop，Step 4 曾確認 PaneDock 與外部 File Explorer 雙向 drag/drop；本輪沒有重演這兩項。它們是 C11–C13 的歷史 baseline，但 Step 3 沒有記錄來源／目的磁碟代號，無法分辨同磁碟 move 與跨磁碟 copy，且 PD-015／017／019 後已更換 state、Group 與 tab/host 路徑，因此不能當成本 ticket 現行完整 build 的 C11／C12 PASS。C13 同樣因本輪沒有互動桌面而維持未驗證。
+- PD-014 的真實桌面驗收另曾確認跨 pane `Ctrl+C`／`Ctrl+V`，可作為 B8 的部分歷史證據；它沒有涵蓋 `Ctrl+X`，且發生在 PD-021 快速鍵派送之前，因此本輪略過重演但不宣稱 B8 PASS。
+- 其餘 A1–A7、B9–B10、C14–C15、D16–D17 沒有可直接沿用且符合本協定細節的 PD-011 證據。沒有任何本輪 `FAIL`，所以沒有建立後續 ticket。
+
+#### 可自動驗證結果
+
+- `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`：通過。
+- `cmake --build build`：通過，`ninja: no work to do`。
+- `ctest --test-dir build --output-on-failure`：3/3 通過（`panedock_core_model`、`panedock_core_layout`、`panedock_core_session`）。
+- `rg -n "OleInitialize|OleUninitialize" src`：命中 `src/app_shell/main.cpp` 的一個 `OleInitialize` 與五個對應 failure／shutdown `OleUninitialize` 路徑；OLE 初始化前提仍存在。
+- 靜態訊息路徑：`translate_accelerator` 仍先於 PD-021 app-shell shortcuts；後者只攔截 T/W/Tab、Alt+Left/Right、Backspace、F6，未攔截 C/V/X/Delete/F2。這不是互動 PASS，只是 boundary trace。
+- 程序 smoke check：啟動本 session 自己的 `build\\PaneDock.exe`，等待 2 秒後 `PID=24480`、`Responding=True`、`HandleCount=766`、`WorkingSet64=58179584`、`HasExited=False`；記錄後只終止該測試 process。
+- 工作開始前已有未追蹤 `.claude/`，本輪未觸碰；未 commit。
+
+### 2026-08-24 最終檢查補記
+
+- `git diff --check`：通過。`git diff --name-only` 最終只有 `docs/testing.md` 與本 ticket，沒有任何 `src/*` diff；`docs/tickets.md`、`docs/roadmap.md` 均未修改。

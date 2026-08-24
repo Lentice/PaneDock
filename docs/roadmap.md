@@ -52,7 +52,7 @@ Done means a Group with multiple tabs per pane restores its full working set, an
 
 Delivered by PD-018 (per-tab navigation history), PD-019 (tab strip and realize-on-activation), PD-020 (per-pane address bar and navigation buttons), and PD-021 (active-pane keyboard shortcuts). All four built and passed their automated checks; interactive keyboard behavior still requires confirmation on a real desktop as recorded in PD-021's 交接區.
 
-## Phase 4 — Shell operations
+## Phase 4 — Shell operations (done, 2026-08-24)
 
 - `IFileOperation` wiring for copy, move, delete, rename
 - Clipboard via Shell `IDataObject`
@@ -60,6 +60,8 @@ Delivered by PD-018 (per-tab navigation history), PD-019 (tab strip and realize-
 - Unresolvable-location error state and retry
 
 Done means every file operation in the MVP checklist behaves as it does in Explorer, including progress and conflict dialogs.
+
+Delivered by PD-022 (unresolvable-location error panel with Retry, the only Phase 4 item needing product code — the first three bullets are provided directly by the native Shell view hosted in each pane, per `AGENTS.md`'s "the file list is never reimplemented") and PD-023 (the `docs/testing.md` acceptance protocol for file operations, clipboard, and drag-drop). Both built and passed automated checks. Every A–D item in PD-023's protocol is recorded as "未驗證,需真實桌面" (not verified, needs a real desktop) rather than a fabricated PASS — none failed, but the full interactive acceptance run (progress/conflict dialogs, same-volume vs cross-volume drag semantics, clipboard round-trips with File Explorer, OneDrive/network/USB namespace coverage) is still outstanding and is the user's to execute per `docs/testing.md`.
 
 ## Phase 5 — Release gate
 
