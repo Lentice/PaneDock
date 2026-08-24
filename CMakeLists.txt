@@ -58,7 +58,15 @@ target_link_libraries(panedock_explorer_host PRIVATE
 )
 panedock_set_warnings(panedock_explorer_host)
 # add_library(panedock_file_operations STATIC src/file_operations/...)
-# add_library(panedock_sidebar STATIC src/sidebar/...)
+add_library(panedock_sidebar STATIC
+    src/sidebar/sidebar.cpp
+)
+target_include_directories(panedock_sidebar PUBLIC src)
+target_compile_definitions(panedock_sidebar PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
+)
+target_link_libraries(panedock_sidebar PRIVATE user32 gdi32)
+panedock_set_warnings(panedock_sidebar)
 
 add_executable(PaneDock WIN32 src/app_shell/main.cpp)
 target_compile_definitions(PaneDock PRIVATE
@@ -66,7 +74,7 @@ target_compile_definitions(PaneDock PRIVATE
 )
 target_link_options(PaneDock PRIVATE -municode)
 target_link_libraries(PaneDock PRIVATE
-    panedock_core panedock_explorer_host
+    panedock_core panedock_explorer_host panedock_sidebar
     shell32 ole32 shlwapi user32 gdi32 uuid
 )
 panedock_set_warnings(PaneDock)

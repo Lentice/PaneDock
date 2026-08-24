@@ -217,13 +217,20 @@ HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
     }
     advised_ = true;
 
-    // Initialize/Advise happen before the requested navigation. Keep the
-    // original parsing name until a successful navigation supplies a new one.
+    return navigate(location);
+}
+
+HRESULT ExplorerHost::navigate(std::wstring_view location) {
+    if (!initialized_ || browser_ == nullptr) return E_UNEXPECTED;
+
+    // Preserve the requested parsing name while navigation is pending or if
+    // the Shell cannot currently resolve it. Session capture must not replace
+    // a newly selected Group's destination with the previous Group's folder.
     location_ = location;
     std::wstring location_text(location);
     Microsoft::WRL::ComPtr<IShellItem> item;
-    hr = SHCreateItemFromParsingName(location_text.c_str(), nullptr,
-                                     IID_PPV_ARGS(&item));
+    HRESULT hr = SHCreateItemFromParsingName(location_text.c_str(), nullptr,
+                                              IID_PPV_ARGS(&item));
     if (FAILED(hr)) {
         log_hresult(L"SHCreateItemFromParsingName", hr);
         navigation_failed();
@@ -233,7 +240,6 @@ HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
     hr = browser_->BrowseToObject(item.Get(), SBSP_ABSOLUTE);
     if (FAILED(hr)) {
         log_hresult(L"IExplorerBrowser::BrowseToObject", hr);
-        location_ = location;
         navigation_failed();
     }
     return S_OK;

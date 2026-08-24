@@ -127,3 +127,66 @@ Get-Content "$env:LOCALAPPDATA\PaneDock\session.json"
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 實作交接
+
+#### 完成內容
+
+- 新增 `panedock_sidebar` 靜態程式庫與 `src/sidebar/sidebar.h`／`sidebar.cpp`。它以原生 `LISTBOX`（`LBS_HASSTRINGS | LBS_OWNERDRAWFIXED | LBS_NOTIFY | WS_VSCROLL`）承載 Group 清單，由 `WM_MEASUREITEM`／`WM_DRAWITEM` 繪製系統色選取高亮與 focus rectangle；資料只是一份由 `ApplicationState.groups` 投影出的 `GroupSummary`，權威狀態仍在 core。
+- `AppState` 新增 `Sidebar`、六個 button HWND 與空狀態 STATIC HWND；`WM_CREATE` 建立英文 UI `New Group`、`Duplicate Group`、`Rename Group`、`Delete Group`、`Move Up`、`Move Down`，`WM_COMMAND` 分別接到既有 `core::add_group`／`duplicate_group`／`rename_group`／`delete_group`／`reorder_group`。每個成功 mutation 都會 `refresh_sidebar` 並在該次操作完成後呼叫 `save_now(AppState&) noexcept`。
+- Up／Down 在邊界禁用；其餘非 New 按鈕在無 Group 時禁用。Delete 使用 `MessageBoxW(..., MB_YESNO | MB_ICONWARNING)` 二次確認。Duplicate 名稱固定為來源名稱加 `L" copy"`。
+- Group 選取切換會先 `capture_locations` 保存舊 active Group，改寫 `active_group_id`，然後讓新 Group 的每個可見且已 realized host 呼叫新增的 `HRESULT ExplorerHost::navigate(std::wstring_view location)`；尚未 realized 的可見 host 才交給 `apply_layout` 初始化，超出新 layout pane 數的 host 只 `set_visible(false)`。切換路徑不呼叫 `destroy()`，因此保留 PD-015 的 live-host 模式；`navigate` 也會在非同步 Shell 導覽前先記住要求的 parsing name，緊接著的 `save_now` 不會把舊 Group location 寫回新 Group。
+- pane rect、splitter rect、pane hit-test 共用扣除 sidebar 後的 `pane_area`。垂直 splitter drag 的 numerator 改為 `point.x - pane_area.left`，denominator 使用 pane area width 減 divider；水平 drag 同理使用 pane area 的 y/height。因此左側新增偏移不會扭曲既有比例計算，且 sidebar 點擊不會命中 pane/splitter。
+
+#### `sidebar` 最終公開介面
+
+```cpp
+inline constexpr int kSidebarWidth = 200;
+inline constexpr UINT kRenameCommitMessage = WM_APP + 1;
+
+struct GroupSummary final {
+    std::string id;
+    std::wstring name;
+};
+
+class Sidebar final {
+public:
+    bool create(HWND parent, int control_id) noexcept;
+    void set_rect(const RECT& rect, UINT dpi) noexcept;
+    void set_groups(const std::vector<GroupSummary>& groups);
+    std::optional<std::size_t> selected_index() const noexcept;
+    void set_selected_index(std::size_t index) noexcept;
+    bool measure_item(MEASUREITEMSTRUCT* item, UINT dpi) const noexcept;
+    bool draw_item(const DRAWITEMSTRUCT* item) const noexcept;
+    bool begin_rename();
+    std::optional<std::wstring> take_rename_text() noexcept;
+    HWND window() const noexcept;
+};
+```
+
+`kSidebarWidth` 是 96-DPI logical pixels；app shell 用 `MulDiv(kSidebarWidth, GetDpiForWindow(window), 96)` 得到實際寬度。8 px margin、4 px gap、28 px button/list-row 高度與 owner-draw 文字 inset 也依同一 DPI 比例換算。此寬度沒有 splitter，也不持久化。
+
+Rename 採用在選取 ListBox item 上疊加單行原生 `EDIT` 的方式：Enter commit、Escape 或失焦 cancel。這比新增 `.rc` 與 `DialogBoxParamW` 資源更少程式與建置面積，且仍提供明確確認／取消；commit 透過 `kRenameCommitMessage` 回到 app shell，sidebar 本身不修改 core 狀態。
+
+#### identity 與空狀態
+
+- 新 Group id 掃描所有 `group-<純數字>` id 的最大後綴並加一；遇到 `group-` 命名空間內無法解析的後綴時，退回 system-clock milliseconds，若同一毫秒仍碰撞再追加 discriminator。既有 `default` 不屬於數字 Group id 且不妨礙遞增。Group id、`pane-*`、`tab-*` 分別用在不同欄位／命名空間；Group 產生器不拿新 Group id 當 pane/tab id，因此不會與 PD-015/PD-016 的 pane/tab identity 衝突。
+- New 在有 active Group 時只沿用其 `LayoutTemplate`，divider 使用該 template 的預設比例，所有可見 pane location 依既有表重設為 `C:\`、`C:\Windows`、`C:\Users`、`C:\Program Files`；從零 Group 建立時使用既有四 pane default。Duplicate 則由 core 複製來源完整狀態。
+- 刪除最後一個 Group 後，core 留下合法的空 `groups`／空 `active_group_id`。`apply_layout` 先配置永遠可見的 sidebar，再把所有 ExplorerHost `set_visible(false)`（不 initialize／destroy），並顯示 pane area 中央的原生 STATIC：`No Group. Click New Group to get started.`。message loop、F6、hotkey、pane/splitter hit-test 與 session capture 均有空狀態 guard；從空狀態按 New 會重新 realize 新 Group 可見的 panes。
+
+#### 驗證結果與限制
+
+- Release configure 成功：`cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`。
+- 完整建置成功：`cmake --build build`。
+- `ctest --test-dir build --output-on-failure`：3/3 通過（`panedock_core_model`、`panedock_core_layout`、`panedock_core_session`）。
+- `rg -n "windows\.h|HWND|ComPtr" src\core`：無命中，sidebar/Win32 未洩漏進 core。
+- `rg -n "LayoutState|PrototypeLocationState|quadrant_layout|prototype_location_persistence" src tests CMakeLists.txt`：無命中，舊 prototype 邊界仍保持清除。
+- `git diff --check`：通過。
+- 靜態 code-path 檢查涵蓋：每個按鈕的 control id → `WM_COMMAND` → 對應 core mutation → `refresh_sidebar`／`save_now`；ListBox `LBN_SELCHANGE` → 舊 Group capture → realized-visible-only `navigate` → `apply_layout` realize/hide → active pane/focus → save；Delete-to-zero 與 New-from-zero 不會呼叫 `active_group` 的 assert 路徑；sidebar offset 同時用於 layout、splitter hit-test 與 drag math。
+- 目前執行環境沒有互動式 Windows desktop，因此無法誠實驗證實際 button click、ListBox 單擊／鍵盤選取、inline EDIT 輸入與 Enter/Escape、MessageBox 確認、owner-draw 實際視覺、高 DPI monitor 切換、真實 Shell location 切換，亦無法在操作後人工讀取 `%LOCALAPPDATA%\PaneDock\session.json` 或 close/reopen 核對 round-trip。這些 Acceptance 1–7 的人工項目仍需在真實桌面依 Agent checks 執行。也因未能視覺檢查，目前沒有可回報的 Windows 版本特定 owner-draw 高 DPI 渲染問題；28 logical-pixel row height 同時由 `WM_MEASUREITEM` 與 `LB_SETITEMHEIGHT` DPI 縮放，僅能由程式路徑確認。
+
+### 2026-08-24 驗證
+
+獨立重跑 build 與完整 `ctest`(3/3 通過)、兩個邊界 `rg`、`git diff --check`,結果一致。`git status` 確認變動範圍為 `CMakeLists.txt`、`src/app_shell/main.cpp`、`src/explorer_host/explorer_host.{h,cpp}`、新增的 `src/sidebar/`,與 PD-017 的 scope 一致。逐行讀過 `sidebar.h`／`sidebar.cpp`(owner-draw ListBox、inline EDIT rename、`WM_KILLFOCUS`/Escape 取消、Enter 提交)與 `main.cpp` 全文(`activate_group`、`add_group`、`duplicate_group`、`delete_group`、`move_group`、空狀態的 `has_active_group` 守衛)：邏輯正確,`activate_group` 對每個仍在新 Group pane 數量範圍內、且已 realize 的 host 呼叫新增的 `ExplorerHost::navigate`,確保切換 Group 後畫面與 model 不會分岔(這比 PD-016 的版型內切換更完整,因為它明確重新導覽而非仰賴 host 保留舊內容)。`ExplorerHost::navigate` 的新增是 PD-015 交接區已預先授權的擴充,不算範圍外變更。
+
+真實桌面上做了不涉及鍵盤/滑鼠點擊的最小驗證:啟動最新 build,四個 pane 正常渲染、`Responding=True`,正常關閉無當機,關閉後 `session.json` 內容不受側邊欄程式碼新增影響(`active_group_id=default`、`groups[0].name=Group 1`,與加入側邊欄前一致)。實際點擊 New/Duplicate/Rename/Delete/Move Up/Move Down、side bar 選取切換 Group、owner-draw 視覺與高 DPI 下的呈現,依目前政策不使用鍵盤/滑鼠自動化驗證,留待你方便時手動確認。程式碼層面與可自動化的部分已核實無誤,判定為完成。
