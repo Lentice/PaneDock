@@ -52,6 +52,9 @@
 | PD-005 | 五種版型的矩形計算 | 1 | `done` | PD-004 | [PD-005](tickets/PD-005-layout-rect-computation.md) |
 | PD-006 | session document 序列化與遷移 | 1 | `done` | PD-004 | [PD-006](tickets/PD-006-session-document-persistence.md) |
 | PD-013 | 設定檔可擴充性慣例(跨 ticket 通用規則) | 1 | `done` | — | [PD-013](tickets/PD-013-config-file-extensibility-convention.md) |
+| PD-015 | app_shell 改用 `core` 的 Group/session 型別取代原型狀態與持久化 | 2 | `ready` | PD-006 | [PD-015](tickets/PD-015-app-shell-core-state-wiring.md) |
+| PD-016 | 全部五種版型、可拖曳分隔線、DPI 縮放修正、鍵盤 pane 焦點切換 | 2 | `planned` | PD-015 | [PD-016](tickets/PD-016-splitters-five-layouts-and-dpi-scaling.md) |
+| PD-017 | Group 側邊欄:建立/重新命名/複製/刪除/重新排序/切換 | 2 | `planned` | PD-015 | [PD-017](tickets/PD-017-group-sidebar.md) |
 
 ## Dependency lanes
 
@@ -70,6 +73,9 @@ Phase 1 — core, gated on PD-011 returning Go
   PD-004 (model + invariants)
     ├─ PD-005 (layout rects)
     └─ PD-006 (session persistence)
+         └─ PD-015 (app_shell wired to core state + session, single Group, two layouts)
+              ├─ PD-016 (all five layouts, draggable splitters, DPI scaling, F6 pane focus)
+              └─ PD-017 (Group sidebar: create/rename/duplicate/delete/reorder/switch)
 ```
 
 PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `IShellFolder` fallback in `docs/design-spec.md` §9.1, and the tickets below it must be rewritten rather than adjusted.
