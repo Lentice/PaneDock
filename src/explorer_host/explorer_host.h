@@ -46,6 +46,13 @@ public:
     void navigation_failed() noexcept;
 
 private:
+    static bool register_error_window_class() noexcept;
+    static LRESULT CALLBACK error_window_proc(HWND window, UINT message,
+                                               WPARAM wparam,
+                                               LPARAM lparam) noexcept;
+    void layout_error_controls() noexcept;
+    void retry_navigation() noexcept;
+
     Microsoft::WRL::ComPtr<IExplorerBrowser> browser_;
     Microsoft::WRL::ComPtr<IServiceProvider> site_;
     Microsoft::WRL::ComPtr<IExplorerBrowserEvents> events_;
@@ -57,6 +64,8 @@ private:
     HWND parent_{nullptr};
     RECT rect_{};
     HWND error_window_{nullptr};
+    HWND error_message_{nullptr};
+    HWND retry_button_{nullptr};
     bool error_visible_{false};
     std::wstring location_;
     std::function<void(std::wstring_view)> navigation_callback_;

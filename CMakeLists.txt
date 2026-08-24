@@ -85,6 +85,9 @@ add_executable(panedock_explorer_host_lifetime_check
 target_include_directories(panedock_explorer_host_lifetime_check PRIVATE
     src tests
 )
+target_link_libraries(panedock_explorer_host_lifetime_check PRIVATE
+    panedock_explorer_host ole32 user32
+)
 panedock_set_warnings(panedock_explorer_host_lifetime_check)
 
 add_subdirectory(tests)

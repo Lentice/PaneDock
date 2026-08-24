@@ -104,3 +104,40 @@ Get-Process PaneDock | Select-Object Responding, HandleCount
 - 記錄 Acceptance 2(重啟後設定仍保留)是用什麼方式驗證的——這是本 ticket 最重要的一條,不能只靠讀程式碼下結論。
 - 若發現 `navigation_failed()` 在某些情境下**不會**被觸發(例如 Shell 自己顯示了 "can't access" 頁面而回報導覽成功),明確記下來:那代表錯誤面板有覆蓋不到的情況,可能需要後續 ticket。
 - 若有任何 Acceptance 因為沒有互動桌面而無法驗證,逐項明確標示「未驗證,需真實桌面」,不要猜測或編造結果。
+
+## 交接區
+
+<!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 實作交接
+
+#### 完成內容
+
+- 最終採用自註冊的輕量 `PaneDock.ErrorPanel` child window 作為每個 `ExplorerHost` 的錯誤容器，內含原生 multiline `STATIC` 與 `BUTTON`。相較把兩個控制項直接掛在 app-shell 主視窗，容器能以單一 HWND 完整遮住 Shell view，並讓既有 `set_rect`／`set_visible`／`navigation_complete`／`destroy` 路徑維持一次搬移、顯示、隱藏與銷毀；沒有把錯誤 UI 所有權上移到 app_shell。
+- `Retry` 的控制項 ID 最終為 `kRetryButtonId = 1`，ID 只在各自的 error-container `WM_COMMAND` 範圍內使用。容器以 `GWLP_USERDATA` 保存對應 `ExplorerHost*`；`BN_CLICKED` 呼叫 private `retry_navigation()`，先複製 `location_` 再呼叫既有 `navigate()`，沒有計時器、自動重試或輪詢。
+- `navigation_failed()` 每次均以目前 `location_` 重設訊息，最終 UI 字串為 `This location is not available:\n<location>\n\nReconnect the drive or check the path, then retry.`。同一容器與兩個 child controls 會重用，不會在重試失敗時重複疊加 HWND；不同 pane 各有自己的 `ExplorerHost` 成員與控制項。
+- `layout_error_controls()` 依 error container 的目前 client rect 與 `GetDpiForWindow` 排列訊息及 Retry 按鈕，並對極窄／極矮矩形夾限為非負尺寸。`set_rect` 搬移容器後重排 children；`set_visible` 顯示／隱藏容器；`focus` 在錯誤狀態聚焦 Retry；`navigation_complete` 沿用既有邏輯隱藏容器；`destroy` 銷毀容器（Win32 連帶銷毀兩個 children）並清空三個 HWND。
+- `navigation_failed_callback_` 路徑未改動：首次失敗及 Retry 再失敗都仍通知 app_shell 的 `handle_navigation_failed`，因此既有 `suppress_history_record` 清旗標與 navigation chrome refresh 保持有效。沒有修改 core、session schema、ExplorerHost 公開簽章、`docs/tickets.md` 或 `docs/roadmap.md`。
+- `tests/unit/explorer_host_lifetime_check.cpp` 現在連結真實 `panedock_explorer_host`，在 hidden parent 下初始化 host，再以保證不合法的 `?:\\PaneDock-PD-022-definitely-not-there` 呼叫 `navigate()`；self-check 驗證 `location()` 仍精確等於請求字串，之後 `destroy()` 使 `live_view_count() == 0` 且 parent 不再有 child HWND。這是 FR-012「失敗後保留目前請求」可自動驗證的 runtime 部分。
+
+#### Acceptance 與驗證結果
+
+- Acceptance 1（真實網址列輸入後顯示 location 與 Retry）：**未驗證，需真實桌面**。靜態路徑確認 `submit_address -> ExplorerHost::navigate -> navigation_failed` 會更新並顯示面板，但未冒充視覺／輸入驗收。
+- Acceptance 2（實際關閉及重開 PaneDock 後仍嘗試相同 location）：**未驗證，需真實桌面**。本 session 沒有用真實 UI 輸入失敗 location、正常 `WM_CLOSE` 寫入 session，再重開觀察；因此沒有把 source inspection 或上述單次 host self-check 當成 restart round-trip 結果。Reviewer 必須照此步驟驗證，這仍是本 ticket 最重要的人工項目。
+- Acceptance 3（點 Retry、再次失敗且不疊加／崩潰）：**未驗證，需真實桌面**。程式碼重用同一組 HWND 並重新呼叫相同 location，但未執行真實按鈕點擊。
+- Acceptance 4（目的地恢復後 Retry 成功並隱藏面板）：**未驗證，需真實桌面**。成功 callback 的 hide 路徑保留，但未實際切換磁碟機／資料夾可用性。
+- Acceptance 5（splitter、layout、Group、tab、DPI 後矩形）：**未驗證，需真實桌面**。所有既有 layout 入口仍經 `set_rect`，且子控制項會同步重排，但未宣稱視覺通過。
+- Acceptance 6（關閉後無 orphan window）：self-check 通過；顯式 `host.destroy()` 後 `live_view_count() == 0` 且 `GetWindow(parent, GW_CHILD) == nullptr`。完整 app 的真實 WM_CLOSE 視覺觀察仍未執行。
+- Acceptance 7（兩 pane 同時顯示各自 location）：**未驗證，需真實桌面**。instance state 靜態上互相獨立，但未冒充雙 pane 視覺驗收。
+- 尚未能觀察 Shell 是否會在某些目的地自行顯示「can't access」頁面卻回報 navigation complete，因為沒有互動桌面；此覆蓋缺口狀態為**未驗證，需真實桌面**，Reviewer 應特別檢查網路磁碟、USB 與 OneDrive 類型。
+- LLVM-MinGW configure：`cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release` 通過。
+- `cmake --build build`：通過，無新增警告。
+- `ctest --test-dir build --output-on-failure`：3/3 通過（`panedock_core_model`、`panedock_core_layout`、`panedock_core_session`）。
+- `build\\panedock_explorer_host_lifetime_check.exe`：`PASSED: explorer_host_lifetime_check`。
+- `rg -n "windows\\.h|HWND|IUnknown" src/core`：無輸出（rg exit 1，符合預期），core 邊界未污染。
+- 啟動 smoke check：本 session 啟動自己的 `build\\PaneDock.exe`，等待 2 秒後 `Responding=True`、`HandleCount=772`，隨後只終止該測試 process；這不是互動驗收。
+- 工作開始前既有未追蹤 `.claude/` 未觸碰；未 commit。
+
+### 2026-08-24 最終檢查補記
+
+- 上述交接追加完成後再次執行完整 configure／build／CTest／self-check／core boundary grep，結果不變且全數通過；`git diff --check` 通過。最終 tracked diff 為 `src/explorer_host/explorer_host.h/.cpp`、`tests/unit/explorer_host_lifetime_check.cpp`、該 self-check 所需的 `CMakeLists.txt` link wiring，以及本 ticket 的 append-only 交接區。

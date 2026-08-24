@@ -1,5 +1,6 @@
 #include "unit/test_util.h"
 
+#include "explorer_host/explorer_host.h"
 #include "explorer_host/live_view_count.h"
 
 int main() {
@@ -23,6 +24,31 @@ int main() {
         view.reset();
         EXPECT(live_view_count() == 0);
     }
+
+    const HRESULT ole_result = OleInitialize(nullptr);
+    EXPECT(SUCCEEDED(ole_result));
+    HWND parent = CreateWindowExW(0, L"STATIC", L"", WS_OVERLAPPEDWINDOW,
+                                  0, 0, 640, 480, nullptr, nullptr,
+                                  GetModuleHandleW(nullptr), nullptr);
+    EXPECT(parent != nullptr);
+    if (SUCCEEDED(ole_result) && parent != nullptr) {
+        panedock::explorer_host::ExplorerHost host;
+        const RECT rect{0, 0, 640, 480};
+        const HRESULT initialize_result =
+            host.initialize(parent, rect, L"shell:Desktop");
+        EXPECT(SUCCEEDED(initialize_result));
+        if (SUCCEEDED(initialize_result)) {
+            constexpr std::wstring_view missing =
+                L"?:\\PaneDock-PD-022-definitely-not-there";
+            EXPECT(SUCCEEDED(host.navigate(missing)));
+            EXPECT(host.location() == missing);
+        }
+        host.destroy();
+        EXPECT(live_view_count() == 0);
+        EXPECT(GetWindow(parent, GW_CHILD) == nullptr);
+        DestroyWindow(parent);
+    }
+    if (SUCCEEDED(ole_result)) OleUninitialize();
 
     return panedock::test::summary("explorer_host_lifetime_check");
 }
