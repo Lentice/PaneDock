@@ -8,10 +8,9 @@
 # Add a row here rather than writing another add_executable block.
 
 set(PANEDOCK_TESTS
-    # "core_model|unit/core_model_test.cpp|panedock_core"                 # PD-004
+    "core_model|unit/core_model_test.cpp|panedock_core"
     # "core_layout|unit/core_layout_test.cpp|panedock_core"               # PD-005
     # "core_session|unit/core_session_test.cpp|panedock_core"             # PD-006
-    "placeholder|unit/placeholder_test.cpp|panedock_core"
 )
 
 foreach(entry IN LISTS PANEDOCK_TESTS)

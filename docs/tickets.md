@@ -48,9 +48,9 @@
 | PD-011 | 原型驗收協定執行與 Go/No-Go 判定 | 0 | `done` | PD-014 | [PD-011](tickets/PD-011-prototype-acceptance-and-go-no-go.md) |
 | PD-002 | 選取狀態還原可行性判定 | 0 | `done` | PD-011 | [PD-002](tickets/PD-002-selection-restore-feasibility.md) |
 | PD-003 | 閒置資源量測基準 | 0 | `blocked` | PD-011 | [PD-003](tickets/PD-003-idle-resource-baseline.md) |
-| PD-004 | `core` 資料模型與不變式 | 1 | `ready` | PD-011 | [PD-004](tickets/PD-004-core-model-invariants.md) |
-| PD-005 | 五種版型的矩形計算 | 1 | `planned` | PD-004 | [PD-005](tickets/PD-005-layout-rect-computation.md) |
-| PD-006 | session document 序列化與遷移 | 1 | `planned` | PD-004 | [PD-006](tickets/PD-006-session-document-persistence.md) |
+| PD-004 | `core` 資料模型與不變式 | 1 | `done` | PD-011 | [PD-004](tickets/PD-004-core-model-invariants.md) |
+| PD-005 | 五種版型的矩形計算 | 1 | `ready` | PD-004 | [PD-005](tickets/PD-005-layout-rect-computation.md) |
+| PD-006 | session document 序列化與遷移 | 1 | `ready` | PD-004 | [PD-006](tickets/PD-006-session-document-persistence.md) |
 | PD-013 | 設定檔可擴充性慣例(跨 ticket 通用規則) | 1 | `done` | — | [PD-013](tickets/PD-013-config-file-extensibility-convention.md) |
 
 ## Dependency lanes

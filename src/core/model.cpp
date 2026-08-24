@@ -1,0 +1,253 @@
+#include "core/model.h"
+
+#include <algorithm>
+#include <cmath>
+#include <iterator>
+#include <unordered_set>
+#include <utility>
+
+namespace panedock::core {
+namespace {
+
+template <typename Range, typename Id>
+bool has_unique_ids(const Range& values, Id id) {
+    std::unordered_set<std::string> ids;
+    for (const auto& value : values) {
+        if (value.id.empty() || !ids.insert(id(value)).second) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <typename Range>
+auto find_id(Range& values, const std::string& id) {
+    return std::find_if(values.begin(), values.end(), [&](const auto& value) {
+        return value.id == id;
+    });
+}
+
+}  // namespace
+
+std::size_t pane_count(LayoutTemplate layout_template) noexcept {
+    switch (layout_template) {
+        case LayoutTemplate::single: return 1;
+        case LayoutTemplate::left_right:
+        case LayoutTemplate::top_bottom: return 2;
+        case LayoutTemplate::three_pane: return 3;
+        case LayoutTemplate::four_pane_grid: return 4;
+    }
+    return 0;
+}
+
+std::size_t divider_ratio_count(LayoutTemplate layout_template) noexcept {
+    switch (layout_template) {
+        case LayoutTemplate::single: return 0;
+        case LayoutTemplate::left_right:
+        case LayoutTemplate::top_bottom: return 1;
+        case LayoutTemplate::three_pane:
+        case LayoutTemplate::four_pane_grid: return 2;
+    }
+    return 0;
+}
+
+std::vector<double> default_divider_ratios(LayoutTemplate layout_template) {
+    return std::vector<double>(divider_ratio_count(layout_template), 0.5);
+}
+
+bool is_valid(const GroupState& group) noexcept {
+    if (group.id.empty() || group.panes.size() != pane_count(group.layout_template) ||
+        group.divider_ratios.size() != divider_ratio_count(group.layout_template) ||
+        !std::all_of(group.divider_ratios.begin(), group.divider_ratios.end(),
+                     [](double ratio) {
+                         return std::isfinite(ratio) && ratio >= 0.0 && ratio <= 1.0;
+                     }) ||
+        !has_unique_ids(group.panes, [](const PaneState& pane) {
+            return pane.id;
+        }) ||
+        find_id(group.panes, group.active_pane_id) == group.panes.end()) {
+        return false;
+    }
+
+    return std::all_of(group.panes.begin(), group.panes.end(),
+                       [](const PaneState& pane) {
+        return !pane.tabs.empty() &&
+               has_unique_ids(pane.tabs, [](const TabState& tab) {
+                   return tab.id;
+               }) &&
+               find_id(pane.tabs, pane.active_tab_id) != pane.tabs.end();
+    });
+}
+
+bool is_valid(const ApplicationState& application) noexcept {
+    if (!has_unique_ids(application.groups, [](const GroupState& group) {
+            return group.id;
+        }) ||
+        !std::all_of(application.groups.begin(), application.groups.end(),
+                     [](const GroupState& group) { return is_valid(group); })) {
+        return false;
+    }
+    return application.groups.empty()
+               ? application.active_group_id.empty()
+               : find_id(application.groups, application.active_group_id) !=
+                     application.groups.end();
+}
+
+bool add_group(ApplicationState& application, GroupState group) {
+    if (!is_valid(group) ||
+        find_id(application.groups, group.id) != application.groups.end()) {
+        return false;
+    }
+    application.groups.push_back(std::move(group));
+    if (application.active_group_id.empty()) {
+        application.active_group_id = application.groups.back().id;
+    }
+    return true;
+}
+
+bool rename_group(ApplicationState& application, const std::string& group_id,
+                  std::wstring name) {
+    const auto group = find_id(application.groups, group_id);
+    if (group == application.groups.end()) {
+        return false;
+    }
+    group->name = std::move(name);
+    return true;
+}
+
+bool duplicate_group(ApplicationState& application,
+                     const std::string& source_group_id,
+                     std::string new_group_id, std::wstring new_name) {
+    const auto source = find_id(application.groups, source_group_id);
+    if (source == application.groups.end() || new_group_id.empty() ||
+        find_id(application.groups, new_group_id) != application.groups.end()) {
+        return false;
+    }
+    GroupState copy = *source;
+    copy.id = std::move(new_group_id);
+    copy.name = std::move(new_name);
+    application.groups.push_back(std::move(copy));
+    return true;
+}
+
+bool delete_group(ApplicationState& application, const std::string& group_id) {
+    const auto group = find_id(application.groups, group_id);
+    if (group == application.groups.end()) {
+        return false;
+    }
+    const bool was_active = application.active_group_id == group_id;
+    const auto next = application.groups.erase(group);
+    if (application.groups.empty()) {
+        application.active_group_id.clear();
+    } else if (was_active) {
+        application.active_group_id =
+            (next == application.groups.end() ? application.groups.back() : *next).id;
+    }
+    return true;
+}
+
+bool reorder_group(ApplicationState& application, const std::string& group_id,
+                   std::size_t new_index) {
+    const auto group = find_id(application.groups, group_id);
+    if (group == application.groups.end() || new_index >= application.groups.size()) {
+        return false;
+    }
+    GroupState moved = std::move(*group);
+    application.groups.erase(group);
+    application.groups.insert(application.groups.begin() +
+                                  static_cast<std::ptrdiff_t>(new_index),
+                              std::move(moved));
+    return true;
+}
+
+bool switch_layout(GroupState& group, LayoutTemplate layout_template,
+                   const ShellLocation& default_location,
+                   const std::vector<std::string>& new_pane_ids,
+                   const std::vector<std::string>& new_tab_ids) {
+    if (!is_valid(group)) {
+        return false;
+    }
+    const std::size_t old_count = group.panes.size();
+    const std::size_t new_count = pane_count(layout_template);
+    const std::size_t added = new_count > old_count ? new_count - old_count : 0;
+    if (new_pane_ids.size() != added || new_tab_ids.size() != added) {
+        return false;
+    }
+
+    GroupState candidate = group;
+
+    if (new_count < old_count) {
+        for (std::size_t index = new_count; index < old_count; ++index) {
+            auto& destination =
+                candidate.panes[(index - new_count) % new_count].tabs;
+            destination.insert(destination.end(),
+                std::make_move_iterator(candidate.panes[index].tabs.begin()),
+                std::make_move_iterator(candidate.panes[index].tabs.end()));
+        }
+        candidate.panes.resize(new_count);
+    } else {
+        for (std::size_t index = 0; index < added; ++index) {
+            candidate.panes.push_back(PaneState{
+                new_pane_ids[index],
+                {TabState{new_tab_ids[index], default_location, {}, {}, true}},
+                new_tab_ids[index]});
+        }
+    }
+
+    candidate.layout_template = layout_template;
+    candidate.divider_ratios = default_divider_ratios(layout_template);
+    if (find_id(candidate.panes, candidate.active_pane_id) ==
+        candidate.panes.end()) {
+        candidate.active_pane_id = candidate.panes.front().id;
+    }
+    if (!is_valid(candidate)) {
+        return false;
+    }
+    group = std::move(candidate);
+    return true;
+}
+
+bool add_tab(PaneState& pane, TabState tab) {
+    if (tab.id.empty() || find_id(pane.tabs, tab.id) != pane.tabs.end()) {
+        return false;
+    }
+    pane.tabs.push_back(std::move(tab));
+    return true;
+}
+
+bool close_tab(PaneState& pane, const std::string& tab_id,
+               const ShellLocation& default_location) {
+    const auto tab = find_id(pane.tabs, tab_id);
+    if (tab == pane.tabs.end()) {
+        return false;
+    }
+    if (pane.tabs.size() == 1) {
+        tab->location = default_location;
+        return true;
+    }
+    const bool was_active = pane.active_tab_id == tab_id;
+    const auto next = pane.tabs.erase(tab);
+    if (was_active) {
+        pane.active_tab_id =
+            (next == pane.tabs.end() ? pane.tabs.back() : *next).id;
+    }
+    return true;
+}
+
+bool set_active_tab(PaneState& pane, const std::string& tab_id) noexcept {
+    if (find_id(pane.tabs, tab_id) == pane.tabs.end()) {
+        return false;
+    }
+    pane.active_tab_id = tab_id;
+    return true;
+}
+
+bool set_active_pane(GroupState& group, const std::string& pane_id) noexcept {
+    if (find_id(group.panes, pane_id) == group.panes.end()) {
+        return false;
+    }
+    group.active_pane_id = pane_id;
+    return true;
+}
+
+}  // namespace panedock::core

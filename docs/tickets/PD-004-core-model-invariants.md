@@ -126,3 +126,17 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 — PD-004 實作
+
+- 六個型別位於 `src/core/model.h`：`ShellLocation` 為三個 `std::wstring` identity 欄位；`LayoutTemplate` 為 `single`、`left_right`、`top_bottom`、`three_pane`、`four_pane_grid`；`TabState` 為 string id、location、view mode、sort column、ascending；`PaneState` 為 string id、tab vector、active tab id；`GroupState` 為 string id、wstring name、layout template、divider ratio vector、pane vector、active pane id；`ApplicationState` 為 uint32 schema version、Group vector、active Group id，以及內嵌的純整數 `WindowPlacement`（x/y/width/height/maximized）。
+- 分隔比例使用 `std::vector<double>`；五種版型的比例數依序為 0、1、1、2、2，版型切換時重設為各分隔線 `0.5`。PD-005 可直接使用 `divider_ratio_count` 與 `default_divider_ratios`。
+- 縮減版型時，超出 pane 按原順序 round-robin 併入保留 pane，且各 pane 內 tab 順序不變；四宮格→單一會把 pane 2、3、4 的全部 tab 依序追加到 pane 1。增加版型時，每個新 pane 使用呼叫端提供的新 pane/tab id，並以預設 Shell location 建立唯一且 active 的 tab。
+- 刪除 active Group 後選擇其後一個 Group（若刪的是末項則選前一個）；刪除最後一個 Group 後 `groups` 與 `active_group_id` 都為空，這是明確的有效狀態。
+- `tests/unit/core_model_test.cpp` 的 `panedock_core_model` 於 `tests/CMakeLists.txt` 的 `PANEDOCK_TESTS` 表註冊。測試涵蓋五種版型 metadata、六類不變式的刻意破壞、全部 Group/tab/pane mutation、失敗 mutation、四→一→四雙向遷移與最後 Group 刪除。
+- COM-free 妥協：Shell identity、view mode、sort column 與視窗位置都只存標準函式庫值；location 解析交給 `shell_core`，HWND/COM 對應與導覽交給 `explorer_host`/`app_shell`。
+- Agent checks（Release，LLVM-MinGW/Ninja）：configure 與 build 成功；`ctest -R core` 1/1、完整 `ctest` 1/1 通過；COM leakage 與 CONTEXT avoid-word 兩個 `rg` 均無命中；`git diff --check` 通過。
+
+### 2026-08-24 驗證
+
+獨立重跑 `cmake`/`cmake --build`/`ctest --test-dir build --output-on-failure`(1/1 通過,唯一註冊測試 `panedock_core_model`,與既有專案慣例一致——多數 self-check exe 本就不進 ctest)、兩個 `rg` 邊界檢查、`git diff --check`,結果與交接一致。已讀 `src/core/model.h`／`model.cpp`／`tests/unit/core_model_test.cpp` 全文:六個型別、六類不變式、Group/tab/pane 全部 mutation、四宮格↔單一雙向遷移、刪除最後一個 Group 的定義狀態均正確且與 `docs/design-spec.md` §FR-003／§FR-005 一致;測試檔案開頭以 `#error` 守衛防止 `windows.h` 意外進入這個 seam,是額外的邊界保護。`git status` 確認變動範圍為 `src/core/model.{h,cpp}`、`tests/unit/core_model_test.cpp`、`tests/CMakeLists.txt`、`CMakeLists.txt`(移除 placeholder)與本文件,無範圍外檔案。判定為完成。
