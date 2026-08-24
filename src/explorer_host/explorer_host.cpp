@@ -301,6 +301,27 @@ void ExplorerHost::focus() noexcept {
     }
 }
 
+HRESULT ExplorerHost::translate_accelerator(MSG* message) noexcept {
+    if (message == nullptr ||
+        (message->message != WM_KEYDOWN &&
+         message->message != WM_SYSKEYDOWN)) {
+        return S_FALSE;
+    }
+    if (browser_ == nullptr) {
+        return S_FALSE;
+    }
+
+    Microsoft::WRL::ComPtr<IShellView> view;
+    const HRESULT view_result =
+        browser_->GetCurrentView(IID_PPV_ARGS(&view));
+    if (FAILED(view_result)) {
+        log_hresult(L"IExplorerBrowser::GetCurrentView", view_result);
+        return S_FALSE;
+    }
+
+    return view->TranslateAcceleratorW(message);
+}
+
 void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
     if (pidl == nullptr) {
         return;

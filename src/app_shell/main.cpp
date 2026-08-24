@@ -377,7 +377,7 @@ bool register_window_class(HINSTANCE instance) noexcept {
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
-    const HRESULT com_result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const HRESULT com_result = OleInitialize(nullptr);
     if (FAILED(com_result)) {
         return static_cast<int>(com_result);
     }
@@ -389,7 +389,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     }
 
     if (!register_window_class(instance)) {
-        CoUninitialize();
+        OleUninitialize();
         return exit_code;
     }
 
@@ -409,7 +409,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     if (window == nullptr) {
         destroy_explorers(state);
         assert(panedock::explorer_host::live_view_count() == 0);
-        CoUninitialize();
+        OleUninitialize();
         return exit_code;
     }
 
@@ -419,6 +419,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     MSG message{};
     int result = 0;
     while ((result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
+        if (state.explorers[state.layout.active_pane()]
+                .translate_accelerator(&message) == S_OK) {
+            continue;
+        }
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
@@ -432,6 +436,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     // any other path that ends the message loop before WM_CLOSE is delivered.
     destroy_explorers(state);
     assert(panedock::explorer_host::live_view_count() == 0);
-    CoUninitialize();
+    OleUninitialize();
     return exit_code;
 }

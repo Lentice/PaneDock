@@ -32,6 +32,7 @@ public:
     void set_visible(bool visible) noexcept;
     void set_active(bool active) noexcept;
     void focus() noexcept;
+    HRESULT translate_accelerator(MSG* message) noexcept;
     void destroy() noexcept;
     const std::wstring& location() const noexcept { return location_; }
 

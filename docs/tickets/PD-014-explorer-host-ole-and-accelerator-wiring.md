@@ -113,3 +113,85 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接（2026-08-20）
+
+- `wWinMain` 實際 diff：初始化由 `CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)` 改為 `OleInitialize(nullptr)`；註冊視窗類別失敗、建立主視窗失敗與正常訊息迴圈結束的三個 `CoUninitialize()` 改為 `OleUninitialize()`。失敗處理、live view 斷言與關閉順序未改動。
+- 訊息迴圈實際 diff：在 `TranslateMessage`／`DispatchMessageW` 前呼叫 `state.explorers[state.layout.active_pane()].translate_accelerator(&message)`；只有回傳 `S_OK` 才 `continue`，否則維持原本的翻譯與派送。
+- 最終簽名：`HRESULT ExplorerHost::translate_accelerator(MSG* message) noexcept`。`browser_ == nullptr` 或 `GetCurrentView` 失敗回傳 `S_FALSE`（未處理）；取得 `IShellView` 成功則直接回傳 `IShellView::TranslateAcceleratorW(message)` 的 `HRESULT`。
+
+自動化 Agent checks：
+
+- `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release`：通過（exit code 0）。
+- `cmake --build build`：通過（exit code 0）。
+- `ctest --test-dir build --output-on-failure`：通過，1/1 test passed（exit code 0）。
+- `.\build\panedock_explorer_host_lifetime_check.exe`：`PASSED: explorer_host_lifetime_check`（exit code 0）。
+- `.\build\panedock_layout_state_check.exe`：`PASSED: layout_state_check`（exit code 0）。
+- `.\build\panedock_prototype_location_persistence_check.exe`：`PASSED: prototype_location_persistence_check`（exit code 0）。
+- `.\build\panedock_quadrant_layout_check.exe`：`PASSED: quadrant_layout_check`（exit code 0）。
+- `rg -n "CoInitializeEx|CoUninitialize" src/app_shell`：無匹配（exit code 1，符合預期）。
+- `git diff --check`：通過（exit code 0）。
+
+手動檢查狀態：本執行環境沒有可附著的互動桌面，未執行 `.\build\PaneDock.exe` 的互動驗收；以下項目均不可用程式碼推論替代：
+
+- Acceptance 3（Backspace／Alt+Left 導覽）：未驗證,需要真實桌面。
+- Acceptance 4（跨 pane Ctrl+C／Ctrl+V）：未驗證,需要真實桌面。
+- Acceptance 5（pane 0 到 pane 3，放開／按住 Ctrl 的拖放）：未驗證,需要真實桌面。
+- Acceptance 6（與外部應用程式雙向拖放）：未驗證,需要真實桌面。
+
+四個既有 self-check 與 ctest 均未出現意外差異；真實桌面上的 `OleInitialize` 與 accelerator 轉發行為仍未驗證,需要真實桌面。
+
+### 2026-08-24 真實桌面人工驗收與範圍修正
+
+在真實桌面上人工測試(非自動化):
+
+- **Acceptance 3(Backspace／Alt+Left 導覽)：不通過,且判定為「不在本 ticket 範圍」而非缺陷。** 追查 `docs/roadmap.md` 發現「Keyboard shortcuts routed to the active pane」與「Per-tab address field, back, forward, parent」明文列在 **Phase 3**,不是 Phase 0。`IShellView::TranslateAcceleratorW` 本身不提供瀏覽器式的上一頁/下一頁導覽歷史——那是宿主應用程式自己維護導覽歷史、重新呼叫 `BrowseToObject` 的責任,屬於 Phase 3 的「per-tab 導覽歷史」功能,目前根本還沒實作,不是本 ticket 想修的宿主接線缺陷。**本 ticket 撤回 Acceptance 3,不再要求它通過**;這個觀測結果轉記給未來的 Phase 3 導覽歷史 ticket(`docs/tickets.md` §候選 已有「Back/Forward/位址列」候選項,此處補充實測證據:Backspace/Alt+Left 目前完全無反應,不是部分可用)。
+- **Acceptance 4(跨 pane Ctrl+C／Ctrl+V)：通過。** 選取檔案、Ctrl+C、切換 pane、Ctrl+V,檔案確實複製過去。確認 accelerator 轉發修正對此按鍵有效。
+- **Acceptance 5(pane 對 pane 拖放)：通過。** pane 對 pane 拖放正常動作。
+- **Acceptance 6(與外部應用程式雙向拖放)：部分通過。** PaneDock 的 pane 拖到外部應用程式(檔案總管)**成功**;反向——從檔案總管拖進 PaneDock 的 pane——**失敗**,沒有任何反應。這是唯一存活的真實缺陷,且屬於 `docs/roadmap.md` Phase 0 明文列出的「Cross-pane drag and drop」與 `docs/testing.md` step 4「External drag and drop」驗收範圍,不是分工外的功能。
+
+**本 ticket 剩餘範圍收斂為只修「從外部應用程式拖進 PaneDock 的 pane 沒有反應」這一項。** Acceptance 3 已撤回;Acceptance 4、5 已確認通過,不需要重做。下一步請鎖定這個不對稱現象調查(pane 對 pane 與 pane 對外都正常,只有外部拖進來的方向失敗),依 `AGENTS.md`「Read the relevant spec section and trace every caller before touching shared code」追查可能原因(例如:是否每個 pane 各自的 `IShellView` 有正確呼叫 `RegisterDragDrop`、是否与 UIPI/完整性等級有關、是否訊息迴圈新增的 accelerator 轉發影響了外部 `DoDragDrop` 訊息幫浦的重入)。禁止用程式碼推論猜測結果替代真實桌面操作驗證——若需要人工驗證,誠實寫「未驗證,需要真實桌面」。
+
+### 2026-08-24 外部拖入修正交接
+
+- 調查 `IExplorerBrowser`／`IShellView` drop-target 路徑：目前沒有 app-side `RegisterDragDrop`／`RevokeDragDrop`／`IDropTarget` 實作；每個 `IExplorerBrowser` 由 Windows Shell 建立原生 `IShellView`，drop target 由該 view 管理。程式沒有呼叫 `FillFromObject`，因此沒有以 `EBF_NODROPTARGET` 關閉 drop target。這些是靜態程式碼檢查結果，沒有冒充 runtime OLE trace。
+- `Site::QueryService` 仍對未支援 service 回傳 `E_NOINTERFACE`；沒有證據顯示它是此方向特有的 drop 失效原因，因此未新增 speculative service 或 fake `IShellBrowser`。`set_active` 只切換 `WS_EX_CLIENTEDGE`，沒有修改 drop 相關視窗樣式；`OleInitialize` 與 `GetMessageW(&message, nullptr, 0, 0)` 保持不變。
+- 修正：`ExplorerHost::translate_accelerator(MSG* message) noexcept` 現在只在 `message` 非 null 且訊息為 `WM_KEYDOWN` 或 `WM_SYSKEYDOWN` 時呼叫目前 `IShellView::TranslateAcceleratorW`；其他訊息（包括 OLE 拖放期間的滑鼠／視窗訊息）直接回傳 `S_FALSE`，交回既有 `TranslateMessage`／`DispatchMessageW`。`browser_` 為 null 或 `GetCurrentView` 失敗也回傳 `S_FALSE`。這是本輪唯一程式碼變更。
+- 手動驗證狀態：Acceptance 3 已由 2026-08-24 真實桌面交接撤回，屬 Phase 3，不在本輪範圍；Acceptance 4（Ctrl+C／Ctrl+V）與 Acceptance 5（pane-to-pane drag）沿用該交接的 CONFIRMED PASSING，未重做；Acceptance 6 的修正後外部拖入結果：**未驗證,需要真實桌面**。本執行環境沒有互動桌面，不能宣稱修正已通過；原先觀察到的「Windows Explorer → PaneDock 無反應」仍是待真實桌面確認的 defect。UIPI／完整性等級差異也是可能的外部條件，但本輪沒有 runtime 證據，且沒有改動禁止 admin elevation 的架構邊界。
+
+自動化 Agent checks（本輪實際結果）：
+
+- `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release`：通過（exit code 0）。
+- `cmake --build build`：失敗（exit code 1），編譯與 library／self-check linking 已完成；最後連結 `PaneDock.exe` 時，`ld.lld` 回報 `failed to write output 'PaneDock.exe': Permission denied`／`unable to remove file`。檢查確認現有執行中的 `PaneDock.exe` 鎖住該輸出檔；沒有終止使用者程序。
+- `cmake -S . -B build-pd-014 -G Ninja -DCMAKE_BUILD_TYPE=Release`：通過（exit code 0），作為不覆蓋鎖定輸出的隔離驗證目錄。
+- `cmake --build build-pd-014`：通過（exit code 0）。
+- `ctest.exe --test-dir build --output-on-failure`：通過，1/1 test passed（exit code 0）。
+- `ctest.exe --test-dir build-pd-014 --output-on-failure`：通過，1/1 test passed（exit code 0）。
+- `build-pd-014\panedock_explorer_host_lifetime_check.exe`：`PASSED: explorer_host_lifetime_check`（exit code 0）。
+- `build-pd-014\panedock_layout_state_check.exe`：`PASSED: layout_state_check`（exit code 0）。
+- `build-pd-014\panedock_prototype_location_persistence_check.exe`：`PASSED: prototype_location_persistence_check`（exit code 0）。
+- `build-pd-014\panedock_quadrant_layout_check.exe`：`PASSED: quadrant_layout_check`（exit code 0）。
+- `rg -n "CoInitializeEx|CoUninitialize" src\app_shell`：無匹配（exit code 1，符合預期）。
+- `git diff --check`：待本段追加完成後執行。
+
+四個 self-check 與 ctest 未顯示因本修正造成的意外差異；外部拖入是否恢復視覺 feedback 與 drop 行為仍**未驗證,需要真實桌面**。
+
+### 2026-08-24 交接補記
+
+- 上段所列 `git diff --check` 已在本段追加完成後實際執行：通過（exit code 0）。
+
+### 2026-08-24 真實桌面最終驗收
+
+在真實桌面上重新 build 主目錄（先關閉鎖住 `PaneDock.exe` 輸出檔的舊行程，刪除 codex 用的隔離目錄 `build-pd-014`），獨立重跑 `cmake --build build`、`ctest --test-dir build`、四個 self-check、`git diff --check`，結果與交接記錄一致,全數通過。啟動 `PaneDock.exe` 人工測試:**從 Windows 檔案總管拖曳檔案進 PaneDock 的 pane,成功放下**。
+
+Acceptance 最終狀態:
+- AC1／AC2（`OleInitialize`／`OleUninitialize`、accelerator 轉發呼叫時機）：通過。
+- AC3（Backspace／Alt+Left）：撤回,判定為 Phase 3 範圍,非本 ticket 缺陷,不計入本 ticket 驗收。
+- AC4（跨 pane Ctrl+C／Ctrl+V）：通過。
+- AC5（pane 對 pane 拖放）：通過。
+- AC6（與外部應用程式雙向拖放）：通過(兩個方向皆確認)。
+- AC7（自動化 checks／self-check）：通過。
+- AC8（`live_view_count` 斷言與 destroy 順序不變）：通過,未見異常。
+- AC9（`git diff --check`）：通過。
+
+PD-014 判定為 `done`。PD-011 可解除封鎖,重跑受影響的 step 3、4,不需重做已完成的 step 1、2。
