@@ -141,3 +141,41 @@ git status
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 實作交接
+
+#### 完成內容與確切輸出位置
+
+- `src/app_shell/main.cpp` 新增 file-local `write_live_view_count() noexcept`：以 `GetStdHandle(STD_OUTPUT_HANDLE)` 取得 stdout，使用 `std::to_chars` 組出固定格式 `panedock.live_view_count=<n>\n`，再以 `WriteFile` 寫出；`nullptr`／`INVALID_HANDLE_VALUE`／格式化失敗／`WriteFile` 失敗都靜默略過，不建立檔案、不開 timer、不開 thread。
+- 第一個輸出點在 `apply_layout(HWND, AppState&)`：無 active Group 的成功返回前，以及所有 pane layout/realize 完成後的正常 `S_OK` 返回前。這涵蓋每次版型套用成功路徑，包括 `Ctrl+Shift+L` 經 `toggle_layout()` 呼叫的同一個 `apply_layout`。
+- 第二個輸出點在 `destroy_explorers(AppState&)`：所有四個 `ExplorerHost::destroy()` 完成、`state.realized.fill(false)` 之後。WM_CLOSE 與 wWinMain 尾端沿用既有 shutdown 路徑，因此正常 close 會看到 destroy 後的 0（可能因兩條既有 cleanup 呼叫而有重複的 0 行）。
+- `kLayoutToggleHotkeyId = 1` 仍由 `RegisterHotKey(window, ..., MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'L')` 註冊，`WM_HOTKEY` 仍呼叫 `toggle_layout()`；release script 的 20 次提示維持 `Ctrl+Shift+L`，與目前 build 對齊。
+
+#### Script 與 baseline
+
+- `tests/release/release_evidence.ps1` 新增 `Get-LiveViewCounts([string[]]$Lines)`；它只解析嚴格的 `panedock.live_view_count=<digits>` 行，無有效行回傳空集合，帶有相同 prefix 但非法數字則 throw，避免把非法輸入當成 0。量測 run 正常關閉後解析 stdout，non-blocking context 報告 `before`、20 次切換後的最後一個 switch sample、以及 `closed` 最終 sample；無讀數或 parse error 報 `Not measured` 並附原因。
+- `Complete-PaneDock` 現在回傳收集到的 stdout/stderr 行；只有 `-CollectMeasurements` 的 measurement process 會解析 live counts。未帶旗標時不啟動 measurement／soak process，也不會產生任何量測數字。
+- 互動流程新增 Single layout 記憶體組態：提示操作者切到 Single、導覽一個本機資料夾並等待穩定；接著提示 Four Panes local、mixed thumbnails/OneDrive/network、text-only、thumbnail folders。20 次 handle 取樣仍要求人類每次按 `Ctrl+Shift+L`，並新增一次 AC-005 `Read-Host`，將操作者原文寫進 non-blocking context。三次 soak 路徑保持原樣。
+- `docs/performance-baseline.md` 改寫每個原先依賴 prototype 的理由：Single layout 現在存在但需互動 desktop 量測；live-view count 已有 stdout surface 但 20-switch 執行仍待 `-CollectMeasurements`；Group/tab/cold-start latency 需產品 timing instrumentation、超出本票且無 blocking threshold；AC-005 改為 operator responsiveness answer、非自動 timing。Idle CPU/disk、mixed memory、handles、thumbnail 等列仍保留現今成立的互動桌面／資源理由；PD-011 的 54.3 MB Phase 0 原始讀數原樣保留。
+- 為了讓 parser 可單獨載入，release script 在 dot-source (`.`) 時只定義函式、不執行主流程；一般直接執行仍完整跑原本 fail-closed workflow。新增 `tests/release/live_view_count_parse_check.ps1`，不註冊 CTest。
+
+#### Acceptance 與驗證結果
+
+- Acceptance 1（stdout 啟動與正常關閉各有 live-count，最後為 0；雙擊無 console）：**部分可驗證／正常關閉與雙擊行為未驗證，需真實桌面**。重導 stdout 的 headless run 收到 `panedock.live_view_count=4` 兩行；`CloseMainWindow()` 回傳 `True` 但 15 秒未退出，因本環境的 PowerShell `MainWindowHandle` 指向 `UAC_InputIndicatorOverlayWnd` 而非 PaneDock 主 HWND，最後只終止明確 PID，因此沒有取得可宣稱的 destroy 後 `=0`。未在有互動桌面的雙擊啟動上確認「不出現 console」。
+- Acceptance 2（不含 `-CollectMeasurements` 仍 INCOMPLETE／exit 2／產生 evidence）：**PASS**。實際輸出 `INCOMPLETE`、`Evidence: E:\GitHub\PaneDock\docs\release-evidence.md`、exit code `2`；文件已生成且 blocking CPU/disk 都是 `Not measured`／`INCOMPLETE`。
+- Acceptance 3（evidence non-blocking context 無 prototype 字串）：**PASS**。`rg -n -i "prototype" docs/release-evidence.md` 無命中；Performance baseline 與 script 受影響行也已清除 prototype 時代理由。
+- Acceptance 4（Single、四 pane 組態、20 handle samples、AC-005、三次 soak 的清楚提示）：**PASS（靜態檢查）**。所有提示存在；實際互動步驟未執行，因明確禁止 `-CollectMeasurements`。
+- Acceptance 5（parser self-check 及非法輸入非零失敗）：**PASS**。`tests/release/live_view_count_parse_check.ps1` 輸出 `PASSED: live_view_count_parse_check`、exit 0；案例包含多筆正常、零筆、雜訊、非法數字。另以未捕捉的非法輸入直接呼叫 parser，PowerShell exit code 為 `1`。
+- Acceptance 6（baseline 無 prototype 缺口理由）：**PASS**。`rg -n -i "prototype" docs/performance-baseline.md docs/release-evidence.md tests/release/release_evidence.ps1` 無輸出；所有 `Not measured` 行都有現況成立的互動／instrumentation／無門檻理由。
+- Acceptance 7（build／CTest）：**PASS**。LLVM-MinGW configure/build 成功；CTest 4/4 通過。`live_view_count_parse_check.ps1` 是依決策 7 單獨執行的 self-check，沒有註冊為 CTest。
+- Acceptance 8（core boundary／diff check）：**PASS**。`rg -n "windows\.h|HWND|IUnknown" src/core` 無輸出；`git diff --check` 通過。
+
+#### 明確限制與未做事項
+
+- 本輪**沒有執行 `tests/release/release_evidence.ps1 -CollectMeasurements`**，沒有產生或填入任何 idle CPU、disk I/O、memory、handle、live-view 20-switch、thumbnail 或延遲量測數字；`docs/performance-baseline.md` 的既有 54.3 MB 是 PD-011 Phase 0 原始讀數，未被改寫為現況。
+- 沒有修改 PD-003 文件或其 blocked 狀態，沒有修改 `docs/tickets.md`／`docs/roadmap.md`，未加入 ctest registration，未 commit。工作開始前既有未追蹤 `.claude/` 未觸碰。
+
+### 2026-08-24 最終檢查補記
+
+- 發現 generated evidence 的 Windows CRLF 會讓 `git diff --check` 將每行 CR 視為 trailing whitespace，已把腳本寫檔改為明確 UTF-8/LF；重新執行不含 `-CollectMeasurements` 的 `release_evidence.ps1` 後仍輸出 `INCOMPLETE`、exit code `2`，再跑 `git diff --check` 通過。
+- 最終 parser self-check 再跑一次：`PASSED: live_view_count_parse_check`、exit 0。`rg` 結果：baseline/evidence/script 無 `prototype` 命中；`src/core` 無 `windows.h`／`HWND`／`IUnknown`；`src` 無 `SetTimer`／`CreateThread`／`_beginthread`；均符合預期的無輸出 boundary check。

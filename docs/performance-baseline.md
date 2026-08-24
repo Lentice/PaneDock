@@ -1,20 +1,20 @@
 # Performance Baseline
 
-Every row below is an **estimate for planning**, not a measurement. Estimates are replaced by measured values as tickets produce them; the ticket that produced a number is cited in the notes column. A row that still reads "Not measured" has never been observed on real hardware, and no claim may be made about it.
+Rows that still read **Not measured** are estimates or unobserved planning context; measured rows cite the ticket and conditions that produced their values. No unmeasured row may be treated as evidence.
 
 | Metric | Target | Blocking threshold | Result | Environment / notes |
 |---|---|---|---|---|
 | Idle CPU, 10 min sample | 0% | avg ≥ 0.1% fails | Not measured (single raw reading below) | NFR-001 blocking. PD-003 added the formal idle-window delta measurement, but it was not run without a real interactive desktop. PD-011 2026-08-24 single sample: process cumulative CPU time 1.16 s over an 11.5 min elapsed window (launch to sample, includes startup/navigation work, not an idle-only delta) — informational only, not a pass/fail measurement against the threshold. |
 | Idle disk I/O, 10 min sample | zero bytes | any I/O fails | Not measured | NFR-001 blocking. PD-003 added `GetProcessIoCounters` transfer-byte delta measurement; the ten-minute interactive sample remains pending. |
-| Resident memory, 1 pane, local folder | — | — | Not measured | PD-003: the Phase 0 prototype exposes only two- and four-pane layouts and keeps hidden views live, so it cannot honestly produce a one-live-pane reading. |
+| Resident memory, 1 pane, local folder | — | — | Not measured | Single layout and realize-on-activation now exist; a valid value still requires a real interactive desktop and operator-confirmed local-folder settling, which is outside this tooling ticket. |
 | Resident memory, 4 panes, local folders | — | — | 54.3 MB WorkingSet64 (single reading) | PD-011 2026-08-24: PaneDock idle after 11.5 min, 4 panes on default local-folder paths, HandleCount 553. Raw process-level reading, not PD-003's formal baseline. |
 | Resident memory, 4 panes, thumbnails + OneDrive + network | — | — | Not measured | PD-003 measurement requires the named resources and Shell interaction on a real desktop; no reading was fabricated. |
 | Handle count, idle after 20 layout switches | flat | monotonic growth fails | Not measured | PD-003 script records 21 handle samples around 20 human `Ctrl+Shift+L` actions; execution remains pending because this session did not automate keyboard input. |
-| Live view count after 20 layout switches | returns to baseline | any residual view fails | Not measured | PD-003: the prototype has no runtime diagnostic surface for live-view count; adding product diagnostics was outside this measurement-only ticket. |
-| Group switch latency, all locations local | — | — | Not measured | Perceived-instant is the goal; no threshold set until measured. |
-| Group switch latency, one unreachable network path | UI never blocks | any UI block fails | Not measured | NFR-003 / AC-005 blocking. PD-001 step 7. |
-| Tab realize latency on activation | — | — | Not measured | Governs whether realize-on-activation is perceptible; see the rejected direction on live-per-tab views. |
-| Cold start to first painted pane | — | — | Not measured | — |
+| Live view count after 20 layout switches | returns to baseline | any residual view fails | Not measured | PD-026 adds stdout samples after layout and destroy; a 20-switch run still requires a real interactive desktop and remains part of `-CollectMeasurements`. |
+| Group switch latency, all locations local | — | — | Not measured | Measuring this requires product timing instrumentation, outside PD-026; no blocking threshold is defined. |
+| Group switch latency, one unreachable network path | UI never blocks | any UI block fails | Not measured | AC-005 is recorded as an operator responsiveness answer by the release script; no timing instrumentation is added in PD-026. |
+| Tab realize latency on activation | — | — | Not measured | Measuring this requires product timing instrumentation, outside PD-026; no blocking threshold is defined. |
+| Cold start to first painted pane | — | — | Not measured | Requires visible-paint instrumentation, outside PD-026. |
 | Thumbnail pipeline memory contribution | — | — | Not measured | PD-003 script computes the WorkingSet64 difference between operator-prepared thumbnail and text-only folders; real-desktop execution remains pending. |
 
 ## Release evidence contract

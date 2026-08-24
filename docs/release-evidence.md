@@ -1,6 +1,6 @@
 # Release Evidence
 
-Generated: 2026-08-24T13:01:44.4763246+08:00
+Generated: 2026-08-24T18:43:35.1821659+08:00
 
 ## Environment
 
@@ -9,8 +9,8 @@ Generated: 2026-08-24T13:01:44.4763246+08:00
 - Logical processors: 20
 - Evidence-script debugger attached: False
 - PaneDock debugger attached during measurement: Not measured
-- Git commit: d36ae74e51acbf7ad01773b1149970fc6623855f
-- Live CTest registrations: 1
+- Git commit: 876f4d67700ee04c905369c7f10c58c56d268382
+- Live CTest registrations: 4
 
 | Tool | Version |
 |---|---|
@@ -31,21 +31,23 @@ Generated: 2026-08-24T13:01:44.4763246+08:00
 
 | Registered | Executed | Skipped markers | Verdict |
 |---:|---:|---:|---|
-| 1 | 1 | 0 | PASS |
+| 4 | 4 | 0 | PASS |
 
 ## Non-blocking context
 
 | Metric | Value | Notes |
 |---|---|---|
-| Resident memory, 1 pane, local folder | Not measured | Prototype has only two- and four-pane layouts; hidden panes remain live. |
+| Resident memory, one pane, local folder | Not measured | Requires a real interactive desktop to select the Single layout, navigate to a local folder, and wait for Shell enumeration to settle. |
 | Resident memory, 4 panes, local folders | Not measured | Requires a real interactive desktop. |
 | Resident memory, 4 panes, thumbnails + OneDrive + network | Not measured | Requires the named resources on a real interactive desktop. |
 | Handle count after 20 manual layout switches | Not measured | Script waits for each human Ctrl+Shift+L action; it never synthesizes input. |
 | Thumbnail pipeline memory contribution | Not measured | WorkingSet64(thumbnail folders) - WorkingSet64(text-only folders). |
-| Live view count after 20 switches | Not measured | No runtime diagnostic surface exists in the prototype. |
-| Group switch latency | Not measured | Prototype has no Group. |
-| Tab realize latency | Not measured | Prototype has no tab. |
-| Cold start to first painted pane | Not measured | Requires visible-paint instrumentation outside PD-003 scope. |
+| Live view count after 20 switches | Not measured | No live-view stdout was collected; requires -CollectMeasurements and a normal interactive close. |
+| Group switch latency | Not measured | Measuring this requires product timing instrumentation, outside this ticket; no blocking threshold is defined. |
+| Tab realize latency | Not measured | Measuring this requires product timing instrumentation, outside this ticket; no blocking threshold is defined. |
+| Group switch latency, one unreachable network path | Not measured | Requires an operator to restore a Group containing the unreachable path and answer the AC-005 responsiveness prompt; no automated timing is attempted. |
+| AC-005 restored unreachable-path responsiveness | Not measured | Operator response captured by Read-Host; this is non-blocking context, not a timing measurement. |
+| Cold start to first painted pane | Not measured | Requires visible-paint instrumentation, outside this ticket. |
 
 ## Step logs
 
@@ -54,7 +56,7 @@ Generated: 2026-08-24T13:01:44.4763246+08:00
 Exit code: 0
 
 ```text
--- Configuring done (0.2s)
+-- Configuring done (0.1s)
 -- Generating done (0.0s)
 -- Build files have been written to: E:/GitHub/PaneDock/build
 ```
@@ -73,9 +75,12 @@ Exit code: 0
 
 ```text
 Test project E:/GitHub/PaneDock/build
-  Test #1: panedock_placeholder
+  Test #1: panedock_diagnostic_flag
+  Test #2: panedock_core_model
+  Test #3: panedock_core_layout
+  Test #4: panedock_core_session
 
-Total Tests: 1
+Total Tests: 4
 ```
 
 ### complete ctest
@@ -84,12 +89,18 @@ Exit code: 0
 
 ```text
 Test project E:/GitHub/PaneDock/build
-    Start 1: panedock_placeholder
-1/1 Test #1: panedock_placeholder .............   Passed    0.02 sec
+    Start 1: panedock_diagnostic_flag
+1/4 Test #1: panedock_diagnostic_flag .........   Passed    0.01 sec
+    Start 2: panedock_core_model
+2/4 Test #2: panedock_core_model ..............   Passed    0.01 sec
+    Start 3: panedock_core_layout
+3/4 Test #3: panedock_core_layout .............   Passed    0.01 sec
+    Start 4: panedock_core_session
+4/4 Test #4: panedock_core_session ............   Passed    0.02 sec
 
-100% tests passed out of 1
+100% tests passed out of 4
 
-Total Test time (real) =   0.03 sec
+Total Test time (real) =   0.07 sec
 ```
 
 ### process launch: measurement

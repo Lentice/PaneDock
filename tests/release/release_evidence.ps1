@@ -78,6 +78,7 @@ function Complete-PaneDock($Run) {
     $script:logs[$Run.LogIndex].ExitCode = $Run.Process.ExitCode
     if ($Run.Process.ExitCode -ne 0) { $script:failed = $true }
     Remove-Item $Run.Stdout, $Run.Stderr -Force -ErrorAction SilentlyContinue
+    return $output
 }
 
 function Get-Snapshot([System.Diagnostics.Process]$Process) {
@@ -90,6 +91,24 @@ function Get-Snapshot([System.Diagnostics.Process]$Process) {
     }
 }
 
+function Get-LiveViewCounts([string[]]$Lines) {
+    $counts = [System.Collections.Generic.List[uint32]]::new()
+    foreach ($line in @($Lines)) {
+        if ($line -notmatch '^panedock\.live_view_count=(.*)$') { continue }
+        $payload = $Matches[1]
+        if ($payload -notmatch '^\d+$') {
+            throw "Invalid live view count: $line"
+        }
+        [uint32]$value = 0
+        if (-not [uint32]::TryParse($payload, [ref]$value)) {
+            throw "Invalid live view count: $line"
+        }
+        $counts.Add($value)
+    }
+    return $counts.ToArray()
+}
+
+if ($MyInvocation.InvocationName -ne '.') {
 Push-Location $repo
 try {
     Invoke-LoggedStep 'configure' {
@@ -127,6 +146,10 @@ try {
     $handleSamples = @()
     $thumbnailDelta = $null
     $appDebuggerAttached = 'Not measured'
+    $measurementOutput = @()
+    $liveViewCounts = @()
+    $liveViewParseError = $null
+    $ac005Response = 'Not measured'
 
     if ($CollectMeasurements -and -not $failed) {
         $run = Start-PaneDock 'measurement'
@@ -151,7 +174,9 @@ try {
             ExitCode = 0
         })
 
-        Read-Host 'Keep four panes on local folders; press Enter to record the local-folder memory configuration' | Out-Null
+        Read-Host 'Switch to the Single layout, navigate to one local folder, wait for it to settle, then press Enter to record the one-pane memory configuration' | Out-Null
+        $memory['One pane, local folder'] = Get-Snapshot $run.Process
+        Read-Host 'Switch to the Four Panes layout on local folders; press Enter to record the local-folder memory configuration' | Out-Null
         $memory['Four panes, local folders'] = Get-Snapshot $run.Process
         Read-Host 'Arrange four panes to include thumbnails, OneDrive, and a network path; press Enter after settling' | Out-Null
         $memory['Four panes, thumbnails + OneDrive + network'] = Get-Snapshot $run.Process
@@ -166,8 +191,14 @@ try {
             Read-Host "Manually press Ctrl+Shift+L once ($switch/20), then press Enter" | Out-Null
             $handleSamples += (Get-Snapshot $run.Process).Handles
         }
+        $ac005Response = Read-Host 'In the restored state with an unreachable network path, confirm whether the UI stayed responsive throughout (include any note in your answer)'
         Read-Host 'Close PaneDock normally, then press Enter' | Out-Null
-        Complete-PaneDock $run
+        $measurementOutput = @(Complete-PaneDock $run)
+        try {
+            $liveViewCounts = @(Get-LiveViewCounts $measurementOutput)
+        } catch {
+            $liveViewParseError = $_.Exception.Message
+        }
 
         for ($soak = 1; $soak -le 3; $soak++) {
             $soakRun = Start-PaneDock "soak-$soak"
@@ -254,11 +285,11 @@ try {
     $lines.Add('')
     $lines.Add('| Metric | Value | Notes |')
     $lines.Add('|---|---|---|')
-    $lines.Add('| Resident memory, 1 pane, local folder | Not measured | Prototype has only two- and four-pane layouts; hidden panes remain live. |')
     foreach ($entry in $memory.GetEnumerator()) {
         $lines.Add("| Resident memory, $($entry.Key.ToLowerInvariant()) | $($entry.Value.WorkingSetBytes) bytes | Process WorkingSet64 snapshot after operator-confirmed settling. |")
     }
     if ($memory.Count -eq 0) {
+        $lines.Add('| Resident memory, one pane, local folder | Not measured | Requires a real interactive desktop to select the Single layout, navigate to a local folder, and wait for Shell enumeration to settle. |')
         $lines.Add('| Resident memory, 4 panes, local folders | Not measured | Requires a real interactive desktop. |')
         $lines.Add('| Resident memory, 4 panes, thumbnails + OneDrive + network | Not measured | Requires the named resources on a real interactive desktop. |')
     }
@@ -271,10 +302,25 @@ try {
     }
     $thumbValue = if ($null -eq $thumbnailDelta) { 'Not measured' } else { "$thumbnailDelta bytes" }
     $lines.Add("| Thumbnail pipeline memory contribution | $thumbValue | WorkingSet64(thumbnail folders) - WorkingSet64(text-only folders). |")
-    $lines.Add('| Live view count after 20 switches | Not measured | No runtime diagnostic surface exists in the prototype. |')
-    $lines.Add('| Group switch latency | Not measured | Prototype has no Group. |')
-    $lines.Add('| Tab realize latency | Not measured | Prototype has no tab. |')
-    $lines.Add('| Cold start to first painted pane | Not measured | Requires visible-paint instrumentation outside PD-003 scope. |')
+    if ($liveViewParseError) {
+        $lines.Add("| Live view count after 20 switches | Not measured | Could not parse PaneDock stdout: $liveViewParseError |")
+    } elseif ($liveViewCounts.Count -ge 2) {
+        $beforeSwitches = $liveViewCounts[0]
+        $afterSwitches = if ($liveViewCounts.Count -ge 3) {
+            $liveViewCounts[$liveViewCounts.Count - 2]
+        } else {
+            $liveViewCounts[-1]
+        }
+        $closedValue = $liveViewCounts[-1]
+        $lines.Add("| Live view count after 20 switches | before=$beforeSwitches; after=$afterSwitches; closed=$closedValue | Parsed $($liveViewCounts.Count) stdout samples; final sample is emitted after destroy. |")
+    } else {
+        $lines.Add('| Live view count after 20 switches | Not measured | No live-view stdout was collected; requires -CollectMeasurements and a normal interactive close. |')
+    }
+    $lines.Add('| Group switch latency | Not measured | Measuring this requires product timing instrumentation, outside this ticket; no blocking threshold is defined. |')
+    $lines.Add('| Tab realize latency | Not measured | Measuring this requires product timing instrumentation, outside this ticket; no blocking threshold is defined. |')
+    $lines.Add('| Group switch latency, one unreachable network path | Not measured | Requires an operator to restore a Group containing the unreachable path and answer the AC-005 responsiveness prompt; no automated timing is attempted. |')
+    $lines.Add("| AC-005 restored unreachable-path responsiveness | $ac005Response | Operator response captured by Read-Host; this is non-blocking context, not a timing measurement. |")
+    $lines.Add('| Cold start to first painted pane | Not measured | Requires visible-paint instrumentation, outside this ticket. |')
     $lines.Add('')
     $lines.Add('## Step logs')
     foreach ($log in $logs) {
@@ -291,7 +337,9 @@ try {
     $lines.Add('## Result')
     $lines.Add('')
     $lines.Add("**$result** — " + $(if ($result -eq 'INCOMPLETE') { 'one or more blocking metrics lack a valid ten-minute measurement, or CTest evidence is stale.' } elseif ($result -eq 'FAIL') { 'a blocking threshold, build, or test failed.' } else { 'all blocking gates passed.' }))
-    [IO.File]::WriteAllLines($evidencePath, $lines, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText(
+        $evidencePath, (($lines -join "`n") + "`n"),
+        [Text.UTF8Encoding]::new($false))
 
     Write-Output $result
     Write-Output "Evidence: $evidencePath"
@@ -301,4 +349,5 @@ try {
 }
 finally {
     Pop-Location
+}
 }

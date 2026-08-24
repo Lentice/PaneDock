@@ -59,6 +59,24 @@ constexpr std::array<const wchar_t*, 6> kButtonLabels{
 const std::array<std::wstring, kExplorerCount> kDefaultLocations{
     L"C:\\", L"C:\\Windows", L"C:\\Users", L"C:\\Program Files"};
 
+void write_live_view_count() noexcept {
+    const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (output == nullptr || output == INVALID_HANDLE_VALUE) return;
+
+    constexpr char prefix[] = "panedock.live_view_count=";
+    std::array<char, 64> line{};
+    std::copy_n(prefix, sizeof(prefix) - 1, line.begin());
+    const auto converted = std::to_chars(
+        line.data() + (sizeof(prefix) - 1), line.data() + line.size() - 1,
+        panedock::explorer_host::live_view_count());
+    if (converted.ec != std::errc{}) return;
+    *converted.ptr = '\n';
+    DWORD written = 0;
+    (void)WriteFile(output, line.data(),
+                    static_cast<DWORD>(converted.ptr - line.data() + 1),
+                    &written, nullptr);
+}
+
 struct LayoutMetrics {
     int minimum_pane_width;
     int minimum_pane_height;
@@ -456,6 +474,7 @@ void destroy_explorers(AppState& state) noexcept {
         explorer.destroy();
     }
     state.realized.fill(false);
+    write_live_view_count();
 }
 
 HRESULT apply_layout(HWND window, AppState& state) {
@@ -470,6 +489,7 @@ HRESULT apply_layout(HWND window, AppState& state) {
             ShowWindow(state.address_bars[index], SW_HIDE);
         }
         ShowWindow(state.empty_message, SW_SHOW);
+        write_live_view_count();
         return S_OK;
     }
     ShowWindow(state.empty_message, SW_HIDE);
@@ -549,6 +569,7 @@ HRESULT apply_layout(HWND window, AppState& state) {
         }
         state.explorers[index].set_visible(visible);
     }
+    write_live_view_count();
     return S_OK;
 }
 
