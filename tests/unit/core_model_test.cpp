@@ -75,9 +75,56 @@ void test_invariants_reject_deliberate_breakage() {
     expect_invalid([](GroupState& value) {
         value.panes.front().tabs.push_back(value.panes.front().tabs.front());
     });
+    expect_invalid([](GroupState& value) {
+        auto& item = value.panes.front().tabs.front();
+        item.history = {item.location};
+        item.history_index = 1;
+    });
+    expect_invalid([](GroupState& value) {
+        auto& item = value.panes.front().tabs.front();
+        item.history = {ShellLocation{L"other", {}, {}}};
+    });
 
     ApplicationState application{1, {group("same"), group("same")}, "same", {}};
     EXPECT(!is_valid(application));
+}
+
+void test_tab_navigation_history() {
+    TabState value = tab("tab", L"one");
+    EXPECT(is_valid(group()));
+    EXPECT(!can_navigate_tab_back(value));
+    EXPECT(!can_navigate_tab_forward(value));
+    EXPECT(!navigate_tab_back(value));
+    EXPECT(!navigate_tab_forward(value));
+
+    record_navigation(value, {L"two", {}, L"fallback"});
+    record_navigation(value, {L"three", {}, L"fallback"});
+    record_navigation(value, {L"four", {}, L"fallback"});
+    EXPECT(value.history.size() == 4);
+    EXPECT(navigate_tab_back(value));
+    EXPECT(value.location.parsing_name == L"three");
+    EXPECT(navigate_tab_back(value));
+    EXPECT(value.location.parsing_name == L"two");
+    EXPECT(navigate_tab_forward(value));
+    EXPECT(value.location.parsing_name == L"three");
+    EXPECT(navigate_tab_forward(value));
+    EXPECT(value.location.parsing_name == L"four");
+    EXPECT(!navigate_tab_forward(value));
+
+    EXPECT(navigate_tab_back(value));
+    record_navigation(value, {L"branch", {}, L"fallback"});
+    EXPECT(value.history.size() == 4);
+    EXPECT(value.history.back().parsing_name == L"branch");
+    EXPECT(!can_navigate_tab_forward(value));
+
+    const auto unchanged = value;
+    record_navigation(value, value.location);
+    EXPECT(value == unchanged);
+
+    GroupState valid = group();
+    valid.panes.front().tabs.front() = value;
+    valid.panes.front().active_tab_id = value.id;
+    EXPECT(is_valid(valid));
 }
 
 void test_group_mutations() {
@@ -181,6 +228,7 @@ void test_failed_mutations_leave_valid_state() {
 int main() {
     test_layout_metadata();
     test_invariants_reject_deliberate_breakage();
+    test_tab_navigation_history();
     test_group_mutations();
     test_tab_and_pane_mutations();
     test_layout_migration_both_directions();

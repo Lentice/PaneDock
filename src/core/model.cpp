@@ -55,6 +55,40 @@ std::vector<double> default_divider_ratios(LayoutTemplate layout_template) {
     return std::vector<double>(divider_ratio_count(layout_template), 0.5);
 }
 
+void record_navigation(TabState& tab, ShellLocation location) {
+    if (location == tab.location) return;
+    if (tab.history.empty()) {
+        tab.history.push_back(tab.location);
+        tab.history_index = 0;
+    }
+    tab.history.erase(tab.history.begin() +
+                          static_cast<std::ptrdiff_t>(tab.history_index + 1),
+                      tab.history.end());
+    tab.history.push_back(location);
+    tab.history_index = tab.history.size() - 1;
+    tab.location = std::move(location);
+}
+
+bool can_navigate_tab_back(const TabState& tab) noexcept {
+    return !tab.history.empty() && tab.history_index > 0;
+}
+
+bool can_navigate_tab_forward(const TabState& tab) noexcept {
+    return !tab.history.empty() && tab.history_index + 1 < tab.history.size();
+}
+
+bool navigate_tab_back(TabState& tab) noexcept {
+    if (!can_navigate_tab_back(tab)) return false;
+    tab.location = tab.history[--tab.history_index];
+    return true;
+}
+
+bool navigate_tab_forward(TabState& tab) noexcept {
+    if (!can_navigate_tab_forward(tab)) return false;
+    tab.location = tab.history[++tab.history_index];
+    return true;
+}
+
 bool is_valid(const GroupState& group) noexcept {
     if (group.id.empty() || group.panes.size() != pane_count(group.layout_template) ||
         group.divider_ratios.size() != divider_ratio_count(group.layout_template) ||
@@ -75,7 +109,13 @@ bool is_valid(const GroupState& group) noexcept {
                has_unique_ids(pane.tabs, [](const TabState& tab) {
                    return tab.id;
                }) &&
-               find_id(pane.tabs, pane.active_tab_id) != pane.tabs.end();
+               find_id(pane.tabs, pane.active_tab_id) != pane.tabs.end() &&
+               std::all_of(pane.tabs.begin(), pane.tabs.end(),
+                           [](const TabState& tab) {
+                   return tab.history.empty() ||
+                          (tab.history_index < tab.history.size() &&
+                           tab.location == tab.history[tab.history_index]);
+               });
     });
 }
 

@@ -28,6 +28,8 @@ struct TabState final {
     std::string view_mode;
     std::string sort_column;
     bool sort_ascending{true};
+    std::vector<ShellLocation> history;
+    std::size_t history_index{0};
 
     bool operator==(const TabState&) const = default;
 };
@@ -73,6 +75,12 @@ struct ApplicationState final {
 std::size_t pane_count(LayoutTemplate layout_template) noexcept;
 std::size_t divider_ratio_count(LayoutTemplate layout_template) noexcept;
 std::vector<double> default_divider_ratios(LayoutTemplate layout_template);
+
+void record_navigation(TabState& tab, ShellLocation location);
+bool can_navigate_tab_back(const TabState& tab) noexcept;
+bool can_navigate_tab_forward(const TabState& tab) noexcept;
+bool navigate_tab_back(TabState& tab) noexcept;
+bool navigate_tab_forward(TabState& tab) noexcept;
 
 bool is_valid(const GroupState& group) noexcept;
 bool is_valid(const ApplicationState& application) noexcept;

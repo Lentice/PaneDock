@@ -106,3 +106,34 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 實作交接
+
+- `TabState` 已在 `src/core/model.h` 的既有五個欄位之後追加：
+  ```cpp
+  std::vector<ShellLocation> history;
+  std::size_t history_index{0};
+  ```
+  空歷史維持合法，既有 `switch_layout`、`add_tab`、`close_tab` 與 session schema/serialization 均未改動；session read 建出的 tab 因尾端 default initializer 而從空歷史開始。
+- PD-020 可直接引用的最終介面均位於 `src/core/model.h`，實作位於 `src/core/model.cpp`：
+  ```cpp
+  void record_navigation(TabState& tab, ShellLocation location);
+  bool can_navigate_tab_back(const TabState& tab) noexcept;
+  bool can_navigate_tab_forward(const TabState& tab) noexcept;
+  bool navigate_tab_back(TabState& tab) noexcept;
+  bool navigate_tab_forward(TabState& tab) noexcept;
+  ```
+- `record_navigation` 對與目前 location 完全相等的輸入直接返回；第一次真正導覽先補入原 location，再追加目的地；已有歷史時從目前 index 後方 erase 掉 forward branch，再追加目的地並同步 `history_index`/`location`。back/forward 僅在相應 `can_*` 成立時移動 index 並同步 location，不新增紀錄。
+- `is_valid(const GroupState&)` 已逐 tab 接上 ticket 指定的不變式：空 history 合法；非空 history 必須 index 在界內且 `tab.location == tab.history[tab.history_index]`。`tests/unit/core_model_test.cpp` 新增 `test_tab_navigation_history`，並在既有 deliberate-breakage 測試加入 index 越界與 current location 不一致兩個 invalid case。測試涵蓋空歷史雙向皆 false、三次記錄後 back/back/forward/forward、回上一頁後建立 branch、相同 location 不重複，以及有效的非空歷史 Group。
+- location 相等沿用 `ShellLocation::operator== = default`，會逐欄位比較 `parsing_name`、`known_folder_identity`、`fallback_path`。因此同一 Shell 位置若一份 identity 欄位完整、另一份只有 parsing name，會被視為不同並留下兩筆；core 無 Shell canonicalization 能力，PD-020 呼叫 `record_navigation` 前應盡量沿用 ExplorerHost 回報的標準化 `ShellLocation` 表示，不應在 core 改成只比較路徑字串。
+- 歷史不落地的決策目前不需要修改 `docs/design-spec.md`：§205 的必要／best-effort 持久化清單沒有 history，而本 ticket 已明訂 runtime-only 語意。若產品之後要求瀏覽器式跨重啟歷史，再以獨立 schema migration ticket 補 spec 與 session 格式，避免在 PD-018 擴張範圍。
+- Ponytail 原則的實際影響：直接在既有 model/test seam 加最小欄位、函式與單一 focused test，未新增 history 類別、介面、session migration 或 UI glue。
+
+#### Agent checks
+
+- `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`：成功。
+- `cmake --build build`：成功。LLVM-MinGW 對 ticket 決策 2 刻意保留的五欄 `TabState{...}` aggregate call sites 報 `-Wmissing-field-initializers`（`model.cpp`、`session.cpp`、`main.cpp` 與兩個 test fixture），但沒有 error；依 Non-goals 未改寫這些既有呼叫端，新欄位仍正確採 empty vector／index 0 預設值。Reviewer 若要求 warning-free build，需要決定是否允許機械式補上尾端 `{}`/`0`，這不影響行為但會偏離「舊呼叫點原樣」的明文取捨。
+- `ctest --test-dir build --output-on-failure`：3/3 通過（`panedock_core_model`、`panedock_core_layout`、`panedock_core_session`）。
+- `rg -n "windows\.h" src\core`：無命中。
+- `git diff --check`：通過。
+- 未修改 `docs/tickets.md`，未 commit；工作開始前既有未追蹤 `.claude/` 未觸碰。
