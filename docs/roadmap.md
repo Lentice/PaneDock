@@ -41,7 +41,7 @@ Done means a user can create Groups, switch between them, and see the correct pa
 
 Delivered by PD-015 (app_shell wired to `core::ApplicationState` and session persistence, replacing the Phase 0 prototype's ad hoc state), PD-016 (all five layout templates, draggable splitters, DPI-scaled layout constants, F6/Shift+F6 pane-focus cycling), and PD-017 (Group sidebar: create/rename/duplicate/delete/reorder/switch, keep-alive Group switching via a new `ExplorerHost::navigate()`). All three built and passed automated checks (build, existing `core` CTest suite, boundary greps, `git diff --check`) with independent re-verification and a minimal real-desktop launch/close smoke test recorded in each ticket's 交接區. The deeper interactive acceptance items (mouse-drag splitter feel, actual DPI-switch visuals, F6 focus cycling, sidebar button clicks and owner-draw rendering) still need a human to confirm on the real desktop — this session paused keyboard/mouse automation mid-project after a privacy-adjacent stale-window screenshot incident (see PD-015's 交接區), so those are documented as pending rather than claimed.
 
-## Phase 3 — Tabs and navigation
+## Phase 3 — Tabs and navigation (done, 2026-08-24)
 
 - Tabs per pane, with realize-on-activation
 - Per-tab address field, back, forward, parent
@@ -49,6 +49,8 @@ Delivered by PD-015 (app_shell wired to `core::ApplicationState` and session per
 - Keyboard shortcuts routed to the active pane
 
 Done means a Group with multiple tabs per pane restores its full working set, and only the visible active tab holds a live view.
+
+Delivered by PD-018 (per-tab navigation history), PD-019 (tab strip and realize-on-activation), PD-020 (per-pane address bar and navigation buttons), and PD-021 (active-pane keyboard shortcuts). All four built and passed their automated checks; interactive keyboard behavior still requires confirmation on a real desktop as recorded in PD-021's 交接區.
 
 ## Phase 4 — Shell operations
 

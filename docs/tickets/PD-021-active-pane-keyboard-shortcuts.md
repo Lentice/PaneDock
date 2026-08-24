@@ -95,3 +95,28 @@ Get-Process PaneDock | Select-Object Responding
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 實作交接
+
+#### 完成內容
+
+- `src/app_shell/main.cpp` 的訊息迴圈已在 active pane 的 `ExplorerHost::translate_accelerator` 未回傳 `S_OK` 後派送本 ticket 快速鍵。所有 handler 都使用同一個 `active_pane_index(active_group(state))` 結果，因此不會改動其他 pane；處理成功的按鍵直接 `continue`，不再送往 `TranslateMessage`／`DispatchMessageW`。
+- `Ctrl+T` 呼叫既有 `add_tab_to_pane(HWND, AppState&, std::size_t)`；`Ctrl+W` 取 active pane 的 `active_tab(...).id` 後呼叫既有 `close_tab_in_pane(HWND, AppState&, std::size_t, const std::string&)`，所以最後一個 tab 的預設 location 行為仍由既有 core 路徑負責。
+- 新增的最終 helper 簽章是 `void cycle_active_tab(HWND window, AppState& state, std::size_t pane_index, bool reverse)`。它以 `active_tab_id` 在該 pane 的 `tabs` 陣列中找目前 index，依正向或反向模數循環，再呼叫既有 `switch_active_tab(HWND, AppState&, std::size_t, const std::string&)`；單一 tab 時會安全地切回同一 tab。
+- `Alt+Left`／`Alt+Right` 完整重用 `navigate_tab_history(AppState&, std::size_t, bool)`，沒有直接操作 core history，因此保留 `suppress_history_record` pending guard、完成 callback 與 PD-020 reviewer 新增的 navigation-failed callback 清旗標路徑。`Backspace` 僅在 Ctrl/Alt 均未按下且 `address_bar_has_focus(state)` 為 false 時呼叫既有 `navigate_up(AppState&, std::size_t)`；網址列聚焦時仍交給原生 EDIT 刪除文字。沒有加入 `Alt+Up`。
+- 按鍵入口接受 `WM_KEYDOWN` 與 `WM_SYSKEYDOWN`；後者是 Win32 在 Alt 按住時傳送 `Alt+Left`／`Alt+Right` 的必要訊息。Shell view 仍先取得 accelerator 處理權，沒有使用 `RegisterHotKey`。Ctrl 系列在網址列聚焦時仍可執行，因為該情況只略過 Shell accelerator，不略過 app-shell 快速鍵判斷。
+- 沒有修改 `src/core`、`src/explorer_host`、既有公開簽章或 session schema。確認 `docs/tickets.md` 中 PD-018、PD-019、PD-020 均為 `done`，本 ticket 實作與自動檢查完成後，已依 Handoff requirements 將 `docs/roadmap.md` Phase 3 標記為 `done, 2026-08-24`，並列出 PD-018／019／020／021；未修改 `docs/tickets.md` 的 PD-021 status。
+
+#### 驗證與人工限制
+
+- `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`：成功。
+- `cmake --build build`：成功，`src/app_shell/main.cpp` 編譯及 `PaneDock.exe` 連結皆成功。
+- `ctest --test-dir build --output-on-failure`：3/3 通過（`panedock_core_model`、`panedock_core_layout`、`panedock_core_session`）。
+- 啟動檢查：`Start-Process .\build\PaneDock.exe -PassThru` 後等待 2 秒，process `Responding=True`；檢查後只終止本次啟動的 process。
+- 靜態路徑確認：tab 循環只讀寫 `active_group(state).panes[active]`；新增／關閉／切換均由 PD-019 helper 導覽、刷新並儲存；歷史鍵由 PD-020 helper 維持 suppression；Backspace 的 address-bar focus guard 位於呼叫 `navigate_up` 之前。
+- 本執行環境沒有可操作的互動桌面，因此 Acceptance 1–6 的真實鍵盤輸入、tab 視覺切換與 Shell 導覽結果均**未驗證，需要真實桌面**。同理，未能觀察任何組合是否被真實 Shell view 的 `TranslateAcceleratorW` 攔截；程式碼只證明 Shell 回傳 `S_OK` 時依既有優先權不進 app-shell handler，回傳非 `S_OK` 時才判斷快速鍵。Reviewer 應逐一人工驗證 `Ctrl+T`、`Ctrl+W`、`Ctrl+Tab`、`Ctrl+Shift+Tab`、`Alt+Left`、`Alt+Right`、一般 view 的 `Backspace`，以及網址列聚焦時的 `Backspace` 文字刪除。
+- 工作開始前已有未追蹤 `.claude/`，本次未觸碰；未 commit。
+
+### 2026-08-24 最終檢查補記
+
+- `git diff --check`：通過。最終 tracked diff 僅包含 `src/app_shell/main.cpp`、本 ticket 交接區及 Handoff requirements 明訂的 `docs/roadmap.md` Phase 3 完成紀錄；`docs/tickets.md` 未修改。

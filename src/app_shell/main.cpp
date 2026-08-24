@@ -773,6 +773,22 @@ void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
     save_now(state);
 }
 
+void cycle_active_tab(HWND window, AppState& state, std::size_t pane_index,
+                      bool reverse) {
+    auto& pane = active_group(state).panes[pane_index];
+    const auto current = std::find_if(
+        pane.tabs.begin(), pane.tabs.end(), [&](const auto& tab) {
+            return tab.id == pane.active_tab_id;
+        });
+    if (current == pane.tabs.end()) return;
+    const std::size_t index =
+        static_cast<std::size_t>(current - pane.tabs.begin());
+    const std::size_t next = reverse ? (index + pane.tabs.size() - 1) %
+                                          pane.tabs.size()
+                                     : (index + 1) % pane.tabs.size();
+    switch_active_tab(window, state, pane_index, pane.tabs[next].id);
+}
+
 void add_tab_to_pane(HWND, AppState& state, std::size_t pane_index) {
     if (!has_active_group(state)) return;
     auto& group = active_group(state);
@@ -1356,11 +1372,42 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             if (!address_bar_has_focus(state) &&
                 state.explorers[active].translate_accelerator(&message) == S_OK)
                 continue;
+            const bool key_down = message.message == WM_KEYDOWN ||
+                                  message.message == WM_SYSKEYDOWN;
+            const bool control = GetKeyState(VK_CONTROL) < 0;
+            const bool alt = GetKeyState(VK_MENU) < 0;
+            const bool shift = GetKeyState(VK_SHIFT) < 0;
+            if (key_down && control && !alt && message.wParam == 'T') {
+                add_tab_to_pane(window, state, active);
+                continue;
+            }
+            if (key_down && control && !alt && message.wParam == 'W') {
+                close_tab_in_pane(window, state, active,
+                                  active_tab(active_group(state).panes[active])
+                                      .id);
+                continue;
+            }
+            if (key_down && control && !alt && message.wParam == VK_TAB) {
+                cycle_active_tab(window, state, active, shift);
+                continue;
+            }
+            if (key_down && alt && !control && message.wParam == VK_LEFT) {
+                navigate_tab_history(state, active, true);
+                continue;
+            }
+            if (key_down && alt && !control && message.wParam == VK_RIGHT) {
+                navigate_tab_history(state, active, false);
+                continue;
+            }
+            if (key_down && !control && !alt &&
+                message.wParam == VK_BACK && !address_bar_has_focus(state)) {
+                navigate_up(state, active);
+                continue;
+            }
             if (message.message == WM_KEYDOWN && message.wParam == VK_F6) {
                 const std::size_t count = active_group(state).panes.size();
-                const bool reverse = GetKeyState(VK_SHIFT) < 0;
-                const std::size_t next = reverse ? (active + count - 1) % count
-                                                 : (active + 1) % count;
+                const std::size_t next = shift ? (active + count - 1) % count
+                                               : (active + 1) % count;
                 set_active_pane(state, next);
                 continue;
             }
