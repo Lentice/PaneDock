@@ -9,7 +9,7 @@
 
 set(PANEDOCK_TESTS
     "core_model|unit/core_model_test.cpp|panedock_core"
-    # "core_layout|unit/core_layout_test.cpp|panedock_core"               # PD-005
+    "core_layout|unit/core_layout_test.cpp|panedock_core"
     # "core_session|unit/core_session_test.cpp|panedock_core"             # PD-006
 )
 

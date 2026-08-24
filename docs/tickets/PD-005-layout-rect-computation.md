@@ -118,3 +118,17 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 — PD-005 實作
+
+- `src/core/layout.h` 定義純值 `PaneRect` 與三個 96-DPI 基準常數：最小 pane 寬 `120` px，讓窄視窗仍保有可操作的 Shell 清單欄位；最小 pane 高 `80` px，足以保留數列可見內容；divider 厚 `4` px，在分隔可辨識與 pane 空間之間取最小實用值。沒有加入 Win32 型別或依賴。
+- `compute_layout_rects` 支援五種 `LayoutTemplate`。三分割的 `divider_ratios[0]` 控制左右分隔，`divider_ratios[1]` 控制右側上下分隔；輸出順序是左側全高、右上、右下。
+- 每條軸先扣 divider，再以 `std::lround` 計算前一區；尾端區使用「可用尺寸減前一區」吸收任何一像素捨入餘數。四宮格的右欄／下列及三分割的右欄／右下因此貼齊 client area；退化尺寸夾住最小值時則依票券允許超出並由 UI 裁切。
+- client width/height 為零或負值時仍從 `(0, 0)` 回傳該版型數量的矩形，所有 width/height 至少為具名最小值。比例數量不符時整組改用該版型的 `0.5` 預設比例；合法數量的比例由 PD-004 model invariant 保證在 `0.0`–`1.0`。
+- `tests/unit/core_layout_test.cpp` 的 `panedock_core_layout` 於 `tests/CMakeLists.txt` 的 `PANEDOCK_TESTS` 表註冊。測試以具體座標涵蓋五種一般版型、奇數像素餘數與 divider 連續性、`0.0`／`1.0`、零／負 client area、小於最小總和及比例數量不符。
+- 發現票券的 DPI 說明稱呼叫端會傳入「已按 DPI 縮放過的最小值常數」，但 scope 所定函式輸入只有 client size、版型與比例，固定常數無法由呼叫端縮放。依本票 scope 保留 96-DPI 基準常數；接線到 Per-Monitor-V2 UI 前，建議另票釐清並讓計算函式接收按 DPI 縮放後的 minimum/divider metrics，無須改變矩形演算法。
+- Agent checks（Release，LLVM-MinGW/Ninja）：`cmake --build build` 成功；`ctest -R layout` 1/1、完整 `ctest` 2/2 通過；Win32 core 邊界 `rg` 無命中；魔術數字 `rg` 僅命中 `layout.h` 的具名常數定義；`git diff --check` 通過。票券原列的 `src\core\layout*` 在此 Windows `rg` 版本會回報非法路徑，因此以等價的 `rg ... src\core --glob "layout*"` 執行。
+
+### 2026-08-24 驗證
+
+獨立重跑 build 與完整 `ctest`(2/2 通過)、兩個邊界 `rg`、`git diff --check`,結果一致。讀過 `src/core/layout.h`／`layout.cpp`／`tests/unit/core_layout_test.cpp` 全文:`split()` 的餘數吸收與退化夾制邏輯正確,且發現一個已被交接記錄的整數溢位修正(`INT_MIN - kDividerThickness` 改成 `std::max(size, kDividerThickness) - kDividerThickness` 避免溢位)——這是實作過程自我抓到並修正的問題,不是遺留缺陷。三分割與四宮格的比例語意、輸出順序與 §FR-003／§FR-004a 一致。DPI 常數寫死一事已如實記錄為落差而非默默改 spec,已在 `docs/tickets.md` §候選 新增對應項目,待 Per-Monitor-V2 接線時開票處理,不阻塞本票。判定為完成。

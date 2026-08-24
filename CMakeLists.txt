@@ -34,6 +34,7 @@ endfunction()
 # dependency here is what enforces it at link time.
 # ---------------------------------------------------------------------------
 add_library(panedock_core STATIC
+    src/core/layout.cpp
     src/core/model.cpp
 )
 target_include_directories(panedock_core PUBLIC src)
