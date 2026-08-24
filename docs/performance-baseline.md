@@ -4,18 +4,18 @@ Every row below is an **estimate for planning**, not a measurement. Estimates ar
 
 | Metric | Target | Blocking threshold | Result | Environment / notes |
 |---|---|---|---|---|
-| Idle CPU, 10 min sample | 0% | avg ≥ 0.1% fails | Not measured (single raw reading below) | NFR-001 blocking. PD-003 owns the formal idle-window delta. PD-011 2026-08-24 single sample: process cumulative CPU time 1.16 s over an 11.5 min elapsed window (launch to sample, includes startup/navigation work, not an idle-only delta) — informational only, not a pass/fail measurement against the threshold. |
-| Idle disk I/O, 10 min sample | zero bytes | any I/O fails | Not measured | NFR-001 blocking. PD-003. |
-| Resident memory, 1 pane, local folder | — | — | Not measured | Estimate: host 5–20 MB + one Shell view. PD-003. |
+| Idle CPU, 10 min sample | 0% | avg ≥ 0.1% fails | Not measured (single raw reading below) | NFR-001 blocking. PD-003 added the formal idle-window delta measurement, but it was not run without a real interactive desktop. PD-011 2026-08-24 single sample: process cumulative CPU time 1.16 s over an 11.5 min elapsed window (launch to sample, includes startup/navigation work, not an idle-only delta) — informational only, not a pass/fail measurement against the threshold. |
+| Idle disk I/O, 10 min sample | zero bytes | any I/O fails | Not measured | NFR-001 blocking. PD-003 added `GetProcessIoCounters` transfer-byte delta measurement; the ten-minute interactive sample remains pending. |
+| Resident memory, 1 pane, local folder | — | — | Not measured | PD-003: the Phase 0 prototype exposes only two- and four-pane layouts and keeps hidden views live, so it cannot honestly produce a one-live-pane reading. |
 | Resident memory, 4 panes, local folders | — | — | 54.3 MB WorkingSet64 (single reading) | PD-011 2026-08-24: PaneDock idle after 11.5 min, 4 panes on default local-folder paths, HandleCount 553. Raw process-level reading, not PD-003's formal baseline. |
-| Resident memory, 4 panes, thumbnails + OneDrive + network | — | — | Not measured | Estimate: +100–300 MB, can exceed 500 MB. Third-party extensions dominate the spread. PD-003. |
-| Handle count, idle after 20 layout switches | flat | monotonic growth fails | Not measured | AC-003. PD-001 step 5. |
-| Live view count after 20 layout switches | returns to baseline | any residual view fails | Not measured | AC-003. PD-001 step 5. |
+| Resident memory, 4 panes, thumbnails + OneDrive + network | — | — | Not measured | PD-003 measurement requires the named resources and Shell interaction on a real desktop; no reading was fabricated. |
+| Handle count, idle after 20 layout switches | flat | monotonic growth fails | Not measured | PD-003 script records 21 handle samples around 20 human `Ctrl+Shift+L` actions; execution remains pending because this session did not automate keyboard input. |
+| Live view count after 20 layout switches | returns to baseline | any residual view fails | Not measured | PD-003: the prototype has no runtime diagnostic surface for live-view count; adding product diagnostics was outside this measurement-only ticket. |
 | Group switch latency, all locations local | — | — | Not measured | Perceived-instant is the goal; no threshold set until measured. |
 | Group switch latency, one unreachable network path | UI never blocks | any UI block fails | Not measured | NFR-003 / AC-005 blocking. PD-001 step 7. |
 | Tab realize latency on activation | — | — | Not measured | Governs whether realize-on-activation is perceptible; see the rejected direction on live-per-tab views. |
 | Cold start to first painted pane | — | — | Not measured | — |
-| Thumbnail pipeline memory contribution | — | — | Not measured | Determines the cache and size caps required by NFR-002. Candidate ticket, gated on PD-003. |
+| Thumbnail pipeline memory contribution | — | — | Not measured | PD-003 script computes the WorkingSet64 difference between operator-prepared thumbnail and text-only folders; real-desktop execution remains pending. |
 
 ## Release evidence contract
 

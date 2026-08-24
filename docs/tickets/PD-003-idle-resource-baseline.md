@@ -113,3 +113,22 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 腳本實作與非互動環境交接
+
+- 新增 `tests/release/release_evidence.ps1`。預設路徑依 LLVM-MinGW toolchain 執行 Release configure、build、`ctest -N` 與完整 CTest，逐步保留 stdout/stderr 與 exit code；產生 `docs/release-evidence.md`。本次實際結果：configure 0、build 0、CTest discovery 0、完整 CTest 0，live registrations 1、executed 1、skipped markers 0，CTest gate `PASS`。最終 `## Result` 為 **INCOMPLETE**，腳本 exit code **2**，原因是兩個 blocking 指標都沒有合格的十分鐘互動桌面讀數。這是 fail-closed 契約的預期結果，不是 PASS。
+- 環境記錄由腳本產生於 2026-08-24（精確 timestamp 見 evidence）：Windows build 26200.9168（registry fallback，因此受限執行環境拒絕 CIM 存取）；CPU `Intel64 Family 6 Model 151 Stepping 2, GenuineIntel`、20 logical processors；evidence script 未附加 debugger；PaneDock measurement 未執行，故 app debugger 狀態為 `Not measured`；git commit `d36ae74e51acbf7ad01773b1149970fc6623855f`。工具版本與各步原始輸出完整保存在 `docs/release-evidence.md`。本受限環境無法可靠盤點目前載入／安裝的第三方 shell extension；先前真實桌面清單仍見 PD-011 交接區，未把它冒充成本次量測環境。
+- `-CollectMeasurements` 是真實桌面路徑：操作者確認四個本機資料夾已穩定後，腳本以 `Process.TotalProcessorTime` 的 idle-window delta／elapsed／logical-processors 算平均 CPU，以 Win32 `GetProcessIoCounters` 的 read/write/other transfer-byte delta算磁碟 I/O，並用 `CheckRemoteDebuggerPresent` 記錄 PaneDock 是否附加 debugger。WorkingSet64 與 HandleCount 由同一 process snapshot 取得。腳本另依序等待操作者準備「四 pane 本機」、「四 pane 含縮圖、OneDrive、network」、「純文字資料夾」、「縮圖資料夾」組態，計算縮圖 WorkingSet64 差值；它不自行導覽或合成輸入。
+- 20 次 layout check 的量測點已實作：切換前取一次 HandleCount，此後每次明示要求操作者自行按一次 `Ctrl+Shift+L`，按 Enter 後再取樣，共 21 點，報告前後值與是否每一步皆嚴格單調上升。依本次政策未模擬鍵盤／滑鼠，故實際 20 次執行仍待人類在真實桌面完成。live-view count 仍為 `Not measured`，因原型沒有 runtime diagnostic surface；本 ticket 是 measurement-only，沒有加入產品診斷功能。
+- 三次連續 soak 已納入同一互動路徑：各次獨立啟動 PaneDock、等待操作者操作並正常關閉，記錄 process launch 的 stdout/stderr 與最終 exit code。此次未執行；非互動 report 對 measurement launch、idle sample 與 soak 1–3 各自明列 `not run`，沒有把 skipped step 當成證據。
+- 無互動桌面的粗讀（**非官方 baseline，不滿足任何 gate**）：2026-08-24 12:55 啟動 Release `PaneDock.exe`，約 15 秒後 PID 35140 為 `Responding=True`、累積 CPU 1.046875 s（含 startup/navigation）、WorkingSet64 59,011,072 bytes（約 56.3 MiB）、HandleCount 747。`CloseMainWindow()` 回傳 true，但在額外 15 秒內仍未退出，最後只終止本次明確 PID 的測試程序。此結果受非互動 Shell/session 行為干擾，不寫入表格的正式 Result，也不推論 shutdown 缺陷。
+- 仍為 `Not measured`：正式 idle CPU、idle disk I/O、單一 pane memory、四 pane mixed-resource memory、20-switch handle/live-view count、thumbnail contribution、Group switch latency、tab realize latency、cold-start paint。原因分別已更新至 `docs/performance-baseline.md`。其中單一 pane 是原型能力缺口（只有二／四 pane且隱藏 view 仍 live）；Group/tab 不存在於原型；cold-start first paint 需要目前沒有的 visible-paint instrumentation。四 pane local 只保留 PD-011 的 54.3 MB 單次讀數，未把本次 15 秒 headless 粗讀覆蓋成 PD-003 正式值。
+- `rg -n "SetTimer|Sleep\(" src` 無命中，現有 app idle path 仍是 `GetMessageW` event-driven message loop。非平凡量測／gate 邏輯的 runnable self-check 即本次直接執行腳本：它捕捉成功的 configure/build/CTest 證據，並在 blocking measurement 缺席時產生 `INCOMPLETE`、exit 2。真實 `GetProcessIoCounters` 十分鐘路徑與人工切換路徑因缺少互動桌面未執行；不得視為驗收條件 3–6 已通過。
+
+### 2026-08-24 驗證與狀態:blocked,需人工執行
+
+獨立重跑 `.\tests\release\release_evidence.ps1`(不含 `-CollectMeasurements`)於真實桌面,結果與交接一致:`INCOMPLETE`、exit code `2`;`git status`/`git diff --stat` 確認只有 `docs/performance-baseline.md`、本文件與新增的 `tests/release/release_evidence.ps1`、`docs/release-evidence.md` 變動,無其他範圍外檔案。
+
+腳本本身已檢視:`-CollectMeasurements` 路徑用 `Read-Host` 在多個步驟等待操作者按 Enter(確認四 pane 設定、確認縮圖/OneDrive/network 組態、每次 `Ctrl+Shift+L` 後按 Enter、確認正常關閉),完全不合成任何鍵盤/滑鼠輸入,設計上就是給人類在互動終端機執行,不是給無人值守環境跑的。這與目前受限的執行環境(無互動 stdin)以及使用者本 session 暫緩鍵盤/滑鼠自動化的指示一致——即使沒有暫緩指示,這支腳本原本就无法被非互動環境跑完。
+
+Acceptance 3–6(十分鐘 idle 讀數、三種記憶體組態、handle 數、縮圖差值)因此仍未達成,不能標記 `done`。`docs/tickets.md` 狀態設為 `blocked`,依賴不變(PD-011),阻塞原因為「需要使用者在真實互動桌面親自執行 `.\tests\release\release_evidence.ps1 -CollectMeasurements`」。執行方式:開一個真正的互動式 PowerShell(不透過任何自動化 agent),`cd` 到 repo 根目錄執行該指令,依提示依序完成四種資料夾組態切換與 20 次 `Ctrl+Shift+L`,腳本會自動產生 `docs/release-evidence.md` 與量測數字;完成後把 `docs/release-evidence.md` 的內容摘要或截圖回報,即可把本 ticket 的狀態改為 `done` 並補上 `docs/performance-baseline.md` 的正式讀數。
