@@ -111,3 +111,32 @@ Get-Process PaneDock | Select-Object Responding
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-24 實作交接
+
+#### 完成內容
+
+- `AppState` 已新增 `std::array<HWND, kExplorerCount> tab_strips{}`。`WM_CREATE` 一開始以 `InitCommonControlsEx({..., ICC_TAB_CLASSES})` 初始化 Common Controls，再建立四個 `WC_TABCONTROLW`；`PaneDock` target 已連結 `comctl32`。每個 pane 槽位仍只有原本的一個 `ExplorerHost`，沒有新增 per-tab host 或修改 core mutation 簽章。
+- tab 條高度最終採 `kTabStripHeight = 24` 個 96-DPI logical pixels，實際高度為 `MulDiv(24, GetDpiForWindow(window), 96)`（經既有 `scaled_value`，最少 1 px）。`apply_layout` 先把 core pane rect 的上緣 24 logical px 配給對應 tab control，再把剩餘 rect 傳給 `ExplorerHost::initialize`／`set_rect`；不可見 pane 與零 Group 狀態同時 hide tab strip 和 ExplorerHost。PD-020 若在同一段 pane chrome 加網址列，應從此 24 logical-pixel tab strip 下緣繼續配置。
+- `refresh_tab_strip(AppState&, std::size_t)` 依 `PaneState.tabs` 順序以 `TCITEMW/TCIF_TEXT` 重建真實 tab，尾端再插入沒有 `TabState` 的 `L"+"` item，最後用 `TCM_SETCURSEL` 對齊 `active_tab_id`。初始化、Group 切換、新增第一個 Group、刪除 Group、layout pane 數變動，以及每次 add/close/set-active-tab 成功後都會刷新相應控制項；resize/splitter drag 只重排 HWND，不反覆重建 items。
+- 顯示文字是 `location.parsing_name` 最後一個 `\\` 或 `/` 後的片段；沒有 separator，或 parsing name 以 separator 結尾（例如 `C:\\`）時顯示整串。這不是 Shell display name，未呼叫 `IShellFolder::GetDisplayNameOf`，所以 virtual namespace 或特殊 folder 可能顯示較長的 parsing name；這是 ticket 明訂的簡化，日後若要求原生顯示名稱需在 Shell-facing 模組解析，不能下放 core。
+- `WM_NOTIFY/TCN_SELCHANGE` 以 `NMHDR::hwndFrom` 對照四個 `tab_strips` 找到 pane。選到尾端 index 會建立新 tab；選到真實 tab 會切換 active tab。切換前 `capture_pane_location` 將該 pane live host 的目前 parsing name 寫回舊 active tab，再呼叫 `core::set_active_tab`，同一個 host 僅 `navigate()` 到新 active tab，隨後 refresh/save；沒有 destroy/reinitialize。因此 inactive tabs 始終只存在於 `PaneState.tabs` 資料中。
+- `+` 使用 Group 全域既有 `unique_tab_id` 配發 identity，location 使用 `kDefaultLocations[pane_index]`，新增後立即設為 active、重導覽、刷新並 `save_now`。新 `TabState` 的 PD-018 history 明確初始化為空 history/index 0，但本 ticket 不讀寫 history。
+- 中鍵關閉沿用既有父視窗 `WM_PARENTNOTIFY`，不 subclass tab control：以目前 cursor 的 parent-client 座標找出 pane，映射到對應 tab control 後用 `TCM_HITTEST`。hit index 必須小於 `pane.tabs.size()`，所以 `+` 不會被當成真實 tab 關閉。關閉前先 capture live location；呼叫 `core::close_tab` 後，只有被關閉的是 active tab（包含最後一個 tab被重設為預設 location）才重導覽，關閉 inactive tab 不做無意義的同位置 Shell navigation；兩條成功路徑都 refresh/save。
+
+#### 訊息交互與人工驗證限制
+
+- 左鍵點 tab control 仍會沿用既有 `WM_PARENTNOTIFY/WM_LBUTTONDOWN -> pane_at_point -> set_active_pane`，使該 pane 成為 active pane；同一次點擊再由 tab control 發出 `TCN_SELCHANGE` 切 tab。這是刻意保留的合理行為：選另一 pane 的 tab 應同時選中 pane。程式路徑上兩者修改不同欄位（`active_pane_id` 與該 pane 的 `active_tab_id`），不互相覆寫；實際焦點/原生方向鍵手感仍需真實桌面確認。
+- 決策 2 維持中鍵關閉且沒有可見 `×`。目前無互動式桌面，無法判斷初次使用是否足夠直覺；建議 reviewing session/使用者人工試用 `+`、一般 tab 切換與中鍵關閉。若可發現性不足，應另開 UI 打磨 ticket 加可見關閉 affordance，不在本票引入 owner-draw/subclass 複雜度。
+- 本 ticket 的新增邏輯位於 Win32/Common Controls 訊息與真實 `IExplorerBrowser` 導覽 seam，不適合在 core 建 fake（repo 已明確否決）；focused 驗證以完整建置、既有 core mutation tests、可啟動/回應檢查，以及上述逐訊息靜態路徑取代。實際點擊、四 pane 視覺、DPI 切換與 `session.json` 操作後內容仍需人工桌面驗證。
+- Ponytail 原則的具體影響：中鍵直接復用 `WM_PARENTNOTIFY + TCM_HITTEST`，未新增 tab-control subclass、owner draw、可見關閉按鈕或新模組；同時避免 inactive-tab close 的多餘 Shell navigation。
+
+#### Agent checks
+
+- `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`：成功。
+- `cmake --build build`：成功；本 ticket 新增/修改的 app-shell 編譯單元無警告。
+- `ctest --test-dir build --output-on-failure`：3/3 通過（`panedock_core_model`、`panedock_core_layout`、`panedock_core_session`）。
+- `rg -n "windows\.h|WC_TABCONTROL|comctl32" src\core`：無命中，tab UI/Common Controls 未洩漏至 core。
+- `git diff --check`：通過。
+- 啟動檢查：`Start-Process .\build\PaneDock.exe -PassThru`，等待 2 秒後 process `Responding=True`；隨後終止測試 process。沒有可用互動桌面，未宣稱完成滑鼠/視覺驗收。
+- 未修改 `docs/tickets.md`，未 commit；工作開始前既有未追蹤 `.claude/` 未觸碰。

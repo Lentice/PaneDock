@@ -75,7 +75,7 @@ target_compile_definitions(PaneDock PRIVATE
 target_link_options(PaneDock PRIVATE -municode)
 target_link_libraries(PaneDock PRIVATE
     panedock_core panedock_explorer_host panedock_sidebar
-    shell32 ole32 shlwapi user32 gdi32 uuid
+    shell32 ole32 shlwapi user32 gdi32 comctl32 uuid
 )
 panedock_set_warnings(PaneDock)
 

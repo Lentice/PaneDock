@@ -6,6 +6,7 @@
 #endif
 #define _WIN32_WINNT 0x0A00
 #include <windows.h>
+#include <commctrl.h>
 
 #include <algorithm>
 #include <array>
@@ -32,6 +33,8 @@ namespace {
 constexpr wchar_t kWindowClassName[] = L"PaneDockMainWindow";
 constexpr int kLayoutToggleHotkeyId = 1;
 constexpr std::size_t kExplorerCount = 4;
+constexpr int kTabStripHeight = 24;
+constexpr int kTabStripIdBase = 200;
 constexpr int kGroupListId = 100;
 constexpr int kNewGroupId = 101;
 constexpr int kDuplicateGroupId = 102;
@@ -70,6 +73,7 @@ struct AppState {
     panedock::sidebar::Sidebar sidebar;
     std::array<HWND, kButtonIds.size()> sidebar_buttons{};
     HWND empty_message{nullptr};
+    std::array<HWND, kExplorerCount> tab_strips{};
 };
 
 std::optional<std::filesystem::path> session_directory() noexcept {
@@ -100,7 +104,7 @@ panedock::core::ApplicationState default_application_state() {
         group.panes.push_back({"pane-" + suffix,
                                {{"tab-" + suffix,
                                  location(kDefaultLocations[index]), {}, {},
-                                 true}},
+                                 true, {}, 0}},
                                "tab-" + suffix});
     }
     group.active_pane_id = group.panes.front().id;
@@ -250,14 +254,60 @@ std::optional<Splitter> splitter_at_point(
     return std::nullopt;
 }
 
-void capture_locations(AppState& state) {
+std::wstring tab_display_text(const panedock::core::TabState& tab) {
+    const auto& parsing_name = tab.location.parsing_name;
+    const std::size_t separator = parsing_name.find_last_of(L"\\/");
+    if (separator == std::wstring::npos || separator + 1 == parsing_name.size())
+        return parsing_name;
+    return parsing_name.substr(separator + 1);
+}
+
+void refresh_tab_strip(AppState& state, std::size_t pane_index) {
+    if (pane_index >= state.tab_strips.size()) return;
+    const HWND strip = state.tab_strips[pane_index];
+    SendMessageW(strip, TCM_DELETEALLITEMS, 0, 0);
+    if (!has_active_group(state) ||
+        pane_index >= active_group(state).panes.size()) return;
+
+    const auto& pane = active_group(state).panes[pane_index];
+    std::size_t active_index = 0;
+    for (std::size_t index = 0; index < pane.tabs.size(); ++index) {
+        std::wstring text = tab_display_text(pane.tabs[index]);
+        TCITEMW item{};
+        item.mask = TCIF_TEXT;
+        item.pszText = text.data();
+        SendMessageW(strip, TCM_INSERTITEMW, index,
+                     reinterpret_cast<LPARAM>(&item));
+        if (pane.tabs[index].id == pane.active_tab_id) active_index = index;
+    }
+    wchar_t plus[] = L"+";
+    TCITEMW add_item{};
+    add_item.mask = TCIF_TEXT;
+    add_item.pszText = plus;
+    SendMessageW(strip, TCM_INSERTITEMW, pane.tabs.size(),
+                 reinterpret_cast<LPARAM>(&add_item));
+    SendMessageW(strip, TCM_SETCURSEL, active_index, 0);
+}
+
+void refresh_tab_strips(AppState& state) {
+    for (std::size_t index = 0; index < state.tab_strips.size(); ++index)
+        refresh_tab_strip(state, index);
+}
+
+void capture_pane_location(AppState& state, std::size_t pane_index) {
     if (!has_active_group(state)) return;
     auto& group = active_group(state);
-    for (std::size_t index = 0; index < group.panes.size(); ++index) {
-        if (state.realized[index] && !state.explorers[index].location().empty()) {
-            active_tab(group.panes[index]).location.parsing_name =
-                state.explorers[index].location();
-        }
+    if (pane_index >= group.panes.size() || !state.realized[pane_index] ||
+        state.explorers[pane_index].location().empty()) return;
+    active_tab(group.panes[pane_index]).location.parsing_name =
+        state.explorers[pane_index].location();
+}
+
+void capture_locations(AppState& state) {
+    if (!has_active_group(state)) return;
+    for (std::size_t index = 0; index < active_group(state).panes.size();
+         ++index) {
+        capture_pane_location(state, index);
     }
 }
 
@@ -332,7 +382,10 @@ void destroy_explorers(AppState& state) noexcept {
 HRESULT apply_layout(HWND window, AppState& state) {
     layout_sidebar(window, state);
     if (!has_active_group(state)) {
-        for (auto& explorer : state.explorers) explorer.set_visible(false);
+        for (std::size_t index = 0; index < state.explorers.size(); ++index) {
+            state.explorers[index].set_visible(false);
+            ShowWindow(state.tab_strips[index], SW_HIDE);
+        }
         ShowWindow(state.empty_message, SW_SHOW);
         return S_OK;
     }
@@ -342,7 +395,17 @@ HRESULT apply_layout(HWND window, AppState& state) {
     for (std::size_t index = 0; index < state.explorers.size(); ++index) {
         const bool visible = index < group.panes.size();
         if (visible) {
-            const RECT rect = to_win32_rect(rects[index]);
+            const RECT pane_rect = to_win32_rect(rects[index]);
+            const int strip_height = scaled_value(window, kTabStripHeight);
+            SetWindowPos(state.tab_strips[index], nullptr, pane_rect.left,
+                         pane_rect.top, pane_rect.right - pane_rect.left,
+                         std::min(strip_height,
+                                  static_cast<int>(pane_rect.bottom -
+                                                   pane_rect.top)),
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            ShowWindow(state.tab_strips[index], SW_SHOW);
+            RECT rect = pane_rect;
+            rect.top = std::min(rect.bottom, rect.top + strip_height);
             if (!state.realized[index]) {
                 const HRESULT hr = state.explorers[index].initialize(
                     window, rect,
@@ -354,6 +417,8 @@ HRESULT apply_layout(HWND window, AppState& state) {
             } else {
                 state.explorers[index].set_rect(rect);
             }
+        } else {
+            ShowWindow(state.tab_strips[index], SW_HIDE);
         }
         state.explorers[index].set_visible(visible);
     }
@@ -425,6 +490,7 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
         state.explorers[previous].set_active(false);
     }
     state.application.active_group_id = target_id;
+    refresh_tab_strips(state);
     auto& group = active_group(state);
     for (std::size_t pane = 0; pane < group.panes.size(); ++pane) {
         if (state.realized[pane]) {
@@ -447,6 +513,7 @@ void add_group(HWND window, AppState& state) {
     if (!panedock::core::add_group(state.application,
                                    new_group_state(state, id))) return;
     if (was_empty) {
+        refresh_tab_strips(state);
         if (FAILED(apply_layout(window, state)))
             OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
         const std::size_t active = active_pane_index(active_group(state));
@@ -483,6 +550,7 @@ void delete_group(HWND window, AppState& state) {
         state.explorers[active_pane_index(active_group(state))].set_active(false);
     }
     if (!panedock::core::delete_group(state.application, id)) return;
+    refresh_tab_strips(state);
     if (deleted_active && has_active_group(state)) {
         auto& group = active_group(state);
         for (std::size_t pane = 0; pane < group.panes.size(); ++pane) {
@@ -557,6 +625,67 @@ std::string unique_tab_id(const panedock::core::GroupState& group,
     }
 }
 
+void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
+                       const std::string& tab_id) {
+    if (!has_active_group(state)) return;
+    auto& group = active_group(state);
+    if (pane_index >= group.panes.size()) return;
+    auto& pane = group.panes[pane_index];
+    if (pane.active_tab_id == tab_id) {
+        refresh_tab_strip(state, pane_index);
+        return;
+    }
+    capture_pane_location(state, pane_index);
+    if (!panedock::core::set_active_tab(pane, tab_id)) {
+        refresh_tab_strip(state, pane_index);
+        return;
+    }
+    if (state.realized[pane_index]) {
+        state.explorers[pane_index].navigate(
+            active_tab(pane).location.parsing_name);
+    }
+    refresh_tab_strip(state, pane_index);
+    save_now(state);
+}
+
+void add_tab_to_pane(HWND, AppState& state, std::size_t pane_index) {
+    if (!has_active_group(state)) return;
+    auto& group = active_group(state);
+    if (pane_index >= group.panes.size()) return;
+    capture_pane_location(state, pane_index);
+    std::size_t candidate = 0;
+    const std::string id = unique_tab_id(group, candidate);
+    auto& pane = group.panes[pane_index];
+    if (!panedock::core::add_tab(
+            pane, {id, location(kDefaultLocations[pane_index]), {}, {}, true,
+                   {}, 0}) ||
+        !panedock::core::set_active_tab(pane, id)) return;
+    if (state.realized[pane_index]) {
+        state.explorers[pane_index].navigate(
+            active_tab(pane).location.parsing_name);
+    }
+    refresh_tab_strip(state, pane_index);
+    save_now(state);
+}
+
+void close_tab_in_pane(HWND, AppState& state, std::size_t pane_index,
+                       const std::string& tab_id) {
+    if (!has_active_group(state)) return;
+    auto& group = active_group(state);
+    if (pane_index >= group.panes.size()) return;
+    auto& pane = group.panes[pane_index];
+    capture_pane_location(state, pane_index);
+    const bool closed_active = pane.active_tab_id == tab_id;
+    if (!panedock::core::close_tab(
+            pane, tab_id, location(kDefaultLocations[pane_index]))) return;
+    if (closed_active && state.realized[pane_index]) {
+        state.explorers[pane_index].navigate(
+            active_tab(pane).location.parsing_name);
+    }
+    refresh_tab_strip(state, pane_index);
+    save_now(state);
+}
+
 void toggle_layout(HWND window, AppState& state) noexcept {
     if (!has_active_group(state)) return;
     auto& group = active_group(state);
@@ -580,6 +709,7 @@ void toggle_layout(HWND window, AppState& state) noexcept {
         active_tab(group.panes[index]).location =
             location(kDefaultLocations[index]);
     }
+    refresh_tab_strips(state);
     if (FAILED(apply_layout(window, state))) {
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
     }
@@ -653,6 +783,29 @@ POINT point_from_lparam(LPARAM lparam) noexcept {
             static_cast<short>(HIWORD(lparam))};
 }
 
+std::optional<std::size_t> tab_strip_index(const AppState& state,
+                                            HWND strip) noexcept {
+    const auto found = std::find(state.tab_strips.begin(),
+                                 state.tab_strips.end(), strip);
+    if (found == state.tab_strips.end()) return std::nullopt;
+    return static_cast<std::size_t>(found - state.tab_strips.begin());
+}
+
+void close_tab_at_point(HWND window, AppState& state, POINT point) {
+    const std::size_t pane_index = pane_at_point(window, state, point);
+    if (pane_index >= state.tab_strips.size() ||
+        pane_index >= active_group(state).panes.size()) return;
+    TCHITTESTINFO hit{};
+    hit.pt = point;
+    MapWindowPoints(window, state.tab_strips[pane_index], &hit.pt, 1);
+    const LRESULT item = SendMessageW(state.tab_strips[pane_index], TCM_HITTEST,
+                                      0, reinterpret_cast<LPARAM>(&hit));
+    const auto& tabs = active_group(state).panes[pane_index].tabs;
+    if (item < 0 || static_cast<std::size_t>(item) >= tabs.size()) return;
+    const std::string id = tabs[static_cast<std::size_t>(item)].id;
+    close_tab_in_pane(window, state, pane_index, id);
+}
+
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                              LPARAM lparam) {
     auto* state = reinterpret_cast<AppState*>(
@@ -666,6 +819,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
 
     switch (message) {
         case WM_CREATE: {
+            INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_TAB_CLASSES};
+            if (!InitCommonControlsEx(&controls)) return -1;
             if (!state->sidebar.create(window, kGroupListId)) return -1;
             for (std::size_t index = 0; index < state->sidebar_buttons.size();
                  ++index) {
@@ -690,7 +845,23 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                          reinterpret_cast<WPARAM>(
                              GetStockObject(DEFAULT_GUI_FONT)),
                          TRUE);
+            for (std::size_t index = 0; index < state->tab_strips.size();
+                 ++index) {
+                state->tab_strips[index] = CreateWindowExW(
+                    0, WC_TABCONTROLW, nullptr,
+                    WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP, 0, 0, 0, 0,
+                    window,
+                    reinterpret_cast<HMENU>(kTabStripIdBase +
+                                             static_cast<int>(index)),
+                    GetModuleHandleW(nullptr), nullptr);
+                if (state->tab_strips[index] == nullptr) return -1;
+                SendMessageW(state->tab_strips[index], WM_SETFONT,
+                             reinterpret_cast<WPARAM>(
+                                 GetStockObject(DEFAULT_GUI_FONT)),
+                             TRUE);
+            }
             refresh_sidebar(*state);
+            refresh_tab_strips(*state);
             if (FAILED(apply_layout(window, *state))) {
                 MessageBoxW(window, L"PaneDock could not open the Shell view.",
                             L"PaneDock", MB_ICONERROR | MB_OK);
@@ -713,6 +884,30 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             return 0;
         }
+        case WM_NOTIFY:
+            if (state != nullptr) {
+                const auto* header = reinterpret_cast<const NMHDR*>(lparam);
+                const auto pane_index =
+                    tab_strip_index(*state, header->hwndFrom);
+                if (pane_index.has_value() && header->code == TCN_SELCHANGE &&
+                    has_active_group(*state) &&
+                    *pane_index < active_group(*state).panes.size()) {
+                    const LRESULT selected = SendMessageW(
+                        state->tab_strips[*pane_index], TCM_GETCURSEL, 0, 0);
+                    auto& pane = active_group(*state).panes[*pane_index];
+                    if (selected == static_cast<LRESULT>(pane.tabs.size())) {
+                        add_tab_to_pane(window, *state, *pane_index);
+                    } else if (selected >= 0 &&
+                               static_cast<std::size_t>(selected) <
+                                   pane.tabs.size()) {
+                        const std::string id =
+                            pane.tabs[static_cast<std::size_t>(selected)].id;
+                        switch_active_tab(window, *state, *pane_index, id);
+                    }
+                    return 0;
+                }
+            }
+            break;
         case WM_MEASUREITEM:
             if (state != nullptr && state->sidebar.measure_item(
                                         reinterpret_cast<MEASUREITEMSTRUCT*>(lparam),
@@ -815,6 +1010,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             break;
         case WM_PARENTNOTIFY:
+            if (state != nullptr && has_active_group(*state) &&
+                LOWORD(wparam) == WM_MBUTTONDOWN) {
+                POINT point{};
+                GetCursorPos(&point);
+                ScreenToClient(window, &point);
+                close_tab_at_point(window, *state, point);
+                return 0;
+            }
             if (state != nullptr && LOWORD(wparam) == WM_LBUTTONDOWN) {
                 POINT point{};
                 GetCursorPos(&point);
