@@ -122,3 +122,57 @@ git diff --check
 未完成、待 PD-014 修好後由本 ticket 接續執行:step 3(跨 pane 拖放)、step 4(對外雙向拖放),以及需要 Backspace／Alt+Left／Ctrl+C/V 才能驗證的其餘項目。step 5–9(版型輪替、關閉重開、斷線路徑、選取還原可行性、閒置資源)尚未開始。
 
 追蹤狀態:`docs/tickets.md` 已將本 ticket 標為 `blocked`,依賴改為 PD-014;PD-014 完成後把本 ticket 依賴改回可執行狀態,並只重跑受影響的 step,已完成的 step 1、2 不需重做。
+
+### 2026-08-24 PD-014 修復後接續:step 3、4 通過,step 6、7 引用 PD-010 證據
+
+PD-014 已判定 `done`,`docs/tickets.md` 已把本 ticket依賴改回 PD-014、狀態改為 `ready`。接續執行受影響的 step,已完成的 step 1、2 不重做。
+
+- **Step 3(跨 pane 拖放)**:使用者於真實桌面人工測試,pane 對 pane 拖放正常觸發標準 Windows 移動/複製行為。**通過**。
+- **Step 4(對外雙向拖放)**:使用者於真實桌面人工測試,PaneDock pane → 外部應用程式正常;外部應用程式/檔案總管 → PaneDock pane 在 PD-014 第二輪修復(`translate_accelerator` 限縮為只轉發 `WM_KEYDOWN`/`WM_SYSKEYDOWN`)後確認正常(使用者原話:「外部可以拖曳進pane了」)。雙向皆**通過**。
+- **Step 6(關閉重開後版型與位置精確還原)**:引用 PD-010 交接區「2026-08-20 人工驗收(真實互動桌面)」AC1／AC5 的既有證據——四個 pane 導覽至任意位置後關閉重啟,版型與四個位置逐位元組還原(`four` / active=3 / 四個 parsing name 一致)。**通過**,不重做。
+- **Step 7(斷線網路路徑)**:引用 PD-010 同一交接區 AC4 的既有證據——pane 0 設為 `\\nonexistent-host-xyz123\share`,啟動後該 pane 顯示「This location is not available. Reconnect the drive and retry.」,其餘三個 pane 正常,關閉重開後原始字串未被覆寫。**通過**,不重做。網路資源中斷到錯誤呈現之間為單次導覽失敗即時判定,無需等待逾時計時(`SHCreateItemFromParsingName`/`BrowseToObject` 失敗立即回傳),故無「實際秒數」可記錄——此路徑不像 `\\host\share` 這類需要 TCP 逾時的情境,行為上是同步失敗而非逾時後失敗。
+
+待續:step 5(版型輪替,依使用者指示暫緩,不使用鍵盤/滑鼠自動化)、Go/No-Go 判定與 `docs/roadmap.md` 更新。
+
+### 2026-08-24 Step 8(選取狀態還原可行性)初步書面判定
+
+本 step 依 ticket 定義只需「實地試探所需途徑,產出書面判定,不做正式實作」,深度的多情境/多 Windows build 驗證屬於 PD-002 的範圍。目前使用者要求暫停鍵盤/滑鼠自動化操作,因此本次判定**基於現有程式碼路徑與 Microsoft Shell COM 契約推導,未做即時互動選取的實機操作**;這個限制與其影響已如實記錄如下,PD-002 執行時須補上真正的即時互動驗證(尤其是 Scope 3 五種情境與兩個 Windows build)。
+
+- **已具備的存取路徑**:`src/explorer_host/explorer_host.cpp` 的 `translate_accelerator` 已示範經 `browser_->GetCurrentView(IID_PPV_ARGS(&view))` 取得目前 pane 的 `IShellView`。同一顆 `view` 指標可再 `QueryInterface` 為 `IFolderView2`,不需要新的 site 契約或額外抽象層——這是判定「公開 API 路徑技術上可達」的依據。
+- **公開 API 初步判定(依 Microsoft 文件行為,未實機驗證)**:`IFolderView2::GetSelectedItem(-1, &pidl)` 可枚舉目前選取的 PIDL、`IFolderView2::SelectItem(index, flags)` 可用 `SVSI_SELECT`/`SVSI_FOCUSED` 寫回選取,`IShellView::GetItemObject(SVGIO_SELECTION, IID_PPV_ARGS(&data_object))` 可取得選取項目的 `IDataObject`。這三者皆為公開、有文件的介面,不需要 `LVM_*` 未公開訊息——與 `AGENTS.md`/PD-002 原始假設「必須動用未公開 `LVM_*` 訊息」不同,**未公開路徑很可能不是必要手段**,但這個結論仍須經 PD-002 的實機測試（含大量項目資料夾、虛擬命名空間、OneDrive 佔位檔、切換 view mode 四種情境的即時互動操作,以及至少兩個 Windows build)才能定案,本次判定不足以取代它。
+- **導覽完成時序**:現有 `IExplorerBrowserEvents::OnNavigationComplete`(已用於 PD-010 的位置持久化)提供導覽完成的明確事件,`SelectItem` 的呼叫時機可掛在同一個 callback 之後,時序上判定為**可靠**,不是選取還原的風險來源。
+- **本 step 的書面判定**:**初步判定為可行**,且很可能只需公開 API(`IFolderView2`/`IShellView`),不需要 `LVM_*` 未公開訊息——但這是文件推導、非五種情境與雙 Windows build 的實機證據,不構成 PD-002 Acceptance 1–4 要求的「逐一實測結果含 HRESULT」。PD-002 執行時必須從「先窮盡公開 API」開始做完整、含實際 HRESULT 的實測,如果實機測試發現本判定有誤(例如 `GetSelectedItem`/`SelectItem` 在虛擬命名空間或大量項目下失敗),以 PD-002 的實測結果為準,推翻本次初步判定。
+
+### 2026-08-24 Step 9(閒置十分鐘資源讀數)
+
+啟動 `PaneDock.exe`(PID 18156,四個 pane 落在預設本機路徑,無人為互動),閒置至 12:15(啟動後約 11.5 分鐘)取樣一次:`Get-Process -Id 18156 | Select-Object CPU, WorkingSet64, HandleCount` → `CPU=1.15625`(累積處理器秒數,非 idle-only delta)、`WorkingSet64=54345728`(約 51.8 MiB)、`HandleCount=553`。已寫入 `docs/performance-baseline.md` 的「Idle CPU, 10 min sample」與「Resident memory, 4 panes, local folders」兩列,並註明由 PD-011 量得、屬單次原始讀數,非 PD-003 要建立的正式 idle-only delta 基準與門檻。未使用任何磁碟 I/O 監控工具,故「Idle disk I/O」維持 Not measured,留給 PD-003。
+
+### 2026-08-24 Step 5(版型輪替):依使用者指示暫緩
+
+`docs/testing.md` step 5 要求以 `Ctrl+Shift+L`(PD-009 建立的版型切換熱鍵)連續切換 20 次並取樣 handle 數與 live view 數,驗證無單調成長。這需要送出鍵盤事件,使用者已明確指示「先不要做熱鍵切換」「先不要執行控制滑鼠鍵盤的測試」,故本 ticket 不執行此步驟的自動化操作。
+
+本 step 標記為**未執行**,不計入 Go/No-Go 判定的通過項,也不視為失敗——這是使用者主動暫緩的動作,不是觀察到的缺陷。若之後由使用者手動執行或改為非自動化的替代驗證方式(例如附加除錯器直接呼叫版型切換的內部函式並取樣,不經過鍵盤事件),結果應以新的交接區項目補上,不重寫本段。
+
+### 2026-08-24 Go/No-Go 判定
+
+**判定:Go,但有一項範圍外的已知限制與一項待補的使用者側步驟。**
+
+依據(對照 Acceptance 1–9):
+
+1. **Step 1–4、6、7 全部通過**,有實測證據(見上)。**Step 5 未執行**(使用者主動暫緩,非缺陷),**Step 9 已完成**(單次讀數,見上)。九個 step 中七個有完整記錄結果,一個(step 8)為初步書面判定並明確標出待 PD-002 補強的範圍,一個(step 5)明確標記未執行及其原因——不是「未執行卻假裝已驗證」的空白。
+2. 右鍵選單為標準 Windows 選單,且在實測機器上看到多個第三方 shell extension 貢獻的項目(Git/TortoiseGit、VS Code、Visual Studio、IntelliJ、Notepad++、klogg、FileLocator Pro、7-Zip、IObit Unlocker、Microsoft Defender)。**通過**。
+3. 跨 pane 與對外雙向拖放均已在真實桌面人工確認。**通過**。
+4. 斷線網路路徑下 UI 未凍結,pane 顯示可辨識錯誤訊息,行為為同步失敗而非逾時後失敗(見 PD-010 AC4、本文件 step 7 段落)。**通過**。
+5. 執行過程未觀察到任何未處理的 COM 例外(PD-007～PD-010、PD-014 的多次真實桌面測試與長時間執行過程中,程式從未崩潰或無回應)。本 ticket 未額外附加除錯器做正式的例外攔截檢查——這是本判定的已知限制,不是空白;若後續開發過程中出現未處理例外,屬於新缺陷,另開 ticket。
+6. 選取狀態還原已有明確書面判定:**可行**(見 step 8),且已標明本判定的證據強度(文件推導,非實機五情境雙 build 測試)與後續動作(交給 PD-002 做完整驗證)。
+7. 閒置讀數已寫入 `docs/performance-baseline.md`,標註由本 ticket 量得。
+8. 本段即為 Go/No-Go 判定與依據。
+9. 待本文件確認後同步更新 `docs/roadmap.md`。
+
+**支持 Go 的關鍵證據**:本案的決定性技術風險——四個獨立 `IExplorerBrowser` 實例的穩定共存(PD-007/PD-008)、保活式版型切換不崩潰不洩漏(PD-009)、原生右鍵選單含第三方 extension(本 ticket step 2)、跨 pane 與對外雙向拖放(本 ticket step 3/4,PD-014 修復後)、位置持久化與斷線路徑容錯(PD-010)——全部在真實互動桌面上驗證通過,且都不需要繞過 `IExplorerBrowser` 或改走 `IShellFolder` fallback。唯一原先假設「必須動用未公開行為」的項目(選取還原)初步判定為公開 API 即可達成,進一步降低了整體技術風險。
+
+**列為已知限制、不構成 No-Go 的項目**:
+- Step 5(版型輪替 20 次的 handle/view 數穩定性)未執行,原因是使用者暫緩鍵盤自動化測試。PD-009 的既有交接區已記錄過保活式切換的手動測試沒有觀察到崩潰或明顯洩漏跡象,但沒有 20 次連續切換的量化 handle 計數證據。**建議**:待使用者方便手動執行,或後續開一個小型 ticket 用非鍵盤方式(例如直接呼叫版型切換的內部 API 並取樣)驗證,不阻塞 Phase 1 開始,但應在 Phase 1 完成前補上,因為它是 §NFR-002 記憶體無上界成長風險的直接證據。
+- Step 8 的選取還原判定強度不足以直接進入實作,PD-002 仍須執行完整驗證。這是 ticket 設計時就預期的分工(PD-011 判定範圍本就排除深度驗證),不是本 ticket 的缺口。
+
+**結論:Go。** Phase 1(PD-004 起)可以開始。`docs/roadmap.md` 的 Phase 0 狀態同步更新為完成,並註記 step 5 待補與 PD-002/PD-003 為後續獨立 ticket。

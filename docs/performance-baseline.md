@@ -4,10 +4,10 @@ Every row below is an **estimate for planning**, not a measurement. Estimates ar
 
 | Metric | Target | Blocking threshold | Result | Environment / notes |
 |---|---|---|---|---|
-| Idle CPU, 10 min sample | 0% | avg ≥ 0.1% fails | Not measured | NFR-001 blocking. PD-003. |
+| Idle CPU, 10 min sample | 0% | avg ≥ 0.1% fails | Not measured (single raw reading below) | NFR-001 blocking. PD-003 owns the formal idle-window delta. PD-011 2026-08-24 single sample: process cumulative CPU time 1.16 s over an 11.5 min elapsed window (launch to sample, includes startup/navigation work, not an idle-only delta) — informational only, not a pass/fail measurement against the threshold. |
 | Idle disk I/O, 10 min sample | zero bytes | any I/O fails | Not measured | NFR-001 blocking. PD-003. |
 | Resident memory, 1 pane, local folder | — | — | Not measured | Estimate: host 5–20 MB + one Shell view. PD-003. |
-| Resident memory, 4 panes, local folders | — | — | Not measured | Estimate: +50–150 MB over host for four views. PD-003. |
+| Resident memory, 4 panes, local folders | — | — | 54.3 MB WorkingSet64 (single reading) | PD-011 2026-08-24: PaneDock idle after 11.5 min, 4 panes on default local-folder paths, HandleCount 553. Raw process-level reading, not PD-003's formal baseline. |
 | Resident memory, 4 panes, thumbnails + OneDrive + network | — | — | Not measured | Estimate: +100–300 MB, can exceed 500 MB. Third-party extensions dominate the spread. PD-003. |
 | Handle count, idle after 20 layout switches | flat | monotonic growth fails | Not measured | AC-003. PD-001 step 5. |
 | Live view count after 20 layout switches | returns to baseline | any residual view fails | Not measured | AC-003. PD-001 step 5. |

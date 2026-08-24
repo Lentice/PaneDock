@@ -2,7 +2,7 @@
 
 `docs/roadmap.md` is the authoritative phase status. Ticket status lives in `docs/tickets.md`.
 
-## Phase 0 — Feasibility prototype (current)
+## Phase 0 — Feasibility prototype (Go, 2026-08-24)
 
 The Go/No-Go gate for the entire product. Four panes, not two: the risk being tested is multi-instance `IExplorerBrowser` behavior, which two panes cannot expose.
 
@@ -16,6 +16,8 @@ The Go/No-Go gate for the entire product. Four panes, not two: the risk being te
 - Measured idle CPU, memory and handle count
 
 Done means every step of the prototype acceptance protocol in `docs/testing.md` has a recorded result, and the Go/No-Go decision is written into the commissioning ticket's 交接區. A No-Go outcome is a legitimate result and redirects to the `IShellFolder` fallback recorded in `docs/design-spec.md` §9.1.
+
+**Verdict: Go.** Recorded in PD-011's 交接區 (`docs/tickets/PD-011-prototype-acceptance-and-go-no-go.md`). The decisive risk — stable multi-instance `IExplorerBrowser` behavior across independent navigation, native context menus with third-party shell extensions, keep-alive layout switching, and bidirectional cross-pane/external drag and drop — held up on the real interactive desktop. Selection-restoration feasibility got a preliminary written verdict (feasible, likely via public `IFolderView2`/`IShellView` APIs without undocumented `LVM_*` messages); the deep multi-scenario, multi-Windows-build validation is PD-002's job. Layout-churn handle-count verification (protocol step 5) was not executed — the user paused keyboard/mouse automation testing mid-session — and is an open item to close before Phase 1 finishes, not a Phase 0 blocker. Idle CPU/memory/handle-count got one raw reading (PD-011); the formal idle baseline and thresholds are PD-003's job.
 
 ## Phase 1 — Core model and persistence
 
