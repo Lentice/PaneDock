@@ -55,6 +55,10 @@
 | PD-015 | app_shell 改用 `core` 的 Group/session 型別取代原型狀態與持久化 | 2 | `done` | PD-006 | [PD-015](tickets/PD-015-app-shell-core-state-wiring.md) |
 | PD-016 | 全部五種版型、可拖曳分隔線、DPI 縮放修正、鍵盤 pane 焦點切換 | 2 | `done` | PD-015 | [PD-016](tickets/PD-016-splitters-five-layouts-and-dpi-scaling.md) |
 | PD-017 | Group 側邊欄:建立/重新命名/複製/刪除/重新排序/切換 | 2 | `done` | PD-015 | [PD-017](tickets/PD-017-group-sidebar.md) |
+| PD-018 | `core` 每個 tab 獨立的導覽歷史(上一頁／下一頁) | 3 | `ready` | PD-006 | [PD-018](tickets/PD-018-tab-navigation-history.md) |
+| PD-019 | 每個 pane 的 tab 條:新增/關閉/切換,接上 realize-on-activation | 3 | `ready` | PD-017 | [PD-019](tickets/PD-019-tab-strip-and-realize-on-activation.md) |
+| PD-020 | 每個 pane 的網址列與上一頁/下一頁/上層按鈕 | 3 | `planned` | PD-018, PD-019 | [PD-020](tickets/PD-020-address-bar-and-navigation-buttons.md) |
+| PD-021 | 送往 active pane 的鍵盤快速鍵:切換/新增/關閉 tab、上一頁/下一頁/上層 | 3 | `planned` | PD-019, PD-020 | [PD-021](tickets/PD-021-active-pane-keyboard-shortcuts.md) |
 
 ## Dependency lanes
 
@@ -76,6 +80,13 @@ Phase 1 — core, gated on PD-011 returning Go
          └─ PD-015 (app_shell wired to core state + session, single Group, two layouts)
               ├─ PD-016 (all five layouts, draggable splitters, DPI scaling, F6 pane focus)
               └─ PD-017 (Group sidebar: create/rename/duplicate/delete/reorder/switch)
+                   └─ PD-019 (tab strip UI, realize-on-activation within a pane)
+
+Phase 3 — tabs and navigation, gated on PD-006/PD-017
+  PD-006 ─── PD-018 (core per-tab back/forward history)
+  PD-017 ─── PD-019 (tab strip: add/close/switch)
+       PD-018 + PD-019 ─── PD-020 (address bar, back/forward/parent)
+                 PD-019 + PD-020 ─── PD-021 (keyboard shortcuts to active pane)
 ```
 
 PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `IShellFolder` fallback in `docs/design-spec.md` §9.1, and the tickets below it must be rewritten rather than adjusted.
@@ -119,7 +130,8 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | `IShellFolder` 自建清單檢視(fallback) | 僅在 PD-001 判定 No-Go 時開。 |
 | 側邊欄寬度的全域設定持久化 | 若使用者回報每次啟動都要重拖再開;目前預設值可接受。 |
 | Group 圖示與顏色 | Spec 未列為 MVP;若 Group 數量成長到難以用文字辨識再開。 |
-| 每個 pane 的導覽列(上一頁／下一頁／上一層按鈕 ＋ editable path bar) | 對應 `docs/roadmap.md` Phase 3「Per-tab address field, back, forward, parent」的具體 UI 形狀。2026-08-20 使用者提出;Phase 0 目前無 tab、無 Group、無 pane chrome 基礎設施,PD-007 決策 #1 明文排除網址欄,現在寫 self-contained 實作 ticket 會引用到不存在的東西。待 Phase 2/3 app shell 與 tab 基礎設施到位時開票,可能需拆成「導覽按鈕」與「editable path bar」兩張(單張恐超過半天到兩天的尺寸)。 |
+| ~~每個 pane 的導覽列(上一頁／下一頁／上一層按鈕 ＋ editable path bar)~~ | **已於 2026-08-24 開票,不再是候選。** 2026-08-20 使用者提出時 Phase 0 尚無 tab/Group/pane chrome 基礎設施;Phase 2 完成後基礎設施到位,拆成 PD-018(核心導覽歷史)、PD-019(tab 條)、PD-020(網址列與導覽按鈕)三張,PD-021 補上對應鍵盤快速鍵。 |
+| 網址列自動完成(`IAutoComplete2`) | PD-020(2026-08-24)刻意排除,只做純 `EDIT` + Enter。若使用者實際使用後認為缺自動完成造成明顯不便,再開 ticket 接 Shell 的 `IAutoComplete2`,不預先做。 |
 | 讓 `compute_layout_rects` 接收 DPI 縮放後的最小尺寸／分隔線厚度,取代目前寫死的 96-DPI 基準常數 | PD-005 2026-08-24 交接發現:`docs/design-spec.md` §FR-004a 的敘述預期呼叫端傳入「已按 DPI 縮放過的最小值常數」,但 PD-005 定義的函式簽章只收 client size、版型、比例,常數是寫死在 `src/core/layout.h` 的 96-DPI 基準值,呼叫端目前無法覆寫。等 app_shell 接上 Per-Monitor-V2 `WM_DPICHANGED`(NFR-004)且需要跨 DPI 正確縮放時開票,把最小尺寸/分隔線厚度改成函式參數,矩形演算法本身不需要動。 |
 
 ## 計畫決策紀錄
