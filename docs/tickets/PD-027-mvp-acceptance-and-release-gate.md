@@ -159,3 +159,63 @@ git status   # 預期:只有 docs/* 改動,沒有 src/*
 ## 交接區
 
 <!-- 驗收 agent 填寫,append-only -->
+
+### 2026-08-24 非互動環境驗收交接
+
+#### 協定與環境
+
+- 已在 `docs/testing.md` 新增 `MVP acceptance run (Phase 5)`，逐項展開現有 MVP checklist（AC-002 與 AC-002b 分列，因此表格共 14 個 checklist rows）以及 PD-027 決策 6 的一般模式／`--diagnostic` 對照。每列明確指定 E1 clean、E2 extensions、E3 mixed-DPI 或 E4 network 環境，並列出操作、預期結果與記錄欄位。
+- 本執行環境可取得 Windows build `26200.9168`（release evidence 的 registry fallback 原始讀值）；沒有可操作的真實互動桌面，無法確認 E1「無第三方 extension」、E2 的雲端同步／壓縮 extension 清單、E3 的兩個實際 DPI 螢幕，或 E4 的可中斷 mapped network drive、USB 與 OneDrive placeholder。這些環境條件均記為 `未驗證,需真實桌面`，沒有把本機程序 smoke 當成環境驗收。
+- 沒有修改 `src/`。工作前已有未追蹤 `.claude/`，未觸碰；沒有修改 `docs/tickets.md` 狀態或 `docs/roadmap.md`，沒有 commit。
+
+#### MVP checklist 逐格結果
+
+下表是本次每一格的唯一結果；沒有任何一格以歷史 ticket 或 source inspection 冒充 PASS。
+
+| Checklist | 指定環境 | 結果 | 原因／待做 |
+|---|---|---|---|
+| AC-001 four-pane stability | E1 clean、E2 extensions | **未驗證,需真實桌面** | 需在兩台（或明確同時滿足兩條件的同一台）真實桌面逐 pane 導覽並記錄 extension 條件。 |
+| AC-002 cross-pane drag and drop | E1 clean | **未驗證,需真實桌面** | 需實際同磁碟與跨磁碟拖放並記錄 drive letters；PD-011／PD-023 歷史紀錄不足以替代現行 build。 |
+| AC-002b external drag and drop | E1 clean | **未驗證,需真實桌面** | 需與 File Explorer／另一接受檔案的應用程式雙向拖放。 |
+| AC-003 layout churn | E1 clean、E2 extensions | **未驗證,需真實桌面** | 需人手完成 20 次 `Ctrl+Shift+L`，記錄 21 個 handle samples、live-view before/after/closed 與焦點。 |
+| AC-004 layout/location restore | E1 clean | **未驗證,需真實桌面** | 需建立多 Group、多 tab 與多 layout，正常關閉重開後逐一比對 location。 |
+| AC-005 unreachable restored path | E4 network | **未驗證,需真實桌面** | 需中斷 mapped drive、重開含該 Group 的 app，觀察 UI responsiveness 與錯誤面板。 |
+| AC-006 idle NFR-001 | E1 clean | **未驗證,需真實桌面** | 需由人類執行 `-CollectMeasurements` 的 10 分鐘 idle、組態、20 次切換與三次 soak；本輪禁止執行。 |
+| FR-001 Group mutations | E1 clean | **未驗證,需真實桌面** | 需點擊 sidebar 完成 New/Rename/Duplicate/Delete/Move Up/Move Down 並記錄順序與持久化。 |
+| FR-003 five layouts | E1 clean | **未驗證,需真實桌面** | 需實際檢查 Single、Left / Right、Top / Bottom、Three Panes、Four Panes 的 pane arrangement。 |
+| FR-005 tabs in every layout | E1 clean | **未驗證,需真實桌面** | 需每一 layout 實際新增、切換、關閉多 tab，並驗證 realize-on-activation。 |
+| FR-007 Shell operations | E1 clean | **未驗證,需真實桌面** | 需重跑 `docs/testing.md` 的 A1–A7、B8–B10；PD-023 的全未驗證紀錄不可引用為 PASS。 |
+| FR-009 namespace coverage | E4 network | **未驗證,需真實桌面** | 需實際 OneDrive placeholder、mapped network drive、USB 的 copy/delete 並記錄 hydration。 |
+| FR-013 crash/session recovery | E1 clean | **未驗證,需真實桌面** | 需照 `docs/testing.md` Crash recovery protocol 觀察三種 MessageBox、狀態復原與 backup 保護。 |
+| NFR-004 mixed-DPI scaling | E3 mixed-DPI | **未驗證,需真實桌面** | 需在兩個不同 DPI monitor 間移動視窗，逐 layout 檢查 clipping、hit target 與 scaling。 |
+
+PD-011 的舊拖放、右鍵選單與位置紀錄，以及 PD-023 的全未驗證 A–D，均沒有被當成本輪現行 MVP PASS。沒有觀察到 `FAIL`，因此沒有建立後續 ticket。
+
+#### 可自動驗證結果
+
+- Release configure、`cmake --build build` 成功（`ninja: no work to do`）；完整 `ctest --test-dir build --output-on-failure` 為 **4/4 passed**：`panedock_diagnostic_flag`、`panedock_core_model`、`panedock_core_layout`、`panedock_core_session`。
+- 未帶量測旗標執行 `.\tests\release\release_evidence.ps1`：輸出 `INCOMPLETE` 與 evidence 路徑，實際 exit code **2**。這只是腳本健康檢查，不是 release gate PASS；沒有執行 `-CollectMeasurements`，沒有產生或填入任何 idle CPU、disk I/O、memory、handle、thumbnail 或延遲數字。`docs/release-evidence.md` 只更新了健康檢查的 timestamp/environment/build log，blocking metrics 仍是 `Not measured`／`INCOMPLETE`。
+- 程序 smoke（每個 process 等待 3 秒後記錄並只終止自己的 PID）：一般模式 `HasExited=False`、`Responding=True`、`Handles=772`；`--diagnostic` `HasExited=False`、`Responding=True`、`MainWindowTitle='PaneDock — Diagnostic Mode'`、`Handles=615`。這是 process-level smoke，不是右鍵選單、導覽、標題視覺或 extension 抑制的互動 PASS；一般模式 title 在無桌面環境讀值為空，因此不宣稱一般標題驗收。
+- `rg -n "windows\.h|HWND|IUnknown" src/core` 無輸出；`rg -n "RegOpenKey|RegSetValue|HKEY_|CreateProcess|ShellExecute" src` 無輸出；`rg -n "SetTimer|CreateThread|_beginthread" src` 無輸出；`OleInitialize`／`OleUninitialize` 路徑仍在 `src/app_shell/main.cpp`；`git diff --check` 通過。tracked diff 只有 `docs/release-evidence.md` 與 `docs/testing.md`，沒有 `src/`。
+
+#### Gate 狀態與人類收尾步驟
+
+- **Release gate：INCOMPLETE，不是 PASS。** 本輪沒有也不得執行 `.\tests\release\release_evidence.ps1 -CollectMeasurements`，因此不能填任何 blocking 數字，也不能寫 Phase 5 completion paragraph 到 `docs/roadmap.md`。
+- 要關閉 gate，使用者需在未附加 debugger 的真實 Release 互動 PowerShell 依序：
+  1. 在 E1 clean machine 執行 `.\tests\release\release_evidence.ps1 -CollectMeasurements`；依提示完成四 pane local-folder 的 10 分鐘 idle、Single pane、Four panes local、mixed thumbnails/OneDrive/network、text-only/thumbnail、21 個 handle samples、AC-005 responsiveness、正常關閉與三次 soak。保存 `docs/release-evidence.md` 的 `## Result`、exit code、CPU/disk blocking values、debugger state 與各 context 數字。
+  2. 依 `docs/testing.md` Phase 5 表格，在 E1、E2、E3、E4 指定環境完成所有 14 rows；每格記錄機器 Windows build、螢幕/DPI、extension 清單、drive letters 與 `PASS`／`FAIL`／`未驗證,需真實桌面`。若有 `FAIL`，先開新 ticket 再回填編號與重現步驟。
+  3. 將本次量測可誠實取得的數字逐列回填 `docs/performance-baseline.md`，並把所有 manual checklist／diagnostic menu／recovery MessageBox 觀察補到本交接區；只有 `release-evidence.md ## Result` 為 PASS 且沒有未解決 FAIL 時，才可由後續驗收 session 依決策 7 在 `docs/roadmap.md` Phase 5 寫完成段落。
+
+### 2026-08-24 Acceptance 狀態補充
+
+| Acceptance | 結果 | 證據／缺口 |
+|---|---|---|
+| 1. `docs/testing.md` 協定 | **PASS** | `MVP acceptance run (Phase 5)` 已加入，所有 checklist rows 與診斷對照均有環境、操作、預期與記錄欄位。 |
+| 2. 每格明確三選一結果 | **PASS（結果為未驗證）** | 上述 14-row 表逐格明列 **未驗證,需真實桌面**；沒有空白或含糊結果。 |
+| 3. 四種環境紀錄 | **未驗證,需真實桌面** | E1/E2/E3/E4 的實際機器與條件不可得；受影響 rows 已逐項列出。 |
+| 4. FAIL 後續 ticket | **PASS（無 FAIL）** | 本輪沒有觀察結果可判 FAIL，因此沒有建立後續 ticket；人工作業若發現 FAIL，必須先開新 ticket。 |
+| 5. `-CollectMeasurements` gate evidence | **未驗證,需真實桌面** | 本輪只跑不含旗標的 health check，`INCOMPLETE`/exit 2；禁止執行 gate 本體，沒有新 measurement。 |
+| 6. performance baseline 讀數 | **未驗證,需真實桌面** | 未填入任何新數字；仍為 `Not measured` 的列不可因 health check 改成 PASS。 |
+| 7. roadmap Phase 5 completion | **未驗證,需真實桌面** | Gate 非 PASS，依決策 7 不修改 `docs/roadmap.md`；缺口與收尾步驟已列在上方。 |
+| 8. build／CTest | **PASS** | Release build 成功，CTest 4/4 通過。 |
+| 9. diff/status 範圍 | **PASS** | `git diff --check` 通過；tracked diff 只有 docs，`src/` 無 diff；既有未追蹤 `.claude/` 未觸碰。 |

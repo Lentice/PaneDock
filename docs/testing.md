@@ -118,6 +118,51 @@ the source code.
    Dismiss it and verify the default Group is usable and the process remains
    stable. Restore the saved files from the safe temporary directory.
 
+## MVP acceptance run (Phase 5)
+
+Run this protocol manually on a Release build. The four environment labels
+may describe the same physical machine when it satisfies multiple conditions,
+but the handoff must record the machine, Windows build, monitor/DPI setup,
+installed shell extensions, and drive letters for every result. For each row,
+record exactly `PASS`, `FAIL`, or `未驗證,需真實桌面` in PD-027's 交接區. A
+`FAIL` requires a new follow-up ticket and exact reproduction steps. PD-023's
+all-unverified A–D record is not historical PASS evidence; execute the
+referenced steps again.
+
+Environment labels:
+
+- **E1 clean** — Windows 11 x64 with no third-party shell extensions.
+- **E2 extensions** — a Windows machine with at least one cloud-sync client
+  and one archive tool installed as shell extensions.
+- **E3 mixed-DPI** — a multi-monitor machine with two different active DPI
+  scales.
+- **E4 network** — a machine with a mapped network drive that can be
+  disconnected on demand; record the mapped drive letter, USB volume, and
+  OneDrive placeholder used for namespace checks.
+
+| Checklist item | Required environment | Operation and expected result | Record |
+|---|---|---|---|
+| AC-001 four-pane stability | E1 and E2 | Open Four Panes, navigate all panes to different local folders, exercise native icons/thumbnails and normal navigation. Expected: all panes remain usable with no unhandled COM exception, hang, or crash. | Machine/build, folders, extension list on E2, and observed stability. |
+| AC-002 cross-pane drag and drop | E1 | In Four Panes, drag disposable files between panes on the same and different volumes. Expected: native Shell move/copy behavior and correct source/destination state. | Source/destination drive letters, operation result, and any native progress UI. |
+| AC-002b external drag and drop | E1 | Drag a file from PaneDock to File Explorer/an accepting application, then drag a file back into PaneDock. Expected: both directions work through native Shell/OLE behavior. | External application, file identity, and both directions' result. |
+| AC-003 layout churn without view leak or focus breakage | E1 and E2 | Repeatedly use `Ctrl+Shift+L` to switch layouts 20 times, recording 21 handle samples, live-view stdout samples, and active-pane focus after each switch. Expected: no monotonic handle/view growth, final live-view count 0 after close, and focus remains on the active pane. | Full handle series, before/after/closed live-view values, focus observations, machine/build. |
+| AC-004 layout and locations restored after restart | E1 | Create multiple Groups and multiple tabs with distinct locations and layout templates, close normally, reopen, and compare every Group, pane, tab, active tab, layout, and parsing name. Expected: exact required-state restoration. | Group/tab/location matrix before and after, plus machine/build. |
+| AC-005 unreachable restored path stays responsive | E4 | Save a Group containing a mapped network path, disconnect the drive, restart into that Group, and interact with another pane while the unavailable pane resolves. Expected: UI remains responsive, the unavailable tab shows its recoverable error, and its saved identity remains intact. | Drive letter/path, observed error text, responsiveness result, and any measured operator timing. |
+| AC-006 idle resources meet NFR-001 | E1 | With no debugger attached, run `.\tests\release\release_evidence.ps1 -CollectMeasurements` interactively. Follow every prompt, including the 10-minute idle window and three soak runs. Expected: evidence `## Result` is PASS, idle CPU is below 0.1% average, and idle disk I/O is zero. | `docs/release-evidence.md` result/exit code, CPU/disk values, debugger state, and environment. Do not substitute visual observation. |
+| FR-001 Group mutations | E1 | Use the sidebar to create, rename, duplicate, delete, move up, and move down Groups; switch among them after each mutation. Expected: names/order/active Group and persisted state remain correct. | Each mutation's observed result and final Group order. |
+| FR-003 five layout templates | E1 | Exercise Single, Left / Right, Top / Bottom, Three Panes, and Four Panes layouts; resize the window and return to each template. Expected: correct pane count/placement and no view destruction or crash. | Template-by-template pane count, visible arrangement, and machine/build. |
+| FR-005 tabs in every layout | E1 | In each of the five layouts, add, switch, and close multiple tabs in each visible pane; activate an inactive tab and navigate it. Expected: tab state persists, active tab is correct, and only the visible active tab owns a live view. | Per-layout tab operations, active tab/location, and any realization issue. |
+| FR-007 Shell file operations | E1 | Execute every item in the existing Shell file operations protocol A1–A7 and clipboard protocol B8–B10 (copy/move/delete/rename, conflict choices, cancel, clipboard round-trips, and re-entry during an operation). Expected: Explorer-equivalent progress/conflict behavior and no crash. | Each A/B item individually; include files/volumes and native dialog observations. |
+| FR-009 network, USB, OneDrive namespace coverage | E4 | Perform the D16 OneDrive placeholder copy and D17 mapped-network/USB copy and delete from the existing protocol. Expected: native namespace semantics remain intact; record any placeholder hydration behavior. | OneDrive state, mapped drive/USB letters, operation results, and exact hydration behavior. |
+| FR-013 corrupt session recovery | E1 | Follow the Crash recovery acceptance protocol above: force-stop recovery, corrupt-primary backup recovery, save-after-recovery backup protection, and both-files-corrupt default recovery. Expected: each exact warning appears, state is usable, and backup is never replaced by garbage. | Each recovery case, warning text/appearance, restored state, and session file contents. |
+| NFR-004 mixed-DPI scaling | E3 | Move the window across both monitors and exercise all five layouts, sidebar, tabs, navigation bars, splitters, and dialogs at each DPI. Expected: no clipping, overlap, wrong hit target, or unscaled logical constant. | Monitor DPI values, Windows build, per-layout visual result, and any defect reproduction. |
+| NFR-006 diagnostic-mode comparison | E2 | On the same file and same Shell view, run normal `.\build\PaneDock.exe` and then `.\build\PaneDock.exe --diagnostic`; right-click the same file in both runs. Expected: native menu remains, while third-party extension entries disappear or are reduced only in diagnostic mode. | Extension list, both menu item lists, title/mode, and any navigation regression. |
+
+The release gate is closed only when the interactive AC-006 measurement run
+produces `PASS`; the non-measurement script health check is not a gate result.
+Do not automate keyboard or mouse input, and do not treat a skipped prompt,
+headless smoke test, or source-code inspection as a PASS for any row above.
+
 ## MVP acceptance checklist
 
 - [ ] AC-001 four-pane stability, no unhandled COM exceptions

@@ -1,15 +1,15 @@
 # Release Evidence
 
-Generated: 2026-08-24T18:43:35.1821659+08:00
+Generated: 2026-08-24T19:01:45.4769205+08:00
 
 ## Environment
 
-- OS: Microsoft Windows 11 專業版, build 26200, version 10.0.26200
-- CPU: 12th Gen Intel(R) Core(TM) i7-12700K
+- OS: Windows 10 Pro, build 26200.9168, version 10.0.26200.0
+- CPU: Intel64 Family 6 Model 151 Stepping 2, GenuineIntel
 - Logical processors: 20
 - Evidence-script debugger attached: False
 - PaneDock debugger attached during measurement: Not measured
-- Git commit: 876f4d67700ee04c905369c7f10c58c56d268382
+- Git commit: 7d84277f1edd8acb8a9f029516105c0a4f7e7dac
 - Live CTest registrations: 4
 
 | Tool | Version |
@@ -56,7 +56,7 @@ Generated: 2026-08-24T18:43:35.1821659+08:00
 Exit code: 0
 
 ```text
--- Configuring done (0.1s)
+-- Configuring done (0.2s)
 -- Generating done (0.0s)
 -- Build files have been written to: E:/GitHub/PaneDock/build
 ```
@@ -92,15 +92,15 @@ Test project E:/GitHub/PaneDock/build
     Start 1: panedock_diagnostic_flag
 1/4 Test #1: panedock_diagnostic_flag .........   Passed    0.01 sec
     Start 2: panedock_core_model
-2/4 Test #2: panedock_core_model ..............   Passed    0.01 sec
+2/4 Test #2: panedock_core_model ..............   Passed    0.02 sec
     Start 3: panedock_core_layout
-3/4 Test #3: panedock_core_layout .............   Passed    0.01 sec
+3/4 Test #3: panedock_core_layout .............   Passed    0.02 sec
     Start 4: panedock_core_session
-4/4 Test #4: panedock_core_session ............   Passed    0.02 sec
+4/4 Test #4: panedock_core_session ............   Passed    0.03 sec
 
 100% tests passed out of 4
 
-Total Test time (real) =   0.07 sec
+Total Test time (real) =   0.08 sec
 ```
 
 ### process launch: measurement
