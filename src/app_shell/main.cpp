@@ -52,6 +52,7 @@ constexpr int kForwardButtonIdBase = 310;
 constexpr int kUpButtonIdBase = 320;
 constexpr int kAddressBarIdBase = 330;
 constexpr int kLayoutButtonIdBase = 400;
+constexpr int kMoreActionsButtonId = kLayoutButtonIdBase + 5;
 constexpr int kGroupListId = 100;
 constexpr int kNewGroupId = 101;
 constexpr int kDuplicateGroupId = 102;
@@ -121,6 +122,7 @@ struct AppState {
     HWND group_label{nullptr};
     HWND layout_label{nullptr};
     std::array<HWND, kLayoutButtonIds.size()> layout_buttons{};
+    HWND more_actions_button{nullptr};
     HWND empty_message{nullptr};
     std::array<HWND, kExplorerCount> tab_strips{};
     std::array<HWND, kExplorerCount> address_bars{};
@@ -238,10 +240,16 @@ void draw_layout_glyph(HDC dc, RECT rect, std::size_t index,
                rect.top + (rect.bottom - rect.top - size) / 2,
                rect.left + (rect.right - rect.left + size) / 2,
                rect.top + (rect.bottom - rect.top + size) / 2};
-    HBRUSH frame_brush = CreateSolidBrush(color);
-    if (frame_brush != nullptr) {
-        FrameRect(dc, &glyph, frame_brush);
-        DeleteObject(frame_brush);
+    HPEN frame_pen = CreatePen(PS_SOLID, 1, color);
+    if (frame_pen != nullptr) {
+        const HGDIOBJ old_pen = SelectObject(dc, frame_pen);
+        const HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        const int radius = std::max(1, size / 6);
+        RoundRect(dc, glyph.left, glyph.top, glyph.right, glyph.bottom, radius,
+                  radius);
+        SelectObject(dc, old_brush);
+        SelectObject(dc, old_pen);
+        DeleteObject(frame_pen);
     }
 
     HPEN pen = CreatePen(PS_SOLID, 1, color);
@@ -304,6 +312,32 @@ void draw_layout_button(const DRAWITEMSTRUCT& item,
     }
     draw_layout_glyph(item.hDC, item.rcItem, index, glyph);
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
+}
+
+void draw_more_actions_button(const DRAWITEMSTRUCT& item) noexcept {
+    // Visual placeholder only (PD-029 decision 2): always disabled, no menu.
+    HBRUSH background = CreateSolidBrush(RGB(248, 250, 252));
+    if (background != nullptr) {
+        FillRect(item.hDC, &item.rcItem, background);
+        DeleteObject(background);
+    }
+    const int width = static_cast<int>(item.rcItem.right - item.rcItem.left);
+    const int height = static_cast<int>(item.rcItem.bottom - item.rcItem.top);
+    const int dot_size = std::max(3, std::min(width, height) / 6);
+    const int gap = dot_size * 2;
+    const int mid_x = item.rcItem.left + width / 2;
+    const int mid_y = item.rcItem.top + height / 2;
+    HBRUSH dot_brush = CreateSolidBrush(RGB(148, 163, 184));
+    if (dot_brush != nullptr) {
+        for (int offset = -1; offset <= 1; ++offset) {
+            const int cx = mid_x + offset * gap;
+            RECT dot{cx - dot_size / 2, mid_y - dot_size / 2,
+                     cx - dot_size / 2 + dot_size,
+                     mid_y - dot_size / 2 + dot_size};
+            FillRect(item.hDC, &dot, dot_brush);
+        }
+        DeleteObject(dot_brush);
+    }
 }
 
 void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
@@ -610,14 +644,29 @@ void layout_header(HWND window, AppState& state) noexcept {
     const int label_width = scaled_value(window, 76);
     const int button_height = std::min(
         scaled_value(window, kLayoutButtonHeight), header_height);
+    // Total slot count is the 5 layout buttons plus the more-actions
+    // placeholder button, sharing the same target width so they shrink
+    // together on narrow windows instead of the placeholder crowding them.
+    constexpr int kButtonSlotCount =
+        static_cast<int>(kLayoutButtonIds.size()) + 1;
     const int available_width = std::max(
         0, static_cast<int>(client.right) - sidebar_width - 2 * margin -
-               label_width -
-               static_cast<int>(kLayoutButtonIds.size() - 1) * gap);
+               label_width - kButtonSlotCount * gap);
     const int button_width = std::max(
         1, std::min(scaled_value(window, kLayoutButtonWidth),
-                    available_width / static_cast<int>(kLayoutButtonIds.size())));
-    int x = sidebar_width + margin;
+                    available_width / kButtonSlotCount));
+    const int more_actions_width = button_width;
+    const int total_width = label_width + kButtonSlotCount * gap +
+                            static_cast<int>(kLayoutButtonIds.size()) *
+                                button_width +
+                            more_actions_width;
+    // Right-align the whole group; if the window is too narrow to fit it
+    // with room to spare on the left of the sidebar, fall back to the
+    // original left-aligned start position instead of overlapping it.
+    const int x_start = std::max(sidebar_width + margin,
+                                 static_cast<int>(client.right) - margin -
+                                     total_width);
+    int x = x_start;
     SetWindowPos(state.layout_label, nullptr, x, 0, label_width, header_height,
                  SWP_NOZORDER | SWP_NOACTIVATE);
     ShowWindow(state.layout_label, SW_SHOW);
@@ -630,6 +679,11 @@ void layout_header(HWND window, AppState& state) noexcept {
         ShowWindow(button, SW_SHOW);
         x += button_width + gap;
     }
+    SetWindowPos(state.more_actions_button, nullptr, x,
+                 std::max(0, (header_height - button_height) / 2),
+                 more_actions_width, button_height,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    ShowWindow(state.more_actions_button, SW_SHOW);
     const bool enabled = has_active_group(state);
     const auto current = enabled ? active_group(state).layout_template
                                  : panedock::core::LayoutTemplate::single;
@@ -1413,6 +1467,15 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                  GetStockObject(DEFAULT_GUI_FONT)),
                              TRUE);
             }
+            // Visual placeholder only (PD-029 decision 2): no menu is wired
+            // up, so it is disabled at creation and never dispatched in
+            // WM_COMMAND.
+            state->more_actions_button = CreateWindowExW(
+                0, L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0,
+                0, 0, window, reinterpret_cast<HMENU>(kMoreActionsButtonId),
+                GetModuleHandleW(nullptr), nullptr);
+            if (state->more_actions_button == nullptr) return -1;
+            EnableWindow(state->more_actions_button, FALSE);
             state->empty_message = CreateWindowExW(
                 0, L"STATIC", L"No Group. Click New Group to get started.",
                 WS_CHILD | SS_CENTER | SS_CENTERIMAGE, 0, 0, 0, 0, window,
@@ -1534,6 +1597,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         scaled_value(window, kLayoutButtonHeight));
                     return TRUE;
                 }
+                if (item != nullptr && item->CtlType == ODT_BUTTON &&
+                    item->CtlID == kMoreActionsButtonId) {
+                    item->itemWidth = static_cast<UINT>(
+                        scaled_value(window, kLayoutButtonWidth));
+                    item->itemHeight = static_cast<UINT>(
+                        scaled_value(window, kLayoutButtonHeight));
+                    return TRUE;
+                }
                 if (state->sidebar.measure_item(item, GetDpiForWindow(window)))
                     return TRUE;
             }
@@ -1548,6 +1619,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     draw_layout_button(
                         *item, static_cast<std::size_t>(item->CtlID -
                                                         kLayoutButtonIdBase));
+                    return TRUE;
+                }
+                if (item != nullptr && item->CtlType == ODT_BUTTON &&
+                    item->CtlID == kMoreActionsButtonId) {
+                    draw_more_actions_button(*item);
                     return TRUE;
                 }
                 if (item != nullptr && item->CtlType == ODT_BUTTON) {

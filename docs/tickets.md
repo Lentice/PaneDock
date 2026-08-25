@@ -65,8 +65,9 @@
 | PD-025 | 崩潰復原路徑:不乾淨關閉偵測、退回備份告知、備份保護(FR-013) | 5 | `done` | PD-024 | [PD-025](tickets/PD-025-crash-recovery-path.md) |
 | PD-026 | release evidence 改為量測完整應用程式而非 Phase 0 原型 | 5 | `done` | PD-023 | [PD-026](tickets/PD-026-release-evidence-covers-shipped-app.md) |
 | PD-027 | MVP 驗收清單在四種必要環境的執行與發佈閘門判定 | 5 | `done` | PD-024, PD-025, PD-026 | [PD-027](tickets/PD-027-mvp-acceptance-and-release-gate.md) |
+| PD-032 | 系統關機／登出／重開機時誤報「不乾淨關閉」的修正 | 5 | `ready` | PD-025 | [PD-032](tickets/PD-032-endsession-clean-shutdown-handling.md) |
 | PD-028 | 側邊欄品牌列、Group 兩行摘要與 footer 按鈕改版 | 6 | `done` | PD-017 | [PD-028](tickets/PD-028-sidebar-brand-and-group-summary-restyle.md) |
-| PD-029 | Quiet header 右對齊、版型圖示重繪與 more-actions 佔位按鈕 | 6 | `planned` | PD-028 | [PD-029](tickets/PD-029-quiet-header-alignment-and-layout-icons.md) |
+| PD-029 | Quiet header 右對齊、版型圖示重繪與 more-actions 佔位按鈕 | 6 | `done` | PD-028 | [PD-029](tickets/PD-029-quiet-header-alignment-and-layout-icons.md) |
 | PD-030 | Pane 卡片背景(圓角上緣＋陰影)與 tab header 圖示化重繪 | 6 | `planned` | PD-028, PD-029 | [PD-030](tickets/PD-030-pane-card-chrome-and-tab-header-restyle.md) |
 | PD-031 | 導覽列圖示化按鈕與圓角網址欄背景 | 6 | `planned` | PD-030 | [PD-031](tickets/PD-031-navigation-row-icon-restyle.md) |
 
@@ -205,6 +206,10 @@ PD-001 標為 `superseded`,文件不動,作為決策軌跡保留。原本依賴 
 ### 2026-08-25 — 視覺改版拆成 PD-028~031,四項刻意不做的事
 
 使用者比對執行中的 app 截圖與 `docs/panedock-ui-prototype.html`(Quiet Header 變體)後回報落差明顯,並授權大幅修改程式碼。落差拆成四張依風險遞增排序的 ticket(PD-028~031),而不是一張大票,理由同上面 PD-001 拆分 PD-007～011 的先例:單一 ticket 裝不下、且風險層級差異大(排版改動 vs. `SysTabControl32` owner-draw 改造)不該綁在一起驗收。
+
+### 2026-08-25 — PD-032:PD-025 的關閉序列遺漏系統關機路徑
+
+使用者回報常常遇到「PaneDock did not shut down cleanly last time」警示,附截圖。讀 `main.cpp` 的 `window_proc` 後確認:`clean_shutdown` 只在 `WM_CLOSE` 分支被寫回 `true`,而 Windows 關機/登出/重開機送的是 `WM_QUERYENDSESSION`/`WM_ENDSESSION`,不是 `WM_CLOSE`——程式碼完全沒有攔截這兩個訊息。這代表**任何一次正常的系統關機或登出都會被誤判成不乾淨關閉**,不是使用者的 extension 或環境有問題,是 PD-025 完成時漏掉的一個終止路徑(PD-025 的驗收清單只驗證了 `Stop-Process -Force` 模擬崩潰,沒有涵蓋系統關機訊息)。開 PD-032 修正,做法是在 `WM_QUERYENDSESSION` 補存檔並標記乾淨、在 `WM_ENDSESSION`(`wParam=TRUE`)才真的收尾銷毀 view,詳見 ticket 文件的「根本原因」一節。
 
 四項刻意不做、且已寫入對應 ticket 的 Non-goals 的決定,記在這裡供之後檢索:
 
