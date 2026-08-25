@@ -1229,7 +1229,7 @@ void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi, bool is_active) noexcept {
     // corners).
     const int outset = std::max(1, MulDiv(2, static_cast<int>(dpi), 96));
     const RECT card{pane_rect.left - outset, pane_rect.top - outset,
-                    pane_rect.right + outset, pane_rect.bottom};
+                    pane_rect.right + outset, pane_rect.bottom + outset};
 
     RECT shadow_rect = card;
     OffsetRect(&shadow_rect, shadow_offset, shadow_offset);

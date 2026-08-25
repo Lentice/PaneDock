@@ -84,3 +84,17 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+`draw_pane_card` 的 `card.bottom` 已改為 `pane_rect.bottom + outset`，讓下緣
+外框路徑與左/上/右邊使用相同的外擴距離。陰影與白色卡片背景仍沿用同一個
+`card`，不需要連帶修改；`apply_layout` 的 Shell container rect、裁切區域、
+相鄰 pane 間距與其他三邊計算均未改動，因此沒有新增視覺重疊或影響檔案列表
+範圍。編譯階段成功，但 Release link 因既存的 `build\\PaneDock.exe` 程序
+（PID 15904）持有輸出檔而回報 `Permission denied`；`ctest` 4/4 通過，
+`rg` 及 `git diff --check` 也通過。
+
+本環境未具備可觀察桌面的互動能力，未完成真實桌面目視驗證；因此 active/
+inactive 下緣框線、圓角與陰影的最終視覺一致性仍需在可互動的 Windows 桌面
+補測。非互動式 smoke check 亦未宣稱為視覺驗收。
