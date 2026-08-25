@@ -83,3 +83,34 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+**變更檔案**：`src/app_shell/main.cpp`
+
+1. 刪除 `state->layout_label`(`AppState` 成員、`WM_CREATE` 建立、排版計算中的 `SetWindowPos`/`ShowWindow`、`WM_CTLCOLORSTATIC` 的顏色設定分支)。刪除後 `rg -n "layout_label" src\app_shell\main.cpp` 無命中。
+2. Header 排版計算(原 `navigation_geometry` 一帶):拿掉 `label_width`(原本 `scaled_value(window, 76)`)這一項,`available_width`/`total_width` 的算式同步移除 `label_width` 項,`x` 起始位置不再先跳過 label 寬度,直接從 `x_start` 排第一個版面配置按鈕。margin(`scaled_value(window, 12)`)、gap(`scaled_value(window, 4)`)未變動,PD-029 的 `x_start = max(sidebar_width + margin, client.right - margin - total_width)` 公式本身未重寫,只是 `total_width` 少了一項。
+3. `InitCommonControlsEx` 的旗標從 `ICC_TAB_CLASSES` 改為 `ICC_TAB_CLASSES | ICC_WIN95_CLASSES`(tooltip 屬於 Win95 classes 群組),沿用同一次呼叫,未另外呼叫。
+4. 新增 `state->layout_tooltip`(`TOOLTIPS_CLASSW`,`WS_EX_TOPMOST` + `WS_POPUP | TTS_ALWAYSTIP`,`CW_USEDEFAULT` 幾何),在 `more_actions_button` 建立完成後於 `WM_CREATE` 中建立,對 5 個版面配置按鈕與 more-actions 按鈕各自 `TTM_ADDTOOLW` 註冊一筆 `TOOLINFOW`(`uFlags = TTF_IDISHWND | TTF_SUBCLASS`,`hwnd` 為主視窗、`uId` 為對應按鈕 HWND)。若 `CreateWindowExW` 建立 tooltip 失敗(回傳 `nullptr`),整段註冊略過,不視為致命錯誤(功能性退化為無 tooltip,不影響按鈕本身可用性)。
+
+**最終 tooltip 文字清單**(依 `kLayoutButtonLabels`/`kLayoutTemplates` 順序,對應 `kLayoutButtonIds`):
+
+| 按鈕(現有短標籤) | LayoutTemplate | Tooltip 文字 |
+|---|---|---|
+| Single | `single` | Single pane |
+| Left / Right | `left_right` | Two panes side by side |
+| Top / Bottom | `top_bottom` | Two panes stacked |
+| Three | `three_pane` | Three panes |
+| Four | `four_pane_grid` | Four panes |
+| (more-actions 佔位按鈕) | — | More actions |
+
+**生命週期**:`layout_tooltip` 是 `window`(主視窗)的子視窗(`CreateWindowExW` 的 parent 參數為 `window`),沒有另外呼叫 `DestroyWindow`。Win32 標準行為是 `DestroyWindow(window)` 會遞迴銷毀所有子視窗,`WM_DESTROY`/`WM_NCDESTROY` 現有程式碼未對其他既有子控制項(`group_label`、`sidebar_buttons`、`layout_buttons` 等)做顯式 `DestroyWindow`,tooltip 比照辦理,不需額外清理程式碼。
+
+**Build/Test 結果**:
+- `cmake --build build`:成功(僅重新編譯 `main.cpp`,無警告輸出於本次紀錄中的訊息)。
+- `ctest --test-dir build --output-on-failure`:4/4 通過(`panedock_diagnostic_flag`、`panedock_core_model`、`panedock_core_layout`、`panedock_core_session`)。這批測試都在 `src/core`,不涉及本票變更的 UI 程式碼,屬既有回歸網。
+- `rg -n "layout_label" src\app_shell\main.cpp`:無命中。
+- `rg -n "TOOLTIPS_CLASS|TTM_ADDTOOL" src\app_shell\main.cpp`:命中新增的 tooltip 建立與註冊程式碼(3 處)。
+- `git diff --check`:通過,無空白字元錯誤。
+
+**手動桌面驗證狀態(誠實記錄限制)**:本次執行環境沒有 Computer Use 或等效的螢幕互動能力,只能以 `--diagnostic` 模式啟動 `build\PaneDock.exe` 確認程式能正常啟動、未當掉(輸出 `panedock.live_view_count=2` 後以逾時方式終止,非崩潰退出)。**無法**實際將滑鼠停留在版面配置按鈕或 more-actions 按鈕上肉眼確認 tooltip 文字顯示、DPI 縮放或多螢幕情境下的 tooltip 定位是否正常。這幾項(Acceptance 2、3 與 Handoff requirements 第三點)需要有桌面互動能力的人或後續 session 補做人工驗證。

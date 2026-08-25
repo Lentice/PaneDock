@@ -311,9 +311,9 @@ struct AppState {
     panedock::sidebar::Sidebar sidebar;
     std::array<HWND, kButtonIds.size()> sidebar_buttons{};
     HWND group_label{nullptr};
-    HWND layout_label{nullptr};
     std::array<HWND, kLayoutButtonIds.size()> layout_buttons{};
     HWND more_actions_button{nullptr};
+    HWND layout_tooltip{nullptr};
     HWND empty_message{nullptr};
     std::array<HWND, kExplorerCount> tab_strips{};
     std::array<HWND, kExplorerCount> address_bars{};
@@ -1040,7 +1040,6 @@ void layout_header(HWND window, AppState& state) noexcept {
     const int header_height = std::min(
         scaled_value(window, kLayoutBarHeight),
         std::max(0, static_cast<int>(client.bottom - client.top)));
-    const int label_width = scaled_value(window, 76);
     const int button_height = std::min(
         scaled_value(window, kLayoutButtonHeight), header_height);
     // Total slot count is the 5 layout buttons plus the more-actions
@@ -1050,12 +1049,12 @@ void layout_header(HWND window, AppState& state) noexcept {
         static_cast<int>(kLayoutButtonIds.size()) + 1;
     const int available_width = std::max(
         0, static_cast<int>(client.right) - sidebar_width - 2 * margin -
-               label_width - kButtonSlotCount * gap);
+               kButtonSlotCount * gap);
     const int button_width = std::max(
         1, std::min(scaled_value(window, kLayoutButtonWidth),
                     available_width / kButtonSlotCount));
     const int more_actions_width = button_width;
-    const int total_width = label_width + kButtonSlotCount * gap +
+    const int total_width = kButtonSlotCount * gap +
                             static_cast<int>(kLayoutButtonIds.size()) *
                                 button_width +
                             more_actions_width;
@@ -1066,10 +1065,6 @@ void layout_header(HWND window, AppState& state) noexcept {
                                  static_cast<int>(client.right) - margin -
                                      total_width);
     int x = x_start;
-    SetWindowPos(state.layout_label, nullptr, x, 0, label_width, header_height,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-    ShowWindow(state.layout_label, SW_SHOW);
-    x += label_width + gap;
     for (HWND button : state.layout_buttons) {
         SetWindowPos(button, nullptr, x,
                      std::max(0, (header_height - button_height) / 2),
@@ -2267,7 +2262,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
 
     switch (message) {
         case WM_CREATE: {
-            INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_TAB_CLASSES};
+            INITCOMMONCONTROLSEX controls{
+                sizeof(controls), ICC_TAB_CLASSES | ICC_WIN95_CLASSES};
             if (!InitCommonControlsEx(&controls)) return -1;
             state->sidebar_drag_target =
                 make_sidebar_drag_hover_target(window, *state);
@@ -2306,15 +2302,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                  GetStockObject(DEFAULT_GUI_FONT)),
                              TRUE);
             }
-            state->layout_label = CreateWindowExW(
-                0, L"STATIC", L"PANE LAYOUT",
-                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE, 0, 0, 0, 0,
-                window, nullptr, GetModuleHandleW(nullptr), nullptr);
-            if (state->layout_label == nullptr) return -1;
-            SendMessageW(state->layout_label, WM_SETFONT,
-                         reinterpret_cast<WPARAM>(
-                             GetStockObject(DEFAULT_GUI_FONT)),
-                         TRUE);
             for (std::size_t index = 0; index < state->layout_buttons.size();
                  ++index) {
                 state->layout_buttons[index] = CreateWindowExW(
@@ -2339,6 +2326,37 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 GetModuleHandleW(nullptr), nullptr);
             if (state->more_actions_button == nullptr) return -1;
             EnableWindow(state->more_actions_button, FALSE);
+            state->layout_tooltip = CreateWindowExW(
+                WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+                WS_POPUP | TTS_ALWAYSTIP, CW_USEDEFAULT, CW_USEDEFAULT,
+                CW_USEDEFAULT, CW_USEDEFAULT, window, nullptr,
+                GetModuleHandleW(nullptr), nullptr);
+            if (state->layout_tooltip != nullptr) {
+                constexpr std::array<const wchar_t*, 5> kLayoutTooltips{
+                    L"Single pane", L"Two panes side by side",
+                    L"Two panes stacked", L"Three panes", L"Four panes"};
+                for (std::size_t index = 0;
+                     index < state->layout_buttons.size(); ++index) {
+                    TOOLINFOW info{};
+                    info.cbSize = sizeof(info);
+                    info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+                    info.hwnd = window;
+                    info.uId = reinterpret_cast<UINT_PTR>(
+                        state->layout_buttons[index]);
+                    info.lpszText = const_cast<wchar_t*>(kLayoutTooltips[index]);
+                    SendMessageW(state->layout_tooltip, TTM_ADDTOOLW, 0,
+                                 reinterpret_cast<LPARAM>(&info));
+                }
+                TOOLINFOW more_info{};
+                more_info.cbSize = sizeof(more_info);
+                more_info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+                more_info.hwnd = window;
+                more_info.uId =
+                    reinterpret_cast<UINT_PTR>(state->more_actions_button);
+                more_info.lpszText = const_cast<wchar_t*>(L"More actions");
+                SendMessageW(state->layout_tooltip, TTM_ADDTOOLW, 0,
+                             reinterpret_cast<LPARAM>(&more_info));
+            }
             state->empty_message = CreateWindowExW(
                 0, L"STATIC", L"No Group. Click New Group to get started.",
                 WS_CHILD | SS_CENTER | SS_CENTERIMAGE, 0, 0, 0, 0, window,
@@ -2576,8 +2594,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_CTLCOLORSTATIC:
             if (state != nullptr) {
                 const HWND control = reinterpret_cast<HWND>(lparam);
-                if (control == state->group_label ||
-                    control == state->layout_label) {
+                if (control == state->group_label) {
                     const HDC dc = reinterpret_cast<HDC>(wparam);
                     SetBkMode(dc, TRANSPARENT);
                     SetTextColor(dc, RGB(152, 162, 179));
