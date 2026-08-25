@@ -374,6 +374,84 @@ void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
 }
 
+void draw_folder_glyph(HDC dc, RECT icon_rect) noexcept {
+    // Fixed-color decorative folder silhouette drawn by us (not a Shell
+    // icon API) — see PD-030 non-goal: pane header chrome is PaneDock's,
+    // not the Shell view's. Colors approximate the design mock's
+    // .folder-icon (#ffd873 fill / #c58b06 stroke).
+    const int width = static_cast<int>(icon_rect.right - icon_rect.left);
+    const int height = static_cast<int>(icon_rect.bottom - icon_rect.top);
+    if (width <= 0 || height <= 0) return;
+    const int body_top = icon_rect.top + std::max(1, height / 4);
+    const int tab_width = std::max(2, width * 2 / 5);
+
+    HBRUSH fill = CreateSolidBrush(RGB(255, 216, 115));
+    HPEN border = CreatePen(PS_SOLID, 1, RGB(197, 139, 6));
+    if (fill != nullptr && border != nullptr) {
+        const HGDIOBJ old_brush = SelectObject(dc, fill);
+        const HGDIOBJ old_pen = SelectObject(dc, border);
+        Rectangle(dc, icon_rect.left, icon_rect.top + std::max(1, height / 8),
+                  icon_rect.left + tab_width, body_top + 1);
+        Rectangle(dc, icon_rect.left, body_top, icon_rect.right,
+                  icon_rect.bottom);
+        SelectObject(dc, old_brush);
+        SelectObject(dc, old_pen);
+    }
+    if (fill != nullptr) DeleteObject(fill);
+    if (border != nullptr) DeleteObject(border);
+}
+
+void draw_tab_item(const DRAWITEMSTRUCT& item, const wchar_t* text,
+                   bool is_add_button, bool active) noexcept {
+    const COLORREF background = active ? RGB(255, 255, 255) : RGB(248, 250, 252);
+    HBRUSH fill = CreateSolidBrush(background);
+    if (fill != nullptr) {
+        FillRect(item.hDC, &item.rcItem, fill);
+        DeleteObject(fill);
+    }
+
+    const int height = static_cast<int>(item.rcItem.bottom - item.rcItem.top);
+    const int inset = std::max(2, height / 6);
+    RECT content{item.rcItem.left + inset, item.rcItem.top,
+                item.rcItem.right - inset, item.rcItem.bottom};
+
+    if (!is_add_button) {
+        const int icon_size = std::max(8, height - inset * 2);
+        RECT icon_rect{content.left,
+                       content.top + (height - icon_size) / 2,
+                       content.left + icon_size,
+                       content.top + (height - icon_size) / 2 + icon_size};
+        draw_folder_glyph(item.hDC, icon_rect);
+        content.left = icon_rect.right + std::max(2, inset / 2);
+    }
+
+    // Active tab is bolded; the strip's assigned font is queried and
+    // re-created with FW_BOLD only for the duration of this draw call (tab
+    // counts are small, so a per-draw HFONT is cheaper than a cached one).
+    const HFONT base_font =
+        reinterpret_cast<HFONT>(SendMessageW(item.hwndItem, WM_GETFONT, 0, 0));
+    HFONT bold_font = nullptr;
+    HFONT font_to_use = base_font;
+    if (active && base_font != nullptr) {
+        LOGFONTW logfont{};
+        if (GetObjectW(base_font, sizeof(logfont), &logfont) != 0) {
+            logfont.lfWeight = FW_BOLD;
+            bold_font = CreateFontIndirectW(&logfont);
+            if (bold_font != nullptr) font_to_use = bold_font;
+        }
+    }
+    const HGDIOBJ old_font =
+        font_to_use != nullptr ? SelectObject(item.hDC, font_to_use) : nullptr;
+    SetBkMode(item.hDC, TRANSPARENT);
+    SetTextColor(item.hDC, RGB(62, 76, 96));
+    UINT format = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS;
+    format |= is_add_button ? DT_CENTER : DT_LEFT;
+    DrawTextW(item.hDC, text, -1, &content, format);
+    if (old_font != nullptr) SelectObject(item.hDC, old_font);
+    if (bold_font != nullptr) DeleteObject(bold_font);
+    if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
+}
+
 RECT pane_area(HWND window) noexcept {
     RECT area = client_rect(window);
     area.left = std::min(area.right,
@@ -767,7 +845,73 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
     if (old_font != nullptr) SelectObject(dc, old_font);
 }
 
-void paint_client_background(HWND window, HDC dc) noexcept {
+void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi) noexcept {
+    // Card visuals: white body, border RGB(223,229,236) (reused from the
+    // existing quiet-header divider color), shadow one step darker
+    // (product decision 3). Radius 10px@96dpi matches the design mock's
+    // .pane { border-radius: 10px }. Shadow is a flat offset RoundRect, not
+    // a real blur (product decision 1 — no AlphaBlend/GradientFill).
+    const int radius = std::max(1, MulDiv(10, static_cast<int>(dpi), 96));
+    const int shadow_offset = std::max(1, MulDiv(2, static_cast<int>(dpi), 96));
+    // The card is drawn a couple of pixels outside pane_rect on the left/
+    // top/right so its rounded top corners and border are visible in the
+    // padding/divider gap that already surrounds every pane rect, rather
+    // than being fully hidden under the opaque tab-strip control that sits
+    // flush at pane_rect's top edge (tab strip/nav row/Shell view are drawn
+    // on top of this, per PD-030's architecture decision). The bottom edge
+    // stays exactly at pane_rect.bottom, flush with the real Shell view
+    // content and with square corners (PD-030 non-goal: no bottom rounding).
+    const int outset = std::max(1, MulDiv(2, static_cast<int>(dpi), 96));
+    const RECT card{pane_rect.left - outset, pane_rect.top - outset,
+                    pane_rect.right + outset, pane_rect.bottom};
+
+    RECT shadow_rect = card;
+    OffsetRect(&shadow_rect, shadow_offset, shadow_offset);
+    HBRUSH shadow_brush = CreateSolidBrush(RGB(205, 211, 219));
+    if (shadow_brush != nullptr) {
+        const HGDIOBJ old_brush = SelectObject(dc, shadow_brush);
+        const HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+        RoundRect(dc, shadow_rect.left, shadow_rect.top, shadow_rect.right,
+                  shadow_rect.bottom, radius, radius);
+        SelectObject(dc, old_pen);
+        SelectObject(dc, old_brush);
+        DeleteObject(shadow_brush);
+    }
+
+    HBRUSH card_brush = CreateSolidBrush(RGB(255, 255, 255));
+    if (card_brush != nullptr) {
+        const HGDIOBJ old_brush = SelectObject(dc, card_brush);
+        const HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+        RoundRect(dc, card.left, card.top, card.right, card.bottom, radius,
+                  radius);
+        // Square off the bottom two corners: only the self-drawn header is
+        // rounded, the area flush with the Shell view stays rectangular.
+        const RECT lower{card.left, card.top + radius, card.right,
+                         card.bottom};
+        FillRect(dc, &lower, card_brush);
+        SelectObject(dc, old_pen);
+        SelectObject(dc, old_brush);
+        DeleteObject(card_brush);
+    }
+
+    HPEN border_pen = CreatePen(PS_SOLID, 1, RGB(223, 229, 236));
+    if (border_pen != nullptr) {
+        const HGDIOBJ old_pen = SelectObject(dc, border_pen);
+        const HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        RoundRect(dc, card.left, card.top, card.right, card.bottom, radius,
+                  radius);
+        MoveToEx(dc, card.left, card.top + radius, nullptr);
+        LineTo(dc, card.left, card.bottom - 1);
+        LineTo(dc, card.right - 1, card.bottom - 1);
+        LineTo(dc, card.right - 1, card.top + radius);
+        SelectObject(dc, old_brush);
+        SelectObject(dc, old_pen);
+        DeleteObject(border_pen);
+    }
+}
+
+void paint_client_background(HWND window, HDC dc,
+                             const AppState& state) noexcept {
     const RECT client = client_rect(window);
     HBRUSH canvas = CreateSolidBrush(RGB(243, 246, 249));
     if (canvas != nullptr) {
@@ -803,6 +947,17 @@ void paint_client_background(HWND window, HDC dc) noexcept {
     if (divider_brush != nullptr) {
         FillRect(dc, &divider, divider_brush);
         DeleteObject(divider_brush);
+    }
+
+    if (has_active_group(state)) {
+        const auto& group = active_group(state);
+        const auto rects = layout_rects(window, group);
+        const UINT dpi = GetDpiForWindow(window);
+        const std::size_t visible =
+            std::min(group.panes.size(), rects.size());
+        for (std::size_t index = 0; index < visible; ++index) {
+            draw_pane_card(dc, to_win32_rect(rects[index]), dpi);
+        }
     }
 }
 
@@ -1489,8 +1644,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                  ++index) {
                 state->tab_strips[index] = CreateWindowExW(
                     0, WC_TABCONTROLW, nullptr,
-                    WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP, 0, 0, 0, 0,
-                    window,
+                    WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP |
+                        TCS_OWNERDRAWFIXED,
+                    0, 0, 0, 0, window,
                     reinterpret_cast<HMENU>(kTabStripIdBase +
                                              static_cast<int>(index)),
                     GetModuleHandleW(nullptr), nullptr);
@@ -1638,6 +1794,29 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         return TRUE;
                     }
                 }
+                if (item != nullptr && item->CtlType == ODT_TAB) {
+                    const auto pane_index =
+                        tab_strip_index(*state, item->hwndItem);
+                    if (pane_index.has_value() && has_active_group(*state) &&
+                        *pane_index < active_group(*state).panes.size()) {
+                        const auto& pane =
+                            active_group(*state).panes[*pane_index];
+                        const auto item_index =
+                            static_cast<std::size_t>(item->itemID);
+                        const bool is_add_button =
+                            item_index >= pane.tabs.size();
+                        const std::wstring text =
+                            is_add_button
+                                ? std::wstring(L"+")
+                                : tab_display_text(pane.tabs[item_index]);
+                        const bool active =
+                            !is_add_button &&
+                            pane.tabs[item_index].id == pane.active_tab_id;
+                        draw_tab_item(*item, text.c_str(), is_add_button,
+                                     active);
+                        return TRUE;
+                    }
+                }
                 if (state->sidebar.draw_item(
                         reinterpret_cast<DRAWITEMSTRUCT*>(lparam)))
                     return TRUE;
@@ -1660,7 +1839,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_ERASEBKGND:
             if (state != nullptr) {
                 paint_client_background(window,
-                                        reinterpret_cast<HDC>(wparam));
+                                        reinterpret_cast<HDC>(wparam), *state);
                 return 1;
             }
             break;
