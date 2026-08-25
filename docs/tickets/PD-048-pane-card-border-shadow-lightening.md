@@ -89,3 +89,14 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+`draw_pane_card` 的 inactive 陰影已由 `RGB(205, 211, 219)` 調淡為
+`RGB(235, 239, 244)`，inactive 外框已由 `RGB(223, 229, 236)` 調淡為
+`RGB(232, 237, 242)`；active 外框 `RGB(37, 99, 235)`、`border_width` 與
+實心 `RoundRect` 繪製方式均未改動。調色參考目標 HTML/CSS 的 inactive
+`.pane { border: 1px solid #d8e0e8; }`；該 CSS 沒有 inactive 陰影，因此
+陰影採用更接近背景的純色，降低四宮格相鄰卡片的視覺疊加。
+
+尚未進行可互動桌面截圖驗證；本次未觀察深色主題或高對比模式下的辨識度問題。

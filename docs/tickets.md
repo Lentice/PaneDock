@@ -85,7 +85,7 @@
 | PD-045 | Active pane 下緣外框線被容器裁切,粗細與上緣不一致 | 6 | `done` | PD-041, PD-042 | [PD-045](tickets/PD-045-pane-card-bottom-border-clipped.md) |
 | PD-046 | 版面配置按鈕群改為視覺相連的分段控制 | 6 | `done` | PD-029, PD-039 | [PD-046](tickets/PD-046-layout-buttons-segmented-control.md) |
 | PD-047 | 版面配置按鈕的選中態高亮對比度不足 | 6 | `done` | PD-046 | [PD-047](tickets/PD-047-layout-button-active-highlight-contrast.md) |
-| PD-048 | Pane 卡片外框/陰影顏色偏重,需調淡 | 6 | `ready` | PD-045 | [PD-048](tickets/PD-048-pane-card-border-shadow-lightening.md) |
+| PD-048 | Pane 卡片外框/陰影顏色偏重,需調淡 | 6 | `done` | PD-045 | [PD-048](tickets/PD-048-pane-card-border-shadow-lightening.md) |
 | PD-049 | Pane tab 條改為自繪控制項,取代原生 `SysTabControl32`(覆寫 PD-019 決策 1) | 6 | `ready` | PD-037, PD-030 | [PD-049](tickets/PD-049-custom-tab-strip-control.md) |
 | PD-050 | 在新自繪 tab 條上重接拖曳懸停自動切換與拖曳排序 | 7 | `ready` | PD-049, PD-034, PD-035 | [PD-050](tickets/PD-050-tab-drag-behaviors-on-custom-strip.md) |
 | PD-051 | 每個 pane 增加狀態列(項目數/選取數) | 7 | `ready` | PD-007, PD-030 | [PD-051](tickets/PD-051-pane-status-bar.md) |

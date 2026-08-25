@@ -1294,7 +1294,7 @@ void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi, bool is_active) noexcept {
 
     RECT shadow_rect = card;
     OffsetRect(&shadow_rect, shadow_offset, shadow_offset);
-    HBRUSH shadow_brush = CreateSolidBrush(RGB(205, 211, 219));
+    HBRUSH shadow_brush = CreateSolidBrush(RGB(235, 239, 244));
     if (shadow_brush != nullptr) {
         const HGDIOBJ old_brush = SelectObject(dc, shadow_brush);
         const HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
@@ -1319,7 +1319,7 @@ void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi, bool is_active) noexcept {
     const int border_width = std::max(
         1, MulDiv(is_active ? 2 : 1, static_cast<int>(dpi), 96));
     const COLORREF border_color =
-        is_active ? RGB(37, 99, 235) : RGB(223, 229, 236);
+        is_active ? RGB(37, 99, 235) : RGB(232, 237, 242);
     HPEN border_pen = CreatePen(PS_SOLID, border_width, border_color);
     if (border_pen != nullptr) {
         const HGDIOBJ old_pen = SelectObject(dc, border_pen);
