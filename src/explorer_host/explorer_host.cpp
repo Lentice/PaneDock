@@ -357,7 +357,19 @@ void ExplorerHost::set_visible(bool visible) noexcept {
 
     const HWND window = view_window(browser_.Get());
     if (window != nullptr) {
+        // PD-038: IExplorerBrowser can finish BrowseToObject (and populate
+        // the Shell view) synchronously while this view HWND is still
+        // hidden -- e.g. the very first navigate() call happens inside
+        // initialize(), which runs before apply_layout() ever calls
+        // set_visible(true). ShowWindow(SW_SHOW) alone does not reliably
+        // repaint content that was built while hidden, so force one
+        // explicit redraw on the hidden -> visible transition.
+        const bool was_visible = IsWindowVisible(window) != FALSE;
         ShowWindow(window, visible ? SW_SHOW : SW_HIDE);
+        if (visible && !was_visible) {
+            RedrawWindow(window, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+        }
     }
     if (error_window_ != nullptr) {
         ShowWindow(error_window_, visible && error_visible_ ? SW_SHOW : SW_HIDE);
@@ -396,6 +408,17 @@ HRESULT ExplorerHost::translate_accelerator(MSG* message) noexcept {
 }
 
 void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
+    // PD-038: OnNavigationComplete can fire synchronously inside
+    // BrowseToObject -- for the very first navigate() call (from
+    // initialize()) that happens before the view HWND is ever shown, and
+    // for a re-navigate on an already-visible pane (Group/tab switch) where
+    // the newly populated content otherwise sits behind a stale/empty
+    // update region. Force a redraw here so the completion event itself
+    // (not a later mouse move) is what makes the content appear.
+    if (const HWND window = view_window(browser_.Get()); window != nullptr) {
+        RedrawWindow(window, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
     if (pidl == nullptr) {
         return;
     }

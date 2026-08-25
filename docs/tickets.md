@@ -75,7 +75,7 @@
 | PD-035 | Tab 拖拉排序(同一 pane 內) | 7 | `done` | PD-019 | [PD-035](tickets/PD-035-tab-drag-reorder.md) |
 | PD-036 | Group 拖拉排序(覆寫 PD-017 決策 5) | 7 | `done` | PD-017, PD-028 | [PD-036](tickets/PD-036-group-drag-reorder.md) |
 | PD-037 | Tab 動態寬度(比照 Chrome 縮放＋上限) | 6 | `done` | PD-030 | [PD-037](tickets/PD-037-dynamic-tab-width.md) |
-| PD-038 | Pane 初次載入畫面空白,需要 hover 才刷新的修正 | 6 | `ready` | PD-030 | [PD-038](tickets/PD-038-pane-blank-until-hover.md) |
+| PD-038 | Pane 初次載入畫面空白,需要 hover 才刷新的修正 | 6 | `done` | PD-030 | [PD-038](tickets/PD-038-pane-blank-until-hover.md) |
 | PD-039 | 移除「PANE LAYOUT」文字標籤,版面配置按鈕改用 tooltip | 6 | `ready` | PD-029 | [PD-039](tickets/PD-039-layout-label-removal-and-tooltip.md) |
 | PD-040 | Pane 卡片四角圓角(覆寫 PD-030 決策:下緣維持方角) | 6 | `ready` | PD-030, PD-033 | [PD-040](tickets/PD-040-pane-card-full-corner-rounding.md) |
 
