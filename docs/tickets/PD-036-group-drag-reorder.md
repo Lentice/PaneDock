@@ -91,3 +91,13 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+- PD-017 決策 5 依本票明確覆寫；`Move Up`／`Move Down` context menu 保留原路徑與命令 id，拖曳只是新增的側邊欄輸入方式。未修改 `core::reorder_group`，放開時以拖曳起點保存的 Group id 與目標 index 直接呼叫既有函式，成功後沿用 `refresh_sidebar`／`save_now`。
+- 拖曳狀態機沿用 PD-035 的結構，但沒有抽出跨控制項共用抽象：tab 版的 `TabDrag`／`TCM_HITTEST`／垂直指示線綁定 tab strip，而本票新增控制項專用的 `GroupDrag`、`group_list_proc`、`group_item_at_point` 與水平指示線，差異只有 LISTBOX 的 `LB_ITEMFROMPOINT` 與 Group id。兩者都使用 `max(SM_CXDRAG, SM_CYDRAG)` 閾值、按下後 capture、游標離開控制項即取消、放開才 mutation。
+- Group 插入指示線由主視窗 `WM_DRAWITEM` 在既有 `Sidebar::draw_item` 完成後繪製，使用 accent blue `RGB(37, 99, 235)`、依 DPI 縮放的 2px 寬水平線；來源索引大於目標索引時畫於目標列上緣，來源索引小於目標索引時畫於目標列下緣。短距離左鍵仍交給原生 LISTBOX，既有 `LBN_SELCHANGE`／`activate_group` 行為不變。
+- subclass 安裝在 `Sidebar::create` 完成並已註冊 PD-034 `IDropTarget` 的同一個 LISTBOX HWND 上，但只處理普通 `WM_LBUTTONDOWN`／`WM_MOUSEMOVE`／`WM_LBUTTONUP`；沒有改動 `RegisterDragDrop`、`DragHoverTarget` 或 `WM_CONTEXTMENU`。因此外部檔案 OLE drag 沒有內部左鍵按下起點，不會建立 Group reorder state；Move Up／Move Down 的既有 context menu 分派也沒有改動。
+- 真實桌面驗證未完成：本回合 Computer Use 初始化後兩次 `list_apps()` 都回報 `Computer Use native pipe is unavailable: failed to connect native pipe: 系統找不到指定的檔案。 (os error 2)`。因此沒有宣稱實際拖曳順序、插入線、右鍵選單或與 PD-034 的同時手勢已在桌面上通過，也沒有觀察到誤觸或 OLE 交互問題；結論來自程式碼路徑核對。放開前若 Group id／目標 index 已失效，既有 `reorder_group` 會回傳 `false`，不會改動狀態。
+- 最終檢查：Release configure、`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 為 4/4；`rg -n "reorder_group" src` 命中 core 定義、既有 `move_group` 與新增拖曳呼叫；`git diff --check` 通過。額外 sanity check 中 `WM_QUERYENDSESSION`／`WM_ENDSESSION` 仍在 `main.cpp` 原有關機處理路徑，`rg -n "set_active\(" src` 無命中。PD-035 未被修改。
+- 針對 LISTBOX 與 tab control 的行為差異補充：拖曳超過閾值後，`group_list_proc` 不再把 `WM_MOUSEMOVE`／拖曳中的 `WM_LBUTTONUP` 交給 LISTBOX 預設處理，避免原生清單在移動中逐列改選取並重入 `activate_group`；閾值前的左鍵仍走原生點擊流程。

@@ -291,6 +291,15 @@ struct AppState {
         std::optional<std::size_t> target_index;
     };
     std::optional<TabDrag> tab_drag;
+    struct GroupDrag final {
+        HWND list{nullptr};
+        std::size_t source_index{};
+        std::string group_id;
+        POINT start{};
+        bool dragging{};
+        std::optional<std::size_t> target_index;
+    };
+    std::optional<GroupDrag> group_drag;
     panedock::sidebar::Sidebar sidebar;
     std::array<HWND, kButtonIds.size()> sidebar_buttons{};
     HWND group_label{nullptr};
@@ -2076,6 +2085,142 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
     return DefSubclassProc(window, message, wparam, lparam);
 }
 
+std::optional<std::size_t> group_item_at_point(const AppState& state,
+                                               HWND list,
+                                               POINT point) noexcept {
+    if (list != state.sidebar.window()) return std::nullopt;
+    const LRESULT hit = SendMessageW(
+        list, LB_ITEMFROMPOINT, 0, MAKELPARAM(point.x, point.y));
+    const std::size_t index = static_cast<std::size_t>(LOWORD(hit));
+    if (HIWORD(hit) != 0 || index >= state.application.groups.size())
+        return std::nullopt;
+    return index;
+}
+
+void draw_group_insertion_indicator(const DRAWITEMSTRUCT& item,
+                                    const AppState& state,
+                                    std::size_t item_index) noexcept {
+    if (!state.group_drag.has_value() || !state.group_drag->dragging ||
+        state.group_drag->list != item.hwndItem ||
+        !state.group_drag->target_index.has_value() ||
+        *state.group_drag->target_index == state.group_drag->source_index ||
+        *state.group_drag->target_index != item_index) {
+        return;
+    }
+    const int dpi = std::max(1, static_cast<int>(GetDpiForWindow(item.hwndItem)));
+    const int width = std::max(2, MulDiv(2, dpi, 96));
+    const int inset = MulDiv(4, dpi, 96);
+    const int y = *state.group_drag->target_index > state.group_drag->source_index
+                      ? item.rcItem.bottom - width
+                      : item.rcItem.top;
+    RECT indicator{item.rcItem.left + inset, y, item.rcItem.right - inset,
+                   y + width};
+    HBRUSH brush = CreateSolidBrush(RGB(37, 99, 235));
+    if (brush != nullptr) {
+        FillRect(item.hDC, &indicator, brush);
+        DeleteObject(brush);
+    }
+}
+
+void cancel_group_drag(AppState& state, HWND list) noexcept {
+    if (!state.group_drag.has_value() || state.group_drag->list != list)
+        return;
+    state.group_drag.reset();
+    InvalidateRect(list, nullptr, FALSE);
+    if (GetCapture() == list) ReleaseCapture();
+}
+
+void finish_group_drag(AppState& state, HWND list) {
+    if (!state.group_drag.has_value() || state.group_drag->list != list)
+        return;
+    AppState::GroupDrag drag = std::move(*state.group_drag);
+    state.group_drag.reset();
+    InvalidateRect(list, nullptr, FALSE);
+    if (GetCapture() == list) ReleaseCapture();
+    if (!drag.dragging || !drag.target_index.has_value() ||
+        *drag.target_index == drag.source_index)
+        return;
+    if (panedock::core::reorder_group(state.application, drag.group_id,
+                                      *drag.target_index)) {
+        refresh_sidebar(state);
+        save_now(state);
+    }
+}
+
+void update_group_drag(AppState& state, HWND list, WPARAM wparam,
+                       LPARAM lparam) {
+    if (!state.group_drag.has_value() || state.group_drag->list != list)
+        return;
+    if ((wparam & MK_LBUTTON) == 0) {
+        cancel_group_drag(state, list);
+        return;
+    }
+    const POINT point = point_from_lparam(lparam);
+    RECT client{};
+    GetClientRect(list, &client);
+    if (!PtInRect(&client, point)) {
+        cancel_group_drag(state, list);
+        return;
+    }
+    if (!state.group_drag->dragging) {
+        const int threshold = std::max(
+            1, std::max(GetSystemMetrics(SM_CXDRAG),
+                        GetSystemMetrics(SM_CYDRAG)));
+        const int dx = point.x - state.group_drag->start.x;
+        const int dy = point.y - state.group_drag->start.y;
+        if (dx < -threshold || dx > threshold || dy < -threshold ||
+            dy > threshold) {
+            state.group_drag->dragging = true;
+        }
+    }
+    if (!state.group_drag->dragging) return;
+    const auto target = group_item_at_point(state, list, point);
+    if (target == state.group_drag->target_index) return;
+    state.group_drag->target_index = target;
+    InvalidateRect(list, nullptr, FALSE);
+}
+
+LRESULT CALLBACK group_list_proc(HWND window, UINT message, WPARAM wparam,
+                                 LPARAM lparam, UINT_PTR,
+                                 DWORD_PTR reference_data) {
+    auto* state = reinterpret_cast<AppState*>(reference_data);
+    if (message == WM_LBUTTONDOWN && state != nullptr) {
+        const POINT point = point_from_lparam(lparam);
+        std::optional<AppState::GroupDrag> pending;
+        const auto item = group_item_at_point(*state, window, point);
+        if (item.has_value()) {
+            pending = AppState::GroupDrag{
+                window, *item, state->application.groups[*item].id, point,
+                false, std::nullopt};
+        }
+        const LRESULT result = DefSubclassProc(window, message, wparam, lparam);
+        if (pending.has_value() && !state->group_drag.has_value()) {
+            state->group_drag = std::move(*pending);
+            SetCapture(window);
+        }
+        return result;
+    }
+    if (message == WM_MOUSEMOVE && state != nullptr) {
+        update_group_drag(*state, window, wparam, lparam);
+        if (state->group_drag.has_value() &&
+            state->group_drag->list == window &&
+            state->group_drag->dragging)
+            return 0;
+    } else if (message == WM_LBUTTONUP && state != nullptr) {
+        const bool dragging = state->group_drag.has_value() &&
+                              state->group_drag->list == window &&
+                              state->group_drag->dragging;
+        finish_group_drag(*state, window);
+        if (dragging) return 0;
+    } else if (message == WM_CAPTURECHANGED && state != nullptr) {
+        cancel_group_drag(*state, window);
+    } else if (message == WM_NCDESTROY && state != nullptr) {
+        cancel_group_drag(*state, window);
+        RemoveWindowSubclass(window, group_list_proc, 0);
+    }
+    return DefSubclassProc(window, message, wparam, lparam);
+}
+
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                              LPARAM lparam) {
     auto* state = reinterpret_cast<AppState*>(
@@ -2095,6 +2240,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 make_sidebar_drag_hover_target(window, *state);
             if (!state->sidebar.create(window, kGroupListId,
                                        state->sidebar_drag_target.Get())) {
+                state->sidebar_drag_target.Reset();
+                return -1;
+            }
+            if (!SetWindowSubclass(state->sidebar.window(), group_list_proc, 0,
+                                   reinterpret_cast<DWORD_PTR>(state))) {
+                state->sidebar.revoke_drag_drop();
                 state->sidebar_drag_target.Reset();
                 return -1;
             }
@@ -2379,8 +2530,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     }
                 }
                 if (state->sidebar.draw_item(
-                        reinterpret_cast<DRAWITEMSTRUCT*>(lparam)))
+                        reinterpret_cast<DRAWITEMSTRUCT*>(lparam))) {
+                    const auto* list_item =
+                        reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+                    draw_group_insertion_indicator(
+                        *list_item, *state,
+                        static_cast<std::size_t>(list_item->itemID));
                     return TRUE;
+                }
             }
             break;
         case WM_CTLCOLORSTATIC:
