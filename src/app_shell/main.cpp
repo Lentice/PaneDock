@@ -50,6 +50,14 @@ constexpr int kPaneDividerThickness = 8;
 constexpr int kSidebarHeadingHeight = 20;
 constexpr int kTabStripHeight = 24;
 constexpr int kTabStripIdBase = 200;
+// PD-037: Chrome-style dynamic tab width. Available strip width (minus one
+// kTabMinWidth reserved for the "+" add-tab item, which shares whatever
+// uniform width TCM_SETITEMSIZE ends up applying) is divided by the tab
+// count and clamped to this range, so a few tabs sit at the readable max
+// instead of stretching to fill the strip, and many tabs shrink to the
+// native-scrollable min instead of becoming unreadable slivers.
+constexpr int kTabMinWidth = 72;
+constexpr int kTabMaxWidth = 200;
 constexpr int kNavigationBarHeight = 28;
 constexpr int kNavigationButtonWidth = 32;
 // PD-031: rounded light-gray pill drawn behind the address bar EDIT to fake
@@ -883,6 +891,28 @@ std::wstring tab_display_text(const panedock::core::TabState& tab) {
     return parsing_name.substr(separator + 1);
 }
 
+// Recomputes the uniform per-tab width for `strip` from its current client
+// width and `tab_count`, then applies it via TCM_SETITEMSIZE. Must be called
+// whenever the strip is resized (apply_layout) or its tab count changes
+// (refresh_tab_strip), since neither the width nor the count alone predicts
+// the other.
+void apply_tab_item_size(HWND strip, std::size_t tab_count) {
+    RECT client{};
+    GetClientRect(strip, &client);
+    const int min_width = scaled_value(strip, kTabMinWidth);
+    const int max_width = scaled_value(strip, kTabMaxWidth);
+    // The "+" add-tab item reserves one kTabMinWidth slot; TCM_SETITEMSIZE
+    // cannot give it a different width than the real tabs (decision 3), so
+    // this is only used to size the division below.
+    const int available = std::max(
+        0, static_cast<int>(client.right - client.left) - min_width);
+    const std::size_t count = std::max<std::size_t>(1, tab_count);
+    const int per_tab = static_cast<int>(available) / static_cast<int>(count);
+    const int width = std::clamp(per_tab, min_width, max_width);
+    SendMessageW(strip, TCM_SETITEMSIZE, 0,
+                 MAKELPARAM(width, scaled_value(strip, kTabStripHeight)));
+}
+
 void refresh_tab_strip(AppState& state, std::size_t pane_index) {
     if (pane_index >= state.tab_strips.size()) return;
     const HWND strip = state.tab_strips[pane_index];
@@ -894,6 +924,7 @@ void refresh_tab_strip(AppState& state, std::size_t pane_index) {
     }
 
     const auto& pane = active_group(state).panes[pane_index];
+    apply_tab_item_size(strip, pane.tabs.size());
     std::size_t active_index = 0;
     for (std::size_t index = 0; index < pane.tabs.size(); ++index) {
         std::wstring text = tab_display_text(pane.tabs[index]);
@@ -1380,6 +1411,8 @@ HRESULT apply_layout(HWND window, AppState& state) {
                          actual_strip_height,
                          SWP_NOZORDER | SWP_NOACTIVATE);
             ShowWindow(state.tab_strips[index], SW_SHOW);
+            apply_tab_item_size(state.tab_strips[index],
+                                 group.panes[index].tabs.size());
 
             const NavigationGeometry geometry =
                 navigation_geometry(window, pane_rect);

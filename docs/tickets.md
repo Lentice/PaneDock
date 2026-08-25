@@ -74,6 +74,10 @@
 | PD-034 | 拖曳懸停自動切換(側邊欄 Group 列與 pane 的 tab) | 7 | `done` | PD-017, PD-019, PD-028 | [PD-034](tickets/PD-034-drag-hover-auto-switch.md) |
 | PD-035 | Tab 拖拉排序(同一 pane 內) | 7 | `done` | PD-019 | [PD-035](tickets/PD-035-tab-drag-reorder.md) |
 | PD-036 | Group 拖拉排序(覆寫 PD-017 決策 5) | 7 | `done` | PD-017, PD-028 | [PD-036](tickets/PD-036-group-drag-reorder.md) |
+| PD-037 | Tab 動態寬度(比照 Chrome 縮放＋上限) | 6 | `done` | PD-030 | [PD-037](tickets/PD-037-dynamic-tab-width.md) |
+| PD-038 | Pane 初次載入畫面空白,需要 hover 才刷新的修正 | 6 | `ready` | PD-030 | [PD-038](tickets/PD-038-pane-blank-until-hover.md) |
+| PD-039 | 移除「PANE LAYOUT」文字標籤,版面配置按鈕改用 tooltip | 6 | `ready` | PD-029 | [PD-039](tickets/PD-039-layout-label-removal-and-tooltip.md) |
+| PD-040 | Pane 卡片四角圓角(覆寫 PD-030 決策:下緣維持方角) | 6 | `ready` | PD-030, PD-033 | [PD-040](tickets/PD-040-pane-card-full-corner-rounding.md) |
 
 ## Dependency lanes
 
@@ -242,3 +246,14 @@ PD-001 標為 `superseded`,文件不動,作為決策軌跡保留。原本依賴 
 - **四項需要新 ticket**:PD-033(active pane 邊框改為扁平彩色,取代舊式 `WS_EX_CLIENTEDGE` 立體邊框)、PD-034(拖曳懸停自動切換,依使用者要求同時支援內部/外部來源、且涵蓋側邊欄 Group 列與 tab 兩種目標)、PD-035(tab 拖拉排序,依使用者確認範圍僅限同一 pane 內)、PD-036(Group 拖拉排序,明確覆寫 PD-017 決策 5——該決策記在 PD-017 文件內部,未登記進本頁「已否決的方向」表格,新證據為使用者本次直接提出的需求)。
 - PD-034/035/036 三張票共用同一種「滑鼠事件拖曳偵測,不用 OLE `IDropTarget`」的排序互動語言(PD-035/036),與「`IDropTarget` 懸停偵測,不接受實際 drop」的檔案懸停互動語言(PD-034)分開設計,避免同一個控制項(側邊欄 `LISTBOX`)上兩套拖放機制互相干擾——細節見各票的已確認的產品決策。
 - 新開為 Phase 7(PD-034~036,拖放互動類);PD-033 歸在 Phase 6(視覺改版收尾,依賴 PD-030)。
+
+### 2026-08-25 — PD-028~036 完成後實機比對,再開 PD-037~040
+
+使用者實際執行 `build\PaneDock.exe` 並附截圖與理想稿比對,回報四項具體落差,逐一開票:
+
+- **PD-037**:tab 寬度目前是 `SysTabControl32` 在 `TCS_OWNERDRAWFIXED` 下的系統預設固定寬度,`refresh_tab_strip` 從未呼叫 `TCM_SETITEMSIZE`,與 tab 數量、文字長度無關——這是「太窄顯示不了字」的根因。改為依可用寬度與 tab 數量動態計算,夾在 `[kTabMinWidth, kTabMaxWidth]`。
+- **PD-038**:pane 初次載入或切換後畫面空白、需滑鼠移動才刷新,判定為功能缺陷(不是視覺落差),優先度 HIGH。根因待實作 agent 用程式碼證據確認(`IExplorerBrowser::Initialize`/`navigate` 完成後可能沒有觸發同步繪製),修法鎖定「host 端主動觸發重繪」,明確排除「監聽滑鼠事件手動刷新」這種治標不治本的做法。
+- **PD-039**:移除「PANE LAYOUT」文字標籤,版面配置按鈕與新的 more-actions 佔位按鈕改用原生 `TOOLTIPS_CLASS32` hover tooltip——本程式碼庫第一次使用 tooltip,選原生 Common Controls 而非自繪。
+- **PD-040**:**覆寫上面「2026-08-25 — 視覺改版拆成 PD-028~031」記錄的候選結論**(pane 卡片只圓上緣、下緣維持方角,觸發條件是「先有安全裁切 `IExplorerBrowser` HWND 的方案」)。新證據:不需要裁切 `IExplorerBrowser` 本身的 HWND,`AGENTS.md` 已預先允許「幫每個 pane 加一層外層容器 HWND」——把容器 HWND 用 `SetWindowRgn`/`CreateRoundRectRgn` 裁成圓角,`IExplorerBrowser` 物件與其內部 Shell view 完全不受影響,滿足觸發條件的實質要求。詳見 ticket 文件的「覆寫聲明」一節。
+
+四張都歸在 Phase 6(視覺/易用性收尾,依賴既有 PD-029/030/033),與 Phase 7 的拖放互動票分開。
