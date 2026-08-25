@@ -1174,15 +1174,34 @@ int pane_card_radius(UINT dpi) noexcept {
     return std::max(1, MulDiv(10, static_cast<int>(dpi), 96));
 }
 
-// PD-040: clip a pane's explorer container child window to a rounded-rect
-// region so all four corners of the real Shell view are rounded, matching
-// draw_pane_card's background. Called whenever the container's rect changes
-// (creation, WM_SIZE, WM_DPICHANGED — i.e. every apply_layout pass).
+// PD-042: clip a pane's explorer container child window with rounded bottom
+// corners while keeping the internal top edge square. Called whenever the
+// container's rect changes (creation, WM_SIZE, WM_DPICHANGED — every
+// apply_layout pass).
 void apply_pane_container_region(HWND container, int width, int height,
                                  int radius) noexcept {
     if (container == nullptr || width <= 0 || height <= 0) return;
-    HRGN region = CreateRoundRectRgn(0, 0, width, height, radius, radius);
-    if (region == nullptr) return;
+    HRGN rounded = CreateRoundRectRgn(0, 0, width, height, radius, radius);
+    if (rounded == nullptr) return;
+    HRGN top_strip = CreateRectRgn(0, 0, width, radius);
+    if (top_strip == nullptr) {
+        DeleteObject(rounded);
+        return;
+    }
+    HRGN region = CreateRectRgn(0, 0, 0, 0);
+    if (region == nullptr) {
+        DeleteObject(top_strip);
+        DeleteObject(rounded);
+        return;
+    }
+    if (CombineRgn(region, rounded, top_strip, RGN_OR) == ERROR) {
+        DeleteObject(region);
+        DeleteObject(top_strip);
+        DeleteObject(rounded);
+        return;
+    }
+    DeleteObject(top_strip);
+    DeleteObject(rounded);
     if (SetWindowRgn(container, region, TRUE) == 0) {
         DeleteObject(region);
     }

@@ -79,7 +79,7 @@
 | PD-039 | 移除「PANE LAYOUT」文字標籤,版面配置按鈕改用 tooltip | 6 | `done` | PD-029 | [PD-039](tickets/PD-039-layout-label-removal-and-tooltip.md) |
 | PD-040 | Pane 卡片四角圓角(覆寫 PD-030 決策:下緣維持方角) | 6 | `done` | PD-030, PD-033 | [PD-040](tickets/PD-040-pane-card-full-corner-rounding.md) |
 | PD-041 | 主視窗缺少 `WS_CLIPCHILDREN`,全視窗重繪蓋掉 pane 內容 | 6 | `done` | PD-038 | [PD-041](tickets/PD-041-main-window-missing-clipchildren.md) |
-| PD-042 | Pane 容器誤圓角化內部邊界頂端兩角,active 外框轉角瑕疵 | 6 | `ready` | PD-040 | [PD-042](tickets/PD-042-pane-container-top-corner-seam.md) |
+| PD-042 | Pane 容器誤圓角化內部邊界頂端兩角,active 外框轉角瑕疵 | 6 | `done` | PD-040 | [PD-042](tickets/PD-042-pane-container-top-corner-seam.md) |
 
 ## Dependency lanes
 

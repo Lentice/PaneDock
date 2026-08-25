@@ -85,3 +85,26 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+**HRGN 組合與釋放。** `apply_pane_container_region` 先以
+`CreateRoundRectRgn` 建立四角圓角區域，再以 `CreateRectRgn(0, 0,
+width, radius)` 建立頂端矩形，透過 `CombineRgn(region, rounded,
+top_strip, RGN_OR)` 補回頂端兩角，最後只保留下緣兩角的圓角。`rounded`、
+`top_strip` 與中繼 `region` 在建立失敗或 `CombineRgn` 失敗時均會釋放；組合
+成功後先釋放兩個來源區域，`SetWindowRgn` 成功時由系統接管最終區域，失敗
+時由程式釋放。
+
+**PD-041 合併狀態。** 修改前重新讀取目前 `main.cpp`；已保留 PD-041 在
+`CreateWindowExW` 的 `WS_CLIPCHILDREN`，本票沒有改動 `apply_layout` 的
+既有佈局邏輯。
+
+**驗證狀態。** Release 配置、`cmake --build build` 與 `ctest --test-dir
+build --output-on-failure` 通過，測試為 4/4；PD-042 指定的 `rg` 與
+`git diff --check` 也通過。嘗試使用 Computer Use 時原生 pipe 不可用，
+因此未完成真實桌面截圖、滑鼠互動及視覺驗收；改以非互動 smoke check 啟動
+`build\PaneDock.exe`，確認 `InputIdle=True`、`Responding=True`、主視窗標題
+為 `PaneDock`，送出正常關閉後 5 秒內退出，未觀察到掛起或殘留程序。圓角
+縫隙對齊、Shell 清單選取/右鍵/捲軸與拖放的視覺結果仍需具備桌面互動能力
+時補測。
