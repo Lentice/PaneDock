@@ -946,12 +946,13 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
     if (old_font != nullptr) SelectObject(dc, old_font);
 }
 
-void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi) noexcept {
-    // Card visuals: white body, border RGB(223,229,236) (reused from the
-    // existing quiet-header divider color), shadow one step darker
-    // (product decision 3). Radius 10px@96dpi matches the design mock's
-    // .pane { border-radius: 10px }. Shadow is a flat offset RoundRect, not
-    // a real blur (product decision 1 — no AlphaBlend/GradientFill).
+void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi, bool is_active) noexcept {
+    // Card visuals: white body, shadow one step darker (product decision 3).
+    // Radius 10px@96dpi matches the design mock's .pane { border-radius:
+    // 10px }. Shadow is a flat offset RoundRect, not a real blur (product
+    // decision 1 — no AlphaBlend/GradientFill). Active panes use the shared
+    // accent blue and a 2px border; inactive panes retain the 1px quiet-gray
+    // border.
     const int radius = std::max(1, MulDiv(10, static_cast<int>(dpi), 96));
     const int shadow_offset = std::max(1, MulDiv(2, static_cast<int>(dpi), 96));
     // The card is drawn a couple of pixels outside pane_rect on the left/
@@ -995,7 +996,11 @@ void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi) noexcept {
         DeleteObject(card_brush);
     }
 
-    HPEN border_pen = CreatePen(PS_SOLID, 1, RGB(223, 229, 236));
+    const int border_width = std::max(
+        1, MulDiv(is_active ? 2 : 1, static_cast<int>(dpi), 96));
+    const COLORREF border_color =
+        is_active ? RGB(37, 99, 235) : RGB(223, 229, 236);
+    HPEN border_pen = CreatePen(PS_SOLID, border_width, border_color);
     if (border_pen != nullptr) {
         const HGDIOBJ old_pen = SelectObject(dc, border_pen);
         const HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
@@ -1098,7 +1103,8 @@ void paint_client_background(HWND window, HDC dc,
             std::min(group.panes.size(), rects.size());
         for (std::size_t index = 0; index < visible; ++index) {
             const RECT pane_rect = to_win32_rect(rects[index]);
-            draw_pane_card(dc, pane_rect, dpi);
+            draw_pane_card(dc, pane_rect, dpi,
+                           index == active_pane_index(group));
             const NavigationGeometry geometry =
                 navigation_geometry(window, pane_rect);
             draw_navigation_bar_background(dc, geometry.address_background,
@@ -1155,6 +1161,7 @@ void destroy_explorers(AppState& state) noexcept {
 HRESULT apply_layout(HWND window, AppState& state) {
     layout_sidebar(window, state);
     layout_header(window, state);
+    InvalidateRect(window, nullptr, TRUE);
     if (!has_active_group(state)) {
         for (std::size_t index = 0; index < state.explorers.size(); ++index) {
             state.explorers[index].set_visible(false);
@@ -1314,10 +1321,6 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
     }
 
     capture_locations(state);
-    if (has_active_group(state)) {
-        const std::size_t previous = active_pane_index(active_group(state));
-        state.explorers[previous].set_active(false);
-    }
     state.application.active_group_id = target_id;
     refresh_tab_strips(state);
     auto& group = active_group(state);
@@ -1329,9 +1332,7 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
     }
     if (FAILED(apply_layout(window, state)))
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
-    const std::size_t active = active_pane_index(group);
-    state.explorers[active].set_active(true);
-    state.explorers[active].focus();
+    state.explorers[active_pane_index(group)].focus();
     refresh_sidebar(state);
     save_now(state);
 }
@@ -1345,9 +1346,7 @@ void add_group(HWND window, AppState& state) {
         refresh_tab_strips(state);
         if (FAILED(apply_layout(window, state)))
             OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
-        const std::size_t active = active_pane_index(active_group(state));
-        state.explorers[active].set_active(true);
-        state.explorers[active].focus();
+        state.explorers[active_pane_index(active_group(state))].focus();
         refresh_sidebar(state);
         save_now(state);
         return;
@@ -1375,9 +1374,6 @@ void delete_group(HWND window, AppState& state) {
     capture_locations(state);
     const std::string id = state.application.groups[*selected].id;
     const bool deleted_active = id == state.application.active_group_id;
-    if (deleted_active) {
-        state.explorers[active_pane_index(active_group(state))].set_active(false);
-    }
     if (!panedock::core::delete_group(state.application, id)) return;
     refresh_tab_strips(state);
     if (deleted_active && has_active_group(state)) {
@@ -1391,9 +1387,7 @@ void delete_group(HWND window, AppState& state) {
     if (FAILED(apply_layout(window, state)))
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
     if (has_active_group(state)) {
-        const std::size_t active = active_pane_index(active_group(state));
-        state.explorers[active].set_active(true);
-        state.explorers[active].focus();
+        state.explorers[active_pane_index(active_group(state))].focus();
     }
     refresh_sidebar(state);
     save_now(state);
@@ -1411,16 +1405,15 @@ void move_group(AppState& state, bool down) {
     save_now(state);
 }
 
-void set_active_pane(AppState& state, std::size_t pane) noexcept {
+void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
     if (!has_active_group(state)) return;
     auto& group = active_group(state);
     if (pane >= group.panes.size()) return;
     const std::size_t previous = active_pane_index(group);
     if (previous == pane ||
         !panedock::core::set_active_pane(group, group.panes[pane].id)) return;
-    state.explorers[previous].set_active(false);
-    state.explorers[pane].set_active(true);
     state.explorers[pane].focus();
+    InvalidateRect(window, nullptr, TRUE);
     save_now(state);
 }
 
@@ -1583,7 +1576,6 @@ void set_layout(HWND window, AppState& state,
     if (!has_active_group(state)) return;
     auto& group = active_group(state);
     capture_locations(state);
-    const std::size_t previous = active_pane_index(group);
 
     std::vector<std::string> pane_ids;
     std::vector<std::string> tab_ids;
@@ -1607,10 +1599,6 @@ void set_layout(HWND window, AppState& state,
     }
 
     const std::size_t active = active_pane_index(group);
-    if (previous != active) {
-        state.explorers[previous].set_active(false);
-        state.explorers[active].set_active(true);
-    }
     state.explorers[active].focus();
     save_now(state);
 }
@@ -1856,7 +1844,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (has_active_group(*state)) {
                 const std::size_t active =
                     active_pane_index(active_group(*state));
-                state->explorers[active].set_active(true);
                 state->explorers[active].focus();
             }
             if (!RegisterHotKey(window, kLayoutToggleHotkeyId,
@@ -2222,7 +2209,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 GetCursorPos(&point);
                 ScreenToClient(window, &point);
                 const std::size_t pane = pane_at_point(window, *state, point);
-                if (pane < kExplorerCount) set_active_pane(*state, pane);
+                if (pane < kExplorerCount) set_active_pane(window, *state, pane);
             }
             return 0;
         case WM_HOTKEY:
@@ -2416,7 +2403,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 const std::size_t count = active_group(state).panes.size();
                 const std::size_t next = shift ? (active + count - 1) % count
                                                : (active + 1) % count;
-                set_active_pane(state, next);
+                set_active_pane(window, state, next);
                 continue;
             }
         }

@@ -364,31 +364,6 @@ void ExplorerHost::set_visible(bool visible) noexcept {
     }
 }
 
-void ExplorerHost::set_active(bool active) noexcept {
-    if (!initialized_ || browser_ == nullptr) {
-        return;
-    }
-
-    const HWND window = view_window(browser_.Get());
-    if (window == nullptr) {
-        return;
-    }
-
-    const LONG_PTR style = GetWindowLongPtrW(window, GWL_EXSTYLE);
-    const LONG_PTR desired =
-        active ? style | WS_EX_CLIENTEDGE : style & ~WS_EX_CLIENTEDGE;
-    if (desired == style) {
-        return;
-    }
-
-    SetWindowLongPtrW(window, GWL_EXSTYLE, desired);
-    SetWindowPos(window, nullptr, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
-                     SWP_FRAMECHANGED);
-    RedrawWindow(window, nullptr, nullptr,
-                 RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW);
-}
-
 void ExplorerHost::focus() noexcept {
     if (error_window_ != nullptr && error_visible_) {
         SetFocus(retry_button_ != nullptr ? retry_button_ : error_window_);

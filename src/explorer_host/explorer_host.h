@@ -36,7 +36,6 @@ public:
     void set_navigation_failed_callback(std::function<void()> callback);
     void set_rect(const RECT& rect) noexcept;
     void set_visible(bool visible) noexcept;
-    void set_active(bool active) noexcept;
     void focus() noexcept;
     HRESULT translate_accelerator(MSG* message) noexcept;
     void destroy() noexcept;

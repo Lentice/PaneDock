@@ -85,3 +85,11 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+- `draw_pane_card` 最終簽章為 `void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi, bool is_active) noexcept`。active 外框使用 `RGB(37,99,235)`、96-DPI 基準 2px；非 active 外框維持 `RGB(223,229,236)`、96-DPI 基準 1px；兩者都以 `MulDiv(value, dpi, 96)` 做 DPI 縮放。PD-030 既有卡片底色 `RGB(255,255,255)`、圓角半徑 10px、outset 2px、陰影 `RGB(205,211,219)` 未改動。
+- 已刪除 `ExplorerHost::set_active` 宣告、定義與全部實際呼叫，共 10 個呼叫點：`activate_group` 舊 active／新 active 各 1 處、`add_group` 空狀態初始化 1 處、`delete_group` 舊 active／新 active 各 1 處、`set_active_pane` 前後各 1 處、`set_layout` 前後各 1 處、`WM_CREATE` 初始 active 1 處。所有 `focus()` 呼叫保留。active 狀態切換後由 `set_active_pane`，以及共用的 `apply_layout` 路徑呼叫 `InvalidateRect(window, nullptr, TRUE)`，讓卡片背景依最新 `active_pane_index(group)` 重畫。
+- Agent checks：指定 LLVM-MinGW/Ninja configure、`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 為 4/4 通過；`rg -n "set_active\\(" src\\app_shell\\main.cpp src\\explorer_host` 無命中；`git diff --check` 通過。
+- `rg -n "WS_EX_CLIENTEDGE" src` 仍命中兩處：`src/explorer_host/explorer_host.cpp` 的 PD-022 `kErrorWindowClassName` 錯誤視窗，以及 PD-028 既有的 `src/sidebar/sidebar.cpp` Group rename `EDIT` 控制項。後者不是 active pane 指示，且不在本票 Scope、Non-goals 明確排除 sidebar 視覺，因此沒有為了 literal grep 改動相鄰功能；本票的該 Agent check 依文字預期「只剩錯誤視窗」未完全滿足。
+- 已嘗試以 Computer Use 啟動並操作真實桌面；初始化與一次重試都回報 `Computer Use native pipe is unavailable: failed to connect native pipe: 系統找不到指定的檔案。 (os error 2)`，與 PD-030 交接記錄的限制相同，因此沒有完成真實滑鼠點擊不同 pane、也沒有宣稱藍色外框視覺驗證通過。另以非互動方式啟動 `build\\PaneDock.exe`，觀察到程序 `Responding=True` 且取得有效主視窗 handle，這只算啟動 smoke check。

@@ -70,7 +70,7 @@
 | PD-029 | Quiet header 右對齊、版型圖示重繪與 more-actions 佔位按鈕 | 6 | `done` | PD-028 | [PD-029](tickets/PD-029-quiet-header-alignment-and-layout-icons.md) |
 | PD-030 | Pane 卡片背景(圓角上緣＋陰影)與 tab header 圖示化重繪 | 6 | `done` | PD-028, PD-029 | [PD-030](tickets/PD-030-pane-card-chrome-and-tab-header-restyle.md) |
 | PD-031 | 導覽列圖示化按鈕與圓角網址欄背景 | 6 | `done` | PD-030 | [PD-031](tickets/PD-031-navigation-row-icon-restyle.md) |
-| PD-033 | Active pane 指示改為扁平彩色外框,移除舊式立體邊框 | 6 | `ready` | PD-030 | [PD-033](tickets/PD-033-active-pane-flat-border-indicator.md) |
+| PD-033 | Active pane 指示改為扁平彩色外框,移除舊式立體邊框 | 6 | `done` | PD-030 | [PD-033](tickets/PD-033-active-pane-flat-border-indicator.md) |
 | PD-034 | 拖曳懸停自動切換(側邊欄 Group 列與 pane 的 tab) | 7 | `ready` | PD-017, PD-019, PD-028 | [PD-034](tickets/PD-034-drag-hover-auto-switch.md) |
 | PD-035 | Tab 拖拉排序(同一 pane 內) | 7 | `ready` | PD-019 | [PD-035](tickets/PD-035-tab-drag-reorder.md) |
 | PD-036 | Group 拖拉排序(覆寫 PD-017 決策 5) | 7 | `ready` | PD-017, PD-028 | [PD-036](tickets/PD-036-group-drag-reorder.md) |
