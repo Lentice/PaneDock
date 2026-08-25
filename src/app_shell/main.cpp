@@ -61,6 +61,7 @@ constexpr int kTabStripIdBase = 200;
 constexpr int kTabMinWidth = 72;
 constexpr int kTabMaxWidth = 200;
 constexpr int kNavigationBarHeight = 28;
+constexpr int kStatusBarHeight = 24;
 constexpr int kNavigationButtonWidth = 32;
 // PD-031: rounded light-gray pill drawn behind the address bar EDIT to fake
 // a rounded input box (see docs/tickets/PD-031-*.md decision 2). Radius is
@@ -325,6 +326,7 @@ struct AppState {
     // untouched (see PD-040 override of PD-030).
     std::array<HWND, kExplorerCount> explorer_containers{};
     std::array<HWND, kExplorerCount> address_bars{};
+    std::array<HWND, kExplorerCount> status_bars{};
     std::array<HWND, kExplorerCount> back_buttons{};
     std::array<HWND, kExplorerCount> forward_buttons{};
     std::array<HWND, kExplorerCount> up_buttons{};
@@ -948,6 +950,22 @@ void refresh_navigation_chrome(AppState& state, std::size_t pane_index) {
     SetWindowTextW(state.address_bars[pane_index], text);
 }
 
+void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
+    if (pane_index >= kExplorerCount || state.status_bars[pane_index] == nullptr)
+        return;
+    panedock::explorer_host::ExplorerHost::ItemCounts counts;
+    if (FAILED(state.explorers[pane_index].item_counts(counts))) {
+        SetWindowTextW(state.status_bars[pane_index], L"");
+        return;
+    }
+    const std::wstring text = counts.selected == 0
+                                  ? std::to_wstring(counts.total) + L" items"
+                                  : std::to_wstring(counts.selected) + L" of " +
+                                        std::to_wstring(counts.total) +
+                                        L" selected";
+    SetWindowTextW(state.status_bars[pane_index], text.c_str());
+}
+
 std::wstring tab_display_text(const panedock::core::TabState& tab) {
     const auto& parsing_name = tab.location.parsing_name;
     const std::size_t separator = parsing_name.find_last_of(L"\\/");
@@ -1475,6 +1493,7 @@ HRESULT apply_layout(HWND window, AppState& state) {
             ShowWindow(state.forward_buttons[index], SW_HIDE);
             ShowWindow(state.up_buttons[index], SW_HIDE);
             ShowWindow(state.address_bars[index], SW_HIDE);
+            ShowWindow(state.status_bars[index], SW_HIDE);
         }
         ShowWindow(state.empty_message, SW_SHOW);
         write_live_view_count();
@@ -1533,6 +1552,17 @@ HRESULT apply_layout(HWND window, AppState& state) {
 
             RECT rect = pane_rect;
             rect.top = navigation_top + navigation_height;
+            const int status_height = std::min(
+                scaled_value(window, kStatusBarHeight),
+                std::max(0, static_cast<int>(rect.bottom - rect.top)));
+            const RECT status_rect{rect.left, rect.bottom - status_height,
+                                   rect.right, rect.bottom};
+            SetWindowPos(state.status_bars[index], nullptr, status_rect.left,
+                         status_rect.top, status_rect.right - status_rect.left,
+                         status_rect.bottom - status_rect.top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            ShowWindow(state.status_bars[index], SW_SHOW);
+            rect.bottom -= status_height;
             // PD-040: the container is the real parent HWND passed to
             // ExplorerHost::initialize now, positioned/sized at `rect` in
             // main-window coordinates; the browser itself is initialized
@@ -1569,12 +1599,15 @@ HRESULT apply_layout(HWND window, AppState& state) {
                         [&state, index]() {
                             handle_navigation_failed(state, index);
                         });
+                    state.explorers[index].set_selection_changed_callback(
+                        [&state, index]() { refresh_status_bar(state, index); });
                 } catch (...) {
                     return E_OUTOFMEMORY;
                 }
             } else {
                 state.explorers[index].set_rect(local_rect);
             }
+            refresh_status_bar(state, index);
         } else {
             ShowWindow(state.explorer_containers[index], SW_HIDE);
             ShowWindow(state.tab_strips[index], SW_HIDE);
@@ -1582,6 +1615,7 @@ HRESULT apply_layout(HWND window, AppState& state) {
             ShowWindow(state.forward_buttons[index], SW_HIDE);
             ShowWindow(state.up_buttons[index], SW_HIDE);
             ShowWindow(state.address_bars[index], SW_HIDE);
+            ShowWindow(state.status_bars[index], SW_HIDE);
         }
         state.explorers[index].set_visible(visible);
     }
@@ -2544,6 +2578,15 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                              reinterpret_cast<WPARAM>(
                                  GetStockObject(DEFAULT_GUI_FONT)),
                              TRUE);
+                state->status_bars[index] = CreateWindowExW(
+                    0, L"STATIC", L"", WS_CHILD | SS_LEFT | SS_CENTERIMAGE,
+                    0, 0, 0, 0, window, nullptr, GetModuleHandleW(nullptr),
+                    nullptr);
+                if (state->status_bars[index] == nullptr) return -1;
+                SendMessageW(state->status_bars[index], WM_SETFONT,
+                             reinterpret_cast<WPARAM>(
+                                 GetStockObject(DEFAULT_GUI_FONT)),
+                             TRUE);
             }
             refresh_sidebar(*state);
             refresh_tab_strips(*state);
@@ -2720,6 +2763,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     SetBkMode(dc, TRANSPARENT);
                     SetTextColor(dc, RGB(152, 162, 179));
                     SetTextCharacterExtra(dc, scaled_value(window, 1));
+                    return reinterpret_cast<LRESULT>(
+                        GetSysColorBrush(COLOR_WINDOW));
+                }
+                if (std::find(state->status_bars.begin(),
+                              state->status_bars.end(),
+                              control) != state->status_bars.end()) {
+                    const HDC dc = reinterpret_cast<HDC>(wparam);
+                    SetBkMode(dc, OPAQUE);
+                    SetBkColor(dc, RGB(255, 255, 255));
+                    SetTextColor(dc, RGB(100, 116, 139));
                     return reinterpret_cast<LRESULT>(
                         GetSysColorBrush(COLOR_WINDOW));
                 }

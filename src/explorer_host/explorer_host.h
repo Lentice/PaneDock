@@ -13,6 +13,7 @@
 #include <windows.h>
 
 #include <shobjidl.h>
+#include <shlobj.h>
 #include <wrl/client.h>
 
 #include "explorer_host/live_view_count.h"
@@ -21,6 +22,11 @@ namespace panedock::explorer_host {
 
 class ExplorerHost final {
 public:
+    struct ItemCounts {
+        int total{};
+        int selected{};
+    };
+
     ExplorerHost() noexcept = default;
     ~ExplorerHost();
 
@@ -34,6 +40,9 @@ public:
     void set_navigation_callback(
         std::function<void(std::wstring_view)> callback);
     void set_navigation_failed_callback(std::function<void()> callback);
+    void set_selection_changed_callback(std::function<void()> callback);
+    HRESULT item_counts(ItemCounts& counts) const noexcept;
+    void selection_changed() noexcept;
     void set_rect(const RECT& rect) noexcept;
     void set_visible(bool visible) noexcept;
     void focus() noexcept;
@@ -69,6 +78,10 @@ private:
     std::wstring location_;
     std::function<void(std::wstring_view)> navigation_callback_;
     std::function<void()> navigation_failed_callback_;
+    std::function<void()> selection_changed_callback_;
+    Microsoft::WRL::ComPtr<IShellView> current_view_;
+    Microsoft::WRL::ComPtr<IShellFolderViewCB> previous_view_callback_;
+    Microsoft::WRL::ComPtr<IShellFolderViewCB> view_callback_;
 };
 
 }  // namespace panedock::explorer_host

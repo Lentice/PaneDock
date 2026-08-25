@@ -91,3 +91,12 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接
+
+2026-08-25
+
+- 選取通知採用 `IShellView` QueryInterface 到 `IShellFolderView` 後呼叫 `SetCallback`，以自有 `IShellFolderViewCB` 接收 undocumented `SFVM_SELECTIONCHANGED`（值 8）；callback 會轉送原 callback，再通知 `ExplorerHost`。`IExplorerBrowserEvents` 只有導覽事件，沒有選取事件；`IFolderView2` 沒有可用的 selection advise，因此未採用輪詢或假設性的 `IFolderView2::Advise`。
+- 狀態列採用每 pane 一個原生 `STATIC` child HWND，固定高度 `24px@96dpi`（以 DPI scaling），放在 Shell view 下方；`apply_layout` 從 Explorer container 高度扣除該高度。文字為 `N items` 或 `N of M selected`。
+- `IFolderView2::ItemCount(SVGIO_ALLVIEW/SVGIO_SELECTION)` 在導覽完成與選取通知時查詢；非 active tab 沒有提前 realize。
+- 驗證：LLVM-MinGW/Clang + Ninja 建置成功，4/4 CTest 通過，Agent `rg` 與 `git diff --check` 通過。GUI 可啟動；本次環境未完成實際滑鼠選取／截圖驗證，因沒有可用的解鎖桌面互動通道。啟動煙霧測試程序 PID 41692 曾以非強制 `taskkill /PID` 重試，該程序未在本次 shell 權限內回報退出，未使用 `/F`。

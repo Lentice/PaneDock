@@ -7,12 +7,21 @@
 #include <utility>
 
 #include <shlwapi.h>
+#include <shlobj.h>
 
 namespace panedock::explorer_host {
 namespace {
 
 constexpr wchar_t kErrorWindowClassName[] = L"PaneDock.ErrorPanel";
 constexpr int kRetryButtonId = 1;
+constexpr GUID kIidShellFolderView{
+    0x37a378c0, 0xf82d, 0x11ce,
+    {0xae, 0x65, 0x08, 0x00, 0x2b, 0x2e, 0x12, 0x62}};
+#ifndef SFVM_SELECTIONCHANGED
+constexpr UINT kSfvmSelectionChanged = 8;
+#else
+constexpr UINT kSfvmSelectionChanged = SFVM_SELECTIONCHANGED;
+#endif
 
 void log_message(const wchar_t* message) noexcept {
     OutputDebugStringW(message);
@@ -36,6 +45,55 @@ void log_service_query(REFGUID service_id) noexcept {
     }
     OutputDebugStringW(L"\n");
 }
+
+class ViewCallback final : public IShellFolderViewCB {
+public:
+    explicit ViewCallback(ExplorerHost* host) noexcept : host_(host) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,
+                                              void** object) override {
+        if (object == nullptr) return E_POINTER;
+        *object = nullptr;
+        if (IsEqualIID(iid, IID_IUnknown) ||
+            IsEqualIID(iid, IID_IShellFolderViewCB)) {
+            *object = static_cast<IShellFolderViewCB*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return references_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining =
+            references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        if (remaining == 0) delete this;
+        return remaining;
+    }
+
+    void set_previous(IShellFolderViewCB* previous) noexcept {
+        previous_ = previous;
+    }
+
+    HRESULT STDMETHODCALLTYPE MessageSFVCB(UINT message, WPARAM wparam,
+                                            LPARAM lparam) noexcept override {
+        if (previous_ != nullptr) {
+            (void)previous_->MessageSFVCB(message, wparam, lparam);
+        }
+        if (message == kSfvmSelectionChanged && host_ != nullptr) {
+            host_->selection_changed();
+        }
+        return E_NOTIMPL;
+    }
+
+private:
+    std::atomic<ULONG> references_{1};
+    ExplorerHost* host_{};
+    Microsoft::WRL::ComPtr<IShellFolderViewCB> previous_;
+};
 
 class Site final : public IServiceProvider, public IExplorerBrowserEvents {
 public:
@@ -336,6 +394,34 @@ void ExplorerHost::set_navigation_failed_callback(
     navigation_failed_callback_ = std::move(callback);
 }
 
+void ExplorerHost::set_selection_changed_callback(
+    std::function<void()> callback) {
+    selection_changed_callback_ = std::move(callback);
+}
+
+HRESULT ExplorerHost::item_counts(ItemCounts& counts) const noexcept {
+    counts = {};
+    if (current_view_ == nullptr) return E_UNEXPECTED;
+
+    Microsoft::WRL::ComPtr<IFolderView2> folder_view;
+    HRESULT hr = current_view_->QueryInterface(
+        IID_IFolderView2, reinterpret_cast<void**>(folder_view.GetAddressOf()));
+    if (FAILED(hr)) return hr;
+    hr = folder_view->ItemCount(SVGIO_ALLVIEW, &counts.total);
+    if (FAILED(hr)) return hr;
+    return folder_view->ItemCount(SVGIO_SELECTION, &counts.selected);
+}
+
+void ExplorerHost::selection_changed() noexcept {
+    if (selection_changed_callback_) {
+        try {
+            selection_changed_callback_();
+        } catch (...) {
+            log_message(L"ExplorerHost: selection changed callback failed");
+        }
+    }
+}
+
 void ExplorerHost::set_rect(const RECT& rect) noexcept {
     rect_ = rect;
     if (initialized_ && browser_ != nullptr) {
@@ -419,6 +505,25 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
         RedrawWindow(window, nullptr, nullptr,
                      RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     }
+
+    current_view_.Reset();
+    previous_view_callback_.Reset();
+    view_callback_.Reset();
+    if (browser_ != nullptr &&
+        SUCCEEDED(browser_->GetCurrentView(IID_PPV_ARGS(&current_view_)))) {
+        Microsoft::WRL::ComPtr<IShellFolderView> folder_view;
+        if (SUCCEEDED(current_view_->QueryInterface(
+                kIidShellFolderView,
+                reinterpret_cast<void**>(folder_view.GetAddressOf())))) {
+            auto* callback = new (std::nothrow) ViewCallback(this);
+            if (callback != nullptr) {
+                view_callback_.Attach(callback);
+                (void)folder_view->SetCallback(view_callback_.Get(),
+                                               &previous_view_callback_);
+                callback->set_previous(previous_view_callback_.Get());
+            }
+        }
+    }
     if (pidl == nullptr) {
         return;
     }
@@ -452,6 +557,7 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
             log_message(L"ExplorerHost: navigation callback failed");
         }
     }
+    selection_changed();
 }
 
 void ExplorerHost::navigation_failed() noexcept {
@@ -524,6 +630,18 @@ void ExplorerHost::destroy() noexcept {
     // site attached until after Destroy can leave Shell teardown re-entering
     // the host contract.
     (void)IUnknown_SetSite(browser_.Get(), nullptr);
+    if (current_view_ != nullptr && view_callback_ != nullptr) {
+        Microsoft::WRL::ComPtr<IShellFolderView> folder_view;
+        if (SUCCEEDED(current_view_->QueryInterface(
+                kIidShellFolderView,
+                reinterpret_cast<void**>(folder_view.GetAddressOf())))) {
+            (void)folder_view->SetCallback(previous_view_callback_.Get(),
+                                           nullptr);
+        }
+    }
+    view_callback_.Reset();
+    previous_view_callback_.Reset();
+    current_view_.Reset();
     if (error_window_ != nullptr) {
         DestroyWindow(error_window_);
         error_window_ = nullptr;
@@ -541,6 +659,7 @@ void ExplorerHost::destroy() noexcept {
     location_.clear();
     navigation_callback_ = {};
     navigation_failed_callback_ = {};
+    selection_changed_callback_ = {};
     destroying_ = false;
 }
 
