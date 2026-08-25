@@ -89,3 +89,22 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+**修正內容。** `src/app_shell/main.cpp` 的主視窗 `CreateWindowExW` style
+已由 `WS_OVERLAPPEDWINDOW` 改為 `WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN`,
+讓主視窗的背景繪製不會覆蓋 tab strip、explorer container 與 Shell view。
+未修改 `ExplorerHost`、任何 `InvalidateRect` 呼叫點或 PD-042 範圍。
+
+**驗證狀態。** 指定的 CMake configure/build 成功,`ctest --test-dir build
+--output-on-failure` 為 4/4 通過;`rg -n "WS_CLIPCHILDREN"
+src\app_shell\main.cpp` 命中 PD-040 container 與本票主視窗建立點;`git diff
+--check` 通過。
+
+**桌面與視覺驗證限制。** 嘗試以 PowerShell 啟動 `build\PaneDock.exe` 做非
+互動式煙霧測試,程序回報 `Responding=True`,但在 1.5 秒後仍沒有
+`MainWindowHandle`/`MainWindowTitle`,因此 `CloseMainWindow()` 無法完成正常
+關閉。已清理該次測試啟動的 PID,沒有殘留程序。此環境沒有桌面滑鼠/畫面觀察
+通道,所以無法判定既有視覺元素是否消失、錯位或出現空白縫隙,也無法判定
+「需要 hover 才恢復」症狀是否仍存在;未將非互動式結果宣稱為視覺驗收通過。

@@ -3007,7 +3007,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                                      ? L"PaneDock \x2014 Diagnostic Mode"
                                      : L"PaneDock";
     HWND window = CreateWindowExW(
-        0, kWindowClassName, title, WS_OVERLAPPEDWINDOW, placement.x,
+        0, kWindowClassName, title, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        placement.x,
         placement.y, placement.width, placement.height, nullptr, nullptr,
         instance, &state);
     if (window == nullptr) {
