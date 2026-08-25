@@ -75,6 +75,8 @@ constexpr int kBackButtonIdBase = 300;
 constexpr int kForwardButtonIdBase = 310;
 constexpr int kUpButtonIdBase = 320;
 constexpr int kAddressBarIdBase = 330;
+constexpr int kRefreshButtonIdBase = 340;
+constexpr int kViewModeButtonIdBase = 350;
 constexpr int kLayoutButtonIdBase = 400;
 constexpr int kMoreActionsButtonId = kLayoutButtonIdBase + 5;
 constexpr int kGroupListId = 100;
@@ -330,6 +332,8 @@ struct AppState {
     std::array<HWND, kExplorerCount> back_buttons{};
     std::array<HWND, kExplorerCount> forward_buttons{};
     std::array<HWND, kExplorerCount> up_buttons{};
+    std::array<HWND, kExplorerCount> refresh_buttons{};
+    std::array<HWND, kExplorerCount> view_mode_buttons{};
     std::array<bool, kExplorerCount> suppress_history_record{};
     Microsoft::WRL::ComPtr<DragHoverTarget> sidebar_drag_target;
     std::array<Microsoft::WRL::ComPtr<DragHoverTarget>, kExplorerCount>
@@ -471,8 +475,8 @@ NavigationGeometry navigation_geometry(HWND window, RECT pane_rect) noexcept {
         std::max(0, static_cast<int>(pane_rect.bottom) - navigation_top));
     const int pane_width = pane_rect.right - pane_rect.left;
     const int button_width = std::min(
-        scaled_value(window, kNavigationButtonWidth), pane_width / 4);
-    const int address_left = pane_rect.left + button_width * 3;
+        scaled_value(window, kNavigationButtonWidth), pane_width / 6);
+    const int address_left = pane_rect.left + button_width * 5;
     const RECT address_background{address_left, navigation_top,
                                   pane_rect.right,
                                   navigation_top + navigation_height};
@@ -613,8 +617,7 @@ void release_navigation_history_image_list() noexcept {
 void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
                                  std::size_t glyph_kind) noexcept {
     // Back(0)/Forward(1) use the public Common Controls history bitmap.
-    // Up(2) has no public Explorer-style image, so it remains a small stroke
-    // glyph with the same visual weight.
+    // Up/refresh/view use small native stroke glyphs with the same visual weight.
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
     HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));
     if (background != nullptr) {
@@ -669,6 +672,20 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
                 MoveToEx(item.hDC, cx - half / 2, cy - half / 2, nullptr);
                 LineTo(item.hDC, cx, cy - half);
                 LineTo(item.hDC, cx + half / 2, cy - half / 2);
+                break;
+            case 3:  // refresh
+                Arc(item.hDC, cx - half, cy - half, cx + half, cy + half,
+                    cx, cy - half, cx - half, cy);
+                MoveToEx(item.hDC, cx, cy - half, nullptr);
+                LineTo(item.hDC, cx + half / 3, cy - half / 3);
+                break;
+            case 4:  // view: four small squares
+                for (int row = -1; row <= 1; row += 2)
+                    for (int column = -1; column <= 1; column += 2)
+                        Rectangle(item.hDC, cx + column * half / 2 - 1,
+                                  cy + row * half / 2 - 1,
+                                  cx + column * half / 2 + 2,
+                                  cy + row * half / 2 + 2);
                 break;
             default:
                 break;
@@ -950,6 +967,42 @@ void refresh_navigation_chrome(AppState& state, std::size_t pane_index) {
     SetWindowTextW(state.address_bars[pane_index], text);
 }
 
+std::string view_mode_name(FOLDERVIEWMODE mode) {
+    switch (mode) {
+        case FVM_ICON: return "FVM_ICON";
+        case FVM_SMALLICON: return "FVM_SMALLICON";
+        case FVM_LIST: return "FVM_LIST";
+        case FVM_DETAILS: return "FVM_DETAILS";
+        default: return {};
+    }
+}
+
+std::optional<FOLDERVIEWMODE> parse_view_mode(std::string_view name) {
+    if (name == "FVM_ICON") return FVM_ICON;
+    if (name == "FVM_SMALLICON") return FVM_SMALLICON;
+    if (name == "FVM_LIST") return FVM_LIST;
+    if (name == "FVM_DETAILS") return FVM_DETAILS;
+    return std::nullopt;
+}
+
+void capture_pane_view_mode(AppState& state, std::size_t pane_index) {
+    if (!has_active_group(state) || pane_index >= active_group(state).panes.size() ||
+        !state.realized[pane_index]) return;
+    FOLDERVIEWMODE mode{};
+    if (SUCCEEDED(state.explorers[pane_index].get_view_mode(mode)))
+        active_tab(active_group(state).panes[pane_index]).view_mode =
+            view_mode_name(mode);
+}
+
+void apply_pane_view_mode(AppState& state, std::size_t pane_index) {
+    if (!has_active_group(state) || pane_index >= active_group(state).panes.size() ||
+        !state.realized[pane_index]) return;
+    auto& tab = active_tab(active_group(state).panes[pane_index]);
+    if (const auto mode = parse_view_mode(tab.view_mode); mode.has_value())
+        (void)state.explorers[pane_index].set_view_mode(*mode);
+    capture_pane_view_mode(state, pane_index);
+}
+
 void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
     if (pane_index >= kExplorerCount || state.status_bars[pane_index] == nullptr)
         return;
@@ -1040,6 +1093,7 @@ void capture_pane_location(AppState& state, std::size_t pane_index) {
         state.explorers[pane_index].location().empty()) return;
     auto& tab = active_tab(group.panes[pane_index]);
     tab.location.parsing_name = state.explorers[pane_index].location();
+    capture_pane_view_mode(state, pane_index);
     if (!tab.history.empty() && tab.history_index < tab.history.size()) {
         tab.history[tab.history_index] = tab.location;
     }
@@ -1460,6 +1514,7 @@ void handle_navigation_complete(AppState& state, std::size_t pane_index,
     } else {
         panedock::core::record_navigation(tab, std::move(completed_location));
     }
+    apply_pane_view_mode(state, pane_index);
     refresh_tab_strip(state, pane_index);
     save_now(state);
 }
@@ -1492,6 +1547,8 @@ HRESULT apply_layout(HWND window, AppState& state) {
             ShowWindow(state.back_buttons[index], SW_HIDE);
             ShowWindow(state.forward_buttons[index], SW_HIDE);
             ShowWindow(state.up_buttons[index], SW_HIDE);
+            ShowWindow(state.refresh_buttons[index], SW_HIDE);
+            ShowWindow(state.view_mode_buttons[index], SW_HIDE);
             ShowWindow(state.address_bars[index], SW_HIDE);
             ShowWindow(state.status_bars[index], SW_HIDE);
         }
@@ -1524,9 +1581,10 @@ HRESULT apply_layout(HWND window, AppState& state) {
                 navigation_geometry(window, pane_rect);
             const int navigation_top = geometry.navigation_top;
             const int navigation_height = geometry.navigation_height;
-            const std::array<HWND, 3> buttons{
+            const std::array<HWND, 5> buttons{
                 state.back_buttons[index], state.forward_buttons[index],
-                state.up_buttons[index]};
+                state.up_buttons[index], state.refresh_buttons[index],
+                state.view_mode_buttons[index]};
             int x = pane_rect.left;
             for (HWND button : buttons) {
                 SetWindowPos(button, nullptr, x, navigation_top,
@@ -1601,6 +1659,7 @@ HRESULT apply_layout(HWND window, AppState& state) {
                         });
                     state.explorers[index].set_selection_changed_callback(
                         [&state, index]() { refresh_status_bar(state, index); });
+                    apply_pane_view_mode(state, index);
                 } catch (...) {
                     return E_OUTOFMEMORY;
                 }
@@ -1614,6 +1673,8 @@ HRESULT apply_layout(HWND window, AppState& state) {
             ShowWindow(state.back_buttons[index], SW_HIDE);
             ShowWindow(state.forward_buttons[index], SW_HIDE);
             ShowWindow(state.up_buttons[index], SW_HIDE);
+            ShowWindow(state.refresh_buttons[index], SW_HIDE);
+            ShowWindow(state.view_mode_buttons[index], SW_HIDE);
             ShowWindow(state.address_bars[index], SW_HIDE);
             ShowWindow(state.status_bars[index], SW_HIDE);
         }
@@ -1967,6 +2028,30 @@ void navigate_up(AppState& state, std::size_t pane_index) {
     if (!has_active_group(state) ||
         pane_index >= active_group(state).panes.size()) return;
     state.explorers[pane_index].navigate_up();
+}
+
+void refresh_pane(AppState& state, std::size_t pane_index) {
+    if (!has_active_group(state) || pane_index >= active_group(state).panes.size())
+        return;
+    (void)state.explorers[pane_index].refresh();
+}
+
+void cycle_view_mode(AppState& state, std::size_t pane_index) {
+    if (!has_active_group(state) || pane_index >= active_group(state).panes.size())
+        return;
+    constexpr std::array<FOLDERVIEWMODE, 4> modes{
+        FVM_ICON, FVM_SMALLICON, FVM_LIST, FVM_DETAILS};
+    FOLDERVIEWMODE current{};
+    if (FAILED(state.explorers[pane_index].get_view_mode(current))) return;
+    const auto found = std::find(modes.begin(), modes.end(), current);
+    const std::size_t next = found == modes.end()
+                                 ? 0
+                                 : (static_cast<std::size_t>(found - modes.begin()) + 1) % modes.size();
+    if (SUCCEEDED(state.explorers[pane_index].set_view_mode(modes[next]))) {
+        active_tab(active_group(state).panes[pane_index]).view_mode =
+            view_mode_name(modes[next]);
+        save_now(state);
+    }
 }
 
 void submit_address(AppState& state, std::size_t pane_index) {
@@ -2538,14 +2623,18 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                              reinterpret_cast<WPARAM>(
                                  GetStockObject(DEFAULT_GUI_FONT)),
                              TRUE);
-                const std::array<const wchar_t*, 3> labels{L"<", L">", L"Up"};
-                const std::array<int, 3> ids{
+                const std::array<const wchar_t*, 5> labels{
+                    L"<", L">", L"Up", L"Refresh", L"View"};
+                const std::array<int, 5> ids{
                     kBackButtonIdBase + static_cast<int>(index),
                     kForwardButtonIdBase + static_cast<int>(index),
-                    kUpButtonIdBase + static_cast<int>(index)};
-                const std::array<HWND*, 3> destinations{
-                    &state->back_buttons[index],
-                    &state->forward_buttons[index], &state->up_buttons[index]};
+                    kUpButtonIdBase + static_cast<int>(index),
+                    kRefreshButtonIdBase + static_cast<int>(index),
+                    kViewModeButtonIdBase + static_cast<int>(index)};
+                const std::array<HWND*, 5> destinations{
+                    &state->back_buttons[index], &state->forward_buttons[index],
+                    &state->up_buttons[index], &state->refresh_buttons[index],
+                    &state->view_mode_buttons[index]};
                 for (std::size_t button = 0; button < labels.size(); ++button) {
                     *destinations[button] = CreateWindowExW(
                         0, L"BUTTON", labels[button],
@@ -2705,6 +2794,20 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     item->CtlID <
                         kUpButtonIdBase + static_cast<int>(kExplorerCount)) {
                     draw_navigation_icon_button(*item, 2);
+                    return TRUE;
+                }
+                if (item != nullptr && item->CtlType == ODT_BUTTON &&
+                    item->CtlID >= kRefreshButtonIdBase &&
+                    item->CtlID < kRefreshButtonIdBase +
+                                      static_cast<int>(kExplorerCount)) {
+                    draw_navigation_icon_button(*item, 3);
+                    return TRUE;
+                }
+                if (item != nullptr && item->CtlType == ODT_BUTTON &&
+                    item->CtlID >= kViewModeButtonIdBase &&
+                    item->CtlID < kViewModeButtonIdBase +
+                                      static_cast<int>(kExplorerCount)) {
+                    draw_navigation_icon_button(*item, 4);
                     return TRUE;
                 }
                 if (item != nullptr && item->CtlType == ODT_BUTTON) {
@@ -2883,6 +2986,18 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     id < kUpButtonIdBase + static_cast<int>(kExplorerCount)) {
                     navigate_up(*state,
                                 static_cast<std::size_t>(id - kUpButtonIdBase));
+                    return 0;
+                }
+                if (id >= kRefreshButtonIdBase &&
+                    id < kRefreshButtonIdBase + static_cast<int>(kExplorerCount)) {
+                    refresh_pane(*state, static_cast<std::size_t>(
+                                             id - kRefreshButtonIdBase));
+                    return 0;
+                }
+                if (id >= kViewModeButtonIdBase &&
+                    id < kViewModeButtonIdBase + static_cast<int>(kExplorerCount)) {
+                    cycle_view_mode(*state, static_cast<std::size_t>(
+                                             id - kViewModeButtonIdBase));
                     return 0;
                 }
                 if (id >= kLayoutButtonIdBase &&

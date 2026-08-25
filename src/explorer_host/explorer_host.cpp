@@ -372,6 +372,30 @@ HRESULT ExplorerHost::navigate(std::wstring_view location) {
     return S_OK;
 }
 
+HRESULT ExplorerHost::refresh() {
+    return navigate(location_);
+}
+
+HRESULT ExplorerHost::set_view_mode(FOLDERVIEWMODE mode) noexcept {
+    if (browser_ == nullptr) return E_UNEXPECTED;
+    Microsoft::WRL::ComPtr<IFolderView2> folder_view;
+    const HRESULT hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
+    if (FAILED(hr)) return hr;
+    return folder_view->SetCurrentViewMode(mode);
+}
+
+HRESULT ExplorerHost::get_view_mode(FOLDERVIEWMODE& mode) const noexcept {
+    mode = FVM_AUTO;
+    if (browser_ == nullptr) return E_UNEXPECTED;
+    Microsoft::WRL::ComPtr<IFolderView2> folder_view;
+    HRESULT hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
+    if (FAILED(hr)) return hr;
+    UINT value{};
+    hr = folder_view->GetCurrentViewMode(&value);
+    if (SUCCEEDED(hr)) mode = static_cast<FOLDERVIEWMODE>(value);
+    return hr;
+}
+
 HRESULT ExplorerHost::navigate_up() noexcept {
     if (!initialized_ || browser_ == nullptr) return E_UNEXPECTED;
     // BrowseToObject requires a non-null punk; BrowseToIDList is the

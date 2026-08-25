@@ -105,3 +105,13 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接
+
+#### 2026-08-25
+
+- `ExplorerHost` 新增 `HRESULT refresh()`、`HRESULT set_view_mode(FOLDERVIEWMODE) noexcept`、`HRESULT get_view_mode(FOLDERVIEWMODE&) const noexcept`；`refresh()` 直接以目前 `location_` 重用 `navigate()`。確認 `navigate()` 沒有位置相同短路，因此不需額外繞過邏輯。
+- `view_mode` 字串對應：`FVM_ICON` → `FVM_ICON`、`FVM_SMALLICON` → `FVM_SMALLICON`、`FVM_LIST` → `FVM_LIST`、`FVM_DETAILS` → `FVM_DETAILS`。導覽完成、初次 realize、存檔前會套用/捕獲；View 按鈕循環四種模式並立即 `save_now`。
+- 每個 pane 導覽列新增 refresh 與 View 按鈕，使用 `GetCurrentView(IID_PPV_ARGS(&folder_view))` 取得 `IFolderView2`，未重做 Shell view 渲染。
+- 驗證：`cmake` configure、`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 4/4 通過；Agent `rg` 與 `git diff --check` 通過。
+- 真實桌面操作未執行：本環境兩次 `tasklist` 均回報 `ERROR: Access denied`，沒有可可靠確認已解鎖的互動截圖/滑鼠驗證；因此未宣稱 refresh、四種模式與還原的實機結果。
