@@ -80,6 +80,10 @@
 | PD-040 | Pane 卡片四角圓角(覆寫 PD-030 決策:下緣維持方角) | 6 | `done` | PD-030, PD-033 | [PD-040](tickets/PD-040-pane-card-full-corner-rounding.md) |
 | PD-041 | 主視窗缺少 `WS_CLIPCHILDREN`,全視窗重繪蓋掉 pane 內容 | 6 | `done` | PD-038 | [PD-041](tickets/PD-041-main-window-missing-clipchildren.md) |
 | PD-042 | Pane 容器誤圓角化內部邊界頂端兩角,active 外框轉角瑕疵 | 6 | `done` | PD-040 | [PD-042](tickets/PD-042-pane-container-top-corner-seam.md) |
+| PD-043 | 導覽按鈕(上一頁/下一頁/上一層)改用 Windows Explorer 風格圖示 | 6 | `ready` | PD-031 | [PD-043](tickets/PD-043-navigation-button-explorer-style-icons.md) |
+| PD-044 | 網址列輸入時顯示子資料夾自動完成下拉選單 | 6 | `ready` | PD-020 | [PD-044](tickets/PD-044-address-bar-autocomplete.md) |
+| PD-045 | Active pane 下緣外框線被容器裁切,粗細與上緣不一致 | 6 | `ready` | PD-041, PD-042 | [PD-045](tickets/PD-045-pane-card-bottom-border-clipped.md) |
+| PD-046 | 版面配置按鈕群改為視覺相連的分段控制 | 6 | `ready` | PD-029, PD-039 | [PD-046](tickets/PD-046-layout-buttons-segmented-control.md) |
 
 ## Dependency lanes
 
@@ -268,3 +272,14 @@ PD-001 標為 `superseded`,文件不動,作為決策軌跡保留。原本依賴 
 - **PD-042**:PD-040 新增的 explorer container 的 `rect.top` 是「導覽列下緣」(內部邊界),不是 pane 最外層上緣,但 `apply_pane_container_region` 無條件把 container 四角都裁圓,導致頂端兩角(導覽列與內容區交界處)憑空多出圓角缺口,與沿著整個 pane 外緣繪製的 active 藍色外框對不齊,形成使用者說的「轉角處很奇怪」。修法是 container 只圓化下緣兩角(用 `CombineRgn`/`RGN_OR` 把頂端圓角區域補回直角),頂端維持直角。
 
 兩票都歸 Phase 6,依賴各自的前置票(PD-038、PD-040)。
+
+### 2026-08-25 — PD-041/042 完成後再次真人測試,開 PD-043~046
+
+使用者附截圖回報四項:導覽按鈕圖示太醜、網址列無自動完成、active pane 下緣框線比上緣細、版面配置按鈕應相連且需要 tooltip。逐一核對程式碼:
+
+- **PD-043**:`draw_navigation_icon_button` 目前是簡單手繪箭頭。改用 Common Controls 公開系統點陣圖 `IDB_HIST_SMALL_COLOR`(`HINST_COMMCTRL`)畫上一頁/下一頁,這正是檔案總管歷史記錄工具列用的同一組圖示,不是私有/不保證的資源索引。上一層沒有對應公開圖示,維持手繪但改善比例。
+- **PD-044**:改用 Win32 內建 `SHAutoComplete(edit, SHACF_FILESYS_DIRS)`,一行 API 掛到每個網址列 `EDIT` 控制項,不自製下拉選單。
+- **PD-045**:根因是 PD-041 修正 `WS_CLIPCHILDREN` 之後才顯現的既有幾何缺陷——`draw_pane_card` 的 `card` 矩形左/上/右三邊比 `pane_rect`(=PD-040 容器邊界)多留 `outset` 空隙,下緣沒有,導致下緣外框筆畫有一半路徑落在容器內部,`WS_CLIPCHILDREN` 生效後那一半被裁掉,只剩下半寬度可見。修法是下緣也比照三邊留 `outset`。
+- **PD-046**:5 個版面配置按鈕目前用固定 gap 分開排列,改為視覺相連的分段控制(共用圓角外框、細分隔線取代留白)。**同時查證 PD-039 的 tooltip 註冊程式碼確實存在**(`TTF_IDISHWND`/`TTM_ADDTOOLW`),但因為本專案一直沒有真人互動驗證能力,PD-039 當時只做到非互動煙霧測試——本票明確要求真人懸停驗證 tooltip 是否真的顯示,不能只憑程式碼審查判斷完成,若發現 bug 就地修正不另開票。
+
+四張都歸 Phase 6,依賴各自的前置票。
