@@ -47,6 +47,14 @@ constexpr int kTabStripHeight = 24;
 constexpr int kTabStripIdBase = 200;
 constexpr int kNavigationBarHeight = 28;
 constexpr int kNavigationButtonWidth = 32;
+// PD-031: rounded light-gray pill drawn behind the address bar EDIT to fake
+// a rounded input box (see docs/tickets/PD-031-*.md decision 2). Radius is
+// smaller than the design mock's 6px .location radius because the fixed
+// kNavigationBarHeight budget (28px@96dpi) does not leave much room for an
+// inset that must exceed the radius on every side while still leaving the
+// EDIT control tall enough to show text.
+constexpr int kAddressBarBackgroundRadius = 4;
+constexpr int kAddressBarInset = 6;
 constexpr int kBackButtonIdBase = 300;
 constexpr int kForwardButtonIdBase = 310;
 constexpr int kUpButtonIdBase = 320;
@@ -231,6 +239,49 @@ int scaled_value(HWND window, int value) noexcept {
                               96));
 }
 
+// PD-031: the navigation row's geometry (tab-strip height, back/forward/up
+// button width, and the rect the address bar background/EDIT occupy) is
+// needed both by apply_layout (to SetWindowPos the real child windows) and
+// by paint_client_background (to draw the rounded background behind the
+// EDIT). Factored into one function so the two call sites cannot drift out
+// of sync with each other (see PD-031 scope item 3).
+struct NavigationGeometry {
+    int navigation_top;
+    int navigation_height;
+    int button_width;
+    // Full-width rect the address bar occupies before EDIT is inset into it;
+    // this is also the rect the rounded background pill is painted into.
+    RECT address_background;
+};
+
+NavigationGeometry navigation_geometry(HWND window, RECT pane_rect) noexcept {
+    const int strip_height = scaled_value(window, kTabStripHeight);
+    const int actual_strip_height = std::min(
+        strip_height, static_cast<int>(pane_rect.bottom - pane_rect.top));
+    const int navigation_top = pane_rect.top + actual_strip_height;
+    const int navigation_height = std::min(
+        scaled_value(window, kNavigationBarHeight),
+        std::max(0, static_cast<int>(pane_rect.bottom) - navigation_top));
+    const int pane_width = pane_rect.right - pane_rect.left;
+    const int button_width = std::min(
+        scaled_value(window, kNavigationButtonWidth), pane_width / 4);
+    const int address_left = pane_rect.left + button_width * 3;
+    const RECT address_background{address_left, navigation_top,
+                                  pane_rect.right,
+                                  navigation_top + navigation_height};
+    return {navigation_top, navigation_height, button_width,
+            address_background};
+}
+
+// Insets a rect on all four sides by `inset`, clamping so it never inverts.
+RECT inset_rect(RECT rect, int inset) noexcept {
+    rect.left = std::min(rect.right, rect.left + inset);
+    rect.top = std::min(rect.bottom, rect.top + inset);
+    rect.right = std::max(rect.left, rect.right - inset);
+    rect.bottom = std::max(rect.top, rect.bottom - inset);
+    return rect;
+}
+
 void draw_layout_glyph(HDC dc, RECT rect, std::size_t index,
                        COLORREF color) noexcept {
     const int width = static_cast<int>(rect.right - rect.left);
@@ -311,6 +362,56 @@ void draw_layout_button(const DRAWITEMSTRUCT& item,
         }
     }
     draw_layout_glyph(item.hDC, item.rcItem, index, glyph);
+    if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
+}
+
+void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
+                                 std::size_t glyph_kind) noexcept {
+    // Back(0)/Forward(1)/Up(2) arrow glyphs for the owner-draw nav buttons
+    // (PD-031 decision 1). Drawn with plain MoveToEx/LineTo strokes, same
+    // technique as draw_layout_glyph — no Wingdings font, no image resource.
+    const bool disabled = (item.itemState & ODS_DISABLED) != 0;
+    const COLORREF color = disabled ? RGB(190, 197, 209) : RGB(90, 102, 122);
+    HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));
+    if (background != nullptr) {
+        FillRect(item.hDC, &item.rcItem, background);
+        DeleteObject(background);
+    }
+
+    const int width = static_cast<int>(item.rcItem.right - item.rcItem.left);
+    const int height = static_cast<int>(item.rcItem.bottom - item.rcItem.top);
+    const int size = std::max(4, std::min(width, height) / 2);
+    const int half = size / 2;
+    const int cx = item.rcItem.left + width / 2;
+    const int cy = item.rcItem.top + height / 2;
+
+    HPEN pen = CreatePen(PS_SOLID, std::max(1, size / 6), color);
+    if (pen != nullptr) {
+        const HGDIOBJ previous = SelectObject(item.hDC, pen);
+        switch (glyph_kind) {
+            case 0:  // back: <
+                MoveToEx(item.hDC, cx + half / 2, cy - half, nullptr);
+                LineTo(item.hDC, cx - half / 2, cy);
+                LineTo(item.hDC, cx + half / 2, cy + half);
+                break;
+            case 1:  // forward: >
+                MoveToEx(item.hDC, cx - half / 2, cy - half, nullptr);
+                LineTo(item.hDC, cx + half / 2, cy);
+                LineTo(item.hDC, cx - half / 2, cy + half);
+                break;
+            case 2:  // up: arrow pointing up
+                MoveToEx(item.hDC, cx, cy + half, nullptr);
+                LineTo(item.hDC, cx, cy - half);
+                MoveToEx(item.hDC, cx - half / 2, cy - half / 2, nullptr);
+                LineTo(item.hDC, cx, cy - half);
+                LineTo(item.hDC, cx + half / 2, cy - half / 2);
+                break;
+            default:
+                break;
+        }
+        SelectObject(item.hDC, previous);
+        DeleteObject(pen);
+    }
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
 }
 
@@ -910,6 +1011,46 @@ void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi) noexcept {
     }
 }
 
+// Same fill color as draw_navigation_bar_background's RoundRect, returned as
+// a cached HBRUSH for WM_CTLCOLOREDIT so the address bar's native background
+// matches the rounded pill painted underneath it (PD-031 decision 2). Kept
+// as a single process-lifetime brush per the ticket's suggested "static
+// brush freed at process lifetime" pattern; released in WM_DESTROY.
+HBRUSH address_bar_background_brush() noexcept {
+    static HBRUSH brush = CreateSolidBrush(RGB(251, 252, 253));
+    return brush;
+}
+
+void release_address_bar_background_brush() noexcept {
+    // The static above is a function-local singleton; DeleteObject is safe
+    // to call on it more than once only if we null it out, but WM_DESTROY
+    // fires exactly once per window, so a single delete here is sufficient.
+    HBRUSH brush = address_bar_background_brush();
+    if (brush != nullptr) DeleteObject(brush);
+}
+
+void draw_navigation_bar_background(HDC dc, RECT rect, UINT dpi) noexcept {
+    // Rounded light-gray pill drawn behind the address bar EDIT (PD-031
+    // decision 2). Colors/radius taken from the design mock's .location
+    // rule (background #fbfcfd, border #d9e1ea); radius reduced from the
+    // mock's 6px — see kAddressBarBackgroundRadius comment for why.
+    if (rect.right <= rect.left || rect.bottom <= rect.top) return;
+    const int radius = std::max(
+        1, MulDiv(kAddressBarBackgroundRadius, static_cast<int>(dpi), 96));
+    HBRUSH fill = CreateSolidBrush(RGB(251, 252, 253));
+    HPEN border = CreatePen(PS_SOLID, 1, RGB(217, 225, 234));
+    if (fill != nullptr && border != nullptr) {
+        const HGDIOBJ old_brush = SelectObject(dc, fill);
+        const HGDIOBJ old_pen = SelectObject(dc, border);
+        RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius,
+                  radius);
+        SelectObject(dc, old_brush);
+        SelectObject(dc, old_pen);
+    }
+    if (fill != nullptr) DeleteObject(fill);
+    if (border != nullptr) DeleteObject(border);
+}
+
 void paint_client_background(HWND window, HDC dc,
                              const AppState& state) noexcept {
     const RECT client = client_rect(window);
@@ -956,7 +1097,12 @@ void paint_client_background(HWND window, HDC dc,
         const std::size_t visible =
             std::min(group.panes.size(), rects.size());
         for (std::size_t index = 0; index < visible; ++index) {
-            draw_pane_card(dc, to_win32_rect(rects[index]), dpi);
+            const RECT pane_rect = to_win32_rect(rects[index]);
+            draw_pane_card(dc, pane_rect, dpi);
+            const NavigationGeometry geometry =
+                navigation_geometry(window, pane_rect);
+            draw_navigation_bar_background(dc, geometry.address_background,
+                                           dpi);
         }
     }
 }
@@ -1039,28 +1185,33 @@ HRESULT apply_layout(HWND window, AppState& state) {
                          SWP_NOZORDER | SWP_NOACTIVATE);
             ShowWindow(state.tab_strips[index], SW_SHOW);
 
-            const int navigation_top = pane_rect.top + actual_strip_height;
-            const int navigation_height = std::min(
-                scaled_value(window, kNavigationBarHeight),
-                std::max(0, static_cast<int>(pane_rect.bottom) -
-                                navigation_top));
-            const int pane_width = pane_rect.right - pane_rect.left;
-            const int button_width = std::min(
-                scaled_value(window, kNavigationButtonWidth), pane_width / 4);
+            const NavigationGeometry geometry =
+                navigation_geometry(window, pane_rect);
+            const int navigation_top = geometry.navigation_top;
+            const int navigation_height = geometry.navigation_height;
             const std::array<HWND, 3> buttons{
                 state.back_buttons[index], state.forward_buttons[index],
                 state.up_buttons[index]};
             int x = pane_rect.left;
             for (HWND button : buttons) {
-                SetWindowPos(button, nullptr, x, navigation_top, button_width,
-                             navigation_height,
+                SetWindowPos(button, nullptr, x, navigation_top,
+                             geometry.button_width, navigation_height,
                              SWP_NOZORDER | SWP_NOACTIVATE);
                 ShowWindow(button, SW_SHOW);
-                x += button_width;
+                x += geometry.button_width;
             }
-            SetWindowPos(state.address_bars[index], nullptr, x, navigation_top,
-                         std::max(0, static_cast<int>(pane_rect.right) - x),
-                         navigation_height,
+            // PD-031: EDIT is inset well inside the rounded background pill
+            // (drawn by draw_navigation_bar_background) so its square
+            // corners sit hidden under the pill's rounded corners — see
+            // kAddressBarInset's comment for why the inset exceeds the
+            // background's radius.
+            const RECT address_rect = inset_rect(
+                geometry.address_background,
+                scaled_value(window, kAddressBarInset));
+            SetWindowPos(state.address_bars[index], nullptr, address_rect.left,
+                         address_rect.top,
+                         address_rect.right - address_rect.left,
+                         address_rect.bottom - address_rect.top,
                          SWP_NOZORDER | SWP_NOACTIVATE);
             ShowWindow(state.address_bars[index], SW_SHOW);
 
@@ -1666,7 +1817,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 for (std::size_t button = 0; button < labels.size(); ++button) {
                     *destinations[button] = CreateWindowExW(
                         0, L"BUTTON", labels[button],
-                        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0,
+                        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON |
+                            BS_OWNERDRAW,
+                        0, 0, 0, 0,
                         window, reinterpret_cast<HMENU>(ids[button]),
                         GetModuleHandleW(nullptr), nullptr);
                     if (*destinations[button] == nullptr) return -1;
@@ -1676,7 +1829,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                  TRUE);
                 }
                 state->address_bars[index] = CreateWindowExW(
-                    WS_EX_CLIENTEDGE, L"EDIT", nullptr,
+                    0, L"EDIT", nullptr,
                     WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0,
                     window,
                     reinterpret_cast<HMENU>(kAddressBarIdBase +
@@ -1782,6 +1935,27 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     draw_more_actions_button(*item);
                     return TRUE;
                 }
+                if (item != nullptr && item->CtlType == ODT_BUTTON &&
+                    item->CtlID >= kBackButtonIdBase &&
+                    item->CtlID <
+                        kBackButtonIdBase + static_cast<int>(kExplorerCount)) {
+                    draw_navigation_icon_button(*item, 0);
+                    return TRUE;
+                }
+                if (item != nullptr && item->CtlType == ODT_BUTTON &&
+                    item->CtlID >= kForwardButtonIdBase &&
+                    item->CtlID < kForwardButtonIdBase +
+                                      static_cast<int>(kExplorerCount)) {
+                    draw_navigation_icon_button(*item, 1);
+                    return TRUE;
+                }
+                if (item != nullptr && item->CtlType == ODT_BUTTON &&
+                    item->CtlID >= kUpButtonIdBase &&
+                    item->CtlID <
+                        kUpButtonIdBase + static_cast<int>(kExplorerCount)) {
+                    draw_navigation_icon_button(*item, 2);
+                    return TRUE;
+                }
                 if (item != nullptr && item->CtlType == ODT_BUTTON) {
                     const auto found = std::find(
                         kButtonIds.begin(), kButtonIds.end(),
@@ -1833,6 +2007,21 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     SetTextCharacterExtra(dc, scaled_value(window, 1));
                     return reinterpret_cast<LRESULT>(
                         GetSysColorBrush(COLOR_WINDOW));
+                }
+            }
+            break;
+        case WM_CTLCOLOREDIT:
+            if (state != nullptr) {
+                const HWND control = reinterpret_cast<HWND>(lparam);
+                if (std::find(state->address_bars.begin(),
+                              state->address_bars.end(),
+                              control) != state->address_bars.end()) {
+                    const HDC dc = reinterpret_cast<HDC>(wparam);
+                    SetBkMode(dc, OPAQUE);
+                    SetBkColor(dc, RGB(251, 252, 253));
+                    SetTextColor(dc, RGB(76, 89, 107));
+                    return reinterpret_cast<LRESULT>(
+                        address_bar_background_brush());
                 }
             }
             break;
@@ -2053,6 +2242,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         case WM_DESTROY:
             UnregisterHotKey(window, kLayoutToggleHotkeyId);
+            release_address_bar_background_brush();
             PostQuitMessage(0);
             return 0;
         case WM_QUERYENDSESSION:
