@@ -52,14 +52,11 @@ constexpr int kPaneDividerThickness = 8;
 constexpr int kSidebarHeadingHeight = 20;
 constexpr int kTabStripHeight = 24;
 constexpr int kTabStripIdBase = 200;
-// PD-037: Chrome-style dynamic tab width. Available strip width (minus one
-// kTabMinWidth reserved for the "+" add-tab item, which shares whatever
-// uniform width TCM_SETITEMSIZE ends up applying) is divided by the tab
-// count and clamped to this range, so a few tabs sit at the readable max
-// instead of stretching to fill the strip, and many tabs shrink to the
-// native-scrollable min instead of becoming unreadable slivers.
+constexpr UINT kTabStripSelectionMessage = WM_APP + 49;
+// PD-049: content-sized tabs with a fixed add button at the right edge.
 constexpr int kTabMinWidth = 72;
 constexpr int kTabMaxWidth = 200;
+constexpr int kTabAddButtonWidth = 36;
 constexpr int kNavigationBarHeight = 28;
 constexpr int kStatusBarHeight = 24;
 constexpr int kNavigationButtonWidth = 32;
@@ -320,7 +317,13 @@ struct AppState {
     HWND more_actions_button{nullptr};
     HWND layout_tooltip{nullptr};
     HWND empty_message{nullptr};
+    struct TabVisual final {
+        std::wstring text;
+        RECT rect{};
+    };
     std::array<HWND, kExplorerCount> tab_strips{};
+    std::array<std::vector<TabVisual>, kExplorerCount> tab_visuals{};
+    std::array<RECT, kExplorerCount> tab_add_rects{};
     // PD-040: one clipping container child window per pane, sitting between
     // the main window and each ExplorerHost's IExplorerBrowser view. Only
     // this container's HWND gets SetWindowRgn'd for full-corner rounding —
@@ -1027,57 +1030,66 @@ std::wstring tab_display_text(const panedock::core::TabState& tab) {
     return parsing_name.substr(separator + 1);
 }
 
-// Recomputes the uniform per-tab width for `strip` from its current client
-// width and `tab_count`, then applies it via TCM_SETITEMSIZE. Must be called
-// whenever the strip is resized (apply_layout) or its tab count changes
-// (refresh_tab_strip), since neither the width nor the count alone predicts
-// the other.
-void apply_tab_item_size(HWND strip, std::size_t tab_count) {
+void apply_tab_item_size(AppState& state, std::size_t pane_index) {
+    if (pane_index >= state.tab_strips.size()) return;
+    const HWND strip = state.tab_strips[pane_index];
     RECT client{};
     GetClientRect(strip, &client);
     const int min_width = scaled_value(strip, kTabMinWidth);
     const int max_width = scaled_value(strip, kTabMaxWidth);
-    // The "+" add-tab item reserves one kTabMinWidth slot; TCM_SETITEMSIZE
-    // cannot give it a different width than the real tabs (decision 3), so
-    // this is only used to size the division below.
-    const int available = std::max(
-        0, static_cast<int>(client.right - client.left) - min_width);
-    const std::size_t count = std::max<std::size_t>(1, tab_count);
-    const int per_tab = static_cast<int>(available) / static_cast<int>(count);
-    const int width = std::clamp(per_tab, min_width, max_width);
-    SendMessageW(strip, TCM_SETITEMSIZE, 0,
-                 MAKELPARAM(width, scaled_value(strip, kTabStripHeight)));
+    const int add_width = scaled_value(strip, kTabAddButtonWidth);
+    const int available = std::max(0, static_cast<int>(client.right) - add_width);
+    auto& visuals = state.tab_visuals[pane_index];
+    std::vector<int> widths;
+    widths.reserve(visuals.size());
+    HDC dc = GetDC(strip);
+    HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    HGDIOBJ previous = dc == nullptr ? nullptr : SelectObject(dc, font);
+    for (const auto& visual : visuals) {
+        SIZE size{};
+        if (dc != nullptr)
+            GetTextExtentPoint32W(dc, visual.text.c_str(),
+                                  static_cast<int>(visual.text.size()), &size);
+        widths.push_back(std::clamp(static_cast<int>(size.cx) +
+                                        scaled_value(strip, 24),
+                                    min_width, max_width));
+    }
+    if (dc != nullptr) {
+        SelectObject(dc, previous);
+        ReleaseDC(strip, dc);
+    }
+    const int total = std::accumulate(widths.begin(), widths.end(), 0);
+    if (total > available && total > 0) {
+        for (int& width : widths)
+            width = std::max(min_width, MulDiv(width, available, total));
+    }
+    int x = 0;
+    for (std::size_t index = 0; index < visuals.size(); ++index) {
+        const int width = widths[index];
+        visuals[index].rect = {x, 0, std::min(x + width, available),
+                               client.bottom};
+        x += width;
+    }
+    state.tab_add_rects[pane_index] = {
+        std::max(0, static_cast<int>(client.right) - add_width), 0,
+        client.right, client.bottom};
+    InvalidateRect(strip, nullptr, FALSE);
 }
 
 void refresh_tab_strip(AppState& state, std::size_t pane_index) {
     if (pane_index >= state.tab_strips.size()) return;
-    const HWND strip = state.tab_strips[pane_index];
-    SendMessageW(strip, TCM_DELETEALLITEMS, 0, 0);
+    state.tab_visuals[pane_index].clear();
     if (!has_active_group(state) ||
         pane_index >= active_group(state).panes.size()) {
+        apply_tab_item_size(state, pane_index);
         refresh_navigation_chrome(state, pane_index);
         return;
     }
 
     const auto& pane = active_group(state).panes[pane_index];
-    apply_tab_item_size(strip, pane.tabs.size());
-    std::size_t active_index = 0;
-    for (std::size_t index = 0; index < pane.tabs.size(); ++index) {
-        std::wstring text = tab_display_text(pane.tabs[index]);
-        TCITEMW item{};
-        item.mask = TCIF_TEXT;
-        item.pszText = text.data();
-        SendMessageW(strip, TCM_INSERTITEMW, index,
-                     reinterpret_cast<LPARAM>(&item));
-        if (pane.tabs[index].id == pane.active_tab_id) active_index = index;
-    }
-    wchar_t plus[] = L"+";
-    TCITEMW add_item{};
-    add_item.mask = TCIF_TEXT;
-    add_item.pszText = plus;
-    SendMessageW(strip, TCM_INSERTITEMW, pane.tabs.size(),
-                 reinterpret_cast<LPARAM>(&add_item));
-    SendMessageW(strip, TCM_SETCURSEL, active_index, 0);
+    for (const auto& tab : pane.tabs)
+        state.tab_visuals[pane_index].push_back({tab_display_text(tab), {}});
+    apply_tab_item_size(state, pane_index);
     refresh_navigation_chrome(state, pane_index);
 }
 
@@ -1574,8 +1586,7 @@ HRESULT apply_layout(HWND window, AppState& state) {
                          actual_strip_height,
                          SWP_NOZORDER | SWP_NOACTIVATE);
             ShowWindow(state.tab_strips[index], SW_SHOW);
-            apply_tab_item_size(state.tab_strips[index],
-                                 group.panes[index].tabs.size());
+            apply_tab_item_size(state, index);
 
             const NavigationGeometry geometry =
                 navigation_geometry(window, pane_rect);
@@ -1916,6 +1927,9 @@ void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
     save_now(state);
 }
 
+std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
+                                             POINT point) noexcept;
+
 bool register_tab_drag_hover_targets(HWND window, AppState& state) {
     for (std::size_t pane_index = 0;
          pane_index < state.tab_strips.size(); ++pane_index) {
@@ -1927,14 +1941,7 @@ bool register_tab_drag_hover_targets(HWND window, AppState& state) {
                 return std::nullopt;
             POINT client = screen;
             ScreenToClient(strip, &client);
-            TCHITTESTINFO hit{};
-            hit.pt = client;
-            const LRESULT item = SendMessageW(
-                strip, TCM_HITTEST, 0, reinterpret_cast<LPARAM>(&hit));
-            const auto& tabs = active_group(state).panes[pane_index].tabs;
-            if (item < 0 || static_cast<std::size_t>(item) >= tabs.size())
-                return std::nullopt;
-            return static_cast<std::size_t>(item);
+            return tab_item_at_point(state, strip, client);
         };
         auto hover_callback = [&state, window,
                                pane_index](std::size_t item) {
@@ -2195,14 +2202,13 @@ void close_tab_at_point(HWND window, AppState& state, POINT point) {
     const std::size_t pane_index = pane_at_point(window, state, point);
     if (pane_index >= state.tab_strips.size() ||
         pane_index >= active_group(state).panes.size()) return;
-    TCHITTESTINFO hit{};
-    hit.pt = point;
-    MapWindowPoints(window, state.tab_strips[pane_index], &hit.pt, 1);
-    const LRESULT item = SendMessageW(state.tab_strips[pane_index], TCM_HITTEST,
-                                      0, reinterpret_cast<LPARAM>(&hit));
+    POINT client = point;
+    MapWindowPoints(window, state.tab_strips[pane_index], &client, 1);
+    const auto item = tab_item_at_point(
+        state, state.tab_strips[pane_index], client);
     const auto& tabs = active_group(state).panes[pane_index].tabs;
-    if (item < 0 || static_cast<std::size_t>(item) >= tabs.size()) return;
-    const std::string id = tabs[static_cast<std::size_t>(item)].id;
+    if (!item.has_value() || *item >= tabs.size()) return;
+    const std::string id = tabs[*item].id;
     close_tab_in_pane(window, state, pane_index, id);
 }
 
@@ -2213,14 +2219,10 @@ std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
         *pane_index >= active_group(state).panes.size()) {
         return std::nullopt;
     }
-    TCHITTESTINFO hit{};
-    hit.pt = point;
-    const LRESULT item = SendMessageW(strip, TCM_HITTEST, 0,
-                                      reinterpret_cast<LPARAM>(&hit));
-    const auto& tabs = active_group(state).panes[*pane_index].tabs;
-    if (item < 0 || static_cast<std::size_t>(item) >= tabs.size())
-        return std::nullopt;
-    return static_cast<std::size_t>(item);
+    const auto& visuals = state.tab_visuals[*pane_index];
+    for (std::size_t index = 0; index < visuals.size(); ++index)
+        if (PtInRect(&visuals[index].rect, point)) return index;
+    return std::nullopt;
 }
 
 void draw_tab_insertion_indicator(const DRAWITEMSTRUCT& item,
@@ -2307,38 +2309,72 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
     InvalidateRect(strip, nullptr, FALSE);
 }
 
+void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
+                     HDC dc) noexcept {
+    RECT client{};
+    GetClientRect(window, &client);
+    FillRect(dc, &client, GetSysColorBrush(COLOR_WINDOW));
+    if (!has_active_group(state) ||
+        pane_index >= active_group(state).panes.size()) return;
+    const auto& pane = active_group(state).panes[pane_index];
+    const auto& visuals = state.tab_visuals[pane_index];
+    const int inset = scaled_value(window, 4);
+    for (std::size_t index = 0; index < visuals.size(); ++index) {
+        RECT rect = visuals[index].rect;
+        InflateRect(&rect, -inset, -inset);
+        const bool active = pane.tabs[index].id == pane.active_tab_id;
+        HBRUSH fill = CreateSolidBrush(active ? RGB(226, 232, 240)
+                                              : RGB(244, 246, 248));
+        if (fill != nullptr) {
+            FillRect(dc, &rect, fill);
+            DeleteObject(fill);
+        }
+        FrameRect(dc, &rect, GetSysColorBrush(COLOR_ACTIVEBORDER));
+        RECT text_rect = rect;
+        text_rect.left += inset;
+        text_rect.right -= inset;
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(31, 41, 55));
+        DrawTextW(dc, visuals[index].text.c_str(), -1, &text_rect,
+                  DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+    RECT add = state.tab_add_rects[pane_index];
+    const int add_inset = scaled_value(window, 5);
+    InflateRect(&add, -add_inset, -add_inset);
+    SetTextColor(dc, RGB(31, 41, 55));
+    DrawTextW(dc, L"+", 1, &add,
+              DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
+}
+
 LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                                 LPARAM lparam, UINT_PTR pane_index,
                                 DWORD_PTR reference_data) {
     auto* state = reinterpret_cast<AppState*>(reference_data);
-    if (message == WM_LBUTTONDOWN && state != nullptr &&
-        pane_index < state->tab_strips.size()) {
-        const POINT point = point_from_lparam(lparam);
-        std::optional<AppState::TabDrag> pending;
-        const auto item = tab_item_at_point(*state, window, point);
-        if (item.has_value() && has_active_group(*state) &&
+    if (state != nullptr && pane_index < state->tab_strips.size()) {
+        if (message == WM_PAINT) {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(window, &paint);
+            paint_tab_strip(window, *state, pane_index, dc);
+            EndPaint(window, &paint);
+            return 0;
+        }
+        if (message == WM_ERASEBKGND) return 1;
+        if (message == WM_LBUTTONDOWN && has_active_group(*state) &&
             pane_index < active_group(*state).panes.size()) {
-            const auto& pane = active_group(*state).panes[pane_index];
-            pending = AppState::TabDrag{window, pane_index, *item,
-                                        pane.tabs[*item].id, point, false,
-                                        std::nullopt};
+            const POINT point = point_from_lparam(lparam);
+            const auto item = tab_item_at_point(*state, window, point);
+            if (item.has_value()) {
+                SendMessageW(GetParent(window), kTabStripSelectionMessage,
+                             static_cast<WPARAM>(pane_index),
+                             static_cast<LPARAM>(*item));
+            } else if (PtInRect(&state->tab_add_rects[pane_index], point)) {
+                SendMessageW(GetParent(window), kTabStripSelectionMessage,
+                             static_cast<WPARAM>(pane_index), -1);
+            }
+            return 0;
         }
-        const LRESULT result = DefSubclassProc(window, message, wparam, lparam);
-        if (pending.has_value() && !state->tab_drag.has_value()) {
-            state->tab_drag = std::move(*pending);
-            SetCapture(window);
-        }
-        return result;
-    }
-    if (message == WM_MOUSEMOVE && state != nullptr) {
-        update_tab_drag(*state, window, wparam, lparam);
-    } else if (message == WM_LBUTTONUP && state != nullptr) {
-        finish_tab_drag(*state, window);
-    } else if (message == WM_CAPTURECHANGED && state != nullptr) {
-        cancel_tab_drag(*state, window);
-    } else if (message == WM_NCDESTROY && state != nullptr) {
-        cancel_tab_drag(*state, window);
-        RemoveWindowSubclass(window, tab_strip_proc, pane_index);
+        if (message == WM_NCDESTROY)
+            RemoveWindowSubclass(window, tab_strip_proc, pane_index);
     }
     return DefSubclassProc(window, message, wparam, lparam);
 }
@@ -2607,9 +2643,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     0, window, nullptr, GetModuleHandleW(nullptr), nullptr);
                 if (state->explorer_containers[index] == nullptr) return -1;
                 state->tab_strips[index] = CreateWindowExW(
-                    0, WC_TABCONTROLW, nullptr,
-                    WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP |
-                        TCS_OWNERDRAWFIXED,
+                    0, L"STATIC", nullptr,
+                    WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP,
                     0, 0, 0, 0, window,
                     reinterpret_cast<HMENU>(kTabStripIdBase +
                                              static_cast<int>(index)),
@@ -2709,28 +2744,20 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             return 0;
         }
-        case WM_NOTIFY:
-            if (state != nullptr) {
-                const auto* header = reinterpret_cast<const NMHDR*>(lparam);
-                const auto pane_index =
-                    tab_strip_index(*state, header->hwndFrom);
-                if (pane_index.has_value() && header->code == TCN_SELCHANGE &&
-                    has_active_group(*state) &&
-                    *pane_index < active_group(*state).panes.size()) {
-                    const LRESULT selected = SendMessageW(
-                        state->tab_strips[*pane_index], TCM_GETCURSEL, 0, 0);
-                    auto& pane = active_group(*state).panes[*pane_index];
-                    if (selected == static_cast<LRESULT>(pane.tabs.size())) {
-                        add_tab_to_pane(window, *state, *pane_index);
-                    } else if (selected >= 0 &&
-                               static_cast<std::size_t>(selected) <
-                                   pane.tabs.size()) {
-                        const std::string id =
-                            pane.tabs[static_cast<std::size_t>(selected)].id;
-                        switch_active_tab(window, *state, *pane_index, id);
-                    }
-                    return 0;
+        case kTabStripSelectionMessage:
+            if (state != nullptr && has_active_group(*state) &&
+                wparam < state->tab_strips.size() &&
+                wparam < active_group(*state).panes.size()) {
+                auto& pane = active_group(*state).panes[wparam];
+                if (lparam == -1) {
+                    add_tab_to_pane(window, *state, wparam);
+                } else if (lparam >= 0 &&
+                           static_cast<std::size_t>(lparam) < pane.tabs.size()) {
+                    switch_active_tab(window, *state, wparam,
+                                      pane.tabs[static_cast<std::size_t>(lparam)]
+                                          .id);
                 }
+                return 0;
             }
             break;
         case WM_MEASUREITEM:

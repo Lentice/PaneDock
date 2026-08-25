@@ -108,3 +108,15 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接
+
+2026-08-25：已將 tab strip 改為 `WC_STATIC` 子視窗加 `SetWindowSubclass`，不新增自訂全域 `WNDCLASS`；subclass 以 `WM_PAINT` 使用 GDI 繪製，並在 `WM_LBUTTONDOWN` 透過 `WM_APP + 49` 將 pane index 與 tab index（`-1` 代表 `+`）送回主視窗。`AppState` 新增每個 pane 的 `std::vector<TabVisual>`（文字與顯示矩形）及固定右側的 `tab_add_rects`，既有 `tab_strips` HWND 陣列與 tab model 不變。
+
+寬度以 `GetTextExtentPoint32W` 量測每個 tab 文字，加上 padding 後夾在 `kTabMinWidth`/`kTabMaxWidth`；總寬超出「strip 寬度減固定 `+` 按鈕寬度」時按比例縮減，最後將超出可用區的 tab 矩形裁到 `+` 按鈕左側，讓 `+` 永遠靠右。`refresh_tab_strip` 重建 visuals，`apply_layout` 重新量測矩形。
+
+所有 `TCM_*`/`TCN_*` 選取、插入、刪除與 hit-test 呼叫已移除：選取與新增改由自繪 subclass 的訊息接回既有 `switch_active_tab`/`add_tab_to_pane`；中鍵關閉與 drag-hover hit-test 改用共用的 `TabVisual.rect` 命中測試。PD-035 拖曳排序尚未重接，預期因不再建立 drag capture 狀態而失效，留給 PD-050；PD-034 的 hover hit-test 已改用新矩形，但尚未做真實桌面互動確認。
+
+本次尚未能提供解鎖桌面的截圖或手動點擊結果；建置、測試與非互動 smoke check 的結果由本次交接後續補記。
+
+驗證補記：LLVM-MinGW/Ninja 建置成功，`ctest --test-dir build --output-on-failure` 的 4/4 測試通過，`rg` 與 `git diff --check` 通過。已啟動 `build\PaneDock.exe` 且程序回報 Responding；`CloseMainWindow` 已送出但 5 秒內未退出，後續 `taskkill /PID` 同樣回報 `Access denied`，因此未使用 `/F`。桌面互動截圖仍受目前 locked/access-denied 狀態限制。
