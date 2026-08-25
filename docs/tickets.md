@@ -83,7 +83,7 @@
 | PD-043 | 導覽按鈕(上一頁/下一頁/上一層)改用 Windows Explorer 風格圖示 | 6 | `done` | PD-031 | [PD-043](tickets/PD-043-navigation-button-explorer-style-icons.md) |
 | PD-044 | 網址列輸入時顯示子資料夾自動完成下拉選單 | 6 | `done` | PD-020 | [PD-044](tickets/PD-044-address-bar-autocomplete.md) |
 | PD-045 | Active pane 下緣外框線被容器裁切,粗細與上緣不一致 | 6 | `done` | PD-041, PD-042 | [PD-045](tickets/PD-045-pane-card-bottom-border-clipped.md) |
-| PD-046 | 版面配置按鈕群改為視覺相連的分段控制 | 6 | `ready` | PD-029, PD-039 | [PD-046](tickets/PD-046-layout-buttons-segmented-control.md) |
+| PD-046 | 版面配置按鈕群改為視覺相連的分段控制 | 6 | `done` | PD-029, PD-039 | [PD-046](tickets/PD-046-layout-buttons-segmented-control.md) |
 
 ## Dependency lanes
 

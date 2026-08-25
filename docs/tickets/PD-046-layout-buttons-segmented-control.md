@@ -87,3 +87,11 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接
+
+2026-08-25：完成版面配置按鈕的 segmented control 視覺。五個獨立按鈕以 1px 分隔線相連，群組共用 `RGB(251,252,253)` 圓角背景與 `kAddressBarBackgroundRadius` 的 DPI-scaled 外框；按鈕內容內縮 1px，保留 `BST_CHECKED` 的藍色選中態。more-actions 維持獨立按鈕與原本 4px 間距，沒有改動切換邏輯或 HWND 架構。
+
+Tooltip 註冊檢查：PD-039 的五個版面配置按鈕與 more-actions `TTF_IDISHWND | TTF_SUBCLASS` 註冊仍完整；本環境無法取得互動桌面控制能力，未能真人懸停觀察 tooltip，因此只完成程式碼與非互動 smoke/build/test 驗證，沒有宣稱真人驗收通過。
+
+非互動 smoke check 可成功啟動 `build\\PaneDock.exe` 並以 `taskkill /PID` 優雅關閉；CMake/Ninja build 與 4 個 ctest 全數通過。因互動能力不可用，未能比較實機畫面與 `docs/panedock-ui-prototype.html` 的視覺差異。

@@ -553,20 +553,40 @@ void draw_layout_button(const DRAWITEMSTRUCT& item,
                                ? RGB(148, 163, 184)
                                : checked ? RGB(37, 99, 235)
                                          : RGB(100, 116, 139);
+    RECT button = item.rcItem;
+    InflateRect(&button, -1, -1);
     HBRUSH fill = CreateSolidBrush(background);
     if (fill != nullptr) {
-        FillRect(item.hDC, &item.rcItem, fill);
+        FillRect(item.hDC, &button, fill);
         DeleteObject(fill);
     }
     if (checked) {
         HBRUSH border = CreateSolidBrush(RGB(207, 224, 255));
         if (border != nullptr) {
-            FrameRect(item.hDC, &item.rcItem, border);
+            FrameRect(item.hDC, &button, border);
             DeleteObject(border);
         }
     }
     draw_layout_glyph(item.hDC, item.rcItem, index, glyph);
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
+}
+
+void draw_layout_segment_background(HDC dc, RECT rect, UINT dpi) noexcept {
+    if (rect.right <= rect.left || rect.bottom <= rect.top) return;
+    const int radius = std::max(
+        1, MulDiv(kAddressBarBackgroundRadius, static_cast<int>(dpi), 96));
+    HBRUSH fill = CreateSolidBrush(RGB(251, 252, 253));
+    HPEN border = CreatePen(PS_SOLID, 1, RGB(217, 225, 234));
+    if (fill != nullptr && border != nullptr) {
+        const HGDIOBJ old_brush = SelectObject(dc, fill);
+        const HGDIOBJ old_pen = SelectObject(dc, border);
+        RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius,
+                  radius);
+        SelectObject(dc, old_pen);
+        SelectObject(dc, old_brush);
+    }
+    if (border != nullptr) DeleteObject(border);
+    if (fill != nullptr) DeleteObject(fill);
 }
 
 HIMAGELIST& navigation_history_image_list() noexcept {
@@ -1080,7 +1100,8 @@ void layout_header(HWND window, AppState& state) noexcept {
         static_cast<int>(client.right - client.left),
         scaled_value(window, panedock::sidebar::kSidebarWidth));
     const int margin = scaled_value(window, 12);
-    const int gap = scaled_value(window, 4);
+    const int segment_gap = scaled_value(window, 1);
+    const int more_actions_gap = scaled_value(window, 4);
     const int header_height = std::min(
         scaled_value(window, kLayoutBarHeight),
         std::max(0, static_cast<int>(client.bottom - client.top)));
@@ -1093,15 +1114,16 @@ void layout_header(HWND window, AppState& state) noexcept {
         static_cast<int>(kLayoutButtonIds.size()) + 1;
     const int available_width = std::max(
         0, static_cast<int>(client.right) - sidebar_width - 2 * margin -
-               kButtonSlotCount * gap);
+               (static_cast<int>(kLayoutButtonIds.size()) - 1) * segment_gap -
+               more_actions_gap);
     const int button_width = std::max(
         1, std::min(scaled_value(window, kLayoutButtonWidth),
                     available_width / kButtonSlotCount));
     const int more_actions_width = button_width;
-    const int total_width = kButtonSlotCount * gap +
-                            static_cast<int>(kLayoutButtonIds.size()) *
-                                button_width +
-                            more_actions_width;
+    const int total_width =
+        static_cast<int>(kLayoutButtonIds.size()) * button_width +
+        (static_cast<int>(kLayoutButtonIds.size()) - 1) * segment_gap +
+        more_actions_gap + more_actions_width;
     // Right-align the whole group; if the window is too narrow to fit it
     // with room to spare on the left of the sidebar, fall back to the
     // original left-aligned start position instead of overlapping it.
@@ -1115,9 +1137,10 @@ void layout_header(HWND window, AppState& state) noexcept {
                      button_width, button_height,
                      SWP_NOZORDER | SWP_NOACTIVATE);
         ShowWindow(button, SW_SHOW);
-        x += button_width + gap;
+        x += button_width + segment_gap;
     }
-    SetWindowPos(state.more_actions_button, nullptr, x,
+    SetWindowPos(state.more_actions_button, nullptr, x + more_actions_gap -
+                                                       segment_gap,
                  std::max(0, (header_height - button_height) / 2),
                  more_actions_width, button_height,
                  SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1379,6 +1402,20 @@ void paint_client_background(HWND window, HDC dc,
                 std::min(client.bottom,
                          client.top + scaled_value(window, kLayoutBarHeight))};
     FillRect(dc, &header, GetSysColorBrush(COLOR_WINDOW));
+
+    RECT layout_group{};
+    RECT last_layout_button{};
+    if (!state.layout_buttons.empty() &&
+        GetWindowRect(state.layout_buttons.front(), &layout_group) &&
+        GetWindowRect(state.layout_buttons.back(), &last_layout_button)) {
+        MapWindowPoints(nullptr, window,
+                        reinterpret_cast<POINT*>(&layout_group), 2);
+        MapWindowPoints(nullptr, window,
+                        reinterpret_cast<POINT*>(&last_layout_button), 2);
+        layout_group.right = last_layout_button.right;
+        draw_layout_segment_background(dc, layout_group,
+                                       GetDpiForWindow(window));
+    }
 
     RECT divider{header.left, header.bottom - scaled_value(window, 1),
                  header.right, header.bottom};
