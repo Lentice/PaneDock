@@ -84,3 +84,10 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接
+
+- 2026-08-25：新增 `resources/app.ico`，由 `resources/generate_app_icon.py` 使用本機 Pillow 以 4 倍超取樣繪製品牌藍圓角方塊、白色資料夾框與雙面板意象，再輸出 16x16、32x32、48x48、256x256 四種尺寸；腳本會重新讀取 ICO 並驗證四種尺寸存在。
+- 2026-08-25：新增 `resources/panedock.rc` 與 `resources/resource.h`，CMake 啟用 RC language 並把 `.rc` 加入 `PaneDock`；LLVM-MinGW `llvm-rc` 實際產生 `CMakeFiles/PaneDock.dir/resources/panedock.rc.res` 並成功連結。
+- 2026-08-25：主視窗類別設定 `hIcon`/`hIconSm`，`draw_brand_bar` 改以同一資源的 `LoadImageW` + `DrawIconEx` 繪製，移除手繪十字。建置後 smoke check 啟動 `PaneDock.exe` 且 `Responding=True`；目前環境的 `tasklist`/截圖路徑受權限或桌面狀態限制，未取得可交付的桌面截圖，故未宣稱完成像素級人工比對。
+- 驗證：CMake configure、`cmake --build build`、4/4 `ctest`、指定 `rg` 與 `git diff --check` 全部通過；未修改 `docs/tickets.md`，未 commit。

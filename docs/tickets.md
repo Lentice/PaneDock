@@ -91,7 +91,7 @@
 | PD-051 | 每個 pane 增加狀態列(項目數/選取數) | 7 | `ready` | PD-007, PD-030 | [PD-051](tickets/PD-051-pane-status-bar.md) |
 | PD-052 | Pane 增加 refresh 按鈕與檢視樣式切換按鈕,補上 `TabState::view_mode` 還原缺口 | 7 | `ready` | PD-020, PD-006 | [PD-052](tickets/PD-052-pane-refresh-and-view-mode-switcher.md) |
 | PD-053 | 側邊欄品牌列與 Group 清單之間的分隔線造成視覺割裂 | 6 | `done` | PD-028 | [PD-053](tickets/PD-053-sidebar-brand-divider-removal.md) |
-| PD-054 | 設計 App icon 並取代側邊欄品牌列的手繪「+」圖示 | 6 | `ready` | PD-028 | [PD-054](tickets/PD-054-app-icon-asset-and-brand-bar-wiring.md) |
+| PD-054 | 設計 App icon 並取代側邊欄品牌列的手繪「+」圖示 | 6 | `done` | PD-028 | [PD-054](tickets/PD-054-app-icon-asset-and-brand-bar-wiring.md) |
 
 ## Dependency lanes
 

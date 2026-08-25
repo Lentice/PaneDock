@@ -36,6 +36,7 @@
 #include "core/model.h"
 #include "core/session.h"
 #include "explorer_host/explorer_host.h"
+#include "resource.h"
 #include "sidebar/sidebar.h"
 
 namespace {
@@ -1182,32 +1183,13 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
                     rect.left + icon_margin + icon_size,
                     rect.top + ((rect.bottom - rect.top) - icon_size) / 2 +
                         icon_size};
-    HBRUSH icon_brush = CreateSolidBrush(RGB(37, 99, 235));
-    HPEN icon_pen = CreatePen(PS_SOLID, 1, RGB(37, 99, 235));
-    if (icon_brush != nullptr && icon_pen != nullptr) {
-        const HGDIOBJ old_brush = SelectObject(dc, icon_brush);
-        const HGDIOBJ old_pen = SelectObject(dc, icon_pen);
-        const int radius = scaled_value(window, 6);
-        RoundRect(dc, icon.left, icon.top, icon.right, icon.bottom, radius,
-                  radius);
-        SelectObject(dc, old_brush);
-        SelectObject(dc, old_pen);
-    }
-    if (icon_brush != nullptr) DeleteObject(icon_brush);
-    if (icon_pen != nullptr) DeleteObject(icon_pen);
-
-    const int glyph_inset = scaled_value(window, 6);
-    HPEN glyph_pen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
-    if (glyph_pen != nullptr) {
-        const HGDIOBJ old_pen = SelectObject(dc, glyph_pen);
-        const int mid_x = (icon.left + icon.right) / 2;
-        const int mid_y = (icon.top + icon.bottom) / 2;
-        MoveToEx(dc, mid_x, icon.top + glyph_inset, nullptr);
-        LineTo(dc, mid_x, icon.bottom - glyph_inset);
-        MoveToEx(dc, icon.left + glyph_inset, mid_y, nullptr);
-        LineTo(dc, icon.right - glyph_inset, mid_y);
-        SelectObject(dc, old_pen);
-        DeleteObject(glyph_pen);
+    const HICON app_icon = static_cast<HICON>(LoadImageW(
+        GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
+        icon_size, icon_size, LR_DEFAULTCOLOR));
+    if (app_icon != nullptr) {
+        DrawIconEx(dc, icon.left, icon.top, app_icon, icon_size, icon_size, 0,
+                   nullptr, DI_NORMAL);
+        DestroyIcon(app_icon);
     }
 
     RECT title{icon.right + scaled_value(window, 10), rect.top,
@@ -3026,6 +3008,8 @@ bool register_window_class(HINSTANCE instance) noexcept {
     window_class.cbSize = sizeof(window_class);
     window_class.hInstance = instance;
     window_class.lpfnWndProc = window_proc;
+    window_class.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
+    window_class.hIconSm = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     window_class.lpszClassName = kWindowClassName;

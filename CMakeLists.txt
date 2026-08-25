@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(PaneDock LANGUAGES CXX)
+project(PaneDock LANGUAGES CXX RC)
 
 include(CTest)
 
@@ -68,7 +68,11 @@ target_compile_definitions(panedock_sidebar PRIVATE
 target_link_libraries(panedock_sidebar PRIVATE user32 gdi32)
 panedock_set_warnings(panedock_sidebar)
 
-add_executable(PaneDock WIN32 src/app_shell/main.cpp)
+add_executable(PaneDock WIN32
+    src/app_shell/main.cpp
+    resources/panedock.rc
+)
+target_include_directories(PaneDock PRIVATE resources)
 target_compile_definitions(PaneDock PRIVATE
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
 )
