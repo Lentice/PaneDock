@@ -80,3 +80,15 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+#### 完成內容
+
+- `PaneDock` 原本已在根 `CMakeLists.txt` 的 `target_link_libraries(PaneDock PRIVATE ...)` 連結 `shlwapi`，因此不需修改建置設定。
+- `src/app_shell/main.cpp` 新增 `<shlwapi.h>`，並在每個網址列 `EDIT` 建立、`SetWindowSubclass` 成功後呼叫一次 `SHAutoComplete(state->address_bars[index], SHACF_FILESYS_DIRS)`。回傳值刻意忽略；失敗不影響手動輸入與導覽。
+- `wWinMain` 在 `CreateWindowExW` 前呼叫 `OleInitialize(nullptr)`，因此網址列建立時 COM 初始化順序符合本票決策。
+
+#### Agent checks
+
+- 未進行互動式桌面測試；本環境沒有可用的互動桌面觀察方式，因此未宣稱實際下拉選單視覺與鍵盤選取通過。

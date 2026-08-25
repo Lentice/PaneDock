@@ -27,6 +27,7 @@
 #include <ole2.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#include <shlwapi.h>
 #include <windowsx.h>
 #include <wrl/client.h>
 
@@ -2489,6 +2490,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                        address_edit_proc, index,
                                        reinterpret_cast<DWORD_PTR>(state)))
                     return -1;
+                (void)SHAutoComplete(state->address_bars[index],
+                                     SHACF_FILESYS_DIRS);
                 SendMessageW(state->address_bars[index], WM_SETFONT,
                              reinterpret_cast<WPARAM>(
                                  GetStockObject(DEFAULT_GUI_FONT)),
