@@ -569,13 +569,30 @@ void draw_layout_button(const DRAWITEMSTRUCT& item,
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
 }
 
+HIMAGELIST& navigation_history_image_list() noexcept {
+    static HIMAGELIST image_list = nullptr;
+    if (image_list == nullptr) {
+        image_list = ImageList_LoadImageW(
+            HINST_COMMCTRL, MAKEINTRESOURCEW(IDB_HIST_SMALL_COLOR), 16, 0,
+            CLR_DEFAULT, IMAGE_BITMAP, LR_DEFAULTCOLOR | LR_CREATEDIBSECTION);
+    }
+    return image_list;
+}
+
+void release_navigation_history_image_list() noexcept {
+    HIMAGELIST& image_list = navigation_history_image_list();
+    if (image_list != nullptr) {
+        ImageList_Destroy(image_list);
+        image_list = nullptr;
+    }
+}
+
 void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
                                  std::size_t glyph_kind) noexcept {
-    // Back(0)/Forward(1)/Up(2) arrow glyphs for the owner-draw nav buttons
-    // (PD-031 decision 1). Drawn with plain MoveToEx/LineTo strokes, same
-    // technique as draw_layout_glyph — no Wingdings font, no image resource.
+    // Back(0)/Forward(1) use the public Common Controls history bitmap.
+    // Up(2) has no public Explorer-style image, so it remains a small stroke
+    // glyph with the same visual weight.
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
-    const COLORREF color = disabled ? RGB(190, 197, 209) : RGB(90, 102, 122);
     HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));
     if (background != nullptr) {
         FillRect(item.hDC, &item.rcItem, background);
@@ -584,12 +601,32 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
 
     const int width = static_cast<int>(item.rcItem.right - item.rcItem.left);
     const int height = static_cast<int>(item.rcItem.bottom - item.rcItem.top);
-    const int size = std::max(4, std::min(width, height) / 2);
+    if (glyph_kind < 2) {
+        const HIMAGELIST image_list = navigation_history_image_list();
+        if (image_list != nullptr) {
+            const int icon_size = scaled_value(item.hwndItem, 16);
+            const int x = item.rcItem.left + (width - icon_size) / 2;
+            const int y = item.rcItem.top + (height - icon_size) / 2;
+            ImageList_DrawEx(image_list,
+                             glyph_kind == 0 ? HIST_BACK : HIST_FORWARD,
+                             item.hDC, x, y, icon_size, icon_size, CLR_NONE,
+                             CLR_NONE,
+                             disabled ? ILD_BLEND50 : ILD_TRANSPARENT);
+            if ((item.itemState & ODS_FOCUS) != 0)
+                DrawFocusRect(item.hDC, &item.rcItem);
+            return;
+        }
+    }
+
+    const COLORREF color = disabled ? RGB(190, 197, 209) : RGB(90, 102, 122);
+    // Keep Up at the same DPI-scaled visual size as the history bitmap rather
+    // than deriving a smaller glyph from the button's client rectangle.
+    const int size = std::max(4, scaled_value(item.hwndItem, 16));
     const int half = size / 2;
     const int cx = item.rcItem.left + width / 2;
     const int cy = item.rcItem.top + height / 2;
 
-    HPEN pen = CreatePen(PS_SOLID, std::max(1, size / 6), color);
+    HPEN pen = CreatePen(PS_SOLID, std::max(1, size / 8), color);
     if (pen != nullptr) {
         const HGDIOBJ previous = SelectObject(item.hDC, pen);
         switch (glyph_kind) {
@@ -2929,6 +2966,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_DESTROY:
             if (state != nullptr) revoke_drag_hover_targets(*state);
             UnregisterHotKey(window, kLayoutToggleHotkeyId);
+            release_navigation_history_image_list();
             release_address_bar_background_brush();
             PostQuitMessage(0);
             return 0;

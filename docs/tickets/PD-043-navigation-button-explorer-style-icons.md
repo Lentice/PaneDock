@@ -80,3 +80,10 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+- Back/Forward 使用 `ImageList_LoadImageW(HINST_COMMCTRL, MAKEINTRESOURCEW(IDB_HIST_SMALL_COLOR), 16, 0, CLR_DEFAULT, IMAGE_BITMAP, LR_DEFAULTCOLOR | LR_CREATEDIBSECTION)` 載入公開 Common Controls 歷史圖示，透過 `HIST_BACK`/`HIST_FORWARD` 索引與 `ImageList_DrawEx` 繪製；圖示尺寸以 `scaled_value(..., 16)` 依目前 DPI 縮放，停用狀態使用 `ILD_BLEND50`。
+- Image list 為 process-lifetime lazy cache，`ImageList_LoadImage` 建立的是應由呼叫端管理的 image list，故在 `WM_DESTROY` 呼叫 `ImageList_Destroy` 並清空 handle；載入失敗時 Back/Forward 保留原有手繪箭頭作為 fallback。
+- Up 維持手繪，沿用原本的向上箭頭比例與線寬計算，並與新圖示同樣使用白底及 enabled/disabled 顏色；按鈕位置、尺寸、點擊與啟用邏輯未改動。
+- 未進行互動式桌面驗證：目前環境無法可靠啟動並觀察 `PaneDock.exe` 視窗；已完成非互動 smoke check（建置、測試、`rg` 與 `git diff --check`），96/144/192 DPI 的圖示尺寸由 `MulDiv(16, dpi, 96)` 計算。
