@@ -84,6 +84,14 @@
 | PD-044 | 網址列輸入時顯示子資料夾自動完成下拉選單 | 6 | `done` | PD-020 | [PD-044](tickets/PD-044-address-bar-autocomplete.md) |
 | PD-045 | Active pane 下緣外框線被容器裁切,粗細與上緣不一致 | 6 | `done` | PD-041, PD-042 | [PD-045](tickets/PD-045-pane-card-bottom-border-clipped.md) |
 | PD-046 | 版面配置按鈕群改為視覺相連的分段控制 | 6 | `done` | PD-029, PD-039 | [PD-046](tickets/PD-046-layout-buttons-segmented-control.md) |
+| PD-047 | 版面配置按鈕的選中態高亮對比度不足 | 6 | `ready` | PD-046 | [PD-047](tickets/PD-047-layout-button-active-highlight-contrast.md) |
+| PD-048 | Pane 卡片外框/陰影顏色偏重,需調淡 | 6 | `ready` | PD-045 | [PD-048](tickets/PD-048-pane-card-border-shadow-lightening.md) |
+| PD-049 | Pane tab 條改為自繪控制項,取代原生 `SysTabControl32`(覆寫 PD-019 決策 1) | 6 | `ready` | PD-037, PD-030 | [PD-049](tickets/PD-049-custom-tab-strip-control.md) |
+| PD-050 | 在新自繪 tab 條上重接拖曳懸停自動切換與拖曳排序 | 7 | `ready` | PD-049, PD-034, PD-035 | [PD-050](tickets/PD-050-tab-drag-behaviors-on-custom-strip.md) |
+| PD-051 | 每個 pane 增加狀態列(項目數/選取數) | 7 | `ready` | PD-007, PD-030 | [PD-051](tickets/PD-051-pane-status-bar.md) |
+| PD-052 | Pane 增加 refresh 按鈕與檢視樣式切換按鈕,補上 `TabState::view_mode` 還原缺口 | 7 | `ready` | PD-020, PD-006 | [PD-052](tickets/PD-052-pane-refresh-and-view-mode-switcher.md) |
+| PD-053 | 側邊欄品牌列與 Group 清單之間的分隔線造成視覺割裂 | 6 | `ready` | PD-028 | [PD-053](tickets/PD-053-sidebar-brand-divider-removal.md) |
+| PD-054 | 設計 App icon 並取代側邊欄品牌列的手繪「+」圖示 | 6 | `ready` | PD-028 | [PD-054](tickets/PD-054-app-icon-asset-and-brand-bar-wiring.md) |
 
 ## Dependency lanes
 
@@ -281,5 +289,22 @@ PD-001 標為 `superseded`,文件不動,作為決策軌跡保留。原本依賴 
 - **PD-044**:改用 Win32 內建 `SHAutoComplete(edit, SHACF_FILESYS_DIRS)`,一行 API 掛到每個網址列 `EDIT` 控制項,不自製下拉選單。
 - **PD-045**:根因是 PD-041 修正 `WS_CLIPCHILDREN` 之後才顯現的既有幾何缺陷——`draw_pane_card` 的 `card` 矩形左/上/右三邊比 `pane_rect`(=PD-040 容器邊界)多留 `outset` 空隙,下緣沒有,導致下緣外框筆畫有一半路徑落在容器內部,`WS_CLIPCHILDREN` 生效後那一半被裁掉,只剩下半寬度可見。修法是下緣也比照三邊留 `outset`。
 - **PD-046**:5 個版面配置按鈕目前用固定 gap 分開排列,改為視覺相連的分段控制(共用圓角外框、細分隔線取代留白)。**同時查證 PD-039 的 tooltip 註冊程式碼確實存在**(`TTF_IDISHWND`/`TTM_ADDTOOLW`),但因為本專案一直沒有真人互動驗證能力,PD-039 當時只做到非互動煙霧測試——本票明確要求真人懸停驗證 tooltip 是否真的顯示,不能只憑程式碼審查判斷完成,若發現 bug 就地修正不另開票。
+
+### 2026-08-25 — 首次具備螢幕截圖與滑鼠操作驗證能力,對照目標 mockup 開 PD-047~054
+
+**環境能力更新:** 本次會話首次確認可以透過 PowerShell(`System.Windows.Forms`/`System.Drawing.Graphics.CopyFromScreen` 截圖、`user32.dll` `SetCursorPos`/`mouse_event` 模擬滑鼠)實際啟動 `build\PaneDock.exe` 並截圖、操作驗證,不再只有非互動 smoke check。這打破了先前每張 PD-0xx 票(PD-011 起)反覆記錄的「本環境無 Computer Use/互動桌面能力」限制——後續票的 Agent checks 應該要求實際截圖/操作驗證,而不是預設接受非互動驗證。
+
+使用者附目標畫面(`docs/panedock-ui-demo-01-refined-quiet-header.html`)與實機截圖,列出 8 項落差,逐一核對程式碼後開票:
+
+- **PD-047**:版面配置按鈕的選中態高亮(PD-046 已做,但對比度太弱)——`draw_layout_button` 選中態背景 `RGB(234,241,255)` 與未選中態 `RGB(248,250,252)` 太接近,改為深色實心填底+白色圖示。
+- **PD-048**:`draw_pane_card` 的 inactive 外框與陰影顏色偏重,調淡但不動粗細(PD-045 已修正粗細一致性)、不動 active pane 的藍色強調外框(PD-033 決策維持)。
+- **PD-049**:**覆寫 PD-019 決策 1**(tab 條使用原生 `SysTabControl32` 的理由)——`TCM_SETITEMSIZE` 只能設定統一寬度,無法逐一動態寬度(PD-037 已知限制);「+」新增按鈕也無法在原生控制項上獨立釘在右緣。改為自繪控制項。
+- **PD-050**:PD-049 換掉 `SysTabControl32` 後,PD-034(拖曳懸停自動切換)、PD-035(拖曳排序)依賴的 `TCM_HITTEST` 等訊息全部失效,依賴 PD-049 完成後另開票重接,避免單票工作量爆炸。
+- **PD-051**:每個 pane 增加狀態列(項目數/選取數),透過 `IExplorerBrowser::GetCurrentView(IID_PPV_ARGS(&folder_view))` 取得 `IFolderView2::ItemCount`,是本專案第一次接觸這個介面。
+- **PD-052**:發現 `docs/design-spec.md` FR-002/NFR-005 早已把 view mode 列為必要還原狀態、`core::TabState::view_mode` 欄位也早已存在並隨 session 序列化,但 `app_shell` 從未讀寫這個欄位——這不是新需求,是既有 spec 承諾與實作之間的靜默落差,本票補上 `IFolderView2::SetCurrentViewMode`/`GetCurrentViewMode` 與 refresh 按鈕。
+- **PD-053**:`draw_brand_bar` 的品牌列與側邊欄背景色其實已經一致(`RGB(251,252,254)`),割裂感純粹來自品牌列自己多畫的一條 1px 分隔線,刪掉即可。
+- **PD-054**:目前完全沒有 app icon 資產,側邊欄品牌列左上角是手繪圓角方塊+十字線條,不是任何 logo。委由 Codex 設計實際的 `.ico` 資產並接上視窗圖示與品牌列繪製。
+
+PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/052 各自獨立但都涉及 `IFolderView2`,可平行進行。
 
 四張都歸 Phase 6,依賴各自的前置票。
