@@ -10,20 +10,25 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
+#include <new>
 #include <numeric>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include <ole2.h>
 #include <shlobj.h>
 #include <shellapi.h>
 #include <windowsx.h>
+#include <wrl/client.h>
 
 #include "app_shell/diagnostic_mode.h"
 #include "core/layout.h"
@@ -87,6 +92,157 @@ constexpr std::array<panedock::core::LayoutTemplate, 5> kLayoutTemplates{
     panedock::core::LayoutTemplate::four_pane_grid};
 const std::array<std::wstring, kExplorerCount> kDefaultLocations{
     L"C:\\", L"C:\\Windows", L"C:\\Users", L"C:\\Program Files"};
+constexpr UINT kDragHoverDelayMilliseconds = 800;
+constexpr UINT_PTR kDragHoverSidebarTimerId = 0xD034;
+constexpr UINT_PTR kDragHoverTabTimerIdBase = 0xD040;
+
+class DragHoverTarget final : public IDropTarget {
+public:
+    using HitTest = std::function<std::optional<std::size_t>(POINT)>;
+    using HoverCallback = std::function<void(std::size_t)>;
+
+    DragHoverTarget(HWND timer_window, UINT_PTR timer_id, HitTest hit_test,
+                    HoverCallback hover_callback)
+        : timer_window_(timer_window),
+          timer_id_(timer_id),
+          hit_test_(std::move(hit_test)),
+          hover_callback_(std::move(hover_callback)) {}
+
+    DragHoverTarget(const DragHoverTarget&) = delete;
+    DragHoverTarget& operator=(const DragHoverTarget&) = delete;
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,
+                                              void** object) override {
+        if (object == nullptr) return E_POINTER;
+        *object = nullptr;
+        if (IsEqualIID(iid, IID_IUnknown) ||
+            IsEqualIID(iid, IID_IDropTarget)) {
+            *object = static_cast<IDropTarget*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return references_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining =
+            references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        if (remaining == 0) delete this;
+        return remaining;
+    }
+
+    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject*, DWORD, POINTL point,
+                                         DWORD* effect) override {
+        if (effect == nullptr) return E_INVALIDARG;
+        *effect = DROPEFFECT_NONE;
+        try {
+            update_hover({point.x, point.y});
+        } catch (...) {
+            cancel_hover();
+            return E_OUTOFMEMORY;
+        }
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE DragOver(DWORD, POINTL point,
+                                        DWORD* effect) override {
+        if (effect == nullptr) return E_INVALIDARG;
+        *effect = DROPEFFECT_NONE;
+        try {
+            update_hover({point.x, point.y});
+        } catch (...) {
+            cancel_hover();
+            return E_OUTOFMEMORY;
+        }
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE DragLeave() override {
+        cancel_hover();
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE Drop(IDataObject*, DWORD, POINTL,
+                                    DWORD* effect) override {
+        cancel_hover();
+        if (effect == nullptr) return E_INVALIDARG;
+        *effect = DROPEFFECT_NONE;
+        return S_OK;
+    }
+
+    void timer_expired() noexcept {
+        if (!hover_index_.has_value() || hover_triggered_ || invoking_)
+            return;
+        const std::size_t index = *hover_index_;
+        hover_triggered_ = true;
+        stop_timer();
+        invoking_ = true;
+        try {
+            hover_callback_(index);
+        } catch (...) {
+            OutputDebugStringW(L"PaneDock: drag hover callback failed\n");
+        }
+        invoking_ = false;
+    }
+
+private:
+    ~DragHoverTarget() { cancel_hover(); }
+
+    void stop_timer() noexcept {
+        if (!timer_running_) return;
+        KillTimer(timer_window_, timer_id_);
+        timer_running_ = false;
+    }
+
+    void cancel_hover() noexcept {
+        stop_timer();
+        hover_index_.reset();
+        hover_triggered_ = false;
+    }
+
+    void update_hover(POINT point) {
+        const auto hit = hit_test_(point);
+        if (!hit.has_value()) {
+            cancel_hover();
+            return;
+        }
+        if (hover_index_ == hit) return;
+
+        cancel_hover();
+        hover_index_ = hit;
+        if (SetTimer(timer_window_, timer_id_, kDragHoverDelayMilliseconds,
+                     nullptr) != 0) {
+            timer_running_ = true;
+        } else {
+            hover_index_.reset();
+        }
+    }
+
+    HWND timer_window_{};
+    UINT_PTR timer_id_{};
+    HitTest hit_test_;
+    HoverCallback hover_callback_;
+    std::atomic<ULONG> references_{1};
+    std::optional<std::size_t> hover_index_;
+    bool timer_running_{false};
+    bool hover_triggered_{false};
+    bool invoking_{false};
+};
+
+Microsoft::WRL::ComPtr<DragHoverTarget> make_drag_hover_target(
+    HWND timer_window, UINT_PTR timer_id, DragHoverTarget::HitTest hit_test,
+    DragHoverTarget::HoverCallback hover_callback) {
+    Microsoft::WRL::ComPtr<DragHoverTarget> target;
+    auto* raw = new (std::nothrow)
+        DragHoverTarget(timer_window, timer_id, std::move(hit_test),
+                        std::move(hover_callback));
+    if (raw != nullptr) target.Attach(raw);
+    return target;
+}
 
 void write_live_view_count() noexcept {
     const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -138,7 +294,21 @@ struct AppState {
     std::array<HWND, kExplorerCount> forward_buttons{};
     std::array<HWND, kExplorerCount> up_buttons{};
     std::array<bool, kExplorerCount> suppress_history_record{};
+    Microsoft::WRL::ComPtr<DragHoverTarget> sidebar_drag_target;
+    std::array<Microsoft::WRL::ComPtr<DragHoverTarget>, kExplorerCount>
+        tab_drag_targets{};
 };
+
+void revoke_drag_hover_targets(AppState& state) noexcept {
+    state.sidebar.revoke_drag_drop();
+    state.sidebar_drag_target.Reset();
+    for (std::size_t index = 0; index < state.tab_drag_targets.size();
+         ++index) {
+        if (state.tab_drag_targets[index] != nullptr)
+            RevokeDragDrop(state.tab_strips[index]);
+        state.tab_drag_targets[index].Reset();
+    }
+}
 
 std::optional<std::filesystem::path> session_directory() noexcept {
     PWSTR local_app_data = nullptr;
@@ -1337,6 +1507,29 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
     save_now(state);
 }
 
+Microsoft::WRL::ComPtr<DragHoverTarget> make_sidebar_drag_hover_target(
+    HWND window, AppState& state) {
+    auto hit_test = [&state](POINT screen) -> std::optional<std::size_t> {
+        const HWND list = state.sidebar.window();
+        if (list == nullptr) return std::nullopt;
+        POINT client = screen;
+        ScreenToClient(list, &client);
+        const LRESULT hit = SendMessageW(
+            list, LB_ITEMFROMPOINT, 0, MAKELPARAM(client.x, client.y));
+        const std::size_t index = static_cast<std::size_t>(LOWORD(hit));
+        if (HIWORD(hit) != 0 || index >= state.application.groups.size())
+            return std::nullopt;
+        return index;
+    };
+    auto hover_callback = [&state, window](std::size_t index) {
+        if (index < state.application.groups.size())
+            activate_group(window, state, index);
+    };
+    return make_drag_hover_target(window, kDragHoverSidebarTimerId,
+                                  std::move(hit_test),
+                                  std::move(hover_callback));
+}
+
 void add_group(HWND window, AppState& state) {
     const bool was_empty = state.application.groups.empty();
     const std::string id = unique_group_id(state.application);
@@ -1468,6 +1661,45 @@ void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
     }
     refresh_tab_strip(state, pane_index);
     save_now(state);
+}
+
+bool register_tab_drag_hover_targets(HWND window, AppState& state) {
+    for (std::size_t pane_index = 0;
+         pane_index < state.tab_strips.size(); ++pane_index) {
+        const HWND strip = state.tab_strips[pane_index];
+        auto hit_test = [&state, strip,
+                         pane_index](POINT screen) -> std::optional<std::size_t> {
+            if (!has_active_group(state) ||
+                pane_index >= active_group(state).panes.size())
+                return std::nullopt;
+            POINT client = screen;
+            ScreenToClient(strip, &client);
+            TCHITTESTINFO hit{};
+            hit.pt = client;
+            const LRESULT item = SendMessageW(
+                strip, TCM_HITTEST, 0, reinterpret_cast<LPARAM>(&hit));
+            const auto& tabs = active_group(state).panes[pane_index].tabs;
+            if (item < 0 || static_cast<std::size_t>(item) >= tabs.size())
+                return std::nullopt;
+            return static_cast<std::size_t>(item);
+        };
+        auto hover_callback = [&state, window,
+                               pane_index](std::size_t item) {
+            if (!has_active_group(state) ||
+                pane_index >= active_group(state).panes.size())
+                return;
+            auto& tabs = active_group(state).panes[pane_index].tabs;
+            if (item >= tabs.size()) return;
+            switch_active_tab(window, state, pane_index, tabs[item].id);
+        };
+        auto target = make_drag_hover_target(
+            window, kDragHoverTabTimerIdBase + pane_index,
+            std::move(hit_test), std::move(hover_callback));
+        if (target == nullptr || FAILED(RegisterDragDrop(strip, target.Get())))
+            return false;
+        state.tab_drag_targets[pane_index] = std::move(target);
+    }
+    return true;
 }
 
 void cycle_active_tab(HWND window, AppState& state, std::size_t pane_index,
@@ -1712,7 +1944,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_CREATE: {
             INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_TAB_CLASSES};
             if (!InitCommonControlsEx(&controls)) return -1;
-            if (!state->sidebar.create(window, kGroupListId)) return -1;
+            state->sidebar_drag_target =
+                make_sidebar_drag_hover_target(window, *state);
+            if (!state->sidebar.create(window, kGroupListId,
+                                       state->sidebar_drag_target.Get())) {
+                state->sidebar_drag_target.Reset();
+                return -1;
+            }
             state->group_label = CreateWindowExW(
                 0, L"STATIC", L"GROUPS",
                 WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE, 0, 0, 0, 0,
@@ -1838,6 +2076,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (FAILED(apply_layout(window, *state))) {
                 MessageBoxW(window, L"PaneDock could not open the Shell view.",
                             L"PaneDock", MB_ICONERROR | MB_OK);
+                revoke_drag_hover_targets(*state);
                 destroy_explorers(*state);
                 return -1;
             }
@@ -1846,11 +2085,19 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     active_pane_index(active_group(*state));
                 state->explorers[active].focus();
             }
+            if (!register_tab_drag_hover_targets(window, *state)) {
+                OutputDebugStringW(
+                    L"PaneDock: RegisterDragDrop for tab strip failed\n");
+                revoke_drag_hover_targets(*state);
+                destroy_explorers(*state);
+                return -1;
+            }
             if (!RegisterHotKey(window, kLayoutToggleHotkeyId,
                                 MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'L')) {
                 MessageBoxW(
                     window, L"PaneDock could not register its layout hotkey.",
                     L"PaneDock", MB_ICONERROR | MB_OK);
+                revoke_drag_hover_targets(*state);
                 destroy_explorers(*state);
                 return -1;
             }
@@ -2180,6 +2427,24 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 return 0;
             }
             break;
+        case WM_TIMER: {
+            if (state == nullptr) break;
+            const UINT_PTR timer = static_cast<UINT_PTR>(wparam);
+            if (timer == kDragHoverSidebarTimerId &&
+                state->sidebar_drag_target != nullptr) {
+                state->sidebar_drag_target->timer_expired();
+                return 0;
+            }
+            if (timer >= kDragHoverTabTimerIdBase &&
+                timer < kDragHoverTabTimerIdBase + kExplorerCount) {
+                const std::size_t pane_index = static_cast<std::size_t>(
+                    timer - kDragHoverTabTimerIdBase);
+                if (state->tab_drag_targets[pane_index] != nullptr)
+                    state->tab_drag_targets[pane_index]->timer_expired();
+                return 0;
+            }
+            break;
+        }
         case WM_SETCURSOR:
             if (state != nullptr && has_active_group(*state) &&
                 LOWORD(lparam) == HTCLIENT) {
@@ -2220,6 +2485,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_CLOSE:
             if (state != nullptr) {
                 UnregisterHotKey(window, kLayoutToggleHotkeyId);
+                revoke_drag_hover_targets(*state);
                 capture_window_placement(window, *state);
                 save_now(*state, true);
                 destroy_explorers(*state);
@@ -2228,10 +2494,17 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             DestroyWindow(window);
             return 0;
         case WM_DESTROY:
+            if (state != nullptr) revoke_drag_hover_targets(*state);
             UnregisterHotKey(window, kLayoutToggleHotkeyId);
             release_address_bar_background_brush();
             PostQuitMessage(0);
             return 0;
+        case WM_NCDESTROY:
+            if (state != nullptr) {
+                revoke_drag_hover_targets(*state);
+                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+            }
+            break;
         case WM_QUERYENDSESSION:
             if (state != nullptr) {
                 capture_window_placement(window, *state);

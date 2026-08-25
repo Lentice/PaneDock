@@ -96,3 +96,13 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+- 共用實作是 `DragHoverTarget final : public IDropTarget`，建構參數為 `DragHoverTarget(HWND timer_window, UINT_PTR timer_id, HitTest hit_test, HoverCallback hover_callback)`；`HitTest` 為 `std::function<std::optional<std::size_t>(POINT)>`，`HoverCallback` 為 `std::function<void(std::size_t)>`。物件由 `Microsoft::WRL::ComPtr<DragHoverTarget>` 持有，`RegisterDragDrop` 額外取得的 COM reference 在 `RevokeDragDrop` 後釋放。
+- 懸停門檻集中在 `src/app_shell/main.cpp` 的 `kDragHoverDelayMilliseconds = 800`；sidebar 使用 `kDragHoverSidebarTimerId`，四個 tab strip 使用 `kDragHoverTabTimerIdBase + pane_index`。timer 綁定主視窗，由 `WM_TIMER` 分派到對應 target，沒有 polling loop。
+- `Sidebar::create` 對其 `LISTBOX` 註冊拖放目標；主視窗建立四個 `tab_strips` 後逐一註冊。`WM_CLOSE`、`WM_DESTROY`、`WM_NCDESTROY` 都會經由共用清理路徑先 `RevokeDragDrop` 再 reset `ComPtr`；不改 `WM_QUERYENDSESSION` 或 `WM_ENDSESSION`。
+- `DragEnter`／`DragOver` 只做螢幕座標 hit-test 與 800ms timer；sidebar 使用 `LB_ITEMFROMPOINT`、tab strip 使用 `TCM_HITTEST`，不檢查 `IDataObject` 格式。`DragLeave`／`Drop` 取消 timer，`Drop` 永遠回傳 `DROPEFFECT_NONE`，沒有任何檔案操作；實際搬移／複製仍由 Shell view 處理。
+- 重入處理：timer 到期會先停止自身、標記已觸發，再呼叫既有的 `activate_group` 或 `switch_active_tab`；`invoking_` 防止同一 target 在 callback 重入時再次觸發。callback 只重新使用既有 Group／tab 切換路徑，沒有在拖曳期間啟動新的 drag operation，也沒有 destroy/recreate pane HWND 或 `IExplorerBrowser`。
+- 真實桌面拖曳未驗證：本回合 Computer Use 初始化與一次重試都回報 `Computer Use native pipe is unavailable: failed to connect native pipe: 系統找不到指定的檔案。 (os error 2)`，因此沒有宣稱已從桌面拖到 Group row／tab item、沒有宣稱已驗證重入穩定性，也沒有觀察到第三方 `IDataObject` 格式問題。非互動啟動 smoke check 曾取得 `Responding=True` 與有效主視窗 handle；這只證明註冊路徑未讓啟動立即失敗，不取代真人拖曳驗收。
+- Agent checks：LLVM-MinGW/Ninja configure、`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 為 4/4；`rg -n "RegisterDragDrop|IDropTarget|RevokeDragDrop" src` 有 sidebar 一組註冊／撤銷與 tab strip 四組註冊／共用撤銷；`git diff --check` 通過。此邏輯位於 `app_shell` 的 Win32/COM seam，沒有把不可測的 COM／HWND 帶入 `core`；真人拖曳是本票的人工替代檢查。

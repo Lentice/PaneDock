@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+struct IDropTarget;
+
 namespace panedock::sidebar {
 
 inline constexpr int kSidebarWidth = 226;
@@ -28,7 +30,8 @@ struct GroupSummary final {
 
 class Sidebar final {
 public:
-    bool create(HWND parent, int control_id) noexcept;
+    bool create(HWND parent, int control_id, ::IDropTarget* drop_target) noexcept;
+    void revoke_drag_drop() noexcept;
     void set_rect(const RECT& rect, UINT dpi) noexcept;
     void set_groups(const std::vector<GroupSummary>& groups);
     std::optional<std::size_t> selected_index() const noexcept;
@@ -50,6 +53,7 @@ private:
     HWND editor_{nullptr};
     WNDPROC original_edit_proc_{nullptr};
     int control_id_{};
+    bool drag_drop_registered_{false};
     std::vector<GroupSummary> groups_;
     std::optional<std::wstring> pending_rename_;
     UINT dpi_{96};

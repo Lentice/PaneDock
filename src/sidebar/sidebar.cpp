@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ole2.h>
 #include <utility>
 
 namespace panedock::sidebar {
@@ -26,7 +27,8 @@ std::wstring format_subtitle(std::size_t pane_count, std::size_t tab_count) {
 
 }  // namespace
 
-bool Sidebar::create(HWND parent, int control_id) noexcept {
+bool Sidebar::create(HWND parent, int control_id,
+                     ::IDropTarget* drop_target) noexcept {
     parent_ = parent;
     control_id_ = control_id;
     list_box_ = CreateWindowExW(
@@ -39,8 +41,21 @@ bool Sidebar::create(HWND parent, int control_id) noexcept {
         SendMessageW(list_box_, WM_SETFONT,
                      reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)),
                      TRUE);
+        if (drop_target == nullptr ||
+            FAILED(RegisterDragDrop(list_box_, drop_target))) {
+            DestroyWindow(list_box_);
+            list_box_ = nullptr;
+            return false;
+        }
+        drag_drop_registered_ = true;
     }
     return list_box_ != nullptr;
+}
+
+void Sidebar::revoke_drag_drop() noexcept {
+    if (!drag_drop_registered_) return;
+    RevokeDragDrop(list_box_);
+    drag_drop_registered_ = false;
 }
 
 void Sidebar::set_rect(const RECT& rect, UINT dpi) noexcept {
