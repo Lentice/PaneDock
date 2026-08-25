@@ -316,6 +316,12 @@ struct AppState {
     HWND layout_tooltip{nullptr};
     HWND empty_message{nullptr};
     std::array<HWND, kExplorerCount> tab_strips{};
+    // PD-040: one clipping container child window per pane, sitting between
+    // the main window and each ExplorerHost's IExplorerBrowser view. Only
+    // this container's HWND gets SetWindowRgn'd for full-corner rounding —
+    // IExplorerBrowser's own HWND, Advise/Unadvise and site contract are
+    // untouched (see PD-040 override of PD-030).
+    std::array<HWND, kExplorerCount> explorer_containers{};
     std::array<HWND, kExplorerCount> address_bars{};
     std::array<HWND, kExplorerCount> back_buttons{};
     std::array<HWND, kExplorerCount> forward_buttons{};
@@ -1161,6 +1167,27 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
     if (old_font != nullptr) SelectObject(dc, old_font);
 }
 
+// Shared by draw_pane_card's background/border RoundRects and the PD-040
+// explorer container's SetWindowRgn clip, so the drawn corner and the
+// clipped corner are always the same radius and never show a mismatch seam.
+int pane_card_radius(UINT dpi) noexcept {
+    return std::max(1, MulDiv(10, static_cast<int>(dpi), 96));
+}
+
+// PD-040: clip a pane's explorer container child window to a rounded-rect
+// region so all four corners of the real Shell view are rounded, matching
+// draw_pane_card's background. Called whenever the container's rect changes
+// (creation, WM_SIZE, WM_DPICHANGED — i.e. every apply_layout pass).
+void apply_pane_container_region(HWND container, int width, int height,
+                                 int radius) noexcept {
+    if (container == nullptr || width <= 0 || height <= 0) return;
+    HRGN region = CreateRoundRectRgn(0, 0, width, height, radius, radius);
+    if (region == nullptr) return;
+    if (SetWindowRgn(container, region, TRUE) == 0) {
+        DeleteObject(region);
+    }
+}
+
 void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi, bool is_active) noexcept {
     // Card visuals: white body, shadow one step darker (product decision 3).
     // Radius 10px@96dpi matches the design mock's .pane { border-radius:
@@ -1168,7 +1195,7 @@ void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi, bool is_active) noexcept {
     // decision 1 — no AlphaBlend/GradientFill). Active panes use the shared
     // accent blue and a 2px border; inactive panes retain the 1px quiet-gray
     // border.
-    const int radius = std::max(1, MulDiv(10, static_cast<int>(dpi), 96));
+    const int radius = pane_card_radius(dpi);
     const int shadow_offset = std::max(1, MulDiv(2, static_cast<int>(dpi), 96));
     // The card is drawn a couple of pixels outside pane_rect on the left/
     // top/right so its rounded top corners and border are visible in the
@@ -1177,7 +1204,10 @@ void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi, bool is_active) noexcept {
     // flush at pane_rect's top edge (tab strip/nav row/Shell view are drawn
     // on top of this, per PD-030's architecture decision). The bottom edge
     // stays exactly at pane_rect.bottom, flush with the real Shell view
-    // content and with square corners (PD-030 non-goal: no bottom rounding).
+    // content — all four corners are rounded (PD-040 overrides PD-030's
+    // square-bottom decision; the PD-040 explorer container clips the real
+    // Shell view to the same radius so there is no seam at the bottom
+    // corners).
     const int outset = std::max(1, MulDiv(2, static_cast<int>(dpi), 96));
     const RECT card{pane_rect.left - outset, pane_rect.top - outset,
                     pane_rect.right + outset, pane_rect.bottom};
@@ -1201,11 +1231,6 @@ void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi, bool is_active) noexcept {
         const HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
         RoundRect(dc, card.left, card.top, card.right, card.bottom, radius,
                   radius);
-        // Square off the bottom two corners: only the self-drawn header is
-        // rounded, the area flush with the Shell view stays rectangular.
-        const RECT lower{card.left, card.top + radius, card.right,
-                         card.bottom};
-        FillRect(dc, &lower, card_brush);
         SelectObject(dc, old_pen);
         SelectObject(dc, old_brush);
         DeleteObject(card_brush);
@@ -1221,10 +1246,6 @@ void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi, bool is_active) noexcept {
         const HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
         RoundRect(dc, card.left, card.top, card.right, card.bottom, radius,
                   radius);
-        MoveToEx(dc, card.left, card.top + radius, nullptr);
-        LineTo(dc, card.left, card.bottom - 1);
-        LineTo(dc, card.right - 1, card.bottom - 1);
-        LineTo(dc, card.right - 1, card.top + radius);
         SelectObject(dc, old_brush);
         SelectObject(dc, old_pen);
         DeleteObject(border_pen);
@@ -1380,6 +1401,7 @@ HRESULT apply_layout(HWND window, AppState& state) {
     if (!has_active_group(state)) {
         for (std::size_t index = 0; index < state.explorers.size(); ++index) {
             state.explorers[index].set_visible(false);
+            ShowWindow(state.explorer_containers[index], SW_HIDE);
             ShowWindow(state.tab_strips[index], SW_HIDE);
             ShowWindow(state.back_buttons[index], SW_HIDE);
             ShowWindow(state.forward_buttons[index], SW_HIDE);
@@ -1393,6 +1415,8 @@ HRESULT apply_layout(HWND window, AppState& state) {
     ShowWindow(state.empty_message, SW_HIDE);
     auto& group = active_group(state);
     const auto rects = layout_rects(window, group);
+    const UINT dpi = GetDpiForWindow(window);
+    const int container_radius = pane_card_radius(dpi);
     for (std::size_t index = 0; index < state.explorers.size(); ++index) {
         const bool visible = index < group.panes.size();
         if (visible) {
@@ -1441,9 +1465,27 @@ HRESULT apply_layout(HWND window, AppState& state) {
 
             RECT rect = pane_rect;
             rect.top = navigation_top + navigation_height;
+            // PD-040: the container is the real parent HWND passed to
+            // ExplorerHost::initialize now, positioned/sized at `rect` in
+            // main-window coordinates; the browser itself is initialized
+            // with a container-local, zero-based rect. SetWindowRgn on the
+            // container (not on IExplorerBrowser's own HWND) is what gives
+            // the real Shell view rounded corners that line up with
+            // draw_pane_card's background — see pane_card_radius/
+            // apply_pane_container_region.
+            const int container_width = rect.right - rect.left;
+            const int container_height = rect.bottom - rect.top;
+            SetWindowPos(state.explorer_containers[index], nullptr, rect.left,
+                         rect.top, container_width, container_height,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            ShowWindow(state.explorer_containers[index], SW_SHOW);
+            apply_pane_container_region(state.explorer_containers[index],
+                                        container_width, container_height,
+                                        container_radius);
+            const RECT local_rect{0, 0, container_width, container_height};
             if (!state.realized[index]) {
                 const HRESULT hr = state.explorers[index].initialize(
-                    window, rect,
+                    state.explorer_containers[index], local_rect,
                     active_tab(group.panes[index]).location.parsing_name);
                 if (FAILED(hr)) {
                     return hr;
@@ -1463,9 +1505,10 @@ HRESULT apply_layout(HWND window, AppState& state) {
                     return E_OUTOFMEMORY;
                 }
             } else {
-                state.explorers[index].set_rect(rect);
+                state.explorers[index].set_rect(local_rect);
             }
         } else {
+            ShowWindow(state.explorer_containers[index], SW_HIDE);
             ShowWindow(state.tab_strips[index], SW_HIDE);
             ShowWindow(state.back_buttons[index], SW_HIDE);
             ShowWindow(state.forward_buttons[index], SW_HIDE);
@@ -2368,6 +2411,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                          TRUE);
             for (std::size_t index = 0; index < state->tab_strips.size();
                  ++index) {
+                // PD-040: plain STATIC child used purely as a clipping
+                // container (SetWindowRgn) and a parent HWND for
+                // ExplorerHost::initialize — it never paints or handles
+                // messages of its own, so no custom window class is needed.
+                state->explorer_containers[index] = CreateWindowExW(
+                    0, L"STATIC", nullptr, WS_CHILD | WS_CLIPCHILDREN, 0, 0, 0,
+                    0, window, nullptr, GetModuleHandleW(nullptr), nullptr);
+                if (state->explorer_containers[index] == nullptr) return -1;
                 state->tab_strips[index] = CreateWindowExW(
                     0, WC_TABCONTROLW, nullptr,
                     WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP |

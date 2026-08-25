@@ -92,3 +92,24 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+**容器 window class 選擇。** 用系統 `L"STATIC"` class(`WS_CHILD | WS_CLIPCHILDREN`,不含 `WS_VISIBLE`),不新註冊 window class。理由:容器只做兩件事——當 `ExplorerHost::initialize` 的 `parent` HWND,以及被 `SetWindowRgn` 裁切——完全不處理任何訊息、不自繪任何內容,`STATIC` 的預設 `WndProc` 從不介入。四個容器在 `WM_CREATE` 裡與既有 `tab_strips`/`address_bars` 同一個迴圈中建立(`src/app_shell/main.cpp` 新增 `AppState::explorer_containers`,`std::array<HWND, kExplorerCount>`,緊接在 `tab_strips` 欄位後),初始 rect 為 `(0,0,0,0)`,交由 `apply_layout` 每次定位。
+
+**`SetWindowRgn` 觸發時機。** 全部收斂到 `apply_layout`(`src/app_shell/main.cpp`)這單一函式:它是版面配置改變的唯一入口,`WM_SIZE`、`WM_DPICHANGED`、`WM_CREATE` 初次配置、Group 切換、layout 按鈕切換全部經過它,沒有另外的呼叫點。每次走到「pane 可見」分支時,依序執行:
+1. `SetWindowPos` 把容器移到 `rect`(即先前直接傳給 `ExplorerHost::initialize`/`set_rect` 的那個 rect,tab strip/導覽列高度已扣除)。
+2. `ShowWindow(container, SW_SHOW)`。
+3. `apply_pane_container_region(container, width, height, container_radius)`——新增的小函式,包一層 `CreateRoundRectRgn` + `SetWindowRgn`,`SetWindowRgn` 失敗時手動 `DeleteObject` 避免洩漏區域物件(成功時所有權轉給系統,不可再 `DeleteObject`)。
+4. `ExplorerHost::initialize`/`set_rect` 改吃「相對容器歸零」的 `RECT{0,0,width,height}`,`parent` 參數從主視窗 `window` 換成 `state.explorer_containers[index]`。
+
+半徑來源抽成新的檔案層級函式 `pane_card_radius(UINT dpi)`(就是原本內嵌在 `draw_pane_card` 的 `MulDiv(10, dpi, 96)`),`draw_pane_card` 與 `apply_layout` 的容器裁切共用同一個計算式,兩處數值保證一致,不會出現裁切邊界跟卡片背景對不齊的鋸齒。`draw_pane_card` 的「下緣方角覆蓋」(`FillRect` 覆蓋下半部)與邊框的直角轉角三段折線(`MoveToEx`/`LineTo` 那段)全部刪除,四個角統一交給 `RoundRect` 畫,對應 PD-030 交接區記錄的方角邏輯已按票面刪除。
+
+**銷毀順序。** 追蹤過 `WM_CLOSE`(`revoke_drag_hover_targets` → `capture_window_placement` → `save_now` → `destroy_explorers(*state)` → 最後才 `DestroyWindow(window)`)與 `WM_ENDSESSION`(`wparam` 為真時只呼叫 `destroy_explorers(*state)`,不銷毀主視窗)這兩條既有路徑,發現**完全不需要新增任何銷毀程式碼**:容器是主視窗的一般 `WS_CHILD`,唯一會銷毀它的時機是主視窗自己被 `DestroyWindow` 遞迴銷毀子視窗——而 `WM_CLOSE` 路徑裡 `destroy_explorers`(內部逐一呼叫 `ExplorerHost::destroy()`,已把 `IExplorerBrowser::Destroy()` 呼叫完)永遠先於 `DestroyWindow(window)` 執行;`WM_ENDSESSION` 路徑則根本不銷毀主視窗,容器也就不會被銷毀。因此原本「先 `ExplorerHost::destroy()` 再銷毀容器 HWND」的順序要求,是既有程式碼結構自動滿足的,沒有引入新的競態或反序風險。沒有在任何地方手動呼叫 `DestroyWindow(container)`。
+
+**驗證狀態。**
+- `cmake --build build`(Release,LLVM-MinGW/Clang+Ninja)乾淨編譯通過。
+- `ctest --test-dir build --output-on-failure`:4/4 通過(這批測試不觸及 UI 繪製/裁切邏輯,是既有回歸涵蓋範圍)。
+- `rg -n "SetWindowRgn|CreateRoundRectRgn" src\app_shell\main.cpp src\explorer_host` 與 `git diff --check` 均如票面要求執行並通過。
+- **非互動式啟動 + 正常關閉煙霧測試**(本環境沒有 Computer Use/桌面互動能力,誠實記錄此限制):用 PowerShell `Start-Process` 啟動 `.\build\PaneDock.exe`,確認 `Responding=True`、`MainWindowTitle="PaneDock"`,再用 `PostMessage(hwnd, WM_CLOSE, 0, 0)` 觸發正常關閉路徑,`WaitForExit` 在 5 秒內完成、`ExitCode=0`,關閉後 `tasklist` 確認沒有殘留的 `PaneDock.exe` 行程。這條路徑覆蓋了風險最高的「容器 HWND 銷毀順序」——沒有觀察到崩潰、掛起或殘留視窗。
+- **誠實的已知限制:** 沒有做到真正的桌面視覺驗證與滑鼠互動(四角圓角是否與卡片背景完全貼合、Shell 檔案列表在裁切區域內選取/右鍵選單/捲軸/拖放高亮是否有超出裁切邊界的視覺瑕疵、多台顯示器混合 DPI 下 `WM_DPICHANGED` 的實際畫面),因為本環境不具備 Computer Use 或其他螢幕截圖/滑鼠控制能力——這是本專案文件中已知的重複性限制。上述「非互動啟動+關閉」煙霧測試只證明了「不崩潰、資源生命週期正確」,不是驗收條件 1–3 要求的視覺與互動正確性;這部分需要有桌面互動能力的人或 agent 之後手動補測。
