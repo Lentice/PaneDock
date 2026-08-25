@@ -15,12 +15,15 @@
 
 namespace panedock::sidebar {
 
-inline constexpr int kSidebarWidth = 200;
+inline constexpr int kSidebarWidth = 226;
+inline constexpr int kGroupRowHeight = 54;
 inline constexpr UINT kRenameCommitMessage = WM_APP + 1;
 
 struct GroupSummary final {
     std::string id;
     std::wstring name;
+    std::size_t pane_count{0};
+    std::size_t tab_count{0};
 };
 
 class Sidebar final {

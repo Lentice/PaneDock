@@ -65,6 +65,10 @@
 | PD-025 | 崩潰復原路徑:不乾淨關閉偵測、退回備份告知、備份保護(FR-013) | 5 | `done` | PD-024 | [PD-025](tickets/PD-025-crash-recovery-path.md) |
 | PD-026 | release evidence 改為量測完整應用程式而非 Phase 0 原型 | 5 | `done` | PD-023 | [PD-026](tickets/PD-026-release-evidence-covers-shipped-app.md) |
 | PD-027 | MVP 驗收清單在四種必要環境的執行與發佈閘門判定 | 5 | `done` | PD-024, PD-025, PD-026 | [PD-027](tickets/PD-027-mvp-acceptance-and-release-gate.md) |
+| PD-028 | 側邊欄品牌列、Group 兩行摘要與 footer 按鈕改版 | 6 | `done` | PD-017 | [PD-028](tickets/PD-028-sidebar-brand-and-group-summary-restyle.md) |
+| PD-029 | Quiet header 右對齊、版型圖示重繪與 more-actions 佔位按鈕 | 6 | `planned` | PD-028 | [PD-029](tickets/PD-029-quiet-header-alignment-and-layout-icons.md) |
+| PD-030 | Pane 卡片背景(圓角上緣＋陰影)與 tab header 圖示化重繪 | 6 | `planned` | PD-028, PD-029 | [PD-030](tickets/PD-030-pane-card-chrome-and-tab-header-restyle.md) |
+| PD-031 | 導覽列圖示化按鈕與圓角網址欄背景 | 6 | `planned` | PD-030 | [PD-031](tickets/PD-031-navigation-row-icon-restyle.md) |
 
 ## Dependency lanes
 
@@ -109,6 +113,15 @@ Phase 5 — release gate,gated on Phase 4 完成
       執行 `-CollectMeasurements`」。PD-026 只修工具,不解除它;真正解除它的是 PD-027
       的量測執行。PD-024/026 可並行,兩者都不需要互動桌面即可完成程式碼與工具部分。
 ```
+
+Phase 6 — 視覺改版,對照 `docs/panedock-ui-prototype.html`(Quiet Header 變體),不改變任何 Group/pane/tab 行為或 core 契約
+  PD-017 ─── PD-028(側邊欄品牌列 + Group 兩行摘要 + footer 改版,含 GroupSummary 擴充與 context menu)
+       PD-028 ─── PD-029(quiet header 右對齊 + 版型圖示重繪 + more-actions 佔位)
+            PD-029 ─── PD-030(pane 卡片背景 + tab header 圖示化,owner-draw tab strip)
+                 PD-030 ─── PD-031(導覽列圖示按鈕 + 圓角網址欄背景)
+  註:四張票依視覺依賴順序串接(PD-030 的卡片背景繪製路徑是 PD-031 疊加導覽列圓角底的唯一插入點),
+      但技術上彼此獨立、風險遞增(PD-028/029 純排版與 owner-draw 按鈕,PD-030 觸碰既有 `SysTabControl32`
+      owner-draw 改造風險最高)。若時間有限,可只做到 PD-028/029 就先驗收,PD-030/031 分開排期。
 
 PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `IShellFolder` fallback in `docs/design-spec.md` §9.1, and the tickets below it must be rewritten rather than adjusted.
 
@@ -188,5 +201,16 @@ PD-001 以單一 ticket 涵蓋整個四分割原型:scope 十項、acceptance �
 PD-001 標為 `superseded`,文件不動,作為決策軌跡保留。原本依賴 PD-001 的 PD-002／PD-003／PD-004 改依賴 PD-011,因為 Go/No-Go 判定的職責移到了那裡。
 
 刻意讓 PD-010(位置持久化)與 PD-009(保活式切換)並行而非串接:兩者只共同依賴 PD-008,合併會讓 PD-009 同時扛 churn 量測與持久化,handle 數異常時難以歸因。
+
+### 2026-08-25 — 視覺改版拆成 PD-028~031,四項刻意不做的事
+
+使用者比對執行中的 app 截圖與 `docs/panedock-ui-prototype.html`(Quiet Header 變體)後回報落差明顯,並授權大幅修改程式碼。落差拆成四張依風險遞增排序的 ticket(PD-028~031),而不是一張大票,理由同上面 PD-001 拆分 PD-007～011 的先例:單一 ticket 裝不下、且風險層級差異大(排版改動 vs. `SysTabControl32` owner-draw 改造)不該綁在一起驗收。
+
+四項刻意不做、且已寫入對應 ticket 的 Non-goals 的決定,記在這裡供之後檢索:
+
+- **不做設計稿的 "Preferences" 按鈕**(PD-028):產品目前沒有偏好設定頁面,加一顆不接行為的按鈕是空殼功能。
+- **不做設計稿的 "more actions"(`...`)選單**(PD-029):同上,沒有定義過的功能不預先做 UI 佔位以外的事。
+- **不刪除 Duplicate／Rename／Delete／Move Up／Move Down 的側邊欄按鈕功能,只搬進 Group 列的右鍵 context menu**(PD-028):這五個是 FR-001 的必要功能,設計稿沒畫出來不代表要拿掉,推論是被收進次要互動裡。
+- **Pane 卡片只圓上緣,下緣(貼著真實 `IExplorerBrowser` 內容)維持方角,不做完整四角圓角**(PD-030):四角圓角需要裁切 Shell view 本身的 HWND,目前沒有安全的做法;上緣是自繪的 tab header,可以自然圓角。若之後要做完整四角圓角,觸發條件是「先有一個能安全裁切 `IExplorerBrowser` HWND 而不影響其生命週期與 site 契約的具體方案」,依 §已否決的方向 的規則辦理(此項目前不算「否決」,只是候選,尚未列入表格,因為還沒有人提出可行方案可供評估)。
 
 刻意讓 PD-011 成為不寫產品程式碼的純驗證片:Go/No-Go 是全案閘門,混在實作片裡容易被草率蓋章。

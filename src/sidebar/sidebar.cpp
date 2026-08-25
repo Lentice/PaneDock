@@ -1,15 +1,36 @@
 #include "sidebar/sidebar.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace panedock::sidebar {
+
+namespace {
+
+constexpr COLORREF kSidebarBackground = RGB(251, 252, 254);
+constexpr COLORREF kSidebarActiveBackground = RGB(234, 241, 255);
+constexpr COLORREF kSidebarText = RGB(75, 85, 101);
+constexpr COLORREF kSidebarActiveText = RGB(23, 75, 180);
+constexpr COLORREF kSidebarSubtitleText = RGB(148, 163, 184);
+constexpr COLORREF kBadgeBackground = RGB(228, 231, 236);
+constexpr COLORREF kBadgeText = RGB(71, 85, 105);
+
+std::wstring format_subtitle(std::size_t pane_count, std::size_t tab_count) {
+    std::wstring text = std::to_wstring(pane_count);
+    text += pane_count == 1 ? L" pane · " : L" panes · ";
+    text += std::to_wstring(tab_count);
+    text += tab_count == 1 ? L" tab" : L" tabs";
+    return text;
+}
+
+}  // namespace
 
 bool Sidebar::create(HWND parent, int control_id) noexcept {
     parent_ = parent;
     control_id_ = control_id;
     list_box_ = CreateWindowExW(
-        WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+        0, L"LISTBOX", nullptr,
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_HASSTRINGS |
             LBS_NOINTEGRALHEIGHT | LBS_NOTIFY | LBS_OWNERDRAWFIXED,
         0, 0, 0, 0, parent, reinterpret_cast<HMENU>(control_id),
@@ -28,7 +49,8 @@ void Sidebar::set_rect(const RECT& rect, UINT dpi) noexcept {
     SetWindowPos(list_box_, nullptr, rect.left, rect.top,
                  rect.right - rect.left, rect.bottom - rect.top,
                  SWP_NOZORDER | SWP_NOACTIVATE);
-    const int item_height = std::max(1, MulDiv(28, static_cast<int>(dpi), 96));
+    const int item_height =
+        std::max(1, MulDiv(kGroupRowHeight, static_cast<int>(dpi), 96));
     SendMessageW(list_box_, LB_SETITEMHEIGHT, 0, item_height);
 }
 
@@ -56,7 +78,7 @@ bool Sidebar::measure_item(MEASUREITEMSTRUCT* item, UINT dpi) const noexcept {
     if (item == nullptr || item->CtlType != ODT_LISTBOX ||
         item->CtlID != static_cast<UINT>(control_id_)) return false;
     item->itemHeight = static_cast<UINT>(
-        std::max(1, MulDiv(28, static_cast<int>(dpi), 96)));
+        std::max(1, MulDiv(kGroupRowHeight, static_cast<int>(dpi), 96)));
     return true;
 }
 
@@ -67,16 +89,95 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item) const noexcept {
         item->itemID >= groups_.size()) return true;
 
     const bool selected = (item->itemState & ODS_SELECTED) != 0;
-    FillRect(item->hDC, &item->rcItem,
-             GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+    HBRUSH background = CreateSolidBrush(kSidebarBackground);
+    if (background != nullptr) {
+        FillRect(item->hDC, &item->rcItem, background);
+        DeleteObject(background);
+    }
+
+    RECT pill = item->rcItem;
+    pill.left += MulDiv(4, static_cast<int>(dpi_), 96);
+    pill.right -= MulDiv(4, static_cast<int>(dpi_), 96);
+    pill.top += MulDiv(2, static_cast<int>(dpi_), 96);
+    pill.bottom -= MulDiv(2, static_cast<int>(dpi_), 96);
+    if (selected) {
+        HBRUSH pill_brush = CreateSolidBrush(kSidebarActiveBackground);
+        if (pill_brush != nullptr) {
+            const HGDIOBJ old_brush = SelectObject(item->hDC, pill_brush);
+            const HGDIOBJ old_pen =
+                SelectObject(item->hDC, GetStockObject(NULL_PEN));
+            const int radius = MulDiv(10, static_cast<int>(dpi_), 96);
+            RoundRect(item->hDC, pill.left, pill.top, pill.right, pill.bottom,
+                      radius, radius);
+            SelectObject(item->hDC, old_brush);
+            SelectObject(item->hDC, old_pen);
+            DeleteObject(pill_brush);
+        }
+    }
+
+    const auto& group = groups_[item->itemID];
+    const int badge_size = MulDiv(22, static_cast<int>(dpi_), 96);
+    const int badge_margin = MulDiv(6, static_cast<int>(dpi_), 96);
+    RECT badge{pill.right - badge_size - badge_margin,
+               pill.top + ((pill.bottom - pill.top) - badge_size) / 2,
+               pill.right - badge_margin, 0};
+    badge.bottom = badge.top + badge_size;
+
+    RECT text_area = pill;
+    text_area.left += MulDiv(6, static_cast<int>(dpi_), 96);
+    text_area.right = badge.left - MulDiv(4, static_cast<int>(dpi_), 96);
+
+    const int line_height = (text_area.bottom - text_area.top) / 2;
+    RECT name_rect{text_area.left, text_area.top, text_area.right,
+                   text_area.top + line_height};
+    RECT subtitle_rect{text_area.left, name_rect.bottom, text_area.right,
+                       text_area.bottom};
+
+    LOGFONTW logfont{};
+    HFONT base_font = reinterpret_cast<HFONT>(
+        SendMessageW(list_box_, WM_GETFONT, 0, 0));
+    if (base_font == nullptr)
+        base_font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    HFONT small_font = nullptr;
+    if (base_font != nullptr &&
+        GetObjectW(base_font, sizeof(logfont), &logfont) != 0) {
+        logfont.lfHeight =
+            static_cast<LONG>(std::lround(logfont.lfHeight * 0.82));
+        logfont.lfWeight = FW_NORMAL;
+        small_font = CreateFontIndirectW(&logfont);
+    }
+
     SetBkMode(item->hDC, TRANSPARENT);
-    SetTextColor(item->hDC,
-                 GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
-    RECT text_rect = item->rcItem;
-    text_rect.left += MulDiv(8, static_cast<int>(dpi_), 96);
-    DrawTextW(item->hDC, groups_[item->itemID].name.c_str(), -1, &text_rect,
+    SetTextColor(item->hDC, selected ? kSidebarActiveText : kSidebarText);
+    DrawTextW(item->hDC, group.name.c_str(), -1, &name_rect,
               DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-    if ((item->itemState & ODS_FOCUS) != 0) DrawFocusRect(item->hDC, &item->rcItem);
+
+    const HGDIOBJ old_font =
+        small_font != nullptr ? SelectObject(item->hDC, small_font) : nullptr;
+    SetTextColor(item->hDC, kSidebarSubtitleText);
+    const std::wstring subtitle =
+        format_subtitle(group.pane_count, group.tab_count);
+    DrawTextW(item->hDC, subtitle.c_str(), -1, &subtitle_rect,
+              DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+
+    HBRUSH badge_brush = CreateSolidBrush(kBadgeBackground);
+    if (badge_brush != nullptr) {
+        const HGDIOBJ old_brush = SelectObject(item->hDC, badge_brush);
+        const HGDIOBJ old_pen =
+            SelectObject(item->hDC, GetStockObject(NULL_PEN));
+        Ellipse(item->hDC, badge.left, badge.top, badge.right, badge.bottom);
+        SelectObject(item->hDC, old_brush);
+        SelectObject(item->hDC, old_pen);
+        DeleteObject(badge_brush);
+    }
+    SetTextColor(item->hDC, kBadgeText);
+    const std::wstring badge_text = std::to_wstring(group.tab_count);
+    DrawTextW(item->hDC, badge_text.c_str(), -1, &badge,
+              DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+    if (old_font != nullptr) SelectObject(item->hDC, old_font);
+    if (small_font != nullptr) DeleteObject(small_font);
+    if ((item->itemState & ODS_FOCUS) != 0) DrawFocusRect(item->hDC, &pill);
     return true;
 }
 

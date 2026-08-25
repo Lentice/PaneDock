@@ -16,12 +16,14 @@
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include <shlobj.h>
 #include <shellapi.h>
+#include <windowsx.h>
 
 #include "app_shell/diagnostic_mode.h"
 #include "core/layout.h"
@@ -35,6 +37,12 @@ namespace {
 constexpr wchar_t kWindowClassName[] = L"PaneDockMainWindow";
 constexpr int kLayoutToggleHotkeyId = 1;
 constexpr std::size_t kExplorerCount = 4;
+constexpr int kLayoutBarHeight = 44;
+constexpr int kLayoutButtonHeight = 30;
+constexpr int kLayoutButtonWidth = 30;
+constexpr int kPaneCanvasPadding = 15;
+constexpr int kPaneDividerThickness = 8;
+constexpr int kSidebarHeadingHeight = 20;
 constexpr int kTabStripHeight = 24;
 constexpr int kTabStripIdBase = 200;
 constexpr int kNavigationBarHeight = 28;
@@ -43,6 +51,7 @@ constexpr int kBackButtonIdBase = 300;
 constexpr int kForwardButtonIdBase = 310;
 constexpr int kUpButtonIdBase = 320;
 constexpr int kAddressBarIdBase = 330;
+constexpr int kLayoutButtonIdBase = 400;
 constexpr int kGroupListId = 100;
 constexpr int kNewGroupId = 101;
 constexpr int kDuplicateGroupId = 102;
@@ -50,12 +59,23 @@ constexpr int kRenameGroupId = 103;
 constexpr int kDeleteGroupId = 104;
 constexpr int kMoveUpId = 105;
 constexpr int kMoveDownId = 106;
-constexpr std::array<int, 6> kButtonIds{kNewGroupId, kDuplicateGroupId,
-                                        kRenameGroupId, kDeleteGroupId,
-                                        kMoveUpId, kMoveDownId};
-constexpr std::array<const wchar_t*, 6> kButtonLabels{
-    L"New Group", L"Duplicate Group", L"Rename Group", L"Delete Group",
-    L"Move Up", L"Move Down"};
+// Duplicate/Rename/Delete/Move Up/Move Down keep their ids (reused as the
+// group list's context-menu command ids, see WM_CONTEXTMENU) but no longer
+// get their own footer button; the footer button array shrinks to New Group.
+constexpr std::array<int, 1> kButtonIds{kNewGroupId};
+constexpr std::array<const wchar_t*, 1> kButtonLabels{L"+ New Group"};
+constexpr int kBrandBarHeight = 52;
+constexpr std::array<int, 5> kLayoutButtonIds{
+    kLayoutButtonIdBase, kLayoutButtonIdBase + 1, kLayoutButtonIdBase + 2,
+    kLayoutButtonIdBase + 3, kLayoutButtonIdBase + 4};
+constexpr std::array<const wchar_t*, 5> kLayoutButtonLabels{
+    L"Single", L"Left / Right", L"Top / Bottom", L"Three", L"Four"};
+constexpr std::array<panedock::core::LayoutTemplate, 5> kLayoutTemplates{
+    panedock::core::LayoutTemplate::single,
+    panedock::core::LayoutTemplate::left_right,
+    panedock::core::LayoutTemplate::top_bottom,
+    panedock::core::LayoutTemplate::three_pane,
+    panedock::core::LayoutTemplate::four_pane_grid};
 const std::array<std::wstring, kExplorerCount> kDefaultLocations{
     L"C:\\", L"C:\\Windows", L"C:\\Users", L"C:\\Program Files"};
 
@@ -98,6 +118,9 @@ struct AppState {
     std::optional<Splitter> splitter_drag;
     panedock::sidebar::Sidebar sidebar;
     std::array<HWND, kButtonIds.size()> sidebar_buttons{};
+    HWND group_label{nullptr};
+    HWND layout_label{nullptr};
+    std::array<HWND, kLayoutButtonIds.size()> layout_buttons{};
     HWND empty_message{nullptr};
     std::array<HWND, kExplorerCount> tab_strips{};
     std::array<HWND, kExplorerCount> address_bars{};
@@ -206,12 +229,125 @@ int scaled_value(HWND window, int value) noexcept {
                               96));
 }
 
+void draw_layout_glyph(HDC dc, RECT rect, std::size_t index,
+                       COLORREF color) noexcept {
+    const int width = static_cast<int>(rect.right - rect.left);
+    const int height = static_cast<int>(rect.bottom - rect.top);
+    const int size = std::min(16, std::max(1, std::min(width, height) - 8));
+    RECT glyph{rect.left + (rect.right - rect.left - size) / 2,
+               rect.top + (rect.bottom - rect.top - size) / 2,
+               rect.left + (rect.right - rect.left + size) / 2,
+               rect.top + (rect.bottom - rect.top + size) / 2};
+    HBRUSH frame_brush = CreateSolidBrush(color);
+    if (frame_brush != nullptr) {
+        FrameRect(dc, &glyph, frame_brush);
+        DeleteObject(frame_brush);
+    }
+
+    HPEN pen = CreatePen(PS_SOLID, 1, color);
+    if (pen == nullptr) return;
+    const HGDIOBJ previous = SelectObject(dc, pen);
+    const int mid_x = glyph.left + (glyph.right - glyph.left) / 2;
+    const int mid_y = glyph.top + (glyph.bottom - glyph.top) / 2;
+    switch (index) {
+        case 1:
+            MoveToEx(dc, mid_x, glyph.top, nullptr);
+            LineTo(dc, mid_x, glyph.bottom);
+            break;
+        case 2:
+            MoveToEx(dc, glyph.left, mid_y, nullptr);
+            LineTo(dc, glyph.right, mid_y);
+            break;
+        case 3:
+            MoveToEx(dc, mid_x, glyph.top, nullptr);
+            LineTo(dc, mid_x, glyph.bottom);
+            MoveToEx(dc, mid_x, mid_y, nullptr);
+            LineTo(dc, glyph.right, mid_y);
+            break;
+        case 4:
+            MoveToEx(dc, mid_x, glyph.top, nullptr);
+            LineTo(dc, mid_x, glyph.bottom);
+            MoveToEx(dc, glyph.left, mid_y, nullptr);
+            LineTo(dc, glyph.right, mid_y);
+            break;
+        default:
+            break;
+    }
+    SelectObject(dc, previous);
+    DeleteObject(pen);
+}
+
+void draw_layout_button(const DRAWITEMSTRUCT& item,
+                        std::size_t index) noexcept {
+    const bool disabled = (item.itemState & ODS_DISABLED) != 0;
+    const bool checked = SendMessageW(item.hwndItem, BM_GETCHECK, 0, 0) ==
+                         BST_CHECKED;
+    const COLORREF background = disabled
+                                    ? RGB(245, 247, 249)
+                                    : checked ? RGB(234, 241, 255)
+                                              : RGB(248, 250, 252);
+    const COLORREF glyph = disabled
+                               ? RGB(148, 163, 184)
+                               : checked ? RGB(37, 99, 235)
+                                         : RGB(100, 116, 139);
+    HBRUSH fill = CreateSolidBrush(background);
+    if (fill != nullptr) {
+        FillRect(item.hDC, &item.rcItem, fill);
+        DeleteObject(fill);
+    }
+    if (checked) {
+        HBRUSH border = CreateSolidBrush(RGB(207, 224, 255));
+        if (border != nullptr) {
+            FrameRect(item.hDC, &item.rcItem, border);
+            DeleteObject(border);
+        }
+    }
+    draw_layout_glyph(item.hDC, item.rcItem, index, glyph);
+    if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
+}
+
+void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
+                                const wchar_t* label) noexcept {
+    const bool disabled = (item.itemState & ODS_DISABLED) != 0;
+    const COLORREF border = disabled ? RGB(232, 235, 239) : RGB(223, 229, 236);
+    const COLORREF text_color = disabled ? RGB(180, 188, 199) : RGB(82, 96, 117);
+    HBRUSH fill = CreateSolidBrush(RGB(255, 255, 255));
+    HPEN pen = CreatePen(PS_SOLID, 1, border);
+    if (fill != nullptr && pen != nullptr) {
+        const HGDIOBJ old_brush = SelectObject(item.hDC, fill);
+        const HGDIOBJ old_pen = SelectObject(item.hDC, pen);
+        const int radius =
+            std::max(4, static_cast<int>(item.rcItem.bottom - item.rcItem.top) /
+                            4);
+        RoundRect(item.hDC, item.rcItem.left, item.rcItem.top, item.rcItem.right,
+                  item.rcItem.bottom, radius, radius);
+        SelectObject(item.hDC, old_brush);
+        SelectObject(item.hDC, old_pen);
+    }
+    if (fill != nullptr) DeleteObject(fill);
+    if (pen != nullptr) DeleteObject(pen);
+
+    const HFONT font = reinterpret_cast<HFONT>(
+        SendMessageW(item.hwndItem, WM_GETFONT, 0, 0));
+    const HGDIOBJ old_font =
+        font != nullptr ? SelectObject(item.hDC, font) : nullptr;
+    SetBkMode(item.hDC, TRANSPARENT);
+    SetTextColor(item.hDC, text_color);
+    RECT text_rect = item.rcItem;
+    DrawTextW(item.hDC, label, -1, &text_rect,
+              DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+    if (old_font != nullptr) SelectObject(item.hDC, old_font);
+    if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
+}
+
 RECT pane_area(HWND window) noexcept {
     RECT area = client_rect(window);
     area.left = std::min(area.right,
                          area.left + scaled_value(
                                          window,
                                          panedock::sidebar::kSidebarWidth));
+    area.top = std::min(area.bottom,
+                        area.top + scaled_value(window, kLayoutBarHeight));
     return area;
 }
 
@@ -222,19 +358,39 @@ LayoutMetrics layout_metrics(HWND window) noexcept {
     };
     return {scaled(panedock::core::kMinimumPaneWidth),
             scaled(panedock::core::kMinimumPaneHeight),
-            scaled(panedock::core::kDividerThickness)};
+            scaled(kPaneDividerThickness)};
+}
+
+RECT pane_content_area(HWND window) noexcept {
+    RECT area = pane_area(window);
+    const LayoutMetrics metrics = layout_metrics(window);
+    const int padding = scaled_value(window, kPaneCanvasPadding);
+    const int width = area.right - area.left;
+    const int height = area.bottom - area.top;
+    if (width < metrics.minimum_pane_width + 2 * padding ||
+        height < metrics.minimum_pane_height + 2 * padding) {
+        return area;
+    }
+    area.left += padding;
+    area.top += padding;
+    area.right -= padding;
+    area.bottom -= padding;
+    return area;
 }
 
 std::vector<panedock::core::PaneRect> layout_rects(
     HWND window, const panedock::core::GroupState& group) {
-    const RECT client = pane_area(window);
+    const RECT client = pane_content_area(window);
     const LayoutMetrics metrics = layout_metrics(window);
     auto rects = panedock::core::compute_layout_rects(
         client.right - client.left, client.bottom - client.top,
         group.layout_template, group.divider_ratios,
         metrics.minimum_pane_width, metrics.minimum_pane_height,
         metrics.divider_thickness);
-    for (auto& rect : rects) rect.x += client.left;
+    for (auto& rect : rects) {
+        rect.x += client.left;
+        rect.y += client.top;
+    }
     return rects;
 }
 
@@ -388,21 +544,22 @@ void refresh_sidebar(AppState& state) {
     for (std::size_t index = 0; index < state.application.groups.size();
          ++index) {
         const auto& group = state.application.groups[index];
-        summaries.push_back({group.id, group.name});
+        const std::size_t tab_count = std::accumulate(
+            group.panes.begin(), group.panes.end(), std::size_t{0},
+            [](std::size_t total, const panedock::core::PaneState& pane) {
+                return total + pane.tabs.size();
+            });
+        summaries.push_back(
+            {group.id, group.name, group.panes.size(), tab_count});
         if (group.id == state.application.active_group_id) active_index = index;
     }
     state.sidebar.set_groups(summaries);
     if (active_index.has_value()) state.sidebar.set_selected_index(*active_index);
 
-    const auto selected = state.sidebar.selected_index();
-    const bool has_selection = selected.has_value();
+    // Duplicate/Rename/Delete/Move Up/Move Down live on the list's context
+    // menu now (see WM_CONTEXTMENU); the footer only keeps New Group, which
+    // is always available.
     EnableWindow(state.sidebar_buttons[0], TRUE);
-    for (std::size_t index = 1; index < 4; ++index)
-        EnableWindow(state.sidebar_buttons[index], has_selection);
-    EnableWindow(state.sidebar_buttons[4],
-                 has_selection && *selected > 0);
-    EnableWindow(state.sidebar_buttons[5],
-                 has_selection && *selected + 1 < state.application.groups.size());
 }
 
 void layout_sidebar(HWND window, AppState& state) noexcept {
@@ -412,13 +569,20 @@ void layout_sidebar(HWND window, AppState& state) noexcept {
                                             panedock::sidebar::kSidebarWidth));
     const int margin = scaled_value(window, 8);
     const int gap = scaled_value(window, 4);
+    const int brand_height = scaled_value(window, kBrandBarHeight);
+    const int heading_height = scaled_value(window, kSidebarHeadingHeight);
     const int button_height = scaled_value(window, 28);
     const int controls_height = static_cast<int>(state.sidebar_buttons.size()) *
                                     button_height +
                                 static_cast<int>(state.sidebar_buttons.size() - 1) * gap;
-    RECT list_rect{margin, margin, std::max(margin, width - margin),
-                   std::max(margin, static_cast<int>(client.bottom) - margin -
-                                        controls_height - gap)};
+    SetWindowPos(state.group_label, nullptr, margin, brand_height + margin,
+                 std::max(0, width - 2 * margin), heading_height,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    ShowWindow(state.group_label, SW_SHOW);
+    const int list_top = brand_height + margin + heading_height + gap;
+    RECT list_rect{margin, list_top, std::max(margin, width - margin),
+                   std::max(list_top, static_cast<int>(client.bottom) - margin -
+                                             controls_height - gap)};
     state.sidebar.set_rect(list_rect, GetDpiForWindow(window));
     int y = list_rect.bottom + gap;
     for (HWND button : state.sidebar_buttons) {
@@ -431,6 +595,161 @@ void layout_sidebar(HWND window, AppState& state) noexcept {
     SetWindowPos(state.empty_message, nullptr, panes.left, panes.top,
                  panes.right - panes.left, panes.bottom - panes.top,
                  SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void layout_header(HWND window, AppState& state) noexcept {
+    const RECT client = client_rect(window);
+    const int sidebar_width = std::min(
+        static_cast<int>(client.right - client.left),
+        scaled_value(window, panedock::sidebar::kSidebarWidth));
+    const int margin = scaled_value(window, 12);
+    const int gap = scaled_value(window, 4);
+    const int header_height = std::min(
+        scaled_value(window, kLayoutBarHeight),
+        std::max(0, static_cast<int>(client.bottom - client.top)));
+    const int label_width = scaled_value(window, 76);
+    const int button_height = std::min(
+        scaled_value(window, kLayoutButtonHeight), header_height);
+    const int available_width = std::max(
+        0, static_cast<int>(client.right) - sidebar_width - 2 * margin -
+               label_width -
+               static_cast<int>(kLayoutButtonIds.size() - 1) * gap);
+    const int button_width = std::max(
+        1, std::min(scaled_value(window, kLayoutButtonWidth),
+                    available_width / static_cast<int>(kLayoutButtonIds.size())));
+    int x = sidebar_width + margin;
+    SetWindowPos(state.layout_label, nullptr, x, 0, label_width, header_height,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    ShowWindow(state.layout_label, SW_SHOW);
+    x += label_width + gap;
+    for (HWND button : state.layout_buttons) {
+        SetWindowPos(button, nullptr, x,
+                     std::max(0, (header_height - button_height) / 2),
+                     button_width, button_height,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        ShowWindow(button, SW_SHOW);
+        x += button_width + gap;
+    }
+    const bool enabled = has_active_group(state);
+    const auto current = enabled ? active_group(state).layout_template
+                                 : panedock::core::LayoutTemplate::single;
+    for (std::size_t index = 0; index < state.layout_buttons.size(); ++index) {
+        EnableWindow(state.layout_buttons[index], enabled);
+        SendMessageW(state.layout_buttons[index], BM_SETCHECK,
+                     kLayoutTemplates[index] == current ? BST_CHECKED
+                                                         : BST_UNCHECKED,
+                     0);
+    }
+}
+
+HFONT brand_font() noexcept {
+    static const HFONT font = [] {
+        LOGFONTW logfont{};
+        HFONT base = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        if (base == nullptr || GetObjectW(base, sizeof(logfont), &logfont) == 0)
+            return static_cast<HFONT>(nullptr);
+        logfont.lfWeight = FW_BOLD;
+        return CreateFontIndirectW(&logfont);
+    }();
+    return font;
+}
+
+void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
+    HBRUSH background = CreateSolidBrush(RGB(251, 252, 254));
+    if (background != nullptr) {
+        FillRect(dc, &rect, background);
+        DeleteObject(background);
+    }
+    RECT divider{rect.left, rect.bottom - scaled_value(window, 1), rect.right,
+                rect.bottom};
+    HBRUSH divider_brush = CreateSolidBrush(RGB(223, 229, 236));
+    if (divider_brush != nullptr) {
+        FillRect(dc, &divider, divider_brush);
+        DeleteObject(divider_brush);
+    }
+
+    const int icon_size = scaled_value(window, 28);
+    const int icon_margin = scaled_value(window, 14);
+    const RECT icon{rect.left + icon_margin,
+                    rect.top + ((rect.bottom - rect.top) - icon_size) / 2,
+                    rect.left + icon_margin + icon_size,
+                    rect.top + ((rect.bottom - rect.top) - icon_size) / 2 +
+                        icon_size};
+    HBRUSH icon_brush = CreateSolidBrush(RGB(37, 99, 235));
+    HPEN icon_pen = CreatePen(PS_SOLID, 1, RGB(37, 99, 235));
+    if (icon_brush != nullptr && icon_pen != nullptr) {
+        const HGDIOBJ old_brush = SelectObject(dc, icon_brush);
+        const HGDIOBJ old_pen = SelectObject(dc, icon_pen);
+        const int radius = scaled_value(window, 6);
+        RoundRect(dc, icon.left, icon.top, icon.right, icon.bottom, radius,
+                  radius);
+        SelectObject(dc, old_brush);
+        SelectObject(dc, old_pen);
+    }
+    if (icon_brush != nullptr) DeleteObject(icon_brush);
+    if (icon_pen != nullptr) DeleteObject(icon_pen);
+
+    const int glyph_inset = scaled_value(window, 6);
+    HPEN glyph_pen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+    if (glyph_pen != nullptr) {
+        const HGDIOBJ old_pen = SelectObject(dc, glyph_pen);
+        const int mid_x = (icon.left + icon.right) / 2;
+        const int mid_y = (icon.top + icon.bottom) / 2;
+        MoveToEx(dc, mid_x, icon.top + glyph_inset, nullptr);
+        LineTo(dc, mid_x, icon.bottom - glyph_inset);
+        MoveToEx(dc, icon.left + glyph_inset, mid_y, nullptr);
+        LineTo(dc, icon.right - glyph_inset, mid_y);
+        SelectObject(dc, old_pen);
+        DeleteObject(glyph_pen);
+    }
+
+    RECT title{icon.right + scaled_value(window, 10), rect.top,
+              rect.right - scaled_value(window, 8), rect.bottom};
+    const HFONT font = brand_font();
+    const HGDIOBJ old_font = font != nullptr ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(30, 41, 59));
+    DrawTextW(dc, L"PaneDock", -1, &title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    if (old_font != nullptr) SelectObject(dc, old_font);
+}
+
+void paint_client_background(HWND window, HDC dc) noexcept {
+    const RECT client = client_rect(window);
+    HBRUSH canvas = CreateSolidBrush(RGB(243, 246, 249));
+    if (canvas != nullptr) {
+        FillRect(dc, &client, canvas);
+        DeleteObject(canvas);
+    }
+
+    const int sidebar_width = std::min(
+        static_cast<int>(client.right - client.left),
+        scaled_value(window, panedock::sidebar::kSidebarWidth));
+    RECT sidebar{client.left, client.top, client.left + sidebar_width,
+                 client.bottom};
+    HBRUSH sidebar_brush = CreateSolidBrush(RGB(251, 252, 254));
+    if (sidebar_brush != nullptr) {
+        FillRect(dc, &sidebar, sidebar_brush);
+        DeleteObject(sidebar_brush);
+    }
+
+    const RECT brand_bar{sidebar.left, sidebar.top, sidebar.right,
+                         std::min(sidebar.bottom,
+                                  sidebar.top +
+                                      scaled_value(window, kBrandBarHeight))};
+    draw_brand_bar(window, dc, brand_bar);
+
+    RECT header{client.left + sidebar_width, client.top, client.right,
+                std::min(client.bottom,
+                         client.top + scaled_value(window, kLayoutBarHeight))};
+    FillRect(dc, &header, GetSysColorBrush(COLOR_WINDOW));
+
+    RECT divider{header.left, header.bottom - scaled_value(window, 1),
+                 header.right, header.bottom};
+    HBRUSH divider_brush = CreateSolidBrush(RGB(223, 229, 236));
+    if (divider_brush != nullptr) {
+        FillRect(dc, &divider, divider_brush);
+        DeleteObject(divider_brush);
+    }
 }
 
 void save_now(AppState& state, bool clean_shutdown = false) noexcept {
@@ -480,6 +799,7 @@ void destroy_explorers(AppState& state) noexcept {
 
 HRESULT apply_layout(HWND window, AppState& state) {
     layout_sidebar(window, state);
+    layout_header(window, state);
     if (!has_active_group(state)) {
         for (std::size_t index = 0; index < state.explorers.size(); ++index) {
             state.explorers[index].set_visible(false);
@@ -898,12 +1218,12 @@ LRESULT CALLBACK address_edit_proc(HWND window, UINT message, WPARAM wparam,
     return DefSubclassProc(window, message, wparam, lparam);
 }
 
-void toggle_layout(HWND window, AppState& state) noexcept {
+void set_layout(HWND window, AppState& state,
+                panedock::core::LayoutTemplate target) noexcept {
     if (!has_active_group(state)) return;
     auto& group = active_group(state);
     capture_locations(state);
     const std::size_t previous = active_pane_index(group);
-    const auto target = next_layout(group.layout_template);
 
     std::vector<std::string> pane_ids;
     std::vector<std::string> tab_ids;
@@ -935,13 +1255,18 @@ void toggle_layout(HWND window, AppState& state) noexcept {
     save_now(state);
 }
 
+void toggle_layout(HWND window, AppState& state) noexcept {
+    if (!has_active_group(state)) return;
+    set_layout(window, state, next_layout(active_group(state).layout_template));
+}
+
 void update_splitter_drag(HWND window, AppState& state, POINT point) {
     if (!state.splitter_drag.has_value()) return;
     auto& group = active_group(state);
     const Splitter& drag = *state.splitter_drag;
     if (drag.ratio_index >= group.divider_ratios.size()) return;
 
-    const RECT client = pane_area(window);
+    const RECT client = pane_content_area(window);
     const int size = drag.vertical ? client.right - client.left
                                    : client.bottom - client.top;
     const int divider = layout_metrics(window).divider_thickness;
@@ -1040,16 +1365,50 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_TAB_CLASSES};
             if (!InitCommonControlsEx(&controls)) return -1;
             if (!state->sidebar.create(window, kGroupListId)) return -1;
+            state->group_label = CreateWindowExW(
+                0, L"STATIC", L"GROUPS",
+                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE, 0, 0, 0, 0,
+                window, nullptr, GetModuleHandleW(nullptr), nullptr);
+            if (state->group_label == nullptr) return -1;
+            SendMessageW(state->group_label, WM_SETFONT,
+                         reinterpret_cast<WPARAM>(
+                             GetStockObject(DEFAULT_GUI_FONT)),
+                         TRUE);
             for (std::size_t index = 0; index < state->sidebar_buttons.size();
                  ++index) {
                 state->sidebar_buttons[index] = CreateWindowExW(
                     0, L"BUTTON", kButtonLabels[index],
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON |
+                        BS_OWNERDRAW,
                     0, 0, 0, 0, window,
                     reinterpret_cast<HMENU>(kButtonIds[index]),
                     GetModuleHandleW(nullptr), nullptr);
                 if (state->sidebar_buttons[index] == nullptr) return -1;
                 SendMessageW(state->sidebar_buttons[index], WM_SETFONT,
+                             reinterpret_cast<WPARAM>(
+                                 GetStockObject(DEFAULT_GUI_FONT)),
+                             TRUE);
+            }
+            state->layout_label = CreateWindowExW(
+                0, L"STATIC", L"PANE LAYOUT",
+                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE, 0, 0, 0, 0,
+                window, nullptr, GetModuleHandleW(nullptr), nullptr);
+            if (state->layout_label == nullptr) return -1;
+            SendMessageW(state->layout_label, WM_SETFONT,
+                         reinterpret_cast<WPARAM>(
+                             GetStockObject(DEFAULT_GUI_FONT)),
+                         TRUE);
+            for (std::size_t index = 0; index < state->layout_buttons.size();
+                 ++index) {
+                state->layout_buttons[index] = CreateWindowExW(
+                    0, L"BUTTON", kLayoutButtonLabels[index],
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON |
+                        BS_OWNERDRAW | (index == 0 ? WS_GROUP : 0),
+                    0, 0, 0, 0, window,
+                    reinterpret_cast<HMENU>(kLayoutButtonIds[index]),
+                    GetModuleHandleW(nullptr), nullptr);
+                if (state->layout_buttons[index] == nullptr) return -1;
+                SendMessageW(state->layout_buttons[index], WM_SETFONT,
                              reinterpret_cast<WPARAM>(
                                  GetStockObject(DEFAULT_GUI_FONT)),
                              TRUE);
@@ -1163,15 +1522,125 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             break;
         case WM_MEASUREITEM:
-            if (state != nullptr && state->sidebar.measure_item(
-                                        reinterpret_cast<MEASUREITEMSTRUCT*>(lparam),
-                                        GetDpiForWindow(window))) return TRUE;
+            if (state != nullptr) {
+                auto* item = reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
+                if (item != nullptr && item->CtlType == ODT_BUTTON &&
+                    item->CtlID >= kLayoutButtonIdBase &&
+                    item->CtlID < kLayoutButtonIdBase +
+                                      static_cast<int>(kLayoutButtonIds.size())) {
+                    item->itemWidth = static_cast<UINT>(
+                        scaled_value(window, kLayoutButtonWidth));
+                    item->itemHeight = static_cast<UINT>(
+                        scaled_value(window, kLayoutButtonHeight));
+                    return TRUE;
+                }
+                if (state->sidebar.measure_item(item, GetDpiForWindow(window)))
+                    return TRUE;
+            }
             break;
         case WM_DRAWITEM:
-            if (state != nullptr && state->sidebar.draw_item(
-                                        reinterpret_cast<DRAWITEMSTRUCT*>(lparam)))
-                return TRUE;
+            if (state != nullptr) {
+                const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+                if (item != nullptr && item->CtlType == ODT_BUTTON &&
+                    item->CtlID >= kLayoutButtonIdBase &&
+                    item->CtlID < kLayoutButtonIdBase +
+                                      static_cast<int>(kLayoutButtonIds.size())) {
+                    draw_layout_button(
+                        *item, static_cast<std::size_t>(item->CtlID -
+                                                        kLayoutButtonIdBase));
+                    return TRUE;
+                }
+                if (item != nullptr && item->CtlType == ODT_BUTTON) {
+                    const auto found = std::find(
+                        kButtonIds.begin(), kButtonIds.end(),
+                        static_cast<int>(item->CtlID));
+                    if (found != kButtonIds.end()) {
+                        const auto label_index = static_cast<std::size_t>(
+                            found - kButtonIds.begin());
+                        draw_sidebar_action_button(*item,
+                                                   kButtonLabels[label_index]);
+                        return TRUE;
+                    }
+                }
+                if (state->sidebar.draw_item(
+                        reinterpret_cast<DRAWITEMSTRUCT*>(lparam)))
+                    return TRUE;
+            }
             break;
+        case WM_CTLCOLORSTATIC:
+            if (state != nullptr) {
+                const HWND control = reinterpret_cast<HWND>(lparam);
+                if (control == state->group_label ||
+                    control == state->layout_label) {
+                    const HDC dc = reinterpret_cast<HDC>(wparam);
+                    SetBkMode(dc, TRANSPARENT);
+                    SetTextColor(dc, RGB(152, 162, 179));
+                    SetTextCharacterExtra(dc, scaled_value(window, 1));
+                    return reinterpret_cast<LRESULT>(
+                        GetSysColorBrush(COLOR_WINDOW));
+                }
+            }
+            break;
+        case WM_ERASEBKGND:
+            if (state != nullptr) {
+                paint_client_background(window,
+                                        reinterpret_cast<HDC>(wparam));
+                return 1;
+            }
+            break;
+        case WM_CONTEXTMENU: {
+            if (state == nullptr) break;
+            const HWND target = reinterpret_cast<HWND>(wparam);
+            if (target != state->sidebar.window()) break;
+
+            POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+            if (lparam == -1) {
+                // Keyboard-invoked (Shift+F10 / menu key): anchor near the
+                // currently selected row instead of a stale cursor position.
+                RECT rect{};
+                GetWindowRect(target, &rect);
+                point = {rect.left + scaled_value(window, 12),
+                         rect.top + scaled_value(window, 12)};
+            }
+            POINT client_point = point;
+            ScreenToClient(target, &client_point);
+            const LRESULT hit = SendMessageW(
+                target, LB_ITEMFROMPOINT, 0,
+                MAKELPARAM(client_point.x, client_point.y));
+            const std::size_t index = static_cast<std::size_t>(LOWORD(hit));
+            if (HIWORD(hit) != 0 || index >= state->application.groups.size())
+                return 0;  // Empty list or click landed outside any row.
+
+            state->sidebar.set_selected_index(index);
+            refresh_sidebar(*state);
+
+            HMENU menu = CreatePopupMenu();
+            if (menu == nullptr) return 0;
+            AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kDuplicateGroupId),
+                        L"Duplicate Group");
+            AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kRenameGroupId),
+                        L"Rename Group");
+            AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kDeleteGroupId),
+                        L"Delete Group");
+            AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(menu,
+                       MF_STRING | (index == 0 ? MF_GRAYED : 0),
+                       static_cast<UINT_PTR>(kMoveUpId), L"Move Up");
+            AppendMenuW(menu,
+                       MF_STRING |
+                           (index + 1 >= state->application.groups.size()
+                                ? MF_GRAYED
+                                : 0),
+                       static_cast<UINT_PTR>(kMoveDownId), L"Move Down");
+            SetForegroundWindow(window);
+            const int command = TrackPopupMenu(
+                menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0,
+                window, nullptr);
+            DestroyMenu(menu);
+            if (command != 0)
+                SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+            return 0;
+        }
         case WM_COMMAND:
             if (state == nullptr) break;
             if (LOWORD(wparam) == kGroupListId && HIWORD(wparam) == LBN_SELCHANGE) {
@@ -1202,6 +1671,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     id < kUpButtonIdBase + static_cast<int>(kExplorerCount)) {
                     navigate_up(*state,
                                 static_cast<std::size_t>(id - kUpButtonIdBase));
+                    return 0;
+                }
+                if (id >= kLayoutButtonIdBase &&
+                    id < kLayoutButtonIdBase +
+                             static_cast<int>(kLayoutButtonIds.size())) {
+                    const std::size_t layout_index =
+                        static_cast<std::size_t>(id - kLayoutButtonIdBase);
+                    set_layout(window, *state, kLayoutTemplates[layout_index]);
                     return 0;
                 }
                 switch (LOWORD(wparam)) {
