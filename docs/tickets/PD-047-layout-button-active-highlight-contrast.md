@@ -92,3 +92,11 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接（2026-08-25）
+
+完成 `draw_layout_button` 的 checked 視覺調整：背景 `RGB(37,99,235)`、圖示 `RGB(255,255,255)`、邊框 `RGB(29,78,216)`；未選中與 disabled 顏色、分段外框、版型切換邏輯均未改動。`draw_layout_glyph` 的 1px 線條在程式碼上保留，未另加粗或新增繪製邏輯。
+
+自動化檢查：CMake configure、LLVM-MinGW/Ninja build 通過；CTest 4/4 通過；`rg -n "draw_layout_button" src\\app_shell\\main.cpp` 找到定義與唯一呼叫點；`git diff --check` 通過。
+
+桌面驗證：已實際啟動 `build\\PaneDock.exe` 並嘗試用 `SetCursorPos`/`mouse_event` 點擊五個版型按鈕；本環境的 `System.Drawing.Graphics.CopyFromScreen` 在兩種 overload 下皆回報「控制代碼無效」，無法取得視窗裁切截圖，因此未宣稱完成實機畫面比對。測試程序已用不帶 `/F` 的 `taskkill /PID` 優雅關閉。

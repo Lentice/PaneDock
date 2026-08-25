@@ -547,11 +547,11 @@ void draw_layout_button(const DRAWITEMSTRUCT& item,
                          BST_CHECKED;
     const COLORREF background = disabled
                                     ? RGB(245, 247, 249)
-                                    : checked ? RGB(234, 241, 255)
+                                    : checked ? RGB(37, 99, 235)
                                               : RGB(248, 250, 252);
     const COLORREF glyph = disabled
                                ? RGB(148, 163, 184)
-                               : checked ? RGB(37, 99, 235)
+                               : checked ? RGB(255, 255, 255)
                                          : RGB(100, 116, 139);
     RECT button = item.rcItem;
     InflateRect(&button, -1, -1);
@@ -561,7 +561,7 @@ void draw_layout_button(const DRAWITEMSTRUCT& item,
         DeleteObject(fill);
     }
     if (checked) {
-        HBRUSH border = CreateSolidBrush(RGB(207, 224, 255));
+        HBRUSH border = CreateSolidBrush(RGB(29, 78, 216));
         if (border != nullptr) {
             FrameRect(item.hDC, &button, border);
             DeleteObject(border);
