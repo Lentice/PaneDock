@@ -82,3 +82,11 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接（2026-08-25）
+
+完成 `src/app_shell/main.cpp` 的最小修正：從 `draw_brand_bar` 移除品牌列底部 `RGB(223,229,236)` 的 1px 分隔線。品牌列與側邊欄背景色、圖示/標題排版、Group 清單、footer 按鈕及側邊欄與 pane 區域的其他分隔線均未改動。
+
+自動化檢查：CMake configure、LLVM-MinGW/Ninja build 通過；CTest 4/4 通過；`rg -n "draw_brand_bar" src\\app_shell\\main.cpp` 通過；`git diff --check` 通過。
+
+實機驗證：已啟動 `build\\PaneDock.exe` 並嘗試用 `System.Drawing.Graphics.CopyFromScreen` 截圖；目前工作階段回報「控制代碼無效」，未取得有效畫面，故未宣稱完成互動畫面比對。測試程序已用不帶 `/F` 的 `taskkill /PID` 優雅關閉。

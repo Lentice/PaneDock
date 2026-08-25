@@ -1175,14 +1175,6 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
         FillRect(dc, &rect, background);
         DeleteObject(background);
     }
-    RECT divider{rect.left, rect.bottom - scaled_value(window, 1), rect.right,
-                rect.bottom};
-    HBRUSH divider_brush = CreateSolidBrush(RGB(223, 229, 236));
-    if (divider_brush != nullptr) {
-        FillRect(dc, &divider, divider_brush);
-        DeleteObject(divider_brush);
-    }
-
     const int icon_size = scaled_value(window, 28);
     const int icon_margin = scaled_value(window, 14);
     const RECT icon{rect.left + icon_margin,
