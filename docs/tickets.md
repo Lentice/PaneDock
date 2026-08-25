@@ -78,6 +78,8 @@
 | PD-038 | Pane 初次載入畫面空白,需要 hover 才刷新的修正 | 6 | `done` | PD-030 | [PD-038](tickets/PD-038-pane-blank-until-hover.md) |
 | PD-039 | 移除「PANE LAYOUT」文字標籤,版面配置按鈕改用 tooltip | 6 | `done` | PD-029 | [PD-039](tickets/PD-039-layout-label-removal-and-tooltip.md) |
 | PD-040 | Pane 卡片四角圓角(覆寫 PD-030 決策:下緣維持方角) | 6 | `done` | PD-030, PD-033 | [PD-040](tickets/PD-040-pane-card-full-corner-rounding.md) |
+| PD-041 | 主視窗缺少 `WS_CLIPCHILDREN`,全視窗重繪蓋掉 pane 內容 | 6 | `ready` | PD-038 | [PD-041](tickets/PD-041-main-window-missing-clipchildren.md) |
+| PD-042 | Pane 容器誤圓角化內部邊界頂端兩角,active 外框轉角瑕疵 | 6 | `ready` | PD-040 | [PD-042](tickets/PD-042-pane-container-top-corner-seam.md) |
 
 ## Dependency lanes
 
@@ -257,3 +259,12 @@ PD-001 標為 `superseded`,文件不動,作為決策軌跡保留。原本依賴 
 - **PD-040**:**覆寫上面「2026-08-25 — 視覺改版拆成 PD-028~031」記錄的候選結論**(pane 卡片只圓上緣、下緣維持方角,觸發條件是「先有安全裁切 `IExplorerBrowser` HWND 的方案」)。新證據:不需要裁切 `IExplorerBrowser` 本身的 HWND,`AGENTS.md` 已預先允許「幫每個 pane 加一層外層容器 HWND」——把容器 HWND 用 `SetWindowRgn`/`CreateRoundRectRgn` 裁成圓角,`IExplorerBrowser` 物件與其內部 Shell view 完全不受影響,滿足觸發條件的實質要求。詳見 ticket 文件的「覆寫聲明」一節。
 
 四張都歸在 Phase 6(視覺/易用性收尾,依賴既有 PD-029/030/033),與 Phase 7 的拖放互動票分開。
+
+### 2026-08-25 — PD-037~040 完成後真人桌面測試,發現兩個真實根因,開 PD-041/042
+
+使用者實機操作附截圖回報三個現象:「active pane 外框轉角處很奇怪」「hover 的 file item 才會顯示,不會自動刷新」「切換 active pane 會清除 pane 內所有 item,變成一片空白,又要 hover 才刷新」。讀程式碼找到兩個各自獨立、有具體證據的根因,不是 PD-038 沒修好,而是同一類症狀的兩個不同觸發點/成因:
+
+- **PD-041**:主視窗(`kWindowClassName`)`CreateWindowExW` 的 style 只有 `WS_OVERLAPPEDWINDOW`,從未加上 `WS_CLIPCHILDREN`。`paint_client_background` 對整個 client rect 做 `FillRect`,沒有這個 style 時會直接覆蓋子視窗(tab strip、PD-040 的 explorer container、Shell view)目前顯示在螢幕上的畫面,且不會觸發子視窗自行重繪。`set_active_pane` 結尾的 `InvalidateRect(window, nullptr, TRUE)` 正是觸發點——這解釋了「切換 active pane 清空畫面」;其他任何呼叫同樣 API 的既有路徑也會觸發同一症狀,這解釋了「需要 hover 才刷新」在 PD-038 修完之後依然存在(PD-038 修的是 `ExplorerHost` 內部導覽完成時機的問題,跟主視窗覆蓋子視窗是完全不同的根因)。修法是幫主視窗補上 `WS_CLIPCHILDREN`,一次解決所有呼叫點,而不是逐一稽核。
+- **PD-042**:PD-040 新增的 explorer container 的 `rect.top` 是「導覽列下緣」(內部邊界),不是 pane 最外層上緣,但 `apply_pane_container_region` 無條件把 container 四角都裁圓,導致頂端兩角(導覽列與內容區交界處)憑空多出圓角缺口,與沿著整個 pane 外緣繪製的 active 藍色外框對不齊,形成使用者說的「轉角處很奇怪」。修法是 container 只圓化下緣兩角(用 `CombineRgn`/`RGN_OR` 把頂端圓角區域補回直角),頂端維持直角。
+
+兩票都歸 Phase 6,依賴各自的前置票(PD-038、PD-040)。
