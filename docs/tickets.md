@@ -70,6 +70,10 @@
 | PD-029 | Quiet header 右對齊、版型圖示重繪與 more-actions 佔位按鈕 | 6 | `done` | PD-028 | [PD-029](tickets/PD-029-quiet-header-alignment-and-layout-icons.md) |
 | PD-030 | Pane 卡片背景(圓角上緣＋陰影)與 tab header 圖示化重繪 | 6 | `done` | PD-028, PD-029 | [PD-030](tickets/PD-030-pane-card-chrome-and-tab-header-restyle.md) |
 | PD-031 | 導覽列圖示化按鈕與圓角網址欄背景 | 6 | `done` | PD-030 | [PD-031](tickets/PD-031-navigation-row-icon-restyle.md) |
+| PD-033 | Active pane 指示改為扁平彩色外框,移除舊式立體邊框 | 6 | `ready` | PD-030 | [PD-033](tickets/PD-033-active-pane-flat-border-indicator.md) |
+| PD-034 | 拖曳懸停自動切換(側邊欄 Group 列與 pane 的 tab) | 7 | `ready` | PD-017, PD-019, PD-028 | [PD-034](tickets/PD-034-drag-hover-auto-switch.md) |
+| PD-035 | Tab 拖拉排序(同一 pane 內) | 7 | `ready` | PD-019 | [PD-035](tickets/PD-035-tab-drag-reorder.md) |
+| PD-036 | Group 拖拉排序(覆寫 PD-017 決策 5) | 7 | `ready` | PD-017, PD-028 | [PD-036](tickets/PD-036-group-drag-reorder.md) |
 
 ## Dependency lanes
 
@@ -123,6 +127,16 @@ Phase 6 — 視覺改版,對照 `docs/panedock-ui-prototype.html`(Quiet Header �
   註:四張票依視覺依賴順序串接(PD-030 的卡片背景繪製路徑是 PD-031 疊加導覽列圓角底的唯一插入點),
       但技術上彼此獨立、風險遞增(PD-028/029 純排版與 owner-draw 按鈕,PD-030 觸碰既有 `SysTabControl32`
       owner-draw 改造風險最高)。若時間有限,可只做到 PD-028/029 就先驗收,PD-030/031 分開排期。
+
+  PD-030 ─── PD-033(active pane 邊框改為扁平彩色,取代舊式 `WS_EX_CLIENTEDGE`)
+
+Phase 7 — 拖放互動,對照使用者 2026-08-25 grilling session 提出的六項需求
+  PD-017 + PD-019 + PD-028 ─── PD-034(拖曳懸停自動切換:側邊欄 Group 列 + pane 的 tab,內部/外部來源皆支援)
+  PD-019 ─── PD-035(tab 拖拉排序,僅限同一 pane 內)
+  PD-017 + PD-028 ─── PD-036(Group 拖拉排序,覆寫 PD-017 決策 5)
+  註:PD-034 用 `IDropTarget`/OLE 拖放偵測檔案懸停;PD-035/036 用滑鼠事件偵測清單/tab 項目本身的拖曳,
+      刻意不用 OLE 拖放,兩種機制分開設計以避免同一個側邊欄 `LISTBOX` 上互相干擾——PD-036 的文件
+      要求實作前需讀過 PD-034 與 PD-035 兩張票。三張票彼此技術獨立,可任意順序或並行實作。
 
 PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `IShellFolder` fallback in `docs/design-spec.md` §9.1, and the tickets below it must be rewritten rather than adjusted.
 
@@ -203,13 +217,11 @@ PD-001 標為 `superseded`,文件不動,作為決策軌跡保留。原本依賴 
 
 刻意讓 PD-010(位置持久化)與 PD-009(保活式切換)並行而非串接:兩者只共同依賴 PD-008,合併會讓 PD-009 同時扛 churn 量測與持久化,handle 數異常時難以歸因。
 
+刻意讓 PD-011 成為不寫產品程式碼的純驗證片:Go/No-Go 是全案閘門,混在實作片裡容易被草率蓋章。
+
 ### 2026-08-25 — 視覺改版拆成 PD-028~031,四項刻意不做的事
 
 使用者比對執行中的 app 截圖與 `docs/panedock-ui-prototype.html`(Quiet Header 變體)後回報落差明顯,並授權大幅修改程式碼。落差拆成四張依風險遞增排序的 ticket(PD-028~031),而不是一張大票,理由同上面 PD-001 拆分 PD-007～011 的先例:單一 ticket 裝不下、且風險層級差異大(排版改動 vs. `SysTabControl32` owner-draw 改造)不該綁在一起驗收。
-
-### 2026-08-25 — PD-032:PD-025 的關閉序列遺漏系統關機路徑
-
-使用者回報常常遇到「PaneDock did not shut down cleanly last time」警示,附截圖。讀 `main.cpp` 的 `window_proc` 後確認:`clean_shutdown` 只在 `WM_CLOSE` 分支被寫回 `true`,而 Windows 關機/登出/重開機送的是 `WM_QUERYENDSESSION`/`WM_ENDSESSION`,不是 `WM_CLOSE`——程式碼完全沒有攔截這兩個訊息。這代表**任何一次正常的系統關機或登出都會被誤判成不乾淨關閉**,不是使用者的 extension 或環境有問題,是 PD-025 完成時漏掉的一個終止路徑(PD-025 的驗收清單只驗證了 `Stop-Process -Force` 模擬崩潰,沒有涵蓋系統關機訊息)。開 PD-032 修正,做法是在 `WM_QUERYENDSESSION` 補存檔並標記乾淨、在 `WM_ENDSESSION`(`wParam=TRUE`)才真的收尾銷毀 view,詳見 ticket 文件的「根本原因」一節。
 
 四項刻意不做、且已寫入對應 ticket 的 Non-goals 的決定,記在這裡供之後檢索:
 
@@ -218,4 +230,15 @@ PD-001 標為 `superseded`,文件不動,作為決策軌跡保留。原本依賴 
 - **不刪除 Duplicate／Rename／Delete／Move Up／Move Down 的側邊欄按鈕功能,只搬進 Group 列的右鍵 context menu**(PD-028):這五個是 FR-001 的必要功能,設計稿沒畫出來不代表要拿掉,推論是被收進次要互動裡。
 - **Pane 卡片只圓上緣,下緣(貼著真實 `IExplorerBrowser` 內容)維持方角,不做完整四角圓角**(PD-030):四角圓角需要裁切 Shell view 本身的 HWND,目前沒有安全的做法;上緣是自繪的 tab header,可以自然圓角。若之後要做完整四角圓角,觸發條件是「先有一個能安全裁切 `IExplorerBrowser` HWND 而不影響其生命週期與 site 契約的具體方案」,依 §已否決的方向 的規則辦理(此項目前不算「否決」,只是候選,尚未列入表格,因為還沒有人提出可行方案可供評估)。
 
-刻意讓 PD-011 成為不寫產品程式碼的純驗證片:Go/No-Go 是全案閘門,混在實作片裡容易被草率蓋章。
+### 2026-08-25 — PD-032:PD-025 的關閉序列遺漏系統關機路徑
+
+使用者回報常常遇到「PaneDock did not shut down cleanly last time」警示,附截圖。讀 `main.cpp` 的 `window_proc` 後確認:`clean_shutdown` 只在 `WM_CLOSE` 分支被寫回 `true`,而 Windows 關機/登出/重開機送的是 `WM_QUERYENDSESSION`/`WM_ENDSESSION`,不是 `WM_CLOSE`——程式碼完全沒有攔截這兩個訊息。這代表**任何一次正常的系統關機或登出都會被誤判成不乾淨關閉**,不是使用者的 extension 或環境有問題,是 PD-025 完成時漏掉的一個終止路徑(PD-025 的驗收清單只驗證了 `Stop-Process -Force` 模擬崩潰,沒有涵蓋系統關機訊息)。開 PD-032 修正,做法是在 `WM_QUERYENDSESSION` 補存檔並標記乾淨、在 `WM_ENDSESSION`(`wParam=TRUE`)才真的收尾銷毀 view,詳見 ticket 文件的「根本原因」一節。
+
+### 2026-08-25 — grilling session:六項行為/資料模型需求核對,新開 PD-033~036
+
+使用者列出六項需求逐一要求核對現況(session persistence、active pane 視覺、drag-hover 切換 tab/Group、tab 拖拉排序、Group 拖拉排序、realize-on-activation),用一輪 fact-finding + grilling 問答核對。結論:
+
+- **兩項已經完成,不需要新 ticket**:每個 Group/pane/tab 的 location 與 active tab 記錄與自動還原(`SessionDocument`/`capture_locations`/`save_now` 已涵蓋全部 Group,非僅預設 Group);realize-on-activation(`apply_layout`/`activate_group` 只對 `state.realized[pane]` 為真的 pane 動作,程式碼證實有落實)。
+- **四項需要新 ticket**:PD-033(active pane 邊框改為扁平彩色,取代舊式 `WS_EX_CLIENTEDGE` 立體邊框)、PD-034(拖曳懸停自動切換,依使用者要求同時支援內部/外部來源、且涵蓋側邊欄 Group 列與 tab 兩種目標)、PD-035(tab 拖拉排序,依使用者確認範圍僅限同一 pane 內)、PD-036(Group 拖拉排序,明確覆寫 PD-017 決策 5——該決策記在 PD-017 文件內部,未登記進本頁「已否決的方向」表格,新證據為使用者本次直接提出的需求)。
+- PD-034/035/036 三張票共用同一種「滑鼠事件拖曳偵測,不用 OLE `IDropTarget`」的排序互動語言(PD-035/036),與「`IDropTarget` 懸停偵測,不接受實際 drop」的檔案懸停互動語言(PD-034)分開設計,避免同一個控制項(側邊欄 `LISTBOX`)上兩套拖放機制互相干擾——細節見各票的已確認的產品決策。
+- 新開為 Phase 7(PD-034~036,拖放互動類);PD-033 歸在 Phase 6(視覺改版收尾,依賴 PD-030)。
