@@ -65,7 +65,7 @@
 | PD-025 | 崩潰復原路徑:不乾淨關閉偵測、退回備份告知、備份保護(FR-013) | 5 | `done` | PD-024 | [PD-025](tickets/PD-025-crash-recovery-path.md) |
 | PD-026 | release evidence 改為量測完整應用程式而非 Phase 0 原型 | 5 | `done` | PD-023 | [PD-026](tickets/PD-026-release-evidence-covers-shipped-app.md) |
 | PD-027 | MVP 驗收清單在四種必要環境的執行與發佈閘門判定 | 5 | `done` | PD-024, PD-025, PD-026 | [PD-027](tickets/PD-027-mvp-acceptance-and-release-gate.md) |
-| PD-032 | 系統關機／登出／重開機時誤報「不乾淨關閉」的修正 | 5 | `ready` | PD-025 | [PD-032](tickets/PD-032-endsession-clean-shutdown-handling.md) |
+| PD-032 | 系統關機／登出／重開機時誤報「不乾淨關閉」的修正 | 5 | `done` | PD-025 | [PD-032](tickets/PD-032-endsession-clean-shutdown-handling.md) |
 | PD-028 | 側邊欄品牌列、Group 兩行摘要與 footer 按鈕改版 | 6 | `done` | PD-017 | [PD-028](tickets/PD-028-sidebar-brand-and-group-summary-restyle.md) |
 | PD-029 | Quiet header 右對齊、版型圖示重繪與 more-actions 佔位按鈕 | 6 | `done` | PD-028 | [PD-029](tickets/PD-029-quiet-header-alignment-and-layout-icons.md) |
 | PD-030 | Pane 卡片背景(圓角上緣＋陰影)與 tab header 圖示化重繪 | 6 | `planned` | PD-028, PD-029 | [PD-030](tickets/PD-030-pane-card-chrome-and-tab-header-restyle.md) |

@@ -1876,6 +1876,17 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             UnregisterHotKey(window, kLayoutToggleHotkeyId);
             PostQuitMessage(0);
             return 0;
+        case WM_QUERYENDSESSION:
+            if (state != nullptr) {
+                capture_window_placement(window, *state);
+                save_now(*state, true);
+            }
+            return TRUE;
+        case WM_ENDSESSION:
+            if (wparam) {
+                if (state != nullptr) destroy_explorers(*state);
+            }
+            return 0;
         default: break;
     }
     return DefWindowProcW(window, message, wparam, lparam);
