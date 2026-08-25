@@ -101,6 +101,8 @@ bool switch_layout(GroupState& group, LayoutTemplate layout_template,
                    const std::vector<std::string>& new_tab_ids = {});
 
 bool add_tab(PaneState& pane, TabState tab);
+bool reorder_tab(PaneState& pane, const std::string& tab_id,
+                 std::size_t target_index) noexcept;
 bool close_tab(PaneState& pane, const std::string& tab_id,
                const ShellLocation& default_location);
 bool set_active_tab(PaneState& pane, const std::string& tab_id) noexcept;

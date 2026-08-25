@@ -85,3 +85,12 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+- 核心新增簽章：`bool reorder_tab(PaneState& pane, const std::string& tab_id, std::size_t target_index) noexcept`。找到 tab 且目標索引小於 `pane.tabs.size()` 才移動；tab id 不存在或索引超出範圍時回傳 `false` 且保留原狀態。`active_tab_id` 不會被改寫。`test_reorder_tab` 覆蓋成功移動、active id 保留、不存在的 `tab_id` 與超出範圍的 `target_index`。
+- UI 以每個 `tab_strips[index]` 的 `tab_strip_proc` subclass 處理普通 `WM_LBUTTONDOWN`／`WM_MOUSEMOVE`／`WM_LBUTTONUP`，沒有新增或改動 PD-034 的 `IDropTarget`／OLE 註冊。按下先記錄 tab id、起點與 pane；位移超過 `max(SM_CXDRAG, SM_CYDRAG)` 後才進入拖曳狀態，並以 `TCM_HITTEST` 取得同一 strip 的目標。游標離開 strip、命中 `+` 或放開時沒有合法目標都取消，不會跨 pane 排序。
+- 插入指示線由 `draw_tab_insertion_indicator` 在 owner-draw tab item 後繪製，使用既有 accent blue `RGB(37, 99, 235)`、依 DPI 縮放的 2px 寬垂直線；來源索引大於目標索引時畫於目標左緣，來源索引小於目標索引時畫於目標右緣。放開且目標不同於來源才呼叫 `core::reorder_tab`，成功後 `refresh_tab_strip` 與 `save_now`。
+- 第一次左鍵仍交給 `DefSubclassProc`，既有主視窗 `WM_PARENTNOTIFY` 的 `pane_at_point`／`set_active_pane` 路徑保持不變；因此短距離點擊仍是原有切換行為。PD-034 的外部檔案 OLE drag 沒有 tab 內 `WM_LBUTTONDOWN` 起點，不會建立本票的內部拖曳狀態，兩者可共存。
+- Computer Use 初始化後兩次 `list_apps()` 都遇到相同原生管線錯誤：`Computer Use native pipe is unavailable: failed to connect native pipe: 系統找不到指定的檔案。 (os error 2)`。因此本回合沒有宣稱完成真實滑鼠拖曳、插入線、跨 pane 取消或重開持久化的桌面驗收；也沒有觀察到 `TCM_HITTEST` 與 tab 數量變動的競態。程式在放開時仍重新驗證 active Group、pane、tab id 與目標索引，若狀態已失效則 core 會安全回傳 `false`。
+- Agent checks：Release configure 成功；`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 為 4/4；`rg -n "reorder_tab" src tests` 命中 core 宣告／定義、app 呼叫與 test；`git diff --check` 通過。工作樹保留未提交變更，PD-036 未修改。

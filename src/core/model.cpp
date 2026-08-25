@@ -255,6 +255,20 @@ bool add_tab(PaneState& pane, TabState tab) {
     return true;
 }
 
+bool reorder_tab(PaneState& pane, const std::string& tab_id,
+                 std::size_t target_index) noexcept {
+    const auto tab = find_id(pane.tabs, tab_id);
+    if (tab == pane.tabs.end() || target_index >= pane.tabs.size()) {
+        return false;
+    }
+    TabState moved = std::move(*tab);
+    pane.tabs.erase(tab);
+    pane.tabs.insert(pane.tabs.begin() +
+                        static_cast<std::ptrdiff_t>(target_index),
+                    std::move(moved));
+    return true;
+}
+
 bool close_tab(PaneState& pane, const std::string& tab_id,
                const ShellLocation& default_location) {
     const auto tab = find_id(pane.tabs, tab_id);

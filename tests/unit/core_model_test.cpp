@@ -176,6 +176,26 @@ void test_tab_and_pane_mutations() {
     EXPECT(is_valid(value));
 }
 
+void test_reorder_tab() {
+    GroupState value = group();
+    PaneState& first = value.panes.front();
+    EXPECT(add_tab(first, tab("second")));
+    EXPECT(add_tab(first, tab("third")));
+    first.active_tab_id = "second";
+
+    EXPECT(reorder_tab(first, "tab-1", 2));
+    EXPECT(first.tabs[0].id == "second");
+    EXPECT(first.tabs[1].id == "third");
+    EXPECT(first.tabs[2].id == "tab-1");
+    EXPECT(first.active_tab_id == "second");
+
+    const PaneState unchanged = first;
+    EXPECT(!reorder_tab(first, "absent", 0));
+    EXPECT(first == unchanged);
+    EXPECT(!reorder_tab(first, "tab-1", first.tabs.size()));
+    EXPECT(first == unchanged);
+}
+
 void test_layout_migration_both_directions() {
     GroupState value = group("group", LayoutTemplate::four_pane_grid);
     EXPECT(add_tab(value.panes[1], tab("tab-2b")));
@@ -231,6 +251,7 @@ int main() {
     test_tab_navigation_history();
     test_group_mutations();
     test_tab_and_pane_mutations();
+    test_reorder_tab();
     test_layout_migration_both_directions();
     test_failed_mutations_leave_valid_state();
     return panedock::test::summary("core_model");

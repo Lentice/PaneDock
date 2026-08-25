@@ -281,6 +281,16 @@ struct AppState {
     panedock::core::SessionDocument session_document;
     std::filesystem::path session_directory;
     std::optional<Splitter> splitter_drag;
+    struct TabDrag final {
+        HWND strip{nullptr};
+        std::size_t pane_index{};
+        std::size_t source_index{};
+        std::string tab_id;
+        POINT start{};
+        bool dragging{};
+        std::optional<std::size_t> target_index;
+    };
+    std::optional<TabDrag> tab_drag;
     panedock::sidebar::Sidebar sidebar;
     std::array<HWND, kButtonIds.size()> sidebar_buttons{};
     HWND group_label{nullptr};
@@ -1929,6 +1939,143 @@ void close_tab_at_point(HWND window, AppState& state, POINT point) {
     close_tab_in_pane(window, state, pane_index, id);
 }
 
+std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
+                                             POINT point) noexcept {
+    const auto pane_index = tab_strip_index(state, strip);
+    if (!pane_index.has_value() || !has_active_group(state) ||
+        *pane_index >= active_group(state).panes.size()) {
+        return std::nullopt;
+    }
+    TCHITTESTINFO hit{};
+    hit.pt = point;
+    const LRESULT item = SendMessageW(strip, TCM_HITTEST, 0,
+                                      reinterpret_cast<LPARAM>(&hit));
+    const auto& tabs = active_group(state).panes[*pane_index].tabs;
+    if (item < 0 || static_cast<std::size_t>(item) >= tabs.size())
+        return std::nullopt;
+    return static_cast<std::size_t>(item);
+}
+
+void draw_tab_insertion_indicator(const DRAWITEMSTRUCT& item,
+                                  const AppState& state,
+                                  std::size_t item_index) noexcept {
+    if (!state.tab_drag.has_value() || !state.tab_drag->dragging ||
+        state.tab_drag->strip != item.hwndItem ||
+        !state.tab_drag->target_index.has_value() ||
+        *state.tab_drag->target_index == state.tab_drag->source_index ||
+        *state.tab_drag->target_index != item_index) {
+        return;
+    }
+    const int dpi = std::max(1, static_cast<int>(GetDpiForWindow(item.hwndItem)));
+    const int width = std::max(2, MulDiv(2, dpi, 96));
+    const int x = *state.tab_drag->target_index > state.tab_drag->source_index
+                      ? item.rcItem.right - width
+                      : item.rcItem.left;
+    RECT indicator{x, item.rcItem.top + MulDiv(3, dpi, 96), x + width,
+                   item.rcItem.bottom - MulDiv(3, dpi, 96)};
+    HBRUSH brush = CreateSolidBrush(RGB(37, 99, 235));
+    if (brush != nullptr) {
+        FillRect(item.hDC, &indicator, brush);
+        DeleteObject(brush);
+    }
+}
+
+void cancel_tab_drag(AppState& state, HWND strip) noexcept {
+    if (!state.tab_drag.has_value() || state.tab_drag->strip != strip)
+        return;
+    state.tab_drag.reset();
+    InvalidateRect(strip, nullptr, FALSE);
+    if (GetCapture() == strip) ReleaseCapture();
+}
+
+void finish_tab_drag(AppState& state, HWND strip) {
+    if (!state.tab_drag.has_value() || state.tab_drag->strip != strip)
+        return;
+    AppState::TabDrag drag = std::move(*state.tab_drag);
+    state.tab_drag.reset();
+    InvalidateRect(strip, nullptr, FALSE);
+    if (GetCapture() == strip) ReleaseCapture();
+    if (!drag.dragging || !drag.target_index.has_value() ||
+        *drag.target_index == drag.source_index || !has_active_group(state))
+        return;
+    auto& group = active_group(state);
+    if (drag.pane_index >= group.panes.size()) return;
+    auto& pane = group.panes[drag.pane_index];
+    if (panedock::core::reorder_tab(pane, drag.tab_id,
+                                    *drag.target_index)) {
+        refresh_tab_strip(state, drag.pane_index);
+        save_now(state);
+    }
+}
+
+void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
+                     LPARAM lparam) {
+    if (!state.tab_drag.has_value() || state.tab_drag->strip != strip) return;
+    if ((wparam & MK_LBUTTON) == 0) {
+        cancel_tab_drag(state, strip);
+        return;
+    }
+    const POINT point = point_from_lparam(lparam);
+    RECT client{};
+    GetClientRect(strip, &client);
+    if (!PtInRect(&client, point)) {
+        cancel_tab_drag(state, strip);
+        return;
+    }
+    if (!state.tab_drag->dragging) {
+        const int threshold = std::max(
+            1, std::max(GetSystemMetrics(SM_CXDRAG),
+                        GetSystemMetrics(SM_CYDRAG)));
+        const int dx = point.x - state.tab_drag->start.x;
+        const int dy = point.y - state.tab_drag->start.y;
+        if (dx < -threshold || dx > threshold || dy < -threshold ||
+            dy > threshold) {
+            state.tab_drag->dragging = true;
+        }
+    }
+    if (!state.tab_drag->dragging) return;
+    const auto target = tab_item_at_point(state, strip, point);
+    if (target == state.tab_drag->target_index) return;
+    state.tab_drag->target_index = target;
+    InvalidateRect(strip, nullptr, FALSE);
+}
+
+LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
+                                LPARAM lparam, UINT_PTR pane_index,
+                                DWORD_PTR reference_data) {
+    auto* state = reinterpret_cast<AppState*>(reference_data);
+    if (message == WM_LBUTTONDOWN && state != nullptr &&
+        pane_index < state->tab_strips.size()) {
+        const POINT point = point_from_lparam(lparam);
+        std::optional<AppState::TabDrag> pending;
+        const auto item = tab_item_at_point(*state, window, point);
+        if (item.has_value() && has_active_group(*state) &&
+            pane_index < active_group(*state).panes.size()) {
+            const auto& pane = active_group(*state).panes[pane_index];
+            pending = AppState::TabDrag{window, pane_index, *item,
+                                        pane.tabs[*item].id, point, false,
+                                        std::nullopt};
+        }
+        const LRESULT result = DefSubclassProc(window, message, wparam, lparam);
+        if (pending.has_value() && !state->tab_drag.has_value()) {
+            state->tab_drag = std::move(*pending);
+            SetCapture(window);
+        }
+        return result;
+    }
+    if (message == WM_MOUSEMOVE && state != nullptr) {
+        update_tab_drag(*state, window, wparam, lparam);
+    } else if (message == WM_LBUTTONUP && state != nullptr) {
+        finish_tab_drag(*state, window);
+    } else if (message == WM_CAPTURECHANGED && state != nullptr) {
+        cancel_tab_drag(*state, window);
+    } else if (message == WM_NCDESTROY && state != nullptr) {
+        cancel_tab_drag(*state, window);
+        RemoveWindowSubclass(window, tab_strip_proc, pane_index);
+    }
+    return DefSubclassProc(window, message, wparam, lparam);
+}
+
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                              LPARAM lparam) {
     auto* state = reinterpret_cast<AppState*>(
@@ -2028,6 +2175,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                              static_cast<int>(index)),
                     GetModuleHandleW(nullptr), nullptr);
                 if (state->tab_strips[index] == nullptr) return -1;
+                if (!SetWindowSubclass(state->tab_strips[index], tab_strip_proc,
+                                       index,
+                                       reinterpret_cast<DWORD_PTR>(state)))
+                    return -1;
                 SendMessageW(state->tab_strips[index], WM_SETFONT,
                              reinterpret_cast<WPARAM>(
                                  GetStockObject(DEFAULT_GUI_FONT)),
@@ -2222,6 +2373,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                             pane.tabs[item_index].id == pane.active_tab_id;
                         draw_tab_item(*item, text.c_str(), is_add_button,
                                      active);
+                        draw_tab_insertion_indicator(*item, *state,
+                                                     item_index);
                         return TRUE;
                     }
                 }
