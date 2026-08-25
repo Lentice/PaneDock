@@ -2364,6 +2364,14 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
             const POINT point = point_from_lparam(lparam);
             const auto item = tab_item_at_point(*state, window, point);
             if (item.has_value()) {
+                const auto& tabs = active_group(*state).panes[pane_index].tabs;
+                if (*item >= tabs.size()) return 0;
+                if (state->tab_drag.has_value())
+                    cancel_tab_drag(*state, state->tab_drag->strip);
+                state->tab_drag = AppState::TabDrag{
+                    window, pane_index, *item, tabs[*item].id, point, false,
+                    *item};
+                SetCapture(window);
                 SendMessageW(GetParent(window), kTabStripSelectionMessage,
                              static_cast<WPARAM>(pane_index),
                              static_cast<LPARAM>(*item));
@@ -2371,6 +2379,18 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                 SendMessageW(GetParent(window), kTabStripSelectionMessage,
                              static_cast<WPARAM>(pane_index), -1);
             }
+            return 0;
+        }
+        if (message == WM_MOUSEMOVE) {
+            update_tab_drag(*state, window, wparam, lparam);
+            return 0;
+        }
+        if (message == WM_LBUTTONUP) {
+            finish_tab_drag(*state, window);
+            return 0;
+        }
+        if (message == WM_CAPTURECHANGED) {
+            cancel_tab_drag(*state, window);
             return 0;
         }
         if (message == WM_NCDESTROY)

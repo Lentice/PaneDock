@@ -91,3 +91,10 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-25 實作交接
+
+- 已確認 PD-034 原本就正常：`register_tab_drag_hover_targets` 將螢幕座標轉為 tab strip client 座標後，共用 `tab_item_at_point` 以 `tab_visuals[pane].rect` 命中；未再使用 `TCM_HITTEST`，因此 PD-049 後的檔案拖曳懸停自動切換路徑不需修改。
+- 已修正 PD-035：`tab_strip_proc` 的 `WM_LBUTTONDOWN` 命中 tab 時建立既有 `AppState::TabDrag`、呼叫 `SetCapture` 並保留原有 tab 選取；新增 `WM_MOUSEMOVE`、`WM_LBUTTONUP`、`WM_CAPTURECHANGED` 分別接回 `update_tab_drag`、`finish_tab_drag`、`cancel_tab_drag`。排序命中完全使用 `tab_visuals` 的 `PtInRect`，既有 `core::reorder_tab`、插入指示線、重新整理與保存流程未重寫。`+` 按鈕與 `RegisterDragDrop` 註冊時機未變更。
+- 非互動驗證：LLVM-MinGW/Ninja Release configure、build 成功；`ctest --test-dir build --output-on-failure` 為 4/4 通過；票據 `rg` 檢查確認 `TCM_HITTEST`／`TCM_SETCURSEL`／`TCN_SELCHANGE` 均不存在；`git diff --check` 通過。
+- 真實桌面拖曳未驗證：執行 `tasklist /FI "IMAGENAME eq PaneDock.exe"` 回報 `Access denied`，表示目前桌面／程序檢視受限；未宣稱完成滑鼠拖曳排序或 PD-034 人工驗收，也未強制終止任何程序。

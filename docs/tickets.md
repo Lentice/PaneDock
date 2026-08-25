@@ -87,7 +87,7 @@
 | PD-047 | 版面配置按鈕的選中態高亮對比度不足 | 6 | `done` | PD-046 | [PD-047](tickets/PD-047-layout-button-active-highlight-contrast.md) |
 | PD-048 | Pane 卡片外框/陰影顏色偏重,需調淡 | 6 | `done` | PD-045 | [PD-048](tickets/PD-048-pane-card-border-shadow-lightening.md) |
 | PD-049 | Pane tab 條改為自繪控制項,取代原生 `SysTabControl32`(覆寫 PD-019 決策 1) | 6 | `done` | PD-037, PD-030 | [PD-049](tickets/PD-049-custom-tab-strip-control.md) |
-| PD-050 | 在新自繪 tab 條上重接拖曳懸停自動切換與拖曳排序 | 7 | `ready` | PD-049, PD-034, PD-035 | [PD-050](tickets/PD-050-tab-drag-behaviors-on-custom-strip.md) |
+| PD-050 | 在新自繪 tab 條上重接拖曳懸停自動切換與拖曳排序 | 7 | `done` | PD-049, PD-034, PD-035 | [PD-050](tickets/PD-050-tab-drag-behaviors-on-custom-strip.md) |
 | PD-051 | 每個 pane 增加狀態列(項目數/選取數) | 7 | `done` | PD-007, PD-030 | [PD-051](tickets/PD-051-pane-status-bar.md) |
 | PD-052 | Pane 增加 refresh 按鈕與檢視樣式切換按鈕,補上 `TabState::view_mode` 還原缺口 | 7 | `done` | PD-020, PD-006 | [PD-052](tickets/PD-052-pane-refresh-and-view-mode-switcher.md) |
 | PD-053 | 側邊欄品牌列與 Group 清單之間的分隔線造成視覺割裂 | 6 | `done` | PD-028 | [PD-053](tickets/PD-053-sidebar-brand-divider-removal.md) |
