@@ -157,3 +157,25 @@ Start-Process .\build\PaneDock.exe -ArgumentList "--diagnostic"
 
 - `Get-AuthenticodeSignature` 對 `DropboxExt64.96.0.dll` 回報 `Status: Valid`、簽署者 `CN="Dropbox, Inc"`,**證明對話框宣稱的「檔案損毀」不成立**,錯誤來自本 process 的簽章政策。
 - 撰票時以 `--diagnostic` 啟動一次並掃描視窗,只看到 `PaneDockMainWindow` 標題 `PaneDock — Diagnostic Mode`,**沒有**攔到 `#32770`;同一輪不加旗標的一般模式反而攔到一個 `#32770`,但內容是 PD-025 的 `PaneDock did not shut down cleanly last time.`,與本票無關。這表示被擋的 extension 是**延遲載入**的,只有在 Shell view 走到會觸發該 extension 的路徑(例如導覽到 Dropbox 資料夾、或觸發 overlay/context menu handler)時才會跳。**實作者驗證時必須導覽到會實際觸發第三方 extension 的位置,否則會得到假陰性。**
+- 撰票後使用者又回報第二個同型對話框,對象換成 `C:\Program Files\Common Files\TortoiseOverlays\TortoiseOverlays.dll`,錯誤狀態同為 `0xc0000428`。**兩個不同廠商、兩個不同 DLL、同一個錯誤碼**,進一步排除「某一顆 DLL 壞了」的解釋,確認是本 process 的簽章政策所致。TortoiseOverlays 是 icon overlay handler,只在 Shell view 顯示版本控管中的資料夾時載入——這給出了可靠的觸發路徑。
+
+### 2026-08-26 實作交接(dispatcher 直接實作)
+
+本票由 dispatcher 直接實作,未派給實作 agent,理由是:這個對話框正在阻塞其他票的自動化驗證(它會讓 PaneDock 停在模態對話框上不結束,持續鎖住 `build\PaneDock.exe` 導致 `ld.lld: failed to write output 'PaneDock.exe': Permission denied`),屬於阻塞性缺陷。
+
+**修改:** `src/app_shell/main.cpp` `wWinMain`,把原本只有失敗分支的 `if (!diagnostic_mode)` 改成雙分支,成功時呼叫 `SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS)`,失敗分支的 `OutputDebugStringW` 原文不變。依決策 4 採「讀出後 OR 回去」,依決策 5 只在 `diagnostic_mode == true` 時呼叫。
+
+**驗證結果——用同一支腳本、同一組操作(啟動 → 等 10 秒讓四個 pane 完成導覽 → 把 pane 0 的網址列導向 `E:\GitHub\PaneDock`(git working copy,會觸發 TortoiseOverlays)→ 等 9 秒 → 以 `EnumWindows` 掃描本 process 的 `#32770`),只換二進位檔:**
+
+| 二進位 | 啟動後 `#32770` 數 | 導覽到 git working copy 後 `#32770` 數 |
+|---|---|---|
+| 修改前(`git stash` 掉本票改動後重建) | **1** | **1** |
+| 修改後 | **0** | **0** |
+
+導覽確實發生,不是假陰性:修改後那一輪的 `PrintWindow` 截圖顯示 pane 0 的網址列為 `E:\GitHub\PaneDock`、檔案清單列出 `.git` / `build` / `docs` / `src` / `.gitignore`,標題列為 `PaneDock — Diagnostic Mode`。同一張截圖中檔案清單**沒有任何 overlay 圖示**(綠勾等),與「TortoiseOverlays 仍然被擋、只是不再彈窗」一致——本票沒有削弱 PD-024 的抑制效果。
+
+驗收 3(一般模式行為不變)以結構保證:`SetErrorMode` 位於 `if (diagnostic_mode)` 之內,一般模式與 `SetProcessMitigationPolicy` 失敗而 fallback 的情形都不會執行到。
+
+關閉正常,無殘留程序。`cmake --build build` 成功;`ctest --test-dir build --output-on-failure` `100% tests passed out of 4`;`git diff --check` 通過。
+
+**未完成的驗收:** 驗收 1 要求「全程不出現任何映像錯誤對話框」已驗證;但 baseline 那一輪攔到的 `#32770` 因腳本的閉包作用域錯誤沒能讀出標題與內文,只確認了「有一個對話框」。使用者提供的兩張截圖(Dropbox 與 TortoiseOverlays)是該對話框內容的直接證據,故未再重跑 baseline。

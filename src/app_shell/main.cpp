@@ -3361,7 +3361,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             diagnostic_mode = SetProcessMitigationPolicy(
                                   ProcessSignaturePolicy, &policy,
                                   sizeof(policy)) != 0;
-            if (!diagnostic_mode) {
+            if (diagnostic_mode) {
+                // PD-070: MicrosoftSignedOnly makes the loader reject every
+                // non-Microsoft-signed shell extension with
+                // STATUS_INVALID_IMAGE_HASH, and by default the loader shows
+                // a modal image-error box for each one. That box blocks the
+                // unattended crash-attribution run this mode exists for, and
+                // its text blames the extension's vendor for a block we
+                // asked for. Suppress the box; the load still fails, just
+                // silently. Only in diagnostic mode: in normal mode the box
+                // is the user's only clue that an extension is genuinely
+                // broken.
+                SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS);
+            } else {
                 OutputDebugStringW(
                     L"PaneDock: diagnostic mode requested but "
                     L"SetProcessMitigationPolicy failed\n");
