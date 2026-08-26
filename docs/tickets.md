@@ -113,6 +113,7 @@
 | PD-073 | Tab 溢出時變成零寬矩形完全無法點擊;加左移/右移捲動按鈕 | 7 | `ready` | PD-055, PD-062, PD-066 | [PD-073](tickets/PD-073-tab-overflow-scroll-buttons.md) |
 | PD-074 | 拖曳排序看不到「拖的是哪一個」:placeholder 內畫出淡化的被拖曳項目 | 7 | `ready` | PD-066, PD-061, PD-062 | [PD-074](tickets/PD-074-drag-placeholder-shows-dragged-item.md) |
 | PD-075 | Pane 導覽列五個圖示由三種技術繪製,統一到 `Segoe MDL2 Assets` | 7 | `ready` | PD-052, PD-064 | [PD-075](tickets/PD-075-unify-pane-chrome-icon-style.md) |
+| PD-076 | Group 與 pane tab 的 active/hover 樣式不一致,以 Group 現有樣式為準套用到 tab | 7 | `ready` | PD-061, PD-062, PD-072 | [PD-076](tickets/PD-076-unify-group-tab-active-hover-style.md) |
 
 ## Dependency lanes
 
@@ -364,3 +365,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 - **PD-068**(CRITICAL,關閉當機):使用者回報存取違規對話框。以 crash dump + `cdb` 取得堆疊,`FAILURE_BUCKET_ID` 直接指出 `NULL_POINTER_WRITE_c0000005_shell32.dll!CDefView::SetCallback`。根因是 PD-051 的 `ExplorerHost::destroy()` 把 `IShellFolderView::SetCallback` 的**第二個 out 參數**傳成 `nullptr`,而 shell32 的實作不檢查 null 就寫入 `*ppOldCB`。安裝路徑(`navigation_complete`)傳的是合法位址,所以只有關閉時當機。修改前 3 輪 3 次當機、修改後 5 輪 0 次。**這個當機是先前多次誤判「本環境不支援截圖/自動化」的真正原因**:當機使程序殘留,殘留程序持有 `Ctrl+Shift+L` 熱鍵,新實例 `RegisterHotKey` 失敗後中止建立主視窗,於是 `MainWindowHandle` 為 0、`PrintWindow` 回傳 False;殘留程序也會鎖住 exe 讓建置失敗。**教訓:當機時以 crash dump 堆疊為準,不要用「換版本測幾輪沒重現」來歸因**——本票以 `9ee9c17` 測 3 輪確實 0 次,差點誤指 PD-055/PD-057。
 
 依賴與排程:PD-055 是 PD-058/PD-062/PD-066 的前置(tab 不能點就無法驗證 tab 的 hover、視覺與拖曳);PD-056/PD-057/PD-059/PD-060/PD-061/PD-063/PD-064/PD-065 彼此獨立可平行。PD-058、PD-062、PD-066 都會改到 `paint_tab_strip`,後做的那票需先 rebase。
+
+### 2026-08-26 — 使用者直接要求 Group/tab active-hover 樣式一致,開 PD-076
+
+使用者原文:「group and pane tab should apply uniform styles on active/hover item. base on current group active/hover style, apply to pane tab. pane tab can use its own proper font.」核對現況:側邊欄 `Sidebar::draw_item`(`kSidebarActiveBackground` 藍底 pill ＋ `kSidebarActiveText` 藍字)active/hover 用「底色 + 文字色」雙重強調;`paint_tab_strip` 的 tab 只靠灰階底色深淺區分,`SetTextColor` 在迴圈外設一次、active/hover/一般三態文字色完全相同,沒有任何強調色。另外發現一個獨立的死碼:tab strip 建立時送的 `WM_SETFONT`(`main.cpp` 第 2736-2739 行)因為 `tab_strip_proc` 把 `WM_PAINT` 整個交給 `paint_tab_strip` 自繪、從未讀回該字型,對實際渲染完全沒有效果——tab 文字目前用的是 GDI 的 stock 字型,不是任何專案定義的字型。此落差不在 PD-062(只處理幾何,色票決策明講不要求對齊側邊欄)或 PD-072(只處理字型 face 語系一致性,Non-goals 明講不改 tab 視覺樣式)範圍內,兩者都是本票的依賴而非涵蓋者。開 PD-076,決策方向:底色/文字色改套用側邊欄既有色票,不建跨模組共用色票標頭(沿用兩模組各自定義相近顏色常數的既有模式);不統一圓角(tab 6px 與側邊欄 10px 的層級關係是 PD-062 定案,不重開);字重不隨 active 改變(側邊欄本身也是靠色彩而非字重做強調);移除死碼 `WM_SETFONT`,改為 `paint_tab_strip` 內明確選字型繪製。
