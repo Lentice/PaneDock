@@ -160,3 +160,12 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-26 實作交接
+
+- 死碼確認與刪除：修改前 `rg` 只有 `WM_DRAWITEM` 的 `ODT_TAB` 分支呼叫 `draw_tab_item`／`draw_tab_insertion_indicator`，而目前 tab strip 是 subclass `STATIC` 的 `WM_PAINT` 路徑；已刪除該整段分支、兩個函式及因此失去最後呼叫者的舊 folder glyph。最終 `rg -n "ODT_TAB|draw_tab_item|draw_tab_insertion_indicator" src\` 為零筆。
+- tab 幾何：`apply_tab_item_size` 先沿用既有文字量測、min/max width 與等比壓縮結果，再從索引順序抽出 `source_index`、於 `target_index` 插回同寬槽；非來源 tab 的 `TabVisual::rect` 因此即時讓位，來源 rect 清空，槽 rect 存於 `tab_placeholder_rects`。`paint_tab_strip` 保留 PD-058 hover 與 PD-062 的 horizontal gap、padding、圓角邏輯，只跳過來源並以 `RGB(238,242,246)` 淺灰填色、`RGB(203,213,225)` 點線圓角框畫槽。hit-test 對槽回傳目前 target，其餘仍直接使用重排後 rect。
+- Group 做法：原生 owner-draw LISTBOX 掌控固定列 rect，無法像 tab 一樣重排控制項幾何；因此 `Sidebar::draw_item` 在來源列只清背景、在目標列以相同填色與點線框畫整列 placeholder，其餘列位置維持 LISTBOX 原生配置。原 `draw_group_insertion_indicator` 已刪除。修改前以舊 build 實測確認原 Group 插入指示線確實會畫出：4× 圖可見目標列下緣 2px 藍線；tab 舊 `ODT_TAB` 路徑則仍無視覺。
+- 重繪與取消：`update_tab_drag`／`update_group_drag` 的「target 未變即 return」guard 保留；tab 只有 target 改變時才重算幾何並 invalidate。cancel、原位放開與 capture changed 都清除 drag state；tab 會重算正常 rect，Group 會 invalidate 回正常內容。沒有 timer、polling、浮動縮圖或動畫。
+- 真實 HWND 驗證：主視窗 `GetWindowRect=(50,50)-(1450,950)`；`GetDlgItem(hwnd,100)` Group list 的 `GetWindowRect=(66,165)-(276,902)`；`GetDlgItem(hwnd,200)` 第一個 tab strip 的 `GetWindowRect=(299,140)-(859,171)`。以 `SetCursorPos` 分 8 段移動並呼叫 `mouse_event(LEFTDOWN/LEFTUP)`；此自動化桌面的 `GetForegroundWindow` 回傳 null，故同時向相同真實 child HWND 補送等價 mouse messages，`GUITHREADINFO.hwndCapture` 分別精確等於 tab strip／Group list HWND，證明拖曳狀態已進入 app。按住未 LEFTUP 時以 `PrintWindow(hwnd, hdc, 2)` 截圖，再用 nearest-neighbor 4× 放大檢視：`build/pd066-tab-drag-4x.bmp` 可見來源 tab 消失、其他 tab 讓位、目標為等寬虛線圓角槽；`build/pd066-group-drag-4x.bmp` 可見來源列內容消失、目標列為等高虛線槽；`build/pd066-group-before-4x.bmp` 留存修改前 2px 藍線對照（build artifacts，不納入版本控制）。LEFTUP 後重排成功；後續執行的畫面順序反映前輪 tab／Group 新順序。游標靜止並等待 Shell 活動收斂後，10 秒 PaneDock process CPU delta 為 `0`。
+- 檢查：乾淨 `build-pd066-final` Release configure/build 成功；`ctest --test-dir build-pd066-final --output-on-failure` 為 4/4；`git diff --check` 通過。標準 `build` 曾在啟動測試前成功連結；後續因已依要求用不帶 `/F` 的 `taskkill /PID` 送出優雅關閉訊號、測試環境中的 Shell 行程仍短暫持有既有輸出檔，最終完整重建改在隔離 build directory 執行。所有本輪測試 PID 都已各自執行不帶 `/F` 的 `taskkill /PID`。

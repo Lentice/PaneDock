@@ -17,6 +17,8 @@ constexpr COLORREF kSidebarActiveText = RGB(23, 75, 180);
 constexpr COLORREF kSidebarSubtitleText = RGB(148, 163, 184);
 constexpr COLORREF kBadgeBackground = RGB(228, 231, 236);
 constexpr COLORREF kBadgeText = RGB(71, 85, 105);
+constexpr COLORREF kPlaceholderBackground = RGB(238, 242, 246);
+constexpr COLORREF kPlaceholderBorder = RGB(203, 213, 225);
 
 std::wstring format_subtitle(std::size_t pane_count, std::size_t tab_count) {
     std::wstring text = std::to_wstring(pane_count);
@@ -102,7 +104,8 @@ bool Sidebar::measure_item(MEASUREITEMSTRUCT* item, UINT dpi) const noexcept {
     return true;
 }
 
-bool Sidebar::draw_item(const DRAWITEMSTRUCT* item) const noexcept {
+bool Sidebar::draw_item(const DRAWITEMSTRUCT* item,
+                        bool placeholder, bool dragged) const noexcept {
     if (item == nullptr || item->CtlType != ODT_LISTBOX ||
         item->CtlID != static_cast<UINT>(control_id_)) return false;
     if (item->itemID == static_cast<UINT>(-1) ||
@@ -115,12 +118,27 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item) const noexcept {
         FillRect(item->hDC, &item->rcItem, background);
         DeleteObject(background);
     }
+    if (dragged && !placeholder) return true;
 
     RECT pill = item->rcItem;
     pill.left += MulDiv(4, static_cast<int>(dpi_), 96);
     pill.right -= MulDiv(4, static_cast<int>(dpi_), 96);
     pill.top += MulDiv(2, static_cast<int>(dpi_), 96);
     pill.bottom -= MulDiv(2, static_cast<int>(dpi_), 96);
+    if (placeholder) {
+        HBRUSH fill = CreateSolidBrush(kPlaceholderBackground);
+        HPEN border = CreatePen(PS_DOT, 1, kPlaceholderBorder);
+        if (fill != nullptr && border != nullptr) {
+            const HGDIOBJ old_brush = SelectObject(item->hDC, fill);
+            const HGDIOBJ old_pen = SelectObject(item->hDC, border);
+            Rectangle(item->hDC, pill.left, pill.top, pill.right, pill.bottom);
+            SelectObject(item->hDC, old_pen);
+            SelectObject(item->hDC, old_brush);
+        }
+        if (fill != nullptr) DeleteObject(fill);
+        if (border != nullptr) DeleteObject(border);
+        return true;
+    }
     if (selected || hovered) {
         HBRUSH pill_brush = CreateSolidBrush(
             selected ? kSidebarActiveBackground : kSidebarHoverBackground);

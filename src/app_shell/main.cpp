@@ -334,6 +334,7 @@ struct AppState {
     };
     std::array<HWND, kExplorerCount> tab_strips{};
     std::array<std::vector<TabVisual>, kExplorerCount> tab_visuals{};
+    std::array<std::optional<RECT>, kExplorerCount> tab_placeholder_rects{};
     std::array<RECT, kExplorerCount> tab_add_rects{};
     // A tab index is stored here; pane.tabs.size() represents the add button.
     std::array<std::optional<std::size_t>, kExplorerCount> tab_hover_indices{};
@@ -814,84 +815,6 @@ void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
 }
 
-void draw_folder_glyph(HDC dc, RECT icon_rect) noexcept {
-    // Fixed-color decorative folder silhouette drawn by us (not a Shell
-    // icon API) — see PD-030 non-goal: pane header chrome is PaneDock's,
-    // not the Shell view's. Colors approximate the design mock's
-    // .folder-icon (#ffd873 fill / #c58b06 stroke).
-    const int width = static_cast<int>(icon_rect.right - icon_rect.left);
-    const int height = static_cast<int>(icon_rect.bottom - icon_rect.top);
-    if (width <= 0 || height <= 0) return;
-    const int body_top = icon_rect.top + std::max(1, height / 4);
-    const int tab_width = std::max(2, width * 2 / 5);
-
-    HBRUSH fill = CreateSolidBrush(RGB(255, 216, 115));
-    HPEN border = CreatePen(PS_SOLID, 1, RGB(197, 139, 6));
-    if (fill != nullptr && border != nullptr) {
-        const HGDIOBJ old_brush = SelectObject(dc, fill);
-        const HGDIOBJ old_pen = SelectObject(dc, border);
-        Rectangle(dc, icon_rect.left, icon_rect.top + std::max(1, height / 8),
-                  icon_rect.left + tab_width, body_top + 1);
-        Rectangle(dc, icon_rect.left, body_top, icon_rect.right,
-                  icon_rect.bottom);
-        SelectObject(dc, old_brush);
-        SelectObject(dc, old_pen);
-    }
-    if (fill != nullptr) DeleteObject(fill);
-    if (border != nullptr) DeleteObject(border);
-}
-
-void draw_tab_item(const DRAWITEMSTRUCT& item, const wchar_t* text,
-                   bool is_add_button, bool active) noexcept {
-    const COLORREF background = active ? RGB(255, 255, 255) : RGB(248, 250, 252);
-    HBRUSH fill = CreateSolidBrush(background);
-    if (fill != nullptr) {
-        FillRect(item.hDC, &item.rcItem, fill);
-        DeleteObject(fill);
-    }
-
-    const int height = static_cast<int>(item.rcItem.bottom - item.rcItem.top);
-    const int inset = std::max(2, height / 6);
-    RECT content{item.rcItem.left + inset, item.rcItem.top,
-                item.rcItem.right - inset, item.rcItem.bottom};
-
-    if (!is_add_button) {
-        const int icon_size = std::max(8, height - inset * 2);
-        RECT icon_rect{content.left,
-                       content.top + (height - icon_size) / 2,
-                       content.left + icon_size,
-                       content.top + (height - icon_size) / 2 + icon_size};
-        draw_folder_glyph(item.hDC, icon_rect);
-        content.left = icon_rect.right + std::max(2, inset / 2);
-    }
-
-    // Active tab is bolded; the strip's assigned font is queried and
-    // re-created with FW_BOLD only for the duration of this draw call (tab
-    // counts are small, so a per-draw HFONT is cheaper than a cached one).
-    const HFONT base_font =
-        reinterpret_cast<HFONT>(SendMessageW(item.hwndItem, WM_GETFONT, 0, 0));
-    HFONT bold_font = nullptr;
-    HFONT font_to_use = base_font;
-    if (active && base_font != nullptr) {
-        LOGFONTW logfont{};
-        if (GetObjectW(base_font, sizeof(logfont), &logfont) != 0) {
-            logfont.lfWeight = FW_BOLD;
-            bold_font = CreateFontIndirectW(&logfont);
-            if (bold_font != nullptr) font_to_use = bold_font;
-        }
-    }
-    const HGDIOBJ old_font =
-        font_to_use != nullptr ? SelectObject(item.hDC, font_to_use) : nullptr;
-    SetBkMode(item.hDC, TRANSPARENT);
-    SetTextColor(item.hDC, RGB(62, 76, 96));
-    UINT format = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS;
-    format |= is_add_button ? DT_CENTER : DT_LEFT;
-    DrawTextW(item.hDC, text, -1, &content, format);
-    if (old_font != nullptr) SelectObject(item.hDC, old_font);
-    if (bold_font != nullptr) DeleteObject(bold_font);
-    if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
-}
-
 RECT pane_area(HWND window) noexcept {
     RECT area = client_rect(window);
     area.left = std::min(area.right,
@@ -1095,6 +1018,8 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index) {
     const int add_width = scaled_value(strip, kTabAddButtonWidth);
     const int available = std::max(0, static_cast<int>(client.right) - add_width);
     auto& visuals = state.tab_visuals[pane_index];
+    auto& placeholder = state.tab_placeholder_rects[pane_index];
+    placeholder.reset();
     std::vector<int> widths;
     widths.reserve(visuals.size());
     const int text_reserve = scaled_value(
@@ -1119,12 +1044,32 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index) {
         for (int& width : widths)
             width = std::max(min_width, MulDiv(width, available, total));
     }
+    std::vector<std::size_t> order(visuals.size());
+    std::iota(order.begin(), order.end(), 0);
+    if (state.tab_drag.has_value() && state.tab_drag->dragging &&
+        state.tab_drag->pane_index == pane_index &&
+        state.tab_drag->target_index.has_value() &&
+        state.tab_drag->source_index < order.size() &&
+        *state.tab_drag->target_index < order.size()) {
+        const std::size_t source = state.tab_drag->source_index;
+        order.erase(order.begin() + source);
+        order.insert(order.begin() + *state.tab_drag->target_index, source);
+    }
     int x = 0;
-    for (std::size_t index = 0; index < visuals.size(); ++index) {
+    for (const std::size_t index : order) {
         const int width = widths[index];
         const int left = std::min(x, available);
         const int right = std::max(left, std::min(x + width, available));
-        visuals[index].rect = {left, 0, right, client.bottom};
+        const RECT rect{left, 0, right, client.bottom};
+        if (state.tab_drag.has_value() && state.tab_drag->dragging &&
+            state.tab_drag->pane_index == pane_index &&
+            state.tab_drag->target_index.has_value() &&
+            index == state.tab_drag->source_index) {
+            visuals[index].rect = {};
+            placeholder = rect;
+        } else {
+            visuals[index].rect = rect;
+        }
         x += width;
     }
     state.tab_add_rects[pane_index] = {
@@ -2259,41 +2204,23 @@ std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
         *pane_index >= active_group(state).panes.size()) {
         return std::nullopt;
     }
+    if (state.tab_drag.has_value() && state.tab_drag->strip == strip &&
+        state.tab_drag->target_index.has_value() &&
+        state.tab_placeholder_rects[*pane_index].has_value() &&
+        PtInRect(&*state.tab_placeholder_rects[*pane_index], point))
+        return state.tab_drag->target_index;
     const auto& visuals = state.tab_visuals[*pane_index];
     for (std::size_t index = 0; index < visuals.size(); ++index)
         if (PtInRect(&visuals[index].rect, point)) return index;
     return std::nullopt;
 }
 
-void draw_tab_insertion_indicator(const DRAWITEMSTRUCT& item,
-                                  const AppState& state,
-                                  std::size_t item_index) noexcept {
-    if (!state.tab_drag.has_value() || !state.tab_drag->dragging ||
-        state.tab_drag->strip != item.hwndItem ||
-        !state.tab_drag->target_index.has_value() ||
-        *state.tab_drag->target_index == state.tab_drag->source_index ||
-        *state.tab_drag->target_index != item_index) {
-        return;
-    }
-    const int dpi = std::max(1, static_cast<int>(GetDpiForWindow(item.hwndItem)));
-    const int width = std::max(2, MulDiv(2, dpi, 96));
-    const int x = *state.tab_drag->target_index > state.tab_drag->source_index
-                      ? item.rcItem.right - width
-                      : item.rcItem.left;
-    RECT indicator{x, item.rcItem.top + MulDiv(3, dpi, 96), x + width,
-                   item.rcItem.bottom - MulDiv(3, dpi, 96)};
-    HBRUSH brush = CreateSolidBrush(RGB(37, 99, 235));
-    if (brush != nullptr) {
-        FillRect(item.hDC, &indicator, brush);
-        DeleteObject(brush);
-    }
-}
-
 void cancel_tab_drag(AppState& state, HWND strip) noexcept {
     if (!state.tab_drag.has_value() || state.tab_drag->strip != strip)
         return;
     state.tab_drag.reset();
-    InvalidateRect(strip, nullptr, FALSE);
+    if (const auto pane = tab_strip_index(state, strip); pane.has_value())
+        apply_tab_item_size(state, *pane);
     if (GetCapture() == strip) ReleaseCapture();
 }
 
@@ -2302,7 +2229,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
         return;
     AppState::TabDrag drag = std::move(*state.tab_drag);
     state.tab_drag.reset();
-    InvalidateRect(strip, nullptr, FALSE);
+    apply_tab_item_size(state, drag.pane_index);
     if (GetCapture() == strip) ReleaseCapture();
     if (!drag.dragging || !drag.target_index.has_value() ||
         *drag.target_index == drag.source_index || !has_active_group(state))
@@ -2346,7 +2273,7 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
     const auto target = tab_item_at_point(state, strip, point);
     if (target == state.tab_drag->target_index) return;
     state.tab_drag->target_index = target;
-    InvalidateRect(strip, nullptr, FALSE);
+    apply_tab_item_size(state, state.tab_drag->pane_index);
 }
 
 void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
@@ -2369,6 +2296,9 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(31, 41, 55));
     for (std::size_t index = 0; index < visuals.size(); ++index) {
+        if (state.tab_drag.has_value() && state.tab_drag->dragging &&
+            state.tab_drag->pane_index == pane_index &&
+            index == state.tab_drag->source_index) continue;
         RECT rect = visuals[index].rect;
         rect.left = std::min(rect.right, rect.left + left_gap);
         rect.right = std::max(rect.left, rect.right - right_gap);
@@ -2403,6 +2333,25 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
                                    text_rect.right - text_padding);
         DrawTextW(dc, visuals[index].text.c_str(), -1, &text_rect,
                   DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+    if (state.tab_placeholder_rects[pane_index].has_value()) {
+        RECT rect = *state.tab_placeholder_rects[pane_index];
+        rect.left = std::min(rect.right, rect.left + left_gap);
+        rect.right = std::max(rect.left, rect.right - right_gap);
+        rect.top = std::min(rect.bottom, rect.top + vertical_padding);
+        rect.bottom = std::max(rect.top, rect.bottom - vertical_padding);
+        HBRUSH fill = CreateSolidBrush(RGB(238, 242, 246));
+        HPEN border = CreatePen(PS_DOT, border_width, RGB(203, 213, 225));
+        if (fill != nullptr && border != nullptr) {
+            const HGDIOBJ old_brush = SelectObject(dc, fill);
+            const HGDIOBJ old_pen = SelectObject(dc, border);
+            RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius,
+                      radius);
+            SelectObject(dc, old_pen);
+            SelectObject(dc, old_brush);
+        }
+        if (fill != nullptr) DeleteObject(fill);
+        if (border != nullptr) DeleteObject(border);
     }
     RECT add = state.tab_add_rects[pane_index];
     RECT hover = add;
@@ -2464,7 +2413,7 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                     cancel_tab_drag(*state, state->tab_drag->strip);
                 state->tab_drag = AppState::TabDrag{
                     window, pane_index, *item, tabs[*item].id, point, false,
-                    *item};
+                    std::nullopt};
                 SetCapture(window);
                 SendMessageW(GetParent(window), kTabStripSelectionMessage,
                              static_cast<WPARAM>(pane_index),
@@ -2550,31 +2499,6 @@ std::optional<std::size_t> group_item_at_point(const AppState& state,
     if (HIWORD(hit) != 0 || index >= state.application.groups.size())
         return std::nullopt;
     return index;
-}
-
-void draw_group_insertion_indicator(const DRAWITEMSTRUCT& item,
-                                    const AppState& state,
-                                    std::size_t item_index) noexcept {
-    if (!state.group_drag.has_value() || !state.group_drag->dragging ||
-        state.group_drag->list != item.hwndItem ||
-        !state.group_drag->target_index.has_value() ||
-        *state.group_drag->target_index == state.group_drag->source_index ||
-        *state.group_drag->target_index != item_index) {
-        return;
-    }
-    const int dpi = std::max(1, static_cast<int>(GetDpiForWindow(item.hwndItem)));
-    const int width = std::max(2, MulDiv(2, dpi, 96));
-    const int inset = MulDiv(4, dpi, 96);
-    const int y = *state.group_drag->target_index > state.group_drag->source_index
-                      ? item.rcItem.bottom - width
-                      : item.rcItem.top;
-    RECT indicator{item.rcItem.left + inset, y, item.rcItem.right - inset,
-                   y + width};
-    HBRUSH brush = CreateSolidBrush(RGB(37, 99, 235));
-    if (brush != nullptr) {
-        FillRect(item.hDC, &indicator, brush);
-        DeleteObject(brush);
-    }
 }
 
 void cancel_group_drag(AppState& state, HWND list) noexcept {
@@ -3045,38 +2969,20 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         return TRUE;
                     }
                 }
-                if (item != nullptr && item->CtlType == ODT_TAB) {
-                    const auto pane_index =
-                        tab_strip_index(*state, item->hwndItem);
-                    if (pane_index.has_value() && has_active_group(*state) &&
-                        *pane_index < active_group(*state).panes.size()) {
-                        const auto& pane =
-                            active_group(*state).panes[*pane_index];
-                        const auto item_index =
-                            static_cast<std::size_t>(item->itemID);
-                        const bool is_add_button =
-                            item_index >= pane.tabs.size();
-                        const std::wstring text =
-                            is_add_button
-                                ? std::wstring(L"+")
-                                : tab_display_text(pane.tabs[item_index]);
-                        const bool active =
-                            !is_add_button &&
-                            pane.tabs[item_index].id == pane.active_tab_id;
-                        draw_tab_item(*item, text.c_str(), is_add_button,
-                                     active);
-                        draw_tab_insertion_indicator(*item, *state,
-                                                     item_index);
-                        return TRUE;
-                    }
-                }
+                const auto* list_item =
+                    reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+                const bool placeholder =
+                    list_item != nullptr && state->group_drag.has_value() &&
+                    state->group_drag->dragging &&
+                    state->group_drag->target_index.has_value() &&
+                    *state->group_drag->target_index == list_item->itemID;
+                const bool dragged =
+                    list_item != nullptr && state->group_drag.has_value() &&
+                    state->group_drag->dragging &&
+                    state->group_drag->source_index == list_item->itemID;
                 if (state->sidebar.draw_item(
-                        reinterpret_cast<DRAWITEMSTRUCT*>(lparam))) {
-                    const auto* list_item =
-                        reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
-                    draw_group_insertion_indicator(
-                        *list_item, *state,
-                        static_cast<std::size_t>(list_item->itemID));
+                        reinterpret_cast<DRAWITEMSTRUCT*>(lparam),
+                        placeholder, dragged)) {
                     return TRUE;
                 }
             }
