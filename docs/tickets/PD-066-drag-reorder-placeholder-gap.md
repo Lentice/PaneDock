@@ -169,3 +169,14 @@ git diff --check
 - 重繪與取消：`update_tab_drag`／`update_group_drag` 的「target 未變即 return」guard 保留；tab 只有 target 改變時才重算幾何並 invalidate。cancel、原位放開與 capture changed 都清除 drag state；tab 會重算正常 rect，Group 會 invalidate 回正常內容。沒有 timer、polling、浮動縮圖或動畫。
 - 真實 HWND 驗證：主視窗 `GetWindowRect=(50,50)-(1450,950)`；`GetDlgItem(hwnd,100)` Group list 的 `GetWindowRect=(66,165)-(276,902)`；`GetDlgItem(hwnd,200)` 第一個 tab strip 的 `GetWindowRect=(299,140)-(859,171)`。以 `SetCursorPos` 分 8 段移動並呼叫 `mouse_event(LEFTDOWN/LEFTUP)`；此自動化桌面的 `GetForegroundWindow` 回傳 null，故同時向相同真實 child HWND 補送等價 mouse messages，`GUITHREADINFO.hwndCapture` 分別精確等於 tab strip／Group list HWND，證明拖曳狀態已進入 app。按住未 LEFTUP 時以 `PrintWindow(hwnd, hdc, 2)` 截圖，再用 nearest-neighbor 4× 放大檢視：`build/pd066-tab-drag-4x.bmp` 可見來源 tab 消失、其他 tab 讓位、目標為等寬虛線圓角槽；`build/pd066-group-drag-4x.bmp` 可見來源列內容消失、目標列為等高虛線槽；`build/pd066-group-before-4x.bmp` 留存修改前 2px 藍線對照（build artifacts，不納入版本控制）。LEFTUP 後重排成功；後續執行的畫面順序反映前輪 tab／Group 新順序。游標靜止並等待 Shell 活動收斂後，10 秒 PaneDock process CPU delta 為 `0`。
 - 檢查：乾淨 `build-pd066-final` Release configure/build 成功；`ctest --test-dir build-pd066-final --output-on-failure` 為 4/4；`git diff --check` 通過。標準 `build` 曾在啟動測試前成功連結；後續因已依要求用不帶 `/F` 的 `taskkill /PID` 送出優雅關閉訊號、測試環境中的 Shell 行程仍短暫持有既有輸出檔，最終完整重建改在隔離 build directory 執行。所有本輪測試 PID 都已各自執行不帶 `/F` 的 `taskkill /PID`。
+
+### 2026-08-26 獨立驗證(非實作 agent)
+
+用與交接區不同的自動化路徑重驗,結論一致。
+
+- 死碼:`rg "ODT_TAB|draw_tab_item|draw_tab_insertion_indicator|draw_group_insertion_indicator" src/` 為零筆。
+- **第一次嘗試只用 `SendMessage(WM_LBUTTONDOWN/MOUSEMOVE)` 送訊息,placeholder 完全沒出現**——tab 條外觀與非拖曳狀態一模一樣。改成 `SetForegroundWindow` + `SetCursorPos` + `mouse_event(LEFTDOWN/MOVE)` 建立真實 capture 後才進入拖曳狀態(`GUITHREADINFO.hwndCapture` 等於目標 child HWND)。**後續要驗證拖曳行為的票都必須走真實 `mouse_event` 路徑,純訊息注入無效。**
+- tab(4× 放大,按住未放開):來源 tab 從第 1 格消失,後續 tab 全部左移讓位,目標位置是一個等寬的淺灰虛線圓角空槽。
+- Group(4× 放大):目標列是等高的淺灰虛線空槽,來源列內容清空。與 tab 的填色/虛線樣式一致(決策 3)。Group 的其他列位置不移動,符合決策 4 記載的 `LISTBOX` 折衷。
+- 拖曳後靜止 12 秒,`TotalProcessorTime` delta = **0 ms**。handles 603、working set 53MB,無異常成長。
+- `WM_CLOSE` 優雅結束,行程數歸零。
