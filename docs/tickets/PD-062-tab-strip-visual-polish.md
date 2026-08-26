@@ -150,3 +150,16 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-26 實作交接
+
+- `src/app_shell/main.cpp` 完成 PD-062；PD-058 的 tab/「+」hover 狀態、`WM_MOUSEMOVE`/`WM_MOUSELEAVE` 與拖曳更新路徑保留，未使用已移除的 Ctrl+Shift+L 熱鍵。
+- 三個獨立 DPI 常數：`kTabHorizontalGap = 6`、`kTabTextHorizontalPadding = 6`、`kTabVerticalPadding = 3`（均為 96-DPI px，分別控制相鄰 tab 總 gap、圓角 tab 內文字左右 padding、上下留白）。`kTabStripHeight` 由 `24` 改為 `31`，31px 列高扣除上下 3px 後，tab 視覺高度為 25px，與目標稿一致。
+- Tab 圓角 `kTabCornerRadius = 6`（96-DPI px）：比 pane card 的 10px 小一級，並大於 address-bar 背景的 4px，符合小元件／容器／pill 的層級關係。active 填色/外框為 `RGB(226,232,240)` / `RGB(203,213,225)`；inactive 為 `RGB(244,246,248)` / `RGB(232,237,242)`；PD-058 的 inactive hover `RGB(236,240,244)` 保持不變。外框已不再使用 `COLOR_ACTIVEBORDER`。
+- `apply_tab_item_size` 原本的 `24` 改為 `text_reserve = scaled_value(strip, 2 * kTabTextHorizontalPadding + kTabCloseButtonSpace)`，其中既有版面保留的 close space 為 16px，所以新值為 `2*6+16 = 28`；只保留空間、不繪製關閉「×」，中鍵關閉行為不變。等比壓縮演算法保留，另將超出可用寬度的矩形 clamp 到零寬，避免極端 tab 數量產生倒置 RECT。
+- 「+」不再使用 `DrawTextW`：`kTabPlusSize = 12`、`kTabPlusLineWidth = 2`（96-DPI px），以 `CreatePen(PS_SOLID, scaled pen width, RGB(31,41,55))` 畫水平/垂直兩條線並置中。每次繪製均先 `SelectObject` 還原舊 pen，再 `DeleteObject`；tab 的 fill/border brush/pen 也同樣還原後釋放。
+- 3 倍 NearestNeighbor 截圖： [修改前](assets/PD-062-tab-strip-before-3x.png)、[修改後](assets/PD-062-tab-strip-after-3x.png)、[修改後「+」hover](assets/PD-062-tab-strip-after-plus-hover-3x.png)。修改前為 24px 方角 tab/字元「+」；修改後為 31px 圓角 tab/線條「+」，長標題仍以既有 `DT_END_ELLIPSIS` 截斷。
+- 實機 Release 驗證（最後建置執行檔 `build\\pd062-output\\PaneDock.exe`）：主視窗 `50,50-1450,950`；以 `GetDlgItem(main, 200..203)` 取得四個 strip，再以 `GetWindowRect` 取得實際矩形：pane 0/1 `299,140-859,171`、`867,140-1427,171`，pane 2/3 `299,538-859,569`、`867,538-1427,569`；四者均為 `dpi=96`、列高 31px。四個 strip 的 `PrintWindow(hwnd, hdc, 2 /* PW_RENDERFULLCONTENT */)` 均回傳 `True`。
+- 實機滑鼠驗證在主視窗與 pane 0 strip 出現後才開始：四個「+」中心使用 `SetCursorPos`（均回傳 `True`）及 `mouse_event(MOUSEEVENTF_MOVE)`，最終座標為 `841,156`、`1409,156`、`841,554`、`1409,554`；3 倍圖與像素檢查確認 hover 背景由 `RGB(255,255,255)` 變為 PD-058 的 `RGB(236,240,244)`。
+- GDI 檢查：`GetGuiResources` 在 100 次四 strip 重繪前後為 `119 -> 119`（delta `0`）。兩台實機螢幕 `GetDpiForMonitor` 均為 96 DPI；同一套 `MulDiv` 縮放路徑的 144/192 DPI 自檢值為列高 `46/62`、gap `9/12`、文字 padding `9/12`、垂直留白 `4/6`、圓角 `9/12`、加號 pen `3/4`。
+- 驗證命令：configure 成功；`cmake --build build` 成功（因舊驗證程序持有原 `build\\PaneDock.exe`，最後一次將 generated runtime output 導向 `build\\pd062-output`，未改 tracked CMake/source）；`ctest --test-dir build --output-on-failure` 為 4/4 PASS；`git diff --check` PASS。每次實機測試後均使用不帶 `/F` 的 `taskkill /PID <pid>`，未使用 `Stop-Process -Force`。

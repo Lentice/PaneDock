@@ -49,13 +49,24 @@ constexpr int kLayoutButtonWidth = 30;
 constexpr int kPaneCanvasPadding = 15;
 constexpr int kPaneDividerThickness = 8;
 constexpr int kSidebarHeadingHeight = 20;
-constexpr int kTabStripHeight = 24;
+constexpr int kTabStripHeight = 31;
 constexpr int kTabStripIdBase = 200;
 constexpr UINT kTabStripSelectionMessage = WM_APP + 49;
 // PD-049: content-sized tabs with a fixed add button at the right edge.
 constexpr int kTabMinWidth = 72;
 constexpr int kTabMaxWidth = 200;
 constexpr int kTabAddButtonWidth = 36;
+// PD-062: independent 96-DPI tab visual metrics. Gap is split across the
+// two sides of each tab; text padding is inside the rounded tab; vertical
+// padding is independent so the tab row can grow without changing either.
+constexpr int kTabHorizontalGap = 6;
+constexpr int kTabTextHorizontalPadding = 6;
+constexpr int kTabVerticalPadding = 3;
+constexpr int kTabCornerRadius = 6;
+// Kept as layout reserve only; closing remains middle-click (PD-062 scope).
+constexpr int kTabCloseButtonSpace = 16;
+constexpr int kTabPlusSize = 12;
+constexpr int kTabPlusLineWidth = 2;
 constexpr int kNavigationBarHeight = 28;
 constexpr int kStatusBarHeight = 24;
 constexpr int kNavigationButtonWidth = 32;
@@ -1086,6 +1097,8 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index) {
     auto& visuals = state.tab_visuals[pane_index];
     std::vector<int> widths;
     widths.reserve(visuals.size());
+    const int text_reserve = scaled_value(
+        strip, 2 * kTabTextHorizontalPadding + kTabCloseButtonSpace);
     HDC dc = GetDC(strip);
     HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     HGDIOBJ previous = dc == nullptr ? nullptr : SelectObject(dc, font);
@@ -1094,8 +1107,7 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index) {
         if (dc != nullptr)
             GetTextExtentPoint32W(dc, visual.text.c_str(),
                                   static_cast<int>(visual.text.size()), &size);
-        widths.push_back(std::clamp(static_cast<int>(size.cx) +
-                                        scaled_value(strip, 24),
+        widths.push_back(std::clamp(static_cast<int>(size.cx) + text_reserve,
                                     min_width, max_width));
     }
     if (dc != nullptr) {
@@ -1110,8 +1122,9 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index) {
     int x = 0;
     for (std::size_t index = 0; index < visuals.size(); ++index) {
         const int width = widths[index];
-        visuals[index].rect = {x, 0, std::min(x + width, available),
-                               client.bottom};
+        const int left = std::min(x, available);
+        const int right = std::max(left, std::min(x + width, available));
+        visuals[index].rect = {left, 0, right, client.bottom};
         x += width;
     }
     state.tab_add_rects[pane_index] = {
@@ -2345,43 +2358,86 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
         pane_index >= active_group(state).panes.size()) return;
     const auto& pane = active_group(state).panes[pane_index];
     const auto& visuals = state.tab_visuals[pane_index];
-    const int inset = scaled_value(window, 4);
+    const int horizontal_gap = scaled_value(window, kTabHorizontalGap);
+    const int left_gap = horizontal_gap / 2;
+    const int right_gap = horizontal_gap - left_gap;
+    const int text_padding =
+        scaled_value(window, kTabTextHorizontalPadding);
+    const int vertical_padding = scaled_value(window, kTabVerticalPadding);
+    const int radius = scaled_value(window, kTabCornerRadius);
+    const int border_width = scaled_value(window, 1);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(31, 41, 55));
     for (std::size_t index = 0; index < visuals.size(); ++index) {
         RECT rect = visuals[index].rect;
-        InflateRect(&rect, -inset, -inset);
+        rect.left = std::min(rect.right, rect.left + left_gap);
+        rect.right = std::max(rect.left, rect.right - right_gap);
+        rect.top = std::min(rect.bottom, rect.top + vertical_padding);
+        rect.bottom = std::max(rect.top, rect.bottom - vertical_padding);
         const bool active = pane.tabs[index].id == pane.active_tab_id;
         const bool hovered = !active &&
                              state.tab_hover_indices[pane_index] == index;
-        HBRUSH fill = CreateSolidBrush(
-            active ? RGB(226, 232, 240)
-                   : hovered ? RGB(236, 240, 244) : RGB(244, 246, 248));
-        if (fill != nullptr) {
-            FillRect(dc, &rect, fill);
-            DeleteObject(fill);
+        if (rect.right > rect.left && rect.bottom > rect.top) {
+            const COLORREF fill_color =
+                active ? RGB(226, 232, 240)
+                       : hovered ? RGB(236, 240, 244) : RGB(244, 246, 248);
+            const COLORREF border_color =
+                active ? RGB(203, 213, 225) : RGB(232, 237, 242);
+            HBRUSH fill = CreateSolidBrush(fill_color);
+            HPEN border = CreatePen(PS_SOLID, border_width, border_color);
+            if (fill != nullptr && border != nullptr) {
+                const HGDIOBJ old_brush = SelectObject(dc, fill);
+                const HGDIOBJ old_pen = SelectObject(dc, border);
+                RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom,
+                          radius, radius);
+                SelectObject(dc, old_pen);
+                SelectObject(dc, old_brush);
+            }
+            if (fill != nullptr) DeleteObject(fill);
+            if (border != nullptr) DeleteObject(border);
         }
-        FrameRect(dc, &rect, GetSysColorBrush(COLOR_ACTIVEBORDER));
         RECT text_rect = rect;
-        text_rect.left += inset;
-        text_rect.right -= inset;
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(31, 41, 55));
+        text_rect.left = std::min(text_rect.right,
+                                  text_rect.left + text_padding);
+        text_rect.right = std::max(text_rect.left,
+                                   text_rect.right - text_padding);
         DrawTextW(dc, visuals[index].text.c_str(), -1, &text_rect,
                   DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
     RECT add = state.tab_add_rects[pane_index];
+    RECT hover = add;
     const int add_inset = scaled_value(window, 5);
-    InflateRect(&add, -add_inset, -add_inset);
+    InflateRect(&hover, -add_inset, -add_inset);
     if (state.tab_hover_indices[pane_index].has_value() &&
         *state.tab_hover_indices[pane_index] == pane.tabs.size()) {
         HBRUSH fill = CreateSolidBrush(RGB(236, 240, 244));
         if (fill != nullptr) {
-            FillRect(dc, &add, fill);
+            FillRect(dc, &hover, fill);
             DeleteObject(fill);
         }
     }
-    SetTextColor(dc, RGB(31, 41, 55));
-    DrawTextW(dc, L"+", 1, &add,
-              DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
+    if (add.right > add.left && add.bottom > add.top) {
+        const int add_size = std::min(static_cast<int>(add.right - add.left),
+                                      static_cast<int>(add.bottom - add.top));
+        const int plus_size = std::min(
+            scaled_value(window, kTabPlusSize),
+            std::max(1, add_size - 2 * vertical_padding));
+        const int half = plus_size / 2;
+        const int center_x = (add.left + add.right) / 2;
+        const int center_y = (add.top + add.bottom) / 2;
+        HPEN plus_pen = CreatePen(PS_SOLID,
+                                  scaled_value(window, kTabPlusLineWidth),
+                                  RGB(31, 41, 55));
+        if (plus_pen != nullptr) {
+            const HGDIOBJ old_pen = SelectObject(dc, plus_pen);
+            MoveToEx(dc, center_x - half, center_y, nullptr);
+            LineTo(dc, center_x + half, center_y);
+            MoveToEx(dc, center_x, center_y - half, nullptr);
+            LineTo(dc, center_x, center_y + half);
+            SelectObject(dc, old_pen);
+            DeleteObject(plus_pen);
+        }
+    }
 }
 
 LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
