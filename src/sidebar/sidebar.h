@@ -36,6 +36,7 @@ public:
     void set_groups(const std::vector<GroupSummary>& groups);
     std::optional<std::size_t> selected_index() const noexcept;
     void set_selected_index(std::size_t index) noexcept;
+    void set_hover_index(std::optional<std::size_t> index) noexcept;
     bool measure_item(MEASUREITEMSTRUCT* item, UINT dpi) const noexcept;
     bool draw_item(const DRAWITEMSTRUCT* item) const noexcept;
 
@@ -55,6 +56,7 @@ private:
     int control_id_{};
     bool drag_drop_registered_{false};
     std::vector<GroupSummary> groups_;
+    std::optional<std::size_t> hover_index_;
     std::optional<std::wstring> pending_rename_;
     UINT dpi_{96};
 };

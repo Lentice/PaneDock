@@ -11,6 +11,7 @@ namespace {
 
 constexpr COLORREF kSidebarBackground = RGB(251, 252, 254);
 constexpr COLORREF kSidebarActiveBackground = RGB(234, 241, 255);
+constexpr COLORREF kSidebarHoverBackground = RGB(242, 245, 248);
 constexpr COLORREF kSidebarText = RGB(75, 85, 101);
 constexpr COLORREF kSidebarActiveText = RGB(23, 75, 180);
 constexpr COLORREF kSidebarSubtitleText = RGB(148, 163, 184);
@@ -71,6 +72,7 @@ void Sidebar::set_rect(const RECT& rect, UINT dpi) noexcept {
 
 void Sidebar::set_groups(const std::vector<GroupSummary>& groups) {
     groups_ = groups;
+    hover_index_.reset();
     SendMessageW(list_box_, LB_RESETCONTENT, 0, 0);
     for (const auto& group : groups_) {
         SendMessageW(list_box_, LB_ADDSTRING, 0,
@@ -89,6 +91,12 @@ void Sidebar::set_selected_index(std::size_t index) noexcept {
     SendMessageW(list_box_, LB_SETCURSEL, static_cast<WPARAM>(index), 0);
 }
 
+void Sidebar::set_hover_index(std::optional<std::size_t> index) noexcept {
+    if (hover_index_ == index) return;
+    hover_index_ = index;
+    if (list_box_ != nullptr) InvalidateRect(list_box_, nullptr, FALSE);
+}
+
 bool Sidebar::measure_item(MEASUREITEMSTRUCT* item, UINT dpi) const noexcept {
     if (item == nullptr || item->CtlType != ODT_LISTBOX ||
         item->CtlID != static_cast<UINT>(control_id_)) return false;
@@ -104,6 +112,7 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item) const noexcept {
         item->itemID >= groups_.size()) return true;
 
     const bool selected = (item->itemState & ODS_SELECTED) != 0;
+    const bool hovered = hover_index_ == item->itemID;
     HBRUSH background = CreateSolidBrush(kSidebarBackground);
     if (background != nullptr) {
         FillRect(item->hDC, &item->rcItem, background);
@@ -115,8 +124,9 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item) const noexcept {
     pill.right -= MulDiv(4, static_cast<int>(dpi_), 96);
     pill.top += MulDiv(2, static_cast<int>(dpi_), 96);
     pill.bottom -= MulDiv(2, static_cast<int>(dpi_), 96);
-    if (selected) {
-        HBRUSH pill_brush = CreateSolidBrush(kSidebarActiveBackground);
+    if (selected || hovered) {
+        HBRUSH pill_brush = CreateSolidBrush(
+            selected ? kSidebarActiveBackground : kSidebarHoverBackground);
         if (pill_brush != nullptr) {
             const HGDIOBJ old_brush = SelectObject(item->hDC, pill_brush);
             const HGDIOBJ old_pen =

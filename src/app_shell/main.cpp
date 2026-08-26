@@ -314,6 +314,7 @@ struct AppState {
     std::array<HWND, kButtonIds.size()> sidebar_buttons{};
     HWND group_label{nullptr};
     std::array<HWND, kLayoutButtonIds.size()> layout_buttons{};
+    std::optional<std::size_t> layout_hover_index;
     HWND more_actions_button{nullptr};
     HWND layout_tooltip{nullptr};
     HWND empty_message{nullptr};
@@ -324,6 +325,8 @@ struct AppState {
     std::array<HWND, kExplorerCount> tab_strips{};
     std::array<std::vector<TabVisual>, kExplorerCount> tab_visuals{};
     std::array<RECT, kExplorerCount> tab_add_rects{};
+    // A tab index is stored here; pane.tabs.size() represents the add button.
+    std::array<std::optional<std::size_t>, kExplorerCount> tab_hover_indices{};
     // PD-040: one clipping container child window per pane, sitting between
     // the main window and each ExplorerHost's IExplorerBrowser view. Only
     // this container's HWND gets SetWindowRgn'd for full-corner rounding —
@@ -551,12 +554,16 @@ void draw_layout_glyph(HDC dc, RECT rect, std::size_t index,
 }
 
 void draw_layout_button(const DRAWITEMSTRUCT& item,
-                        std::size_t index, bool checked) noexcept {
+                        std::size_t index, bool checked,
+                        bool fallback_hovered) noexcept {
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
+    const bool hovered = (item.itemState & ODS_HOTLIGHT) != 0 ||
+                         fallback_hovered;
     const COLORREF background = disabled
                                     ? RGB(245, 247, 249)
-                                    : checked ? RGB(37, 99, 235)
-                                              : RGB(248, 250, 252);
+                                    : checked   ? RGB(37, 99, 235)
+                                    : hovered   ? RGB(242, 245, 248)
+                                                : RGB(248, 250, 252);
     const COLORREF glyph = disabled
                                ? RGB(148, 163, 184)
                                : checked ? RGB(255, 255, 255)
@@ -1116,6 +1123,7 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index) {
 
 void refresh_tab_strip(AppState& state, std::size_t pane_index) {
     if (pane_index >= state.tab_strips.size()) return;
+    state.tab_hover_indices[pane_index].reset();
     state.tab_visuals[pane_index].clear();
     if (!has_active_group(state) ||
         pane_index >= active_group(state).panes.size()) {
@@ -2362,8 +2370,11 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
         RECT rect = visuals[index].rect;
         InflateRect(&rect, -inset, -inset);
         const bool active = pane.tabs[index].id == pane.active_tab_id;
-        HBRUSH fill = CreateSolidBrush(active ? RGB(226, 232, 240)
-                                              : RGB(244, 246, 248));
+        const bool hovered = !active &&
+                             state.tab_hover_indices[pane_index] == index;
+        HBRUSH fill = CreateSolidBrush(
+            active ? RGB(226, 232, 240)
+                   : hovered ? RGB(236, 240, 244) : RGB(244, 246, 248));
         if (fill != nullptr) {
             FillRect(dc, &rect, fill);
             DeleteObject(fill);
@@ -2380,6 +2391,14 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
     RECT add = state.tab_add_rects[pane_index];
     const int add_inset = scaled_value(window, 5);
     InflateRect(&add, -add_inset, -add_inset);
+    if (state.tab_hover_indices[pane_index].has_value() &&
+        *state.tab_hover_indices[pane_index] == pane.tabs.size()) {
+        HBRUSH fill = CreateSolidBrush(RGB(236, 240, 244));
+        if (fill != nullptr) {
+            FillRect(dc, &add, fill);
+            DeleteObject(fill);
+        }
+    }
     SetTextColor(dc, RGB(31, 41, 55));
     DrawTextW(dc, L"+", 1, &add,
               DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
@@ -2421,7 +2440,28 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         }
         if (message == WM_MOUSEMOVE) {
+            const POINT point = point_from_lparam(lparam);
+            TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
+            TrackMouseEvent(&tracking);
+            std::optional<std::size_t> hover =
+                tab_item_at_point(*state, window, point);
+            if (!hover.has_value() && has_active_group(*state) &&
+                pane_index < active_group(*state).panes.size() &&
+                PtInRect(&state->tab_add_rects[pane_index], point)) {
+                hover = active_group(*state).panes[pane_index].tabs.size();
+            }
+            if (state->tab_hover_indices[pane_index] != hover) {
+                state->tab_hover_indices[pane_index] = hover;
+                InvalidateRect(window, nullptr, FALSE);
+            }
             update_tab_drag(*state, window, wparam, lparam);
+            return 0;
+        }
+        if (message == WM_MOUSELEAVE) {
+            if (state->tab_hover_indices[pane_index].has_value()) {
+                state->tab_hover_indices[pane_index].reset();
+                InvalidateRect(window, nullptr, FALSE);
+            }
             return 0;
         }
         if (message == WM_LBUTTONUP) {
@@ -2434,6 +2474,32 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
         }
         if (message == WM_NCDESTROY)
             RemoveWindowSubclass(window, tab_strip_proc, pane_index);
+    }
+    return DefSubclassProc(window, message, wparam, lparam);
+}
+
+LRESULT CALLBACK layout_button_proc(HWND window, UINT message, WPARAM wparam,
+                                    LPARAM lparam, UINT_PTR button_index,
+                                    DWORD_PTR reference_data) {
+    auto* state = reinterpret_cast<AppState*>(reference_data);
+    if (state != nullptr && button_index < state->layout_buttons.size()) {
+        if (message == WM_MOUSEMOVE) {
+            TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
+            TrackMouseEvent(&tracking);
+            if (state->layout_hover_index != button_index) {
+                state->layout_hover_index = button_index;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+        } else if (message == WM_MOUSELEAVE) {
+            if (state->layout_hover_index == button_index) {
+                state->layout_hover_index.reset();
+                InvalidateRect(window, nullptr, FALSE);
+            }
+        } else if (message == WM_NCDESTROY) {
+            if (state->layout_hover_index == button_index)
+                state->layout_hover_index.reset();
+            RemoveWindowSubclass(window, layout_button_proc, button_index);
+        }
     }
     return DefSubclassProc(window, message, wparam, lparam);
 }
@@ -2565,11 +2631,19 @@ LRESULT CALLBACK group_list_proc(HWND window, UINT message, WPARAM wparam,
         return result;
     }
     if (message == WM_MOUSEMOVE && state != nullptr) {
+        const POINT point = point_from_lparam(lparam);
+        TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
+        TrackMouseEvent(&tracking);
+        state->sidebar.set_hover_index(
+            group_item_at_point(*state, window, point));
         update_group_drag(*state, window, wparam, lparam);
         if (state->group_drag.has_value() &&
             state->group_drag->list == window &&
             state->group_drag->dragging)
             return 0;
+    } else if (message == WM_MOUSELEAVE && state != nullptr) {
+        state->sidebar.set_hover_index(std::nullopt);
+        return 0;
     } else if (message == WM_LBUTTONUP && state != nullptr) {
         const bool dragging = state->group_drag.has_value() &&
                               state->group_drag->list == window &&
@@ -2663,6 +2737,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     reinterpret_cast<HMENU>(kLayoutButtonIds[index]),
                     GetModuleHandleW(nullptr), nullptr);
                 if (state->layout_buttons[index] == nullptr) return -1;
+                if (!SetWindowSubclass(state->layout_buttons[index],
+                                       layout_button_proc, index,
+                                       reinterpret_cast<DWORD_PTR>(state)))
+                    return -1;
                 SendMessageW(state->layout_buttons[index], WM_SETFONT,
                              reinterpret_cast<WPARAM>(
                                  GetStockObject(DEFAULT_GUI_FONT)),
@@ -2877,16 +2955,15 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     item->CtlID >= kLayoutButtonIdBase &&
                     item->CtlID < kLayoutButtonIdBase +
                                       static_cast<int>(kLayoutButtonIds.size())) {
+                    const std::size_t index = static_cast<std::size_t>(
+                        item->CtlID - kLayoutButtonIdBase);
                     const bool enabled = has_active_group(*state);
                     const auto current =
                         enabled ? active_group(*state).layout_template
                                 : panedock::core::LayoutTemplate::single;
-                    draw_layout_button(
-                        *item,
-                        static_cast<std::size_t>(item->CtlID -
-                                                 kLayoutButtonIdBase),
-                        kLayoutTemplates[static_cast<std::size_t>(
-                            item->CtlID - kLayoutButtonIdBase)] == current);
+                    draw_layout_button(*item, index,
+                                       kLayoutTemplates[index] == current,
+                                       state->layout_hover_index == index);
                     return TRUE;
                 }
                 if (item != nullptr && item->CtlType == ODT_BUTTON &&

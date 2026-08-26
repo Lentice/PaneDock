@@ -110,3 +110,14 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-26 實作交接
+
+- 已在 `src/app_shell/main.cpp`、`src/sidebar/sidebar.h`、`src/sidebar/sidebar.cpp` 完成四類 hover feedback：版型按鈕、tab、tab 的 `+`、Group 列；未加入動畫、timer、active/selected 顏色或尺寸變更。
+- `ODS_HOTLIGHT` 實測結果：在 `BS_OWNERDRAW | BS_AUTORADIOBUTTON` 上不會送達。第一版以像素比對確認非 active 按鈕仍為 `RGB(248,250,252)`，因此依決策 2 改用 layout button subclass 的 `TrackMouseEvent(TME_LEAVE)` fallback；`draw_layout_button` 仍保留 `ODS_HOTLIGHT` 讀取。fallback 後非 active hover 為 `RGB(242,245,248)`，active layout hover 維持 `RGB(37,99,235)`。
+- 最終 hover 色值：layout `RGB(242,245,248)`；tab 與 `+` `RGB(236,240,244)`；Group `RGB(242,245,248)`。常態 tab 為 `RGB(244,246,248)`、Group 為 `RGB(251,252,254)`；active/selected 優先，不會被 hover 覆蓋。Group hover 沿用 `Sidebar::draw_item` 既有 `pill`/`RoundRect`。
+- 狀態儲存：`AppState::layout_hover_index`；`AppState::tab_hover_indices`（每個 pane 一個 `optional<size_t>`，`pane.tabs.size()` 代表 `+`）；`Sidebar::hover_index_`。tab 與 Group 在各自 subclass 的 `WM_MOUSEMOVE` 呼叫 `TrackMouseEvent(TME_LEAVE)`，`WM_MOUSELEAVE` 清除。
+- 只在狀態真的改變時 invalidate：layout button 只在 `layout_hover_index` 改變時 invalidate 自身；tab 比較新的 optional index 後才 invalidate strip；`Sidebar::set_hover_index` 先比較再 invalidate list。`refresh_tab_strip` 與 `Sidebar::set_groups` 會清除可能失效的舊 index。
+- 自動驗證：指定 CMake configure、Release build、`ctest --test-dir build --output-on-failure` 全部通過（4/4）；`rg -n "ODS_HOTLIGHT|TrackMouseEvent|WM_MOUSELEAVE|hover" ...` 通過；`git diff --check` 通過。
+- 實機驗證（Release，PID 39364，主視窗矩形 `50,50-1450,950`）：使用票據指定的 `PrintWindow(hwnd, hdc, 2 /* PW_RENDERFULLCONTENT */)`，搭配 `SetCursorPos`/`mouse_event`；所有擷取成功。非 active layout `248,250,252 → 242,245,248`；active layout 維持 `37,99,235`；tab `244,246,248 → 236,240,244`；`+` `255,255,255 → 236,240,244`；Group `251,252,254 → 242,245,248`；移出後 tab/`+`/Group 分別回到 `244,246,248`/`255,255,255`/`251,252,254`。四個 tab strip 均實際移入，拖曳既有 `WM_MOUSEMOVE` 路徑仍共存。
+- CPU 觀察：在 tab strip 連續 120 次游標移動（每次間隔 10 ms）取樣，程序 CPU 平均 `0.1173%`；停止互動取樣約 3 秒為 `0%`。未新增 polling loop 或磁碟 I/O 路徑。測試後已用不帶 `/F` 的 `taskkill /PID 39364` 關閉。
