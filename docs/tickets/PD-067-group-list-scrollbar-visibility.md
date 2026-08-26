@@ -135,3 +135,42 @@ SendMessageW(list, LB_GETCOUNT   /*0x018B*/)    # 項目總數
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### PD-067 實作交接（2026-08-27）
+
+實作採用方案 C：
+
+- `src/sidebar/sidebar.cpp` 的原生 `LISTBOX` 加上 `LBS_DISABLENOSCROLL`。既有 `WS_VSCROLL`、`GetScrollInfo`、wheel、thumb 與 track 行為未重寫；少量 Group 時保留停用狀態，避免 scrollbar 出現/消失造成版面跳動。
+- Group pill 的右側內距由 DPI-scaled `4px` 改為 DPI-scaled `14px`，讓數量 badge 與右側 scrollbar 保持明確間隔。未改列高、字級或 Group row 顏色，也未新增自訂 scrollbar。
+
+自行量測與本票診斷一致，但測試環境的還原 session 原本已有 60 個 Group，且視窗 list client 為 `193x617`；因此不是票面範例的 18 個 Group / `page=13`，本次 overflow 量測為 74 個 Group / `page=11`。基準版仍證實既有捲動功能正常、但沒有 `LBS_DISABLENOSCROLL`；最終版只增加該 native style bit 並擴大 pill 右側保留空間。
+
+量測證據（基準與最終均以同一個 96 DPI 視窗、同一套 Win32 probe 執行）：
+
+- 基準 `docs/tickets/PD-067-before-96dpi.txt`：style `0x50210151`、`WS_VSCROLL=1`、`LBS_DISABLENOSCROLL=0`；14 個新增後 `min=0 max=73 page=11 pos=63 top=63 count=74`。
+- 最終 `docs/tickets/PD-067-after-96dpi.txt`：style `0x50211151`、`WS_VSCROLL=1`、`LBS_DISABLENOSCROLL=1`；14 個新增後同為 `min=0 max=73 page=11 pos=63 top=63 count=74`。scrollbar geometry 為 `rect=249,155,266,772`，list client 為 `0,0,193,617`。
+- Wheel：最終版 `after_wheel_up_3` 為 `pos/top=54`，`after_wheel_down_5` 回到 `63`。
+- Thumb：先回到頂端後，`before_thumb_drag` 為 `pos/top=0`，`after_thumb_drag` 為 `pos/top=63`。
+- Track page：`before_track_page_down` 為 `pos/top=0`，`after_track_page_down` 為 `pos/top=10`。
+- probe 確實記錄 `PrintWindow(..., 2 /* PW_RENDERFULLCONTENT */) result=1`；未使用 `CopyFromScreen`。wheel 測試按票面使用 `mouse_event(MOUSEEVENTF_WHEEL, ..., 120/-120, ...)`，但本機前景視窗限制使注入後 index 未變，harness 才記錄並以同一個原生 listbox `WM_MOUSEWHEEL` 訊息 fallback 完成功能量測；因此 wheel 的原生行為已由數值證明，若要求實體 `mouse_event` 必須單獨成功，該環境子項仍受限。
+
+放大後的視覺證據（原圖由 `PrintWindow` 取得，使用 `InterpolationMode.NearestNeighbor` 放大 3 倍）：
+
+- [基準 sidebar](PD-067-before-sidebar-3x.png)
+- [最終 sidebar](PD-067-after-sidebar-3x.png)
+- [少量 Group sidebar](PD-067-after-low-sidebar-3x.png)
+
+Acceptance：
+
+1. 已驗證：最終放大圖可辨識 scrollbar track/thumb，且基準/最終對照可見 pill badge 與 scrollbar 的間隔改善。
+2. 已以 `LB_GETTOPINDEX`、`GetScrollInfo` 驗證 wheel、thumb、track page 的前後變化；實體 `mouse_event` 注入受前景視窗限制，詳見上方限制說明。
+3. 已驗證：最終圖中 badge 未被 scrollbar 覆蓋；程式以 DPI-scaled `14px` 右內距保留空間。
+4. 已驗證：`docs/tickets/PD-067-after-low-96dpi.txt` 的 1 個 Group 量測為 `max=0 page=1 pos=0 top=0 count=1`，style 保留 `LBS_DISABLENOSCROLL=1`；少量 Group 圖顯示停用 scrollbar，版面欄位寬度未跳動。
+5. 已驗證：scroll 後 click index 70 後，`session.json` 讀回 `groups=74`、`active_group_id=group-70`、`schema_version=1`。
+6. 未驗證：本環境實際 `GetDpiForWindow=96`；沒有可用的 150%/200% 顯示器，未以模擬值冒充實機 DPI 證據。程式仍保留 `MulDiv(14, dpi, 96)` 與既有 DPI scaling 路徑。
+7. 已驗證：LLVM-MinGW/Ninja configure 成功；`cmake --build build` 回報 `ninja: no work to do.`；`ctest --test-dir build --output-on-failure` 為 `100% tests passed out of 4`。
+8. 已驗證：`git diff --check` 通過。
+
+測試資料已清除：測試前原本 `session.json` 不存在、`session.json.bak` 為 68,329 bytes / 60 個 Group / `active_group_id=group-59`；測試產生的 74-group 與 1-group fixture 已移走，現在 `session.json` 仍不存在，原始 `session.json.bak` 已恢復。所有測試程序均以不帶 `/F` 的 `taskkill /PID <pid>` 關閉，未使用 `Stop-Process -Force`。
+
+因 Acceptance 6 尚未取得 150%/200% 的實機證據，`docs/tickets.md` 的 PD-067 狀態維持 `ready`，不宣稱本票已完成。

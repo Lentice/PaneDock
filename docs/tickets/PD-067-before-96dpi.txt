@@ -1,0 +1,372 @@
+RUNNER started
+RUNNER pid=13568
+INFO label=initial main=0x5d0c58 list=0x7f259e style=0x50210151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=0 scroll_ok=1 min=0 max=59 page=11 pos=49 top=49 count=60 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=493,600
+FOREGROUND target=0x5a2650 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=1143 y=600 under=0xaa197e class=Button
+INFO label=after_dialog main=0x5d0c58 list=0x7f259e style=0x50210151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=0 scroll_ok=1 min=0 max=59 page=11 pos=49 top=49 count=60 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=493,600
+PRINTWINDOW path=E:\GitHub\PaneDock\docs\tickets\PD-067-before-96dpi.bmp result=1 saved=1
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=161 y=790 under=0x1b22cc class=Button
+INFO label=after_add_14 main=0x5d0c58 list=0x7f259e style=0x50210151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=0 scroll_ok=1 min=0 max=73 page=11 pos=63 top=63 count=74 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=513,600
+PRINTWINDOW path=E:\GitHub\PaneDock\docs\tickets\PD-067-before-96dpi.bmp result=1 saved=1
+INFO label=before_wheel_up_3 main=0x5d0c58 list=0x7f259e style=0x50210151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=0 scroll_ok=1 min=0 max=73 page=11 pos=63 top=63 count=74 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=513,600
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+INFO label=after_wheel_up_3 main=0x5d0c58 list=0x7f259e style=0x50210151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=0 scroll_ok=1 min=0 max=73 page=11 pos=54 top=54 count=74 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=442,529
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+INFO label=after_wheel_down_5 main=0x5d0c58 list=0x7f259e style=0x50210151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=0 scroll_ok=1 min=0 max=73 page=11 pos=63 top=63 count=74 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=513,600
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+INFO label=before_thumb_drag main=0x5d0c58 list=0x7f259e style=0x50210151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=0 scroll_ok=1 min=0 max=73 page=11 pos=0 top=0 count=74 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=17,104
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+DRAG fallback=SB_THUMBPOSITION pos=63
+DRAG start=60 end=764
+INFO label=after_thumb_drag main=0x5d0c58 list=0x7f259e style=0x50210151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=0 scroll_ok=1 min=0 max=73 page=11 pos=63 top=63 count=74 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=513,600
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+WHEEL fallback=WM_MOUSEWHEEL delta=120
+INFO label=before_track_page_down main=0x5d0c58 list=0x7f259e style=0x50210151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=0 scroll_ok=1 min=0 max=73 page=11 pos=0 top=0 count=74 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=17,104
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=257 y=163 under=0x7f259e class=ListBox
+PAGE fallback=WM_VSCROLL
+PAGE direction=down y=112
+INFO label=after_track_page_down main=0x5d0c58 list=0x7f259e style=0x50210151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=0 scroll_ok=1 min=0 max=73 page=11 pos=10 top=10 count=74 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=96,183
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+WHEEL fallback=WM_MOUSEWHEEL delta=-120
+INFO label=before_group_click main=0x5d0c58 list=0x7f259e style=0x50210151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=0 scroll_ok=1 min=0 max=73 page=11 pos=63 top=63 count=74 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=513,600
+FOREGROUND target=0x5d0c58 actual=0x608c4 pid=24452 class=CASCADIA_HOSTING_WINDOW_CLASS
+POINTER x=152 y=545 under=0x7f259e class=ListBox
+CLICK_ROW fallback=WM_COMMAND index=70
+CLICK_ROW index=70 point=152,545
+INFO label=after_group_click_70 main=0x5d0c58 list=0x7f259e style=0x50210151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=0 scroll_ok=1 min=0 max=73 page=11 pos=60 top=60 count=74 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=489,576
+PRINTWINDOW path=E:\GitHub\PaneDock\docs\tickets\PD-067-before-96dpi.bmp result=1 saved=1
+RUNNER complete

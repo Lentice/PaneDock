@@ -1,0 +1,8 @@
+RUNNER started
+RUNNER pid=24444
+INFO label=initial main=0x4022be list=0x4224ac style=0x50211151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=1 scroll_ok=1 min=0 max=0 page=1 pos=0 top=0 count=1 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=16,599
+INFO label=after_dialog main=0x4022be list=0x4224ac style=0x50211151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=1 scroll_ok=1 min=0 max=0 page=1 pos=0 top=0 count=1 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=16,599
+PRINTWINDOW path=E:\GitHub\PaneDock\docs\tickets\PD-067-after-low-96dpi.bmp result=1 saved=1
+INFO label=low_only main=0x4022be list=0x4224ac style=0x50211151 WS_VSCROLL=1 LBS_DISABLENOSCROLL=1 scroll_ok=1 min=0 max=0 page=1 pos=0 top=0 count=1 item_height=52 dpi=96 client=0,0,193,617 scrollbar_ok=1 scrollbar_rect=249,155,266,772 thumb=16,599
+PRINTWINDOW path=E:\GitHub\PaneDock\docs\tickets\PD-067-after-low-96dpi.bmp result=1 saved=1
+RUNNER complete
