@@ -2702,7 +2702,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 if (state->explorer_containers[index] == nullptr) return -1;
                 state->tab_strips[index] = CreateWindowExW(
                     0, L"STATIC", nullptr,
-                    WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP,
+                    WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | SS_NOTIFY,
                     0, 0, 0, 0, window,
                     reinterpret_cast<HMENU>(kTabStripIdBase +
                                              static_cast<int>(index)),

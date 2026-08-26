@@ -113,3 +113,35 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-26 實作交接
+
+- 最終採用 `SS_NOTIFY`：在建立 tab strip 的 `STATIC` 子視窗時直接加入樣式。這是票據指定的標準 Win32 修法，讓既有 `tab_strip_proc` 收到滑鼠訊息；未使用 `WM_NCHITTEST` 備援，也未修改其他 `STATIC` 控制項或 `WM_PARENTNOTIFY`。
+- 修改範圍只有 `src/app_shell/main.cpp` 一行：`WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | SS_NOTIFY`。
+- Agent checks：CMake configure 成功；Release build 成功；CTest `100% tests passed out of 4`；`rg` 找到 `SS_NOTIFY` 與 tab strip 建立處；`git diff --check` 通過。
+- 實機驗證：已啟動 `build\\PaneDock.exe`（PID 30040，`Responding=True`），實際呼叫 `SetCursorPos`/`mouse_event` 嘗試點擊 tab 候選位置；但本環境 `GetWindowRect` 回傳 `0,0,0,0`，`PrintWindow(hwnd, hdc, 2)` 回傳 `False`，無法取得可信 HWND 幾何或截圖，因此 tab 切換、`+` 新增、拖曳排序、插入指示線、中鍵關閉及 active pane 切換均未能判定為通過，沒有截圖佐證可附。
+- 未觀察到既有行為回歸；但上述桌面通道失效，故不能以本次執行宣稱中鍵關閉或 active pane 切換已完成驗證。程序最後使用不帶 `/F` 的 `taskkill /PID 30040`，回報 `SUCCESS`。
+
+### 2026-08-26 實機驗證補完(dispatcher)
+
+實作 agent 回報的桌面通道失效已查明原因,**不是環境限制**:當時有一個前次執行殘留的 PaneDock 程序仍持有 `Ctrl+Shift+L` 全域熱鍵,新啟動的實例在 `WM_CREATE` 中 `RegisterHotKey` 失敗,跳出 `PaneDock could not register its layout hotkey.` 對話框(class `#32770`)後 `return -1` 中止建立主視窗。因此主視窗從未顯示,`GetWindowRect` 回傳 `0,0,0,0`、`PrintWindow` 回傳 `False` 都是這個後果而非因。
+
+**排查方式(後續票遇到同樣症狀請直接沿用):** `Get-Process` 的 `MainWindowHandle` 為 `0` 時不要就此判定環境不可用,改用 `EnumWindows` + `GetWindowThreadProcessId` 列出該 PID 的所有視窗(P/Invoke 宣告記得加 `CharSet=CharSet.Unicode`,否則 `GetClassNameW` 取回的字串會是亂碼)。本次即是靠這個方法看到 `#32770` 對話框與 `vis=False` 的 `PaneDockMainWindow`,才找到真正原因。清掉殘留程序後重新啟動即正常。
+
+**樣式確認:** `GetWindowLongW(strip, GWL_STYLE)` 回傳 `0x54010100`,`SS_NOTIFY`(`0x100`)位元確實已設定。
+
+**六項驗收全部實測通過**(視窗置於 50,50 1400x900;tab 條 `GetDlgItem(main, kTabStripIdBase)` 取得 rect `299,140-859,164`;tab 中心座標由 4 倍放大截圖判讀為 330 / 394 / 465):
+
+| 驗收 | 操作 | 結果 |
+|---|---|---|
+| 1 tab 切換 | 依序點擊 tab1 / tab3 / tab2 | `active_tab_id` 依序變為 `tab-0` → `tab-3` → `tab-4`,每次都正確 |
+| 2「+」新增 | 點擊 tab 條右緣「+」 | tab 數由 1 增至 3,並自動切換到新 tab |
+| 3 拖曳排序 | 按住 tab1 分段移動至 tab3 位置後放開 | 順序由 `[C:\, C:\Dell, C:\Program Files]` 變為 `[C:\Dell, C:\Program Files, C:\]`,正確 |
+| 5 中鍵關閉 | 中鍵點擊第一個 tab | tab 數由 3 減為 2,正確 |
+| 6 active pane | 點擊 tab 條 | 該 pane 仍正確成為 active pane,未回歸 |
+
+驗收 4(拖曳插入指示線)**確認不可見,但這不是本票造成的**:調查後發現 `draw_tab_insertion_indicator` 的呼叫點在 `WM_DRAWITEM` 的 `item->CtlType == ODT_TAB` 分支內,而 `ODT_TAB` 只有原生 `SysTabControl32` 會送出,PD-049 換成自繪 `STATIC` 之後該分支永不成立——這個指示線自 PD-049 起就是死碼,`paint_tab_strip` 自己完全沒有繪製指示線的程式碼。**已另開 PD-066 處理(該票同時把細線升級為使用者要求的 placeholder 空槽)。本票不修。**
+
+**驗證方法的重要更正:** 早先一次以 `strip.left + 35 / +110` 推估 tab 中心的點擊全部落空,一度誤判為「tab 切換仍失效」。tab 是動態寬度(PD-037),不能用固定 offset 推估——**必須先對 tab 條 `PrintWindow` 截圖並以 `NearestNeighbor` 放大 4 倍判讀實際 tab 邊界,再換算螢幕座標**。後續涉及 tab 的票請一律照這個順序做。
+
+程序以不帶 `/F` 的 `taskkill /PID` 關閉;`session.json` 的 `clean_shutdown` 確認為 `true`,無殘留程序。
