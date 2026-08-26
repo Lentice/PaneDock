@@ -92,6 +92,18 @@
 | PD-052 | Pane 增加 refresh 按鈕與檢視樣式切換按鈕,補上 `TabState::view_mode` 還原缺口 | 7 | `done` | PD-020, PD-006 | [PD-052](tickets/PD-052-pane-refresh-and-view-mode-switcher.md) |
 | PD-053 | 側邊欄品牌列與 Group 清單之間的分隔線造成視覺割裂 | 6 | `done` | PD-028 | [PD-053](tickets/PD-053-sidebar-brand-divider-removal.md) |
 | PD-054 | 設計 App icon 並取代側邊欄品牌列的手繪「+」圖示 | 6 | `done` | PD-028 | [PD-054](tickets/PD-054-app-icon-asset-and-brand-bar-wiring.md) |
+| PD-055 | Tab 條 `STATIC` 缺 `SS_NOTIFY`,滑鼠訊息不送達,tab 無法點擊切換 | 7 | `ready` | PD-049, PD-050 | [PD-055](tickets/PD-055-tab-strip-static-ss-notify-missing.md) |
+| PD-056 | 切換版型後舊的 active 版型按鈕未重繪,highlight 沒清除 | 7 | `ready` | PD-047 | [PD-056](tickets/PD-056-layout-button-stale-highlight.md) |
+| PD-057 | Group 拖曳的 `ReleaseCapture` 時機錯誤吃掉 `LBN_SELCHANGE`,無法切換 Group | 7 | `ready` | PD-036 | [PD-057](tickets/PD-057-group-list-selection-notification-suppressed.md) |
+| PD-058 | 版型按鈕/tab/「+」/Group 列補上滑鼠 hover 視覺回饋 | 7 | `planned` | PD-055, PD-046 | [PD-058](tickets/PD-058-hover-feedback-for-interactive-chrome.md) |
+| PD-059 | 檢視模式按鈕改為下拉選單,取代單向循環切換 | 7 | `ready` | PD-052 | [PD-059](tickets/PD-059-view-mode-dropdown-menu.md) |
+| PD-060 | Pane 狀態列補上選取檔案總大小,並加上分隔線/底色 | 7 | `ready` | PD-051 | [PD-060](tickets/PD-060-pane-status-bar-selection-size-and-separator.md) |
+| PD-061 | 側邊欄 Group 名稱與副標題字級太小,改用系統 UI 字型 | 7 | `ready` | PD-028 | [PD-061](tickets/PD-061-sidebar-group-typography.md) |
+| PD-062 | Tab 改圓角外框,拆分 padding/gap/列高,「+」加大加粗 | 7 | `planned` | PD-049, PD-055 | [PD-062](tickets/PD-062-tab-strip-visual-polish.md) |
+| PD-063 | Active pane 圓角外框鋸齒,改用不依賴圓角描邊的強調方式 | 7 | `ready` | PD-040, PD-048 | [PD-063](tickets/PD-063-active-pane-highlight-aliasing.md) |
+| PD-064 | 移除無作用的 more-actions「...」按鈕,修正 Up 圖示對齊 | 7 | `ready` | PD-029, PD-043 | [PD-064](tickets/PD-064-header-and-nav-icon-cleanup.md) |
+| PD-065 | `EBO_NOBORDER` 在 `Initialize` 之後才設定,檔案區殘留深色細外框 | 7 | `ready` | PD-040, PD-048 | [PD-065](tickets/PD-065-explorer-view-residual-border.md) |
+| PD-066 | 拖曳排序改用撐開空位的 placeholder;修復 tab 插入指示線死碼 | 7 | `planned` | PD-055, PD-050, PD-036 | [PD-066](tickets/PD-066-drag-reorder-placeholder-gap.md) |
 
 ## Dependency lanes
 
@@ -308,3 +320,30 @@ PD-001 標為 `superseded`,文件不動,作為決策軌跡保留。原本依賴 
 PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/052 各自獨立但都涉及 `IFolderView2`,可平行進行。
 
 四張都歸 Phase 6,依賴各自的前置票。
+
+### 2026-08-26 — PD-047~054 實裝後的實機驗證發現三個功能性回歸,連同視覺落差開 PD-055~065
+
+**驗證方法更新(取代 2026-08-25 記錄的做法):** `Graphics.CopyFromScreen` 已證實不可靠——它是「螢幕座標區域截圖」,當 `SetForegroundWindow` 靜默失敗(背景腳本呼叫者常見)時會截到疊在上面的其他視窗;桌面鎖定時則靜默截到鎖定畫面而不報錯。**後續一律改用 `PrintWindow(hwnd, hdc, 2 /* PW_RENDERFULLCONTENT */)`**,它直接請目標視窗把內容畫進指定的 HDC,不受 z-order、遮擋或前景狀態影響。細小元件(tab 條、16px 圖示、side bar 文字)必須截圖後以 `InterpolationMode = NearestNeighbor` 放大 3~6 倍才能判讀。
+
+**另一個教訓:測試程序一律用不帶 `/F` 的 `taskkill /PID` 優雅關閉。** 上一輪驗證大量使用 `Stop-Process -Force`,等同於模擬當機,使 `clean_shutdown` 這個 dirty bit 停在 `false`,導致使用者下次啟動看到 crash 復原警告對話框。這不是產品缺陷(PD-025/032 的 dirty-bit 設計正確),是驗證方法的副作用。
+
+三個功能性回歸都是「畫面看起來正常、實際功能失效」的類型,純程式碼審查與純截圖都抓不到,只有實際操作 + 讀資料層狀態才能發現:
+
+- **PD-055**(CRITICAL):PD-049 把 tab 條換成 `STATIC` 子視窗時沒加 `SS_NOTIFY`。**未指定 `SS_NOTIFY` 的 `STATIC` 對 `WM_NCHITTEST` 回傳 `HTTRANSPARENT`**,滑鼠訊息全部穿透到父視窗,`tab_strip_proc` 的 `WM_LBUTTONDOWN` 分支成為死碼——tab 切換、「+」新增 tab、PD-050 的 tab 拖曳排序三者同時失效。
+- **PD-056**:PD-047 已正確改成由 `AppState` 決定 checked 狀態,但沒有人 invalidate 舊按鈕。`apply_layout` 的 `InvalidateRect(window, nullptr, TRUE)` **不會讓子視窗控制項失效**,舊的 active 按鈕因此保留舊像素,畫面同時出現兩顆藍色按鈕。修法是在 `layout_header` 既有的按鈕同步迴圈補上逐顆 `InvalidateRect`。
+- **PD-057**(CRITICAL):PD-036 的 Group 拖曳排序在 `group_list_proc` 的 `WM_LBUTTONUP` 分支中,**在把訊息交給 `DefSubclassProc` 之前**就呼叫了 `finish_group_drag`,而後者會 `ReleaseCapture()`。LISTBOX 收到 `WM_CAPTURECHANGED` 後放棄進行中的點擊追蹤,於是不送 `LBN_SELCHANGE`,Group 永遠切換不了。**決定性實驗:真實點擊後 `LB_GETCURSEL` 已變、`active_group_id` 未變;手動補送一個 `WM_COMMAND`/`LBN_SELCHANGE` 後立即切換成功**,證明 `activate_group` 本身完全正確。同一個 subclass 的 `WM_LBUTTONDOWN` 分支反而是正確示範(先 `DefSubclassProc` 再動自己的狀態)。
+
+視覺與互動落差:
+
+- **PD-058**:全應用程式沒有任何 hover 狀態。版型按鈕可試 `ODS_HOTLIGHT`(但 PD-047 已證實同類按鈕的 `BM_GETCHECK` 不可靠,不可假設);tab 條與 Group 清單是自繪/LISTBOX,必須自行以 `WM_MOUSEMOVE` + `TrackMouseEvent(TME_LEAVE)` 追蹤,且**只在 hover 項目改變時才 invalidate**,否則違反閒置 0% CPU 規則。
+- **PD-059**:PD-052 的檢視模式只做單向循環,使用者無法直選。改用 `TrackPopupMenu`,照抄 Group 右鍵選單既有的 `CreatePopupMenu`/`TPM_RETURNCMD` 模式。
+- **PD-060**:PD-051 的狀態列是「N items」/「N of M selected」二選一,缺選取總大小。改三段式,大小走 `IShellItem2::GetUInt64(PKEY_Size)` + `StrFormatByteSizeW`,**必須設選取項目數上限**(Ctrl+A 數萬項會卡死 UI),資料夾無 `PKEY_Size` 屬正常需跳過。同時補上狀態列的分隔線/底色。
+- **PD-061**:側邊欄用 `GetStockObject(DEFAULT_GUI_FONT)`(舊 stock 字型,約 8pt),副標題再乘 0.82 更小。改用 `SystemParametersInfoForDpi` 取 `lfMessageFont`(Segoe UI),名稱加粗,列高依字型度量重算。
+- **PD-062**:tab 用 `FillRect`+`FrameRect` 是方角,且外框用系統色 `COLOR_ACTIVEBORDER` 會隨主題跳動;更關鍵的是 padding 與 gap **共用同一個 `inset` 常數**,而使用者要求兩者往相反方向調(padding +2px、gap -2px),不拆開常數就無法同時滿足。「+」目前只是 `DrawTextW` 畫一個字元,改用 GDI 線條繪製。
+- **PD-063**:**GDI 的 `RoundRect` 沒有反鋸齒,這是 API 本身的性質,無法靠調參數繞過。** 鋸齒只在 active pane 明顯,因為那是 2px 飽和藍 vs 白底的高對比;PD-048 調淡後的 inactive 邊框則被低對比掩蓋。本票要求實作 agent 至少實作並截圖比對兩條路徑(GDI+ 反鋸齒 / 多層柔和光暈 / 改用不依賴圓弧的強調)後再選定。
+- **PD-064**:more-actions「...」自 PD-029 起就是永久停用的視覺佔位符,使用者判斷不需要,**本票明確覆寫 PD-029 決策 2** 予以移除(移除後 `layout_header` 的 `kButtonSlotCount`/`total_width` 必須重算,否則五顆按鈕會被當成六個 slot)。Up 圖示的直立桿畫在 `cx`、畫筆寬 2px,**GDI 偶數寬度線條無法真正置中**,重心比對稱的箭頭兩翼偏左半個像素——優先評估改用 `Segoe MDL2 Assets` 字型圖示,PD-052 的 refresh 圖示已經在手算 `Arc()` 失敗兩輪後付過這個學費。
+- **PD-065**:`EBO_NOBORDER` **在 `Initialize` 之後才 `SetOptions`,已經太晚**——該旗標控制的是內部宿主視窗建立時的樣式,對已建立的視窗沒有回溯效果,所以這個旗標從來沒生效過。修法是把 `SetOptions` 移到 `Initialize` 之前,並把失敗路徑從 `destroy()` 改成 `reset_uninitialized_browser`(此時尚未 `Initialize`,不可呼叫 `Destroy`)。**紅線:不得 subclass 或改寫 Shell view 內部子視窗;若公開 API 無法移除該線,正確結果是如實記錄結案。**
+
+- **PD-066**:使用者要求拖曳排序時有 placeholder。調查中發現**第二個 PD-049 遺留的死碼回歸**:`WM_DRAWITEM` 中處理 tab 的分支條件是 `item->CtlType == ODT_TAB`,而 `ODT_TAB` 只有原生 `SysTabControl32` 會送出;PD-049 換成 subclass 的 `STATIC` 之後,該分支永遠不成立,`draw_tab_item` 與 `draw_tab_insertion_indicator` 都成為死碼,而 `paint_tab_strip` 自己完全沒有繪製插入指示線——**所以 tab 拖曳排序至今沒有任何視覺提示**。Group 側的 `draw_group_insertion_indicator` 走 owner-draw `LISTBOX` 路徑,應仍有效但需實機確認。本票一併刪死碼並把細線升級為「撐開空位」的 placeholder。tab 側的正確做法是在 `apply_tab_item_size` 的幾何計算階段就重排矩形(讓位與 hit-test 都免費正確);Group 側受 `LISTBOX` 架構限制無法重排,只能在 `Sidebar::draw_item` 把 placeholder 那一列改畫成空槽。
+
+依賴與排程:PD-055 是 PD-058/PD-062/PD-066 的前置(tab 不能點就無法驗證 tab 的 hover、視覺與拖曳);PD-056/PD-057/PD-059/PD-060/PD-061/PD-063/PD-064/PD-065 彼此獨立可平行。PD-058、PD-062、PD-066 都會改到 `paint_tab_strip`,後做的那票需先 rebase。
