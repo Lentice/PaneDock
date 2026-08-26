@@ -115,3 +115,9 @@ git diff --check
 - 每個 pane 導覽列新增 refresh 與 View 按鈕，使用 `GetCurrentView(IID_PPV_ARGS(&folder_view))` 取得 `IFolderView2`，未重做 Shell view 渲染。
 - 驗證：`cmake` configure、`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 4/4 通過；Agent `rg` 與 `git diff --check` 通過。
 - 真實桌面操作未執行：本環境兩次 `tasklist` 均回報 `ERROR: Access denied`，沒有可可靠確認已解鎖的互動截圖/滑鼠驗證；因此未宣稱 refresh、四種模式與還原的實機結果。
+
+### 實作交接（2026-08-26）
+
+實機截圖發現 refresh 圖示原本只有短段 `Arc` 加一條短線，視覺上像 blob/hump，無法辨識為 refresh。已改為接近完整圓弧（保留小缺口）並在弧端加入兩筆線段組成清楚的箭頭尖端，沿用既有 DPI-scaled 尺寸與筆畫寬度。
+
+驗證：已完成程式碼層級的 glyph 幾何檢查；本次環境 `Get-Process` 顯示程式未執行，未能進行新的桌面截圖驗證。

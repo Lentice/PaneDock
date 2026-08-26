@@ -100,3 +100,9 @@ git diff --check
 自動化檢查：CMake configure、LLVM-MinGW/Ninja build 通過；CTest 4/4 通過；`rg -n "draw_layout_button" src\\app_shell\\main.cpp` 找到定義與唯一呼叫點；`git diff --check` 通過。
 
 桌面驗證：已實際啟動 `build\\PaneDock.exe` 並嘗試用 `SetCursorPos`/`mouse_event` 點擊五個版型按鈕；本環境的 `System.Drawing.Graphics.CopyFromScreen` 在兩種 overload 下皆回報「控制代碼無效」，無法取得視窗裁切截圖，因此未宣稱完成實機畫面比對。測試程序已用不帶 `/F` 的 `taskkill /PID` 優雅關閉。
+
+### 實作交接（2026-08-26）
+
+實機驗證發現原先的根因不是顏色對比度，而是 owner-draw radio button 的 `BM_GETCHECK` 不可靠：即使外部直接送出 `BM_SETCHECK(BST_CHECKED)`，立即查詢仍回傳未選取，導致 `draw_layout_button` 永遠畫未選中態。已移除 `BM_GETCHECK` 作為繪製依據，改由 `WM_DRAWITEM` 以 `AppState` 的 active group `layout_template` 與 `kLayoutTemplates[index]` 比對後傳入 checked 狀態；五種版型的高亮因此跟隨實際 active layout。
+
+驗證：程式碼檢查確認繪製路徑已完全不依賴 `BM_GETCHECK`；本次環境 `Get-Process` 顯示程式未執行，未能進行新的桌面截圖驗證。

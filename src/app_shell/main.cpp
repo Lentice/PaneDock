@@ -551,10 +551,8 @@ void draw_layout_glyph(HDC dc, RECT rect, std::size_t index,
 }
 
 void draw_layout_button(const DRAWITEMSTRUCT& item,
-                        std::size_t index) noexcept {
+                        std::size_t index, bool checked) noexcept {
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
-    const bool checked = SendMessageW(item.hwndItem, BM_GETCHECK, 0, 0) ==
-                         BST_CHECKED;
     const COLORREF background = disabled
                                     ? RGB(245, 247, 249)
                                     : checked ? RGB(37, 99, 235)
@@ -677,10 +675,17 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
                 LineTo(item.hDC, cx + half / 2, cy - half / 2);
                 break;
             case 3:  // refresh
+                // Start at the right and end at the upper-right: GDI draws
+                // the long counterclockwise arc between these points.
                 Arc(item.hDC, cx - half, cy - half, cx + half, cy + half,
-                    cx, cy - half, cx - half, cy);
-                MoveToEx(item.hDC, cx, cy - half, nullptr);
-                LineTo(item.hDC, cx + half / 3, cy - half / 3);
+                    cx + half, cy, cx + half / 2,
+                    cy - std::max(1, (half * 7) / 8));
+                MoveToEx(item.hDC, cx + half / 2,
+                         cy - std::max(1, (half * 7) / 8), nullptr);
+                LineTo(item.hDC, cx, cy - half / 4);
+                MoveToEx(item.hDC, cx + half / 2,
+                         cy - std::max(1, (half * 7) / 8), nullptr);
+                LineTo(item.hDC, cx + half / 4, cy - half / 2);
                 break;
             case 4:  // view: four small squares
                 for (int row = -1; row <= 1; row += 2)
@@ -2812,9 +2817,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     item->CtlID >= kLayoutButtonIdBase &&
                     item->CtlID < kLayoutButtonIdBase +
                                       static_cast<int>(kLayoutButtonIds.size())) {
+                    const bool enabled = has_active_group(*state);
+                    const auto current =
+                        enabled ? active_group(*state).layout_template
+                                : panedock::core::LayoutTemplate::single;
                     draw_layout_button(
-                        *item, static_cast<std::size_t>(item->CtlID -
-                                                        kLayoutButtonIdBase));
+                        *item,
+                        static_cast<std::size_t>(item->CtlID -
+                                                 kLayoutButtonIdBase),
+                        kLayoutTemplates[static_cast<std::size_t>(
+                            item->CtlID - kLayoutButtonIdBase)] == current);
                     return TRUE;
                 }
                 if (item != nullptr && item->CtlType == ODT_BUTTON &&
