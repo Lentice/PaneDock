@@ -92,18 +92,18 @@
 | PD-052 | Pane 增加 refresh 按鈕與檢視樣式切換按鈕,補上 `TabState::view_mode` 還原缺口 | 7 | `done` | PD-020, PD-006 | [PD-052](tickets/PD-052-pane-refresh-and-view-mode-switcher.md) |
 | PD-053 | 側邊欄品牌列與 Group 清單之間的分隔線造成視覺割裂 | 6 | `done` | PD-028 | [PD-053](tickets/PD-053-sidebar-brand-divider-removal.md) |
 | PD-054 | 設計 App icon 並取代側邊欄品牌列的手繪「+」圖示 | 6 | `done` | PD-028 | [PD-054](tickets/PD-054-app-icon-asset-and-brand-bar-wiring.md) |
-| PD-055 | Tab 條 `STATIC` 缺 `SS_NOTIFY`,滑鼠訊息不送達,tab 無法點擊切換 | 7 | `ready` | PD-049, PD-050 | [PD-055](tickets/PD-055-tab-strip-static-ss-notify-missing.md) |
+| PD-055 | Tab 條 `STATIC` 缺 `SS_NOTIFY`,滑鼠訊息不送達,tab 無法點擊切換 | 7 | `done` | PD-049, PD-050 | [PD-055](tickets/PD-055-tab-strip-static-ss-notify-missing.md) |
 | PD-056 | 切換版型後舊的 active 版型按鈕未重繪,highlight 沒清除 | 7 | `ready` | PD-047 | [PD-056](tickets/PD-056-layout-button-stale-highlight.md) |
 | PD-057 | Group 拖曳的 `ReleaseCapture` 時機錯誤吃掉 `LBN_SELCHANGE`,無法切換 Group | 7 | `ready` | PD-036 | [PD-057](tickets/PD-057-group-list-selection-notification-suppressed.md) |
-| PD-058 | 版型按鈕/tab/「+」/Group 列補上滑鼠 hover 視覺回饋 | 7 | `planned` | PD-055, PD-046 | [PD-058](tickets/PD-058-hover-feedback-for-interactive-chrome.md) |
+| PD-058 | 版型按鈕/tab/「+」/Group 列補上滑鼠 hover 視覺回饋 | 7 | `ready` | PD-055, PD-046 | [PD-058](tickets/PD-058-hover-feedback-for-interactive-chrome.md) |
 | PD-059 | 檢視模式按鈕改為下拉選單,取代單向循環切換 | 7 | `ready` | PD-052 | [PD-059](tickets/PD-059-view-mode-dropdown-menu.md) |
 | PD-060 | Pane 狀態列補上選取檔案總大小,並加上分隔線/底色 | 7 | `ready` | PD-051 | [PD-060](tickets/PD-060-pane-status-bar-selection-size-and-separator.md) |
 | PD-061 | 側邊欄 Group 名稱與副標題字級太小,改用系統 UI 字型 | 7 | `ready` | PD-028 | [PD-061](tickets/PD-061-sidebar-group-typography.md) |
-| PD-062 | Tab 改圓角外框,拆分 padding/gap/列高,「+」加大加粗 | 7 | `planned` | PD-049, PD-055 | [PD-062](tickets/PD-062-tab-strip-visual-polish.md) |
+| PD-062 | Tab 改圓角外框,拆分 padding/gap/列高,「+」加大加粗 | 7 | `ready` | PD-049, PD-055 | [PD-062](tickets/PD-062-tab-strip-visual-polish.md) |
 | PD-063 | Active pane 圓角外框鋸齒,改用不依賴圓角描邊的強調方式 | 7 | `ready` | PD-040, PD-048 | [PD-063](tickets/PD-063-active-pane-highlight-aliasing.md) |
 | PD-064 | 移除無作用的 more-actions「...」按鈕,修正 Up 圖示對齊 | 7 | `ready` | PD-029, PD-043 | [PD-064](tickets/PD-064-header-and-nav-icon-cleanup.md) |
 | PD-065 | `EBO_NOBORDER` 在 `Initialize` 之後才設定,檔案區殘留深色細外框 | 7 | `ready` | PD-040, PD-048 | [PD-065](tickets/PD-065-explorer-view-residual-border.md) |
-| PD-066 | 拖曳排序改用撐開空位的 placeholder;修復 tab 插入指示線死碼 | 7 | `planned` | PD-055, PD-050, PD-036 | [PD-066](tickets/PD-066-drag-reorder-placeholder-gap.md) |
+| PD-066 | 拖曳排序改用撐開空位的 placeholder;修復 tab 插入指示線死碼 | 7 | `ready` | PD-055, PD-050, PD-036 | [PD-066](tickets/PD-066-drag-reorder-placeholder-gap.md) |
 
 ## Dependency lanes
 
