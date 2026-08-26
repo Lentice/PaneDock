@@ -104,6 +104,7 @@
 | PD-064 | 移除無作用的 more-actions「...」按鈕,修正 Up 圖示對齊 | 7 | `ready` | PD-029, PD-043 | [PD-064](tickets/PD-064-header-and-nav-icon-cleanup.md) |
 | PD-065 | `EBO_NOBORDER` 在 `Initialize` 之後才設定,檔案區殘留深色細外框 | 7 | `ready` | PD-040, PD-048 | [PD-065](tickets/PD-065-explorer-view-residual-border.md) |
 | PD-066 | 拖曳排序改用撐開空位的 placeholder;修復 tab 插入指示線死碼 | 7 | `ready` | PD-055, PD-050, PD-036 | [PD-066](tickets/PD-066-drag-reorder-placeholder-gap.md) |
+| PD-067 | Group 清單捲軸視覺存在感過低(捲動功能實測已正常) | 7 | `ready` | PD-028, PD-061 | [PD-067](tickets/PD-067-group-list-scrollbar-visibility.md) |
 
 ## Dependency lanes
 
@@ -345,5 +346,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 - **PD-065**:`EBO_NOBORDER` **在 `Initialize` 之後才 `SetOptions`,已經太晚**——該旗標控制的是內部宿主視窗建立時的樣式,對已建立的視窗沒有回溯效果,所以這個旗標從來沒生效過。修法是把 `SetOptions` 移到 `Initialize` 之前,並把失敗路徑從 `destroy()` 改成 `reset_uninitialized_browser`(此時尚未 `Initialize`,不可呼叫 `Destroy`)。**紅線:不得 subclass 或改寫 Shell view 內部子視窗;若公開 API 無法移除該線,正確結果是如實記錄結案。**
 
 - **PD-066**:使用者要求拖曳排序時有 placeholder。調查中發現**第二個 PD-049 遺留的死碼回歸**:`WM_DRAWITEM` 中處理 tab 的分支條件是 `item->CtlType == ODT_TAB`,而 `ODT_TAB` 只有原生 `SysTabControl32` 會送出;PD-049 換成 subclass 的 `STATIC` 之後,該分支永遠不成立,`draw_tab_item` 與 `draw_tab_insertion_indicator` 都成為死碼,而 `paint_tab_strip` 自己完全沒有繪製插入指示線——**所以 tab 拖曳排序至今沒有任何視覺提示**。Group 側的 `draw_group_insertion_indicator` 走 owner-draw `LISTBOX` 路徑,應仍有效但需實機確認。本票一併刪死碼並把細線升級為「撐開空位」的 placeholder。tab 側的正確做法是在 `apply_tab_item_size` 的幾何計算階段就重排矩形(讓位與 hit-test 都免費正確);Group 側受 `LISTBOX` 架構限制無法重排,只能在 `Sidebar::draw_item` 把 placeholder 那一列改畫成空槽。
+
+- **PD-067**:使用者要求 Group 超過側邊欄高度時要有捲軸。**開票前先實測,結論是功能已經完整可用,本票因此從「新增功能」降級為「視覺微調」**:`WS_VSCROLL` 早已設定(執行期樣式 `0x50210151`),`GetScrollInfo` 回傳 `min=0 max=17 page=13 pos=5` 完全正確,滑鼠滾輪捲動實測 `LB_GETTOPINDEX` 由 5→0→5 正常,`PrintWindow` 截圖也看得到 thumb。真正的落差只是那條 Windows 11 細型捲軸又細又低對比,在淺色側邊欄上容易被當成不存在。優先解法是加 `LBS_DISABLENOSCROLL` 讓捲軸恆常可見,次要是調整 pill 右內距避免被捲軸壓到。
 
 依賴與排程:PD-055 是 PD-058/PD-062/PD-066 的前置(tab 不能點就無法驗證 tab 的 hover、視覺與拖曳);PD-056/PD-057/PD-059/PD-060/PD-061/PD-063/PD-064/PD-065 彼此獨立可平行。PD-058、PD-062、PD-066 都會改到 `paint_tab_strip`,後做的那票需先 rebase。
