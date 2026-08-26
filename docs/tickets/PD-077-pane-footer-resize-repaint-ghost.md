@@ -214,3 +214,27 @@ test；`docs/testing.md` 明確指出 live `IExplorerBrowser` 沒有可誠實造
 work to do`）；`ctest --test-dir build --output-on-failure` 為 4/4 通過；
 `git diff --check` 通過。測試程序 PID `22520` 以不帶 `/F` 的
 `taskkill /PID 22520` 關閉，約 5 秒後確認程序已退出；沒有使用強制終止。
+
+### 2026-08-26 補充:連續拖曳中繼幀實測(補上一輪缺口)
+
+前一輪受限於 computer-use 輸入層失敗,沒有取得連續拖曳的中繼截圖。改用
+`SetWindowPos` + `PrintWindow(PW_RENDERFULLCONTENT)` 直接對真實視窗操作,
+從 `build\pd062-output\PaneDock.exe`(已確認是 `ninja: no work to do` 的最新
+建置產物)實測:
+
+- 基準 1200x780,連續放大 5 步到 1500x980(每步 +60x+40,間隔 350ms),
+  再從 1500x980 連續縮小 5 步回到 1200x780,共 11 張 `PrintWindow` 截圖
+  (`step0`–`step5`、`shrink4`–`shrink0`)。
+- 全部 11 張畫面乾淨:四個 pane 的檔案列表中沒有任何一張出現舊狀態列文字
+  殘留(例如 `80 items` 出現在列表中段),每個 pane 底部只有自己對應的單一
+  狀態列文字(`80 items`/`138 items`/`4 items`/`0 items` 依 pane 而定)。
+  放大與縮小兩個方向都覆蓋到,不是只驗頭尾。
+- 代表性截圖存檔:`PD-077-resize-step2.png`(放大中)、
+  `PD-077-resize-step4.png`(放大後段)、`PD-077-resize-shrink3.png`
+  (縮小中)。
+- 測試程序以不帶 `/F` 的 `taskkill /PID` 關閉,確認已退出,沒有殘留程序。
+
+驗收第 4 項(連續拖曳中繼截圖)在此補齊。決策 1+2 疊加後的修復效果視覺上
+確認有效;仍未觸及決策 6(未發現需要走該分支的證據)。DPI/Group 切換/
+tab 新增關閉等互動路徑仍如上一輪記錄維持未驗證,留給下次有相關改動時
+一併檢查。
