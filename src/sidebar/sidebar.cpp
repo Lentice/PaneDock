@@ -39,9 +39,6 @@ bool Sidebar::create(HWND parent, int control_id,
         0, 0, 0, 0, parent, reinterpret_cast<HMENU>(control_id),
         GetModuleHandleW(nullptr), nullptr);
     if (list_box_ != nullptr) {
-        SendMessageW(list_box_, WM_SETFONT,
-                     reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)),
-                     TRUE);
         if (drop_target == nullptr ||
             FAILED(RegisterDragDrop(list_box_, drop_target))) {
             DestroyWindow(list_box_);
@@ -158,27 +155,35 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item) const noexcept {
     RECT subtitle_rect{text_area.left, name_rect.bottom, text_area.right,
                        text_area.bottom};
 
-    LOGFONTW logfont{};
-    HFONT base_font = reinterpret_cast<HFONT>(
-        SendMessageW(list_box_, WM_GETFONT, 0, 0));
-    if (base_font == nullptr)
-        base_font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-    HFONT small_font = nullptr;
-    if (base_font != nullptr &&
-        GetObjectW(base_font, sizeof(logfont), &logfont) != 0) {
-        logfont.lfHeight =
-            static_cast<LONG>(std::lround(logfont.lfHeight * 0.82));
-        logfont.lfWeight = FW_NORMAL;
-        small_font = CreateFontIndirectW(&logfont);
+    NONCLIENTMETRICSW metrics{};
+    metrics.cbSize = sizeof(metrics);
+    const bool have_system_font = SystemParametersInfoForDpi(
+        SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, dpi_) != FALSE;
+    HFONT name_font = nullptr;
+    HFONT subtitle_font = nullptr;
+    if (have_system_font) {
+        LOGFONTW name_logfont = metrics.lfMessageFont;
+        name_logfont.lfWeight = FW_SEMIBOLD;
+        name_font = CreateFontIndirectW(&name_logfont);
+
+        LOGFONTW subtitle_logfont = metrics.lfMessageFont;
+        subtitle_logfont.lfHeight = static_cast<LONG>(std::lround(
+            static_cast<double>(subtitle_logfont.lfHeight) * 0.9));
+        subtitle_logfont.lfWeight = FW_NORMAL;
+        subtitle_font = CreateFontIndirectW(&subtitle_logfont);
     }
 
     SetBkMode(item->hDC, TRANSPARENT);
     SetTextColor(item->hDC, selected ? kSidebarActiveText : kSidebarText);
+    const HGDIOBJ old_name_font =
+        name_font != nullptr ? SelectObject(item->hDC, name_font) : nullptr;
     DrawTextW(item->hDC, group.name.c_str(), -1, &name_rect,
               DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+    if (old_name_font != nullptr) SelectObject(item->hDC, old_name_font);
 
     const HGDIOBJ old_font =
-        small_font != nullptr ? SelectObject(item->hDC, small_font) : nullptr;
+        subtitle_font != nullptr ? SelectObject(item->hDC, subtitle_font)
+                                 : nullptr;
     SetTextColor(item->hDC, kSidebarSubtitleText);
     const std::wstring subtitle =
         format_subtitle(group.pane_count, group.tab_count);
@@ -201,7 +206,8 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item) const noexcept {
               DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
     if (old_font != nullptr) SelectObject(item->hDC, old_font);
-    if (small_font != nullptr) DeleteObject(small_font);
+    if (name_font != nullptr) DeleteObject(name_font);
+    if (subtitle_font != nullptr) DeleteObject(subtitle_font);
     if ((item->itemState & ODS_FOCUS) != 0) DrawFocusRect(item->hDC, &pill);
     return true;
 }

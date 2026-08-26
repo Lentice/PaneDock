@@ -98,7 +98,7 @@
 | PD-058 | 版型按鈕/tab/「+」/Group 列補上滑鼠 hover 視覺回饋 | 7 | `done` | PD-055, PD-046 | [PD-058](tickets/PD-058-hover-feedback-for-interactive-chrome.md) |
 | PD-059 | 檢視模式按鈕改為下拉選單,取代單向循環切換 | 7 | `ready` | PD-052 | [PD-059](tickets/PD-059-view-mode-dropdown-menu.md) |
 | PD-060 | Pane 狀態列補上選取檔案總大小,並加上分隔線/底色 | 7 | `ready` | PD-051 | [PD-060](tickets/PD-060-pane-status-bar-selection-size-and-separator.md) |
-| PD-061 | 側邊欄 Group 名稱與副標題字級太小,改用系統 UI 字型 | 7 | `ready` | PD-028 | [PD-061](tickets/PD-061-sidebar-group-typography.md) |
+| PD-061 | 側邊欄 Group 名稱與副標題字級太小,改用系統 UI 字型 | 7 | `done` | PD-028 | [PD-061](tickets/PD-061-sidebar-group-typography.md) |
 | PD-062 | Tab 改圓角外框,拆分 padding/gap/列高,「+」加大加粗 | 7 | `ready` | PD-049, PD-055 | [PD-062](tickets/PD-062-tab-strip-visual-polish.md) |
 | PD-063 | Active pane 圓角外框鋸齒,改用不依賴圓角描邊的強調方式 | 7 | `ready` | PD-040, PD-048 | [PD-063](tickets/PD-063-active-pane-highlight-aliasing.md) |
 | PD-064 | 移除無作用的 more-actions「...」按鈕,修正 Up 圖示對齊 | 7 | `ready` | PD-029, PD-043 | [PD-064](tickets/PD-064-header-and-nav-icon-cleanup.md) |

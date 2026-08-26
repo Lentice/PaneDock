@@ -18,7 +18,7 @@ struct IDropTarget;
 namespace panedock::sidebar {
 
 inline constexpr int kSidebarWidth = 226;
-inline constexpr int kGroupRowHeight = 54;
+inline constexpr int kGroupRowHeight = 52;
 inline constexpr UINT kRenameCommitMessage = WM_APP + 1;
 
 struct GroupSummary final {

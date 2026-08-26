@@ -125,3 +125,12 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-26 — 實作與實機驗證
+
+- `Sidebar::draw_item` 改用 `SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, ...)` 取得目前 `dpi_` 的 `NONCLIENTMETRICSW::lfMessageFont`。Group 名稱使用 `FW_SEMIBOLD`、基準字級；副標題使用 `FW_NORMAL`、字型高度的 `0.9` 倍，顏色維持 `kSidebarSubtitleText`。
+- `kGroupRowHeight` 從 `54` 調為 `52` logical px。實機 `GetTextMetricsW` probe（實際系統字型為 `Microsoft JhengHei UI`）結果：96 DPI 的名稱/副標題高度為 `15/14` px、120 DPI 為 `19/18` px、144 DPI 為 `23/20` px；列高仍保留足夠上下空間，實拍無裁切或重疊。`set_rect` 與 `measure_item` 原本共用此常數及 `MulDiv`，未新增第二份列高。
+- 未加字型 cache：每次 owner-draw 依當下 `dpi_` 建立兩個 `HFONT`，繪製後各自 `DeleteObject`。這個最小方案沒有 cache invalidation/lifetime 狀態，也會在 `WM_DPICHANGED` 重新繪製時自然取得新 DPI 字型。
+- 實機驗證使用 `build\PaneDock.exe --diagnostic` 進入可見 UI；以 `SetCursorPos`/`mouse_event` 點擊 Group 清單，再用 `PrintWindow(hwnd, hdc, 2)` 擷取，回傳 `True`。當前視窗為 96 DPI、window `1400x900`、client `1384x861`；群組列、名稱、省略、摘要及 badge 均正常。一般模式在本次驗證 shell 會卡在 Shell 初始化而未取得可見主視窗；此為既有啟動路徑觀察，未擴大本票範圍。
+- DPI probe 同時以 96/120/144 DPI 呼叫 `SystemParametersInfoForDpi`，確認同一 API 回傳隨 DPI 縮放的字型度量；本機實際可見桌面為 96 DPI，因此未改動使用者顯示設定。放大 3 倍截圖：[PD-061-sidebar-3x.png](PD-061-sidebar-3x.png)。與 `panedock-ui-demo-01-refined-quiet-header.html` 目標畫面比對後，名稱的半粗體／基準大小、摘要的次要灰色及 badge 對齊符合目標層級，未改動 `GROUPS` 標題或其他非本票區域。
+- 驗證：`cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release` 成功；`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 4/4 通過；`git diff --check` 成功。
