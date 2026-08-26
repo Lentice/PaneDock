@@ -42,7 +42,6 @@
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PaneDockMainWindow";
-constexpr int kLayoutToggleHotkeyId = 1;
 constexpr std::size_t kExplorerCount = 4;
 constexpr int kLayoutBarHeight = 44;
 constexpr int kLayoutButtonHeight = 30;
@@ -1921,20 +1920,6 @@ void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
     save_now(state);
 }
 
-panedock::core::LayoutTemplate next_layout(
-    panedock::core::LayoutTemplate layout) noexcept {
-    using panedock::core::LayoutTemplate;
-    switch (layout) {
-        case LayoutTemplate::single: return LayoutTemplate::left_right;
-        case LayoutTemplate::left_right: return LayoutTemplate::top_bottom;
-        case LayoutTemplate::top_bottom: return LayoutTemplate::three_pane;
-        case LayoutTemplate::three_pane:
-            return LayoutTemplate::four_pane_grid;
-        case LayoutTemplate::four_pane_grid: return LayoutTemplate::single;
-    }
-    return LayoutTemplate::single;
-}
-
 std::string unique_tab_id(const panedock::core::GroupState& group,
                           std::size_t& candidate_index) {
     for (;;) {
@@ -2164,11 +2149,6 @@ void set_layout(HWND window, AppState& state,
     const std::size_t active = active_pane_index(group);
     state.explorers[active].focus();
     save_now(state);
-}
-
-void toggle_layout(HWND window, AppState& state) noexcept {
-    if (!has_active_group(state)) return;
-    set_layout(window, state, next_layout(active_group(state).layout_template));
 }
 
 void update_splitter_drag(HWND window, AppState& state, POINT point) {
@@ -2896,15 +2876,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 destroy_explorers(*state);
                 return -1;
             }
-            if (!RegisterHotKey(window, kLayoutToggleHotkeyId,
-                                MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'L')) {
-                MessageBoxW(
-                    window, L"PaneDock could not register its layout hotkey.",
-                    L"PaneDock", MB_ICONERROR | MB_OK);
-                revoke_drag_hover_targets(*state);
-                destroy_explorers(*state);
-                return -1;
-            }
             return 0;
         }
         case kTabStripSelectionMessage:
@@ -3322,14 +3293,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 if (pane < kExplorerCount) set_active_pane(window, *state, pane);
             }
             return 0;
-        case WM_HOTKEY:
-            if (wparam == kLayoutToggleHotkeyId && state != nullptr &&
-                has_active_group(*state))
-                toggle_layout(window, *state);
-            return 0;
         case WM_CLOSE:
             if (state != nullptr) {
-                UnregisterHotKey(window, kLayoutToggleHotkeyId);
                 revoke_drag_hover_targets(*state);
                 capture_window_placement(window, *state);
                 save_now(*state, true);
@@ -3340,7 +3305,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         case WM_DESTROY:
             if (state != nullptr) revoke_drag_hover_targets(*state);
-            UnregisterHotKey(window, kLayoutToggleHotkeyId);
             release_navigation_history_image_list();
             release_navigation_refresh_font();
             release_address_bar_background_brush();
