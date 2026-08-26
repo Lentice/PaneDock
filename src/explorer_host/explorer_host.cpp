@@ -659,8 +659,13 @@ void ExplorerHost::destroy() noexcept {
         if (SUCCEEDED(current_view_->QueryInterface(
                 kIidShellFolderView,
                 reinterpret_cast<void**>(folder_view.GetAddressOf())))) {
+            // CDefView::SetCallback stores the outgoing callback through the
+            // second parameter without checking it for null, so passing
+            // nullptr faults inside shell32 during teardown. Hand it a real
+            // slot and drop the value instead.
+            Microsoft::WRL::ComPtr<IShellFolderViewCB> replaced;
             (void)folder_view->SetCallback(previous_view_callback_.Get(),
-                                           nullptr);
+                                           replaced.GetAddressOf());
         }
     }
     view_callback_.Reset();

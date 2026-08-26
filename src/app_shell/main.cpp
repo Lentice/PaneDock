@@ -1277,6 +1277,7 @@ void layout_header(HWND window, AppState& state) noexcept {
                      kLayoutTemplates[index] == current ? BST_CHECKED
                                                          : BST_UNCHECKED,
                      0);
+        InvalidateRect(state.layout_buttons[index], nullptr, FALSE);
     }
 }
 

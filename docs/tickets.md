@@ -93,7 +93,7 @@
 | PD-053 | 側邊欄品牌列與 Group 清單之間的分隔線造成視覺割裂 | 6 | `done` | PD-028 | [PD-053](tickets/PD-053-sidebar-brand-divider-removal.md) |
 | PD-054 | 設計 App icon 並取代側邊欄品牌列的手繪「+」圖示 | 6 | `done` | PD-028 | [PD-054](tickets/PD-054-app-icon-asset-and-brand-bar-wiring.md) |
 | PD-055 | Tab 條 `STATIC` 缺 `SS_NOTIFY`,滑鼠訊息不送達,tab 無法點擊切換 | 7 | `done` | PD-049, PD-050 | [PD-055](tickets/PD-055-tab-strip-static-ss-notify-missing.md) |
-| PD-056 | 切換版型後舊的 active 版型按鈕未重繪,highlight 沒清除 | 7 | `ready` | PD-047 | [PD-056](tickets/PD-056-layout-button-stale-highlight.md) |
+| PD-056 | 切換版型後舊的 active 版型按鈕未重繪,highlight 沒清除 | 7 | `done` | PD-047 | [PD-056](tickets/PD-056-layout-button-stale-highlight.md) |
 | PD-057 | Group 拖曳在 button-down 搶走 LISTBOX capture,通知變成 `LBN_SELCANCEL`,無法切換 Group | 7 | `done` | PD-036 | [PD-057](tickets/PD-057-group-list-selection-notification-suppressed.md) |
 | PD-058 | 版型按鈕/tab/「+」/Group 列補上滑鼠 hover 視覺回饋 | 7 | `ready` | PD-055, PD-046 | [PD-058](tickets/PD-058-hover-feedback-for-interactive-chrome.md) |
 | PD-059 | 檢視模式按鈕改為下拉選單,取代單向循環切換 | 7 | `ready` | PD-052 | [PD-059](tickets/PD-059-view-mode-dropdown-menu.md) |
@@ -105,6 +105,7 @@
 | PD-065 | `EBO_NOBORDER` 在 `Initialize` 之後才設定,檔案區殘留深色細外框 | 7 | `ready` | PD-040, PD-048 | [PD-065](tickets/PD-065-explorer-view-residual-border.md) |
 | PD-066 | 拖曳排序改用撐開空位的 placeholder;修復 tab 插入指示線死碼 | 7 | `ready` | PD-055, PD-050, PD-036 | [PD-066](tickets/PD-066-drag-reorder-placeholder-gap.md) |
 | PD-067 | Group 清單捲軸視覺存在感過低(捲動功能實測已正常) | 7 | `ready` | PD-028, PD-061 | [PD-067](tickets/PD-067-group-list-scrollbar-visibility.md) |
+| PD-068 | 關閉程式時在 `SHELL32.dll` 當機:`SetCallback` 的 out 參數傳 `nullptr` | 7 | `done` | PD-051 | [PD-068](tickets/PD-068-shell-folder-view-setcallback-null-out-param.md) |
 
 ## Dependency lanes
 
@@ -348,5 +349,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 - **PD-066**:使用者要求拖曳排序時有 placeholder。調查中發現**第二個 PD-049 遺留的死碼回歸**:`WM_DRAWITEM` 中處理 tab 的分支條件是 `item->CtlType == ODT_TAB`,而 `ODT_TAB` 只有原生 `SysTabControl32` 會送出;PD-049 換成 subclass 的 `STATIC` 之後,該分支永遠不成立,`draw_tab_item` 與 `draw_tab_insertion_indicator` 都成為死碼,而 `paint_tab_strip` 自己完全沒有繪製插入指示線——**所以 tab 拖曳排序至今沒有任何視覺提示**。Group 側的 `draw_group_insertion_indicator` 走 owner-draw `LISTBOX` 路徑,應仍有效但需實機確認。本票一併刪死碼並把細線升級為「撐開空位」的 placeholder。tab 側的正確做法是在 `apply_tab_item_size` 的幾何計算階段就重排矩形(讓位與 hit-test 都免費正確);Group 側受 `LISTBOX` 架構限制無法重排,只能在 `Sidebar::draw_item` 把 placeholder 那一列改畫成空槽。
 
 - **PD-067**:使用者要求 Group 超過側邊欄高度時要有捲軸。**開票前先實測,結論是功能已經完整可用,本票因此從「新增功能」降級為「視覺微調」**:`WS_VSCROLL` 早已設定(執行期樣式 `0x50210151`),`GetScrollInfo` 回傳 `min=0 max=17 page=13 pos=5` 完全正確,滑鼠滾輪捲動實測 `LB_GETTOPINDEX` 由 5→0→5 正常,`PrintWindow` 截圖也看得到 thumb。真正的落差只是那條 Windows 11 細型捲軸又細又低對比,在淺色側邊欄上容易被當成不存在。優先解法是加 `LBS_DISABLENOSCROLL` 讓捲軸恆常可見,次要是調整 pill 右內距避免被捲軸壓到。
+
+- **PD-068**(CRITICAL,關閉當機):使用者回報存取違規對話框。以 crash dump + `cdb` 取得堆疊,`FAILURE_BUCKET_ID` 直接指出 `NULL_POINTER_WRITE_c0000005_shell32.dll!CDefView::SetCallback`。根因是 PD-051 的 `ExplorerHost::destroy()` 把 `IShellFolderView::SetCallback` 的**第二個 out 參數**傳成 `nullptr`,而 shell32 的實作不檢查 null 就寫入 `*ppOldCB`。安裝路徑(`navigation_complete`)傳的是合法位址,所以只有關閉時當機。修改前 3 輪 3 次當機、修改後 5 輪 0 次。**這個當機是先前多次誤判「本環境不支援截圖/自動化」的真正原因**:當機使程序殘留,殘留程序持有 `Ctrl+Shift+L` 熱鍵,新實例 `RegisterHotKey` 失敗後中止建立主視窗,於是 `MainWindowHandle` 為 0、`PrintWindow` 回傳 False;殘留程序也會鎖住 exe 讓建置失敗。**教訓:當機時以 crash dump 堆疊為準,不要用「換版本測幾輪沒重現」來歸因**——本票以 `9ee9c17` 測 3 輪確實 0 次,差點誤指 PD-055/PD-057。
 
 依賴與排程:PD-055 是 PD-058/PD-062/PD-066 的前置(tab 不能點就無法驗證 tab 的 hover、視覺與拖曳);PD-056/PD-057/PD-059/PD-060/PD-061/PD-063/PD-064/PD-065 彼此獨立可平行。PD-058、PD-062、PD-066 都會改到 `paint_tab_strip`,後做的那票需先 rebase。

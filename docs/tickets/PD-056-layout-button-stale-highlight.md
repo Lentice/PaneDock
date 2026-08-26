@@ -116,3 +116,25 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-26 實作交接
+
+**修改位置與內容:** 完全依照票據的產品決策 1,在 `layout_header` 既有的按鈕同步迴圈(`src/app_shell/main.cpp` 第 1274-1281 行)末端補一行:
+
+```cpp
+InvalidateRect(state.layout_buttons[index], nullptr, FALSE);
+```
+
+`BM_SETCHECK` 依決策 3 保留;`draw_layout_button` 的顏色未動;`bErase` 依決策 2 傳 `FALSE`。整個 diff 只有這一行。
+
+**實機驗證結果(通過):**
+
+視窗置於 50,50 1400x900。五顆版型按鈕以 `GetDlgItem(main, kLayoutButtonIdBase + i)`(`kLayoutButtonIdBase = 400`)取得後 `GetWindowRect` 換算螢幕座標,中心分別為 x=1257 / 1288 / 1319 / 1350 / 1381,y=103——**不是用截圖目測**。依序點擊五顆,每次點擊後以 `PrintWindow(hwnd, hdc, 2)` 截圖並將按鈕列區域以 `NearestNeighbor` 放大 5 倍判讀。
+
+結果:**每一次截圖都只有一顆按鈕呈藍底白圖示,且正是剛點擊的那一顆**,先前 active 的那顆已恢復未選中的淺灰樣式。分段控制的共用外框、按鈕間距與 disabled 樣式均未受影響。
+
+**建置與測試:** `cmake --build build` 成功;`ctest --test-dir build --output-on-failure` `100% tests passed out of 4`;`git diff --check` 通過。
+
+**驗證期間發現一個與本票無關的當機,已另開 PD-068 並修復:** 反覆啟動/關閉程式時,`PaneDock.exe` 在 `SHELL32.dll` 發生存取違規。這不是本票造成的,但它會讓本票的實機驗證難以進行(程序關閉後殘留、占用 Ctrl+Shift+L 熱鍵導致下一個實例無法建立主視窗),因此先修掉才完成本票驗證。詳見 `docs/tickets/PD-068-shell-folder-view-setcallback-null-out-param.md`。
+
+程序以不帶 `/F` 的 `taskkill /PID` 關閉,`clean_shutdown` 為 `true`,無殘留程序。
