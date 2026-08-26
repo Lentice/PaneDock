@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PaneDock UI concepts</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #667085;
+      --faint: #98a2b3;
+      --line: #dfe5ec;
+      --line-strong: #cbd5e1;
+      --canvas: #eef2f6;
+      --surface: #ffffff;
+      --surface-soft: #f7f9fb;
+      --blue: #2563eb;
+      --blue-soft: #eaf1ff;
+      --teal: #0f766e;
+      --amber: #b45309;
+      --violet: #6d4aff;
+      --shadow: 0 18px 45px rgba(22, 34, 51, .12), 0 2px 8px rgba(22, 34, 51, .06);
+      --radius: 14px;
+      --ui: Inter, "Segoe UI", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      padding: 22px 22px 92px;
+      color: var(--ink);
+      background: #e9eef4;
+      font: 13px/1.35 var(--ui);
+    }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible {
+      outline: 3px solid rgba(37, 99, 235, .28);
+      outline-offset: 1px;
+    }
+    .prototype-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      max-width: 1500px;
+      margin: 0 auto 12px;
+      color: #536173;
+      font-size: 12px;
+      letter-spacing: .02em;
+    }
+    .prototype-header strong { color: var(--ink); font-size: 13px; }
+    .prototype-header .hint { color: #7c8999; }
+
+    .app-window {
+      position: relative;
+      display: grid;
+      width: min(1500px, 100%);
+      height: min(850px, calc(100vh - 72px));
+      min-height: 620px;
+      margin: auto;
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid #d4dce6;
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+    .icon { width: 16px; height: 16px; flex: 0 0 16px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .icon.sm { width: 14px; height: 14px; flex-basis: 14px; }
+    .icon.lg { width: 19px; height: 19px; flex-basis: 19px; }
+    .muted { color: var(--muted); }
+    .eyebrow { color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
+    .text-button, .icon-button, .layout-button, .group-button, .tab-button, .rail-button { cursor: pointer; border: 0; background: transparent; }
+    .icon-button, .layout-button, .rail-button {
+      display: inline-grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      color: #64748b;
+    }
+    .icon-button:hover, .layout-button:hover, .rail-button:hover { color: var(--blue); background: #edf3ff; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 24px;
+      padding: 0 9px;
+      border-radius: 999px;
+      color: #475569;
+      background: #f1f5f9;
+      font-size: 11px;
+      font-weight: 650;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; }
+
+    /* Shared group and native-view details. */
+    .brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 29px;
+      height: 29px;
+      border-radius: 9px;
+      color: white;
+      background: #1f64e7;
+      box-shadow: 0 5px 12px rgba(37, 99, 235, .24);
+    }
+    .brand-mark .icon { width: 17px; height: 17px; }
+    .brand-name { font-size: 14px; font-weight: 760; letter-spacing: -.02em; }
+    .group-list { display: grid; gap: 4px; }
+    .group-button {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 48px;
+      padding: 7px 10px;
+      text-align: left;
+      border-radius: 10px;
+      color: #4b5565;
+    }
+    .group-button:hover { background: #f2f5f8; }
+    .group-button.is-active { color: #174bb4; background: var(--blue-soft); }
+    .group-copy { min-width: 0; }
+    .group-copy strong, .group-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .group-copy strong { font-size: 12px; font-weight: 700; }
+    .group-copy small { margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .group-count { color: #8995a6; font-size: 10px; font-variant-numeric: tabular-nums; }
+    .sidebar-actions { display: grid; gap: 6px; }
+    .action-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 34px;
+      padding: 0 10px;
+      cursor: pointer;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: #526075;
+      font-size: 11px;
+      font-weight: 650;
+    }
+    .action-row:hover { border-color: #b9cdf4; color: var(--blue); background: #f8fbff; }
+
+    .pane-board { min-width: 0; min-height: 0; display: grid; gap: 8px; }
+    .pane {
+      display: flex;
+      min-width: 0;
+      min-height: 0;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid #d8e0e8;
+      border-radius: 10px;
+      background: #fff;
+    }
+    .pane.is-active { border-color: #7da7f3; box-shadow: inset 0 0 0 1px rgba(37,99,235,.18), 0 4px 12px rgba(37,99,235,.08); }
+    .pane-tabs { display: flex; align-items: center; min-width: 0; height: 31px; padding: 0 6px; border-bottom: 1px solid #e6ebf0; background: #f8fafc; }
+    .tab-button {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      height: 25px;
+      padding: 0 8px;
+      border-radius: 6px;
+      color: #3e4c60;
+      font-size: 11px;
+      font-weight: 650;
+    }
+    .tab-button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(22,34,51,.08); }
+    .tab-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tab-button .icon { color: #7b8796; }
+    .pane-tabs .icon-button { margin-left: auto; width: 26px; height: 26px; }
+    .pane-toolbar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 6px; border-bottom: 1px solid #eef1f4; background: #fff; }
+    .nav-buttons { display: flex; gap: 2px; }
+    .nav-buttons .icon-button { width: 26px; height: 26px; border-radius: 6px; }
+    .location {
+      min-width: 0;
+      height: 27px;
+      padding: 0 9px;
+      border: 1px solid #d9e1ea;
+      border-radius: 6px;
+      outline: 0;
+      color: #4c596b;
+      background: #fbfcfd;
+      font-size: 11px;
+    }
+    .location:focus { border-color: #8bb0f5; background: #fff; }
+    .view-tools { display: flex; gap: 2px; }
+    .view-tools .icon-button { width: 26px; height: 26px; }
+    .file-head, .file-row { display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(86px, .8fr) 74px; gap: 10px; align-items: center; }
+    .file-head { min-height: 29px; padding: 0 12px; color: #8190a2; border-bottom: 1px solid #edf0f3; font-size: 10px; font-weight: 700; }
+    .file-body { overflow: hidden; padding: 3px 5px 6px; }
+    .file-row { min-height: 30px; padding: 0 7px; border-radius: 6px; color: #344054; font-size: 11px; }
+    .file-row:hover { background: #f2f6fb; }
+    .file-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .file-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .folder-icon { color: #e7a514; fill: #ffd873; stroke: #c58b06; }
+    .file-icon { color: #7b8ca4; }
+    .file-meta { overflow: hidden; color: #8a96a5; text-overflow: ellipsis; white-space: nowrap; }
+    .file-size { color: #8a96a5; text-align: right; font-variant-numeric: tabular-nums; }
+    .pane-status { display: flex; align-items: center; justify-content: space-between; min-height: 24px; padding: 0 10px; margin-top: auto; color: #9aa5b3; border-top: 1px solid #f0f2f5; font-size: 10px; }
+
+    /* 01 — Utility Classic: closest to the current implementation, but quieter and clearer. */
+    .v1 { grid-template-columns: 226px minmax(0, 1fr); }
+    .v1 .sidebar { display: flex; flex-direction: column; gap: 22px; padding: 20px 13px 14px; background: #fbfcfe; border-right: 1px solid var(--line); }
+    .v1 .group-area { min-height: 0; overflow: auto; }
+    .v1 .sidebar-label { display: flex; align-items: center; justify-content: space-between; margin: 0 9px 8px; }
+    .v1 .sidebar-label button { width: 22px; height: 22px; border: 0; border-radius: 6px; color: var(--blue); background: var(--blue-soft); cursor: pointer; }
+    .v1 .sidebar-actions { margin-top: auto; }
+    .v1 .main-surface { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: #f3f6f9; }
+    .v1 .topbar { display: flex; align-items: center; justify-content: space-between; min-height: 68px; padding: 0 22px; background: #fff; border-bottom: 1px solid var(--line); }
+    .v1 .title-stack { display: grid; gap: 4px; }
+    .v1 .workspace-title { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 760; letter-spacing: -.03em; }
+    .v1 .workspace-title .dot { margin-left: 3px; }
+    .v1 .top-actions { display: flex; align-items: center; gap: 7px; }
+    .v1 .layout-picker { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: #f8fafc; }
+    .v1 .layout-button { width: 27px; height: 27px; }
+    .v1 .layout-button.active { color: var(--blue); background: #fff; box-shadow: 0 1px 4px rgba(22,34,51,.1); }
+    .v1 .board-wrap { min-width: 0; min-height: 0; padding: 15px; flex: 1; }
+    .v1 .pane-board { height: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+    .v1 .workspace-footer { display: flex; justify-content: space-between; padding: 0 17px 10px; color: #8591a0; font-size: 10px; }
+
+    /* 02 — Workspace Dock: compact rail plus a denser command surface. */
+    .v2 { grid-template-columns: 64px 210px minmax(0, 1fr); background: #f8fafc; }
+    .v2 .icon-rail { display: flex; align-items: center; flex-direction: column; gap: 12px; padding: 17px 11px; background: #172033; color: #b8c5d8; }
+    .v2 .icon-rail .brand-mark { width: 34px; height: 34px; margin-bottom: 14px; color: #172033; background: #fff; box-shadow: none; }
+    .v2 .icon-rail .brand-mark .icon { color: var(--blue); }
+    .v2 .rail-button { width: 39px; height: 39px; border-radius: 10px; color: #9ba9bd; }
+    .v2 .rail-button:hover, .v2 .rail-button.active { color: #fff; background: rgba(255,255,255,.12); }
+    .v2 .rail-spacer { flex: 1; }
+    .v2 .group-dock { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 19px 12px 12px; background: #fff; border-right: 1px solid var(--line); }
+    .v2 .dock-heading { display: flex; align-items: flex-start; justify-content: space-between; margin: 0 7px 15px; }
+    .v2 .dock-heading strong { display: block; margin-top: 3px; font-size: 15px; letter-spacing: -.02em; }
+    .v2 .group-list { overflow: auto; }
+    .v2 .group-button { grid-template-columns: minmax(0, 1fr); min-height: 52px; }
+    .v2 .group-button .group-count { display: none; }
+    .v2 .dock-bottom { display: grid; gap: 9px; margin-top: auto; padding: 12px 6px 2px; border-top: 1px solid #eef1f4; }
+    .v2 .storage-line { display: flex; align-items: center; justify-content: space-between; color: #718096; font-size: 10px; }
+    .v2 .storage-meter { height: 5px; overflow: hidden; border-radius: 99px; background: #edf1f5; }
+    .v2 .storage-meter span { display: block; width: 63%; height: 100%; border-radius: inherit; background: #77a8f8; }
+    .v2 .main-surface { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: #eef2f6; }
+    .v2 .commandbar { display: grid; gap: 13px; padding: 18px 22px 15px; background: #fff; border-bottom: 1px solid var(--line); }
+    .v2 .command-top, .v2 .command-bottom { display: flex; align-items: center; justify-content: space-between; gap: 15px; }
+    .v2 .command-title { display: flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 760; letter-spacing: -.03em; }
+    .v2 .command-title small { color: #8390a0; font-size: 11px; font-weight: 500; }
+    .v2 .breadcrumbs { display: flex; align-items: center; gap: 7px; min-width: 0; color: #69788c; font-size: 11px; }
+    .v2 .breadcrumbs span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .v2 .command-input { display: flex; align-items: center; flex: 0 1 250px; height: 30px; padding: 0 10px; gap: 8px; color: #8995a5; border: 1px solid var(--line); border-radius: 7px; background: #f8fafc; }
+    .v2 .command-input input { width: 100%; min-width: 0; border: 0; outline: 0; color: #4b5563; background: transparent; font-size: 11px; }
+    .v2 .layout-picker { display: flex; gap: 4px; }
+    .v2 .layout-button { border: 1px solid transparent; }
+    .v2 .layout-button.active { color: var(--blue); border-color: #cfe0ff; background: #eaf1ff; }
+    .v2 .board-wrap { min-width: 0; min-height: 0; padding: 14px 16px 16px; flex: 1; }
+    .v2 .pane-board { height: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .v2 .pane { border-radius: 12px; box-shadow: 0 2px 8px rgba(35,52,73,.04); }
+    .v2 .pane.is-active { box-shadow: inset 0 0 0 1px rgba(37,99,235,.18), 0 6px 16px rgba(37,99,235,.1); }
+
+    /* 03 — Focus Canvas: group navigation behaves like a workspace switcher, with one dominant pane. */
+    .v3 { grid-template-columns: 196px minmax(0, 1fr); }
+    .v3 .sidebar { display: flex; min-height: 0; flex-direction: column; padding: 18px 11px 13px; background: #f8fafc; border-right: 1px solid var(--line); }
+    .v3 .sidebar .brand { padding: 0 8px 18px; }
+    .v3 .workspace-card { padding: 13px; margin: 0 4px 17px; border: 1px solid #d9e5fb; border-radius: 12px; background: #edf4ff; }
+    .v3 .workspace-card strong { display: block; margin-top: 6px; font-size: 13px; }
+    .v3 .workspace-card p { margin: 4px 0 0; color: #65748a; font-size: 10px; }
+    .v3 .sidebar-label { margin: 0 9px 8px; }
+    .v3 .group-button { grid-template-columns: minmax(0, 1fr); min-height: 42px; padding: 6px 9px; }
+    .v3 .group-button .group-count { display: none; }
+    .v3 .recent { display: grid; gap: 8px; margin: auto 8px 0; padding-top: 13px; border-top: 1px solid #e4e9ef; }
+    .v3 .recent a { display: flex; align-items: center; gap: 7px; overflow: hidden; color: #6f7d8f; font-size: 10px; text-decoration: none; }
+    .v3 .recent a:hover { color: var(--blue); }
+    .v3 .main-surface { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: #fff; }
+    .v3 .workspace-tabs { display: flex; align-items: flex-end; gap: 4px; min-height: 55px; padding: 0 19px; border-bottom: 1px solid var(--line); background: #fbfcfe; }
+    .v3 .workspace-tab { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 13px; cursor: pointer; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #718096; font-weight: 650; }
+    .v3 .workspace-tab:hover { color: var(--blue); }
+    .v3 .workspace-tab.active { color: var(--ink); border-color: var(--blue); }
+    .v3 .workspace-tab .dot { width: 6px; height: 6px; }
+    .v3 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 20px; border-bottom: 1px solid #edf0f3; }
+    .v3 .toolbar-left { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .v3 .toolbar-title { overflow: hidden; color: #344054; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .v3 .toolbar-title span { color: #8b98a8; font-weight: 500; }
+    .v3 .layout-picker { display: flex; align-items: center; gap: 3px; padding-left: 10px; border-left: 1px solid var(--line); }
+    .v3 .layout-button.active { color: var(--blue); background: var(--blue-soft); }
+    .v3 .canvas-wrap { min-width: 0; min-height: 0; padding: 16px 20px 20px; flex: 1; background: #f6f8fa; }
+    .v3 .pane-board { height: 100%; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .95fr); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .v3 .pane:first-child { grid-row: span 2; }
+    .v3 .pane { border-radius: 12px; }
+    .v3 .pane:first-child .file-row { min-height: 34px; }
+
+    /* 04 — Soft Canvas: airy, almost frameless panes with the Group as the primary context. */
+    .v4 { grid-template-columns: 248px minmax(0, 1fr); background: #f7f8fa; }
+    .v4 .sidebar { display: flex; min-height: 0; flex-direction: column; padding: 24px 16px; background: #fff; border-right: 1px solid #e8ebef; }
+    .v4 .sidebar .brand { padding: 0 8px 30px; }
+    .v4 .side-heading { display: flex; align-items: flex-end; justify-content: space-between; padding: 0 8px 10px; }
+    .v4 .side-heading strong { font-size: 16px; letter-spacing: -.03em; }
+    .v4 .side-heading button { display: grid; place-items: center; width: 26px; height: 26px; cursor: pointer; border: 0; border-radius: 8px; color: #5576b2; background: #edf3ff; }
+    .v4 .group-list { gap: 8px; }
+    .v4 .group-button { grid-template-columns: minmax(0, 1fr); min-height: 64px; padding: 10px 11px; border: 1px solid transparent; border-radius: 12px; }
+    .v4 .group-button.is-active { border-color: #d7e5ff; background: #f0f5ff; }
+    .v4 .group-button .group-count { display: none; }
+    .v4 .sidebar-footnote { display: flex; align-items: center; gap: 8px; margin: auto 8px 0; padding-top: 15px; color: #7b8798; border-top: 1px solid #eef1f4; font-size: 10px; }
+    .v4 .main-surface { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 25px 28px 18px; background: #f7f8fa; }
+    .v4 .hero-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 0 2px 21px; }
+    .v4 .hero-head h1 { margin: 5px 0 0; font-size: 24px; letter-spacing: -.05em; }
+    .v4 .hero-head p { margin: 5px 0 0; color: #748195; font-size: 11px; }
+    .v4 .hero-actions { display: flex; align-items: center; gap: 7px; }
+    .v4 .hero-actions .pill { background: #eef8f2; color: #27754a; }
+    .v4 .board-wrap { min-width: 0; min-height: 0; flex: 1; }
+    .v4 .pane-board { height: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .v4 .pane { border-color: #e1e6ec; border-radius: 16px; box-shadow: 0 5px 14px rgba(24,40,61,.035); }
+    .v4 .pane-tabs { height: 39px; padding: 0 10px; background: #fff; }
+    .v4 .pane-toolbar { padding: 8px 10px; }
+    .v4 .pane-status { min-height: 28px; }
+
+    .prototype-switcher {
+      position: fixed;
+      z-index: 20;
+      left: 50%;
+      bottom: 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 54px;
+      padding: 7px 9px;
+      transform: translateX(-50%);
+      border: 1px solid #27354a;
+      border-radius: 15px;
+      color: #dce6f4;
+      background: rgba(23, 32, 51, .97);
+      box-shadow: 0 12px 35px rgba(16, 24, 40, .22);
+    }
+    .prototype-switcher > button { display: grid; place-items: center; width: 34px; height: 34px; cursor: pointer; border: 1px solid #3c4b63; border-radius: 9px; color: #dce6f4; background: #25324a; }
+    .prototype-switcher > button:hover { border-color: #8eb4ff; color: #fff; background: #304362; }
+    .prototype-switcher .switcher-label { min-width: 172px; padding: 0 5px; }
+    .prototype-switcher .switcher-label small { display: block; color: #90a1ba; font-size: 9px; font-weight: 750; letter-spacing: .14em; }
+    .prototype-switcher .switcher-label strong { display: block; margin-top: 2px; color: #fff; font-size: 12px; }
+    .variant-dots { display: flex; gap: 4px; padding-left: 8px; border-left: 1px solid #3d4b60; }
+    .variant-dots button { width: 20px; height: 20px; cursor: pointer; border: 0; border-radius: 6px; color: #95a5bc; background: transparent; font-size: 10px; }
+    .variant-dots button:hover, .variant-dots button.active { color: #fff; background: #45628c; }
+    .toast { position: fixed; z-index: 30; top: 20px; left: 50%; padding: 9px 13px; opacity: 0; transform: translate(-50%, -10px); border: 1px solid #cfe0ff; border-radius: 8px; color: #174bb4; background: #f4f8ff; box-shadow: 0 8px 25px rgba(22,34,51,.12); pointer-events: none; transition: opacity .18s ease, transform .18s ease; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .solo .prototype-header, .solo .prototype-switcher { display: none; }
+    .solo { padding: 0; }
+    .solo .app-window { width: 100%; height: 100vh; min-height: 100vh; border: 0; border-radius: 0; box-shadow: none; }
+
+    /* Refined Demo 01: only core context and pane-layout controls remain. */
+    .refined-shell { grid-template-columns: 226px minmax(0, 1fr); }
+    .refined-shell .sidebar { display: flex; min-height: 0; flex-direction: column; gap: 22px; padding: 20px 13px 14px; background: #fbfcfe; border-right: 1px solid var(--line); }
+    .refined-shell .sidebar .brand { padding: 0 8px; }
+    .refined-shell .group-area { min-height: 0; overflow: auto; }
+    .refined-shell .sidebar-label { display: flex; align-items: center; justify-content: space-between; margin: 0 9px 8px; }
+    .refined-shell .sidebar-label button { display: grid; place-items: center; width: 22px; height: 22px; cursor: pointer; border: 0; border-radius: 6px; color: var(--blue); background: var(--blue-soft); }
+    .refined-shell .sidebar-actions { margin-top: auto; }
+    .refined-shell .main-surface { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: #f3f6f9; }
+    .refined-shell .board-wrap { min-width: 0; min-height: 0; padding: 15px; flex: 1; }
+    .refined-shell .pane-board { height: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+    .refined-shell .layout-picker { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: #f8fafc; }
+    .refined-shell .layout-button { width: 27px; height: 27px; }
+    .refined-shell .layout-button.active { color: var(--blue); background: #fff; box-shadow: 0 1px 4px rgba(22,34,51,.1); }
+    .quietbar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-height: 50px; padding: 0 18px; background: #fff; border-bottom: 1px solid var(--line); }
+    .quietbar .eyebrow { margin-right: 2px; }
+    .board-toolbar { display: flex; align-items: center; gap: 13px; min-height: 50px; padding: 0 18px; background: #fff; border-bottom: 1px solid var(--line); }
+    .board-toolbar .eyebrow { margin-right: 2px; }
+    .board-toolbar .layout-picker { margin-left: 0; }
+    .refined-side-controls { grid-template-columns: 226px 48px minmax(0, 1fr); }
+    .control-rail { display: flex; align-items: center; flex-direction: column; gap: 10px; padding: 17px 7px; background: #f8fafc; border-right: 1px solid var(--line); }
+    .control-rail .rail-label { color: #8c98a7; font-size: 9px; font-weight: 750; letter-spacing: .12em; writing-mode: vertical-rl; transform: rotate(180deg); }
+    .control-rail .layout-picker { display: flex; flex-direction: column; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+    .control-rail .layout-button { width: 30px; height: 30px; }
+    .control-rail .layout-button.active { color: var(--blue); background: var(--blue-soft); }
+    .refined-side-controls .main-surface { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: #f3f6f9; }
+    .refined-pane-canvas .sidebar-layout { display: grid; gap: 8px; padding: 14px 9px 0; border-top: 1px solid #e8edf2; }
+    .refined-pane-canvas .sidebar-layout .layout-picker { justify-content: flex-start; }
+    .refined-pane-canvas .main-surface { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: #f3f6f9; }
+    .refined-pane-canvas .board-wrap { min-width: 0; min-height: 0; padding: 15px; flex: 1; }
+    .refined-pane-canvas .pane-board { height: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+
+    @media (max-width: 1080px) {
+      body { padding: 15px 15px 88px; }
+      .app-window { height: min(820px, calc(100vh - 63px)); }
+      .v1 { grid-template-columns: 204px minmax(0, 1fr); }
+      .v2 { grid-template-columns: 58px 190px minmax(0, 1fr); }
+      .v4 { grid-template-columns: 220px minmax(0, 1fr); }
+      .v4 .main-surface { padding-inline: 20px; }
+      .refined-shell { grid-template-columns: 204px minmax(0, 1fr); }
+      .refined-side-controls { grid-template-columns: 204px 48px minmax(0, 1fr); }
+    }
+    @media (max-width: 760px) {
+      body { padding: 10px 10px 84px; }
+      .prototype-header .hint { display: none; }
+      .app-window { min-height: 630px; height: calc(100vh - 55px); border-radius: 13px; }
+      .v1, .v3, .v4 { grid-template-columns: 175px minmax(0, 1fr); }
+      .v2 { grid-template-columns: 52px minmax(0, 1fr); }
+      .v2 .group-dock { display: none; }
+      .v1 .topbar { padding-inline: 15px; }
+      .v1 .workspace-title { font-size: 15px; }
+      .v1 .top-actions .pill, .v1 .top-actions > .icon-button { display: none; }
+      .v1 .board-wrap, .v3 .canvas-wrap { padding: 10px; }
+      .v1 .pane-board, .v2 .pane-board, .v4 .pane-board { grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(4, minmax(0, 1fr)); overflow: auto; }
+      .v1 .pane:nth-child(n+3), .v2 .pane:nth-child(n+3), .v4 .pane:nth-child(n+3) { display: none; }
+      .v2 .commandbar { padding: 13px 14px; }
+      .v2 .command-bottom .breadcrumbs { display: none; }
+      .v3 .workspace-tabs { overflow: auto; padding-inline: 10px; }
+      .v3 .workspace-tab { white-space: nowrap; }
+      .v3 .toolbar { padding-inline: 11px; }
+      .v3 .toolbar-title span { display: none; }
+      .v3 .pane-board { grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(3, minmax(0, 1fr)); overflow: auto; }
+      .v3 .pane:first-child { grid-row: auto; }
+      .v4 .main-surface { padding: 18px 12px 12px; }
+      .v4 .hero-head { align-items: flex-start; flex-direction: column; padding-bottom: 13px; }
+      .v4 .hero-head h1 { font-size: 20px; }
+      .v4 .hero-actions { display: none; }
+      .refined-shell { grid-template-columns: 175px minmax(0, 1fr); }
+      .refined-side-controls { grid-template-columns: 175px minmax(0, 1fr); }
+      .refined-side-controls .control-rail { display: none; }
+      .refined-shell .board-wrap, .refined-pane-canvas .board-wrap { padding: 10px; }
+      .refined-shell .pane-board, .refined-pane-canvas .pane-board { grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(4, minmax(0, 1fr)); overflow: auto; }
+      .refined-shell .pane:nth-child(n+3), .refined-pane-canvas .pane:nth-child(n+3) { display: none; }
+      .quietbar, .board-toolbar { min-height: 44px; padding-inline: 11px; }
+      .quietbar .eyebrow, .board-toolbar .eyebrow { display: none; }
+      .prototype-switcher { bottom: 10px; }
+      .prototype-switcher .switcher-label { min-width: 132px; }
+      .variant-dots { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="prototype-header">
+    <div><strong>PaneDock</strong> · light theme UI exploration</div>
+    <div class="hint">Prototype only · use the bottom switcher to compare four directions</div>
+  </div>
+  <div id="app" aria-live="polite"></div>
+  <div id="toast" class="toast" role="status"></div>
+  <nav class="prototype-switcher" aria-label="UI concept switcher">
+    <button type="button" data-switch="previous" aria-label="Previous UI concept">‹</button>
+    <div class="switcher-label"><small>CONCEPT 01 / 04</small><strong>Utility Classic</strong></div>
+    <button type="button" data-switch="next" aria-label="Next UI concept">›</button>
+    <div class="variant-dots" aria-label="Choose a UI concept">
+      <button type="button" data-variant="1">01</button>
+      <button type="button" data-variant="2">02</button>
+      <button type="button" data-variant="3">03</button>
+      <button type="button" data-variant="4">04</button>
+    </div>
+  </nav>
+
+  <script>
+    // UI prototype: four radically different layouts for the same PaneDock state.
+    const icons = {
+      dock: '<path d="M4 5.5h16M4 18.5h16M5.5 5.5v13M18.5 5.5v13M8.5 9h7M8.5 15h7"/>',
+      folder: '<path d="M3.5 7.5h6l1.8 2h9.2v8.8a1.7 1.7 0 0 1-1.7 1.7H5.2a1.7 1.7 0 0 1-1.7-1.7z"/>',
+      briefcase: '<path d="M4 7.5h16v11H4zM8 7.5V5.2h8v2.3M4 11h16M10 11v2h4v-2"/>',
+      image: '<rect x="3.5" y="4" width="17" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.4"/><path d="m4.5 17 4.4-4.4 3.1 3 2.1-2.1 5.4 5"/>',
+      code: '<path d="m8 7-4 5 4 5M16 7l4 5-4 5M14 4l-4 16"/>',
+      download: '<path d="M12 3v11m0 0 4-4m-4 4-4-4M4 18v2h16v-2"/>',
+      plus: '<path d="M12 5v14M5 12h14"/>',
+      more: '<circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/>',
+      settings: '<path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19.4 15 .1.1a1.7 1.7 0 0 1-2.4 2.4l-.1-.1-1.1.6-.1.3a1.7 1.7 0 0 1-3.4 0V18l-1.3-.3-.1.1a1.7 1.7 0 0 1-2.4-2.4l.1-.1-.6-1.1h-.3a1.7 1.7 0 0 1 0-3.4h.3l.6-1.1-.1-.1A1.7 1.7 0 0 1 10 7.2l.1.1 1.1-.6v-.3a1.7 1.7 0 0 1 3.4 0v.3l1.1.6.1-.1a1.7 1.7 0 0 1 2.4 2.4l-.1.1.6 1.1h.3a1.7 1.7 0 0 1 0 3.4h-.3z"/>',
+      search: '<circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4.5 4.5"/>',
+      grid: '<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',
+      splitColumns: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M12 4v16"/>',
+      splitRows: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 12h16"/>',
+      three: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M12 4v16M12 12h8"/>',
+      list: '<path d="M8 6h12M8 12h12M8 18h12M4.5 6h.1M4.5 12h.1M4.5 18h.1"/>',
+      monitor: '<rect x="3.5" y="4" width="17" height="13" rx="2"/><path d="M8 20h8M12 17v3"/>',
+      clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.3 2"/>',
+      cloud: '<path d="M7.3 18.5h9.4a4.3 4.3 0 0 0 .6-8.6 5.6 5.6 0 0 0-10.8 1.4 3.6 3.6 0 0 0 .8 7.2Z"/>',
+      chevron: '<path d="m9 6 6 6-6 6"/>',
+      back: '<path d="m14 6-6 6 6 6"/>',
+      forward: '<path d="m10 6 6 6-6 6"/>',
+      up: '<path d="m6 11 6-6 6 6M12 5v14"/>',
+      refresh: '<path d="M19 8a7.5 7.5 0 1 0 1 5M19 4v4h-4"/>',
+      close: '<path d="m7 7 10 10M17 7 7 17"/>',
+      star: '<path d="m12 4 2.3 4.8 5.2.7-3.8 3.7.9 5.2-4.6-2.4-4.6 2.4.9-5.2-3.8-3.7 5.2-.7z"/>',
+      drive: '<path d="m7 5-4 7 4 7h10l4-7-4-7zM3 12h18"/>',
+      check: '<path d="m5 12 4.2 4.2L19 6.5"/>',
+      file: '<path d="M6 3.5h8l4 4v13H6zM14 3.5v4h4"/>',
+      eye: '<path d="M3.5 12s3.2-5 8.5-5 8.5 5 8.5 5-3.2 5-8.5 5-8.5-5-8.5-5Z"/><circle cx="12" cy="12" r="2"/>',
+    };
+    const icon = (name, className = '') => `<svg class="icon ${className}" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.file}</svg>`;
+
+    const groups = [
+      { name: 'Client work', detail: '5 panes · 12 tabs', count: '12' },
+      { name: 'Code projects', detail: '4 panes · 8 tabs', count: '8' },
+      { name: 'Media library', detail: '2 panes · 4 tabs', count: '4' },
+      { name: 'Downloads', detail: '1 pane · 3 tabs', count: '3' },
+    ];
+    const panes = [
+      { tab: 'Design', path: 'C:\\Users\\lenticetsai\\Documents\\Design', items: [['Brand', 'folder', 'Today'], ['CAFuBon', 'folder', 'Yesterday'], ['Product shots', 'folder', 'Aug 20'], ['brief.pdf', 'file', 'Aug 18']] },
+      { tab: 'Windows', path: 'C:\\Windows', items: [['addins', 'folder', 'Dec 19, 2024'], ['appcompat', 'folder', 'Aug 17'], ['assembly', 'folder', 'Aug 13'], ['Branding', 'folder', 'Apr 1']] },
+      { tab: 'Users', path: 'C:\\Users', items: [['Default', 'folder', 'Dec 19, 2024'], ['lenticetsai', 'folder', 'Today'], ['Public', 'folder', 'Aug 18'], ['Shared', 'folder', 'Aug 12']] },
+      { tab: 'Program Files', path: 'C:\\Program Files', items: [['7-Zip', 'folder', 'May 1'], ['Adobe', 'folder', 'Jun 19'], ['AMD', 'folder', 'Nov 2'], ['ASUS', 'folder', 'Feb 26']] },
+    ];
+    const variants = {
+      1: { name: 'Utility Classic', kicker: 'closest to the current window', count: 4 },
+      2: { name: 'Workspace Dock', kicker: 'compact command surface', count: 4 },
+      3: { name: 'Focus Canvas', kicker: 'one dominant pane, quick switching', count: 3 },
+      4: { name: 'Soft Canvas', kicker: 'airy, calm, high legibility', count: 4 },
+    };
+    const refinedVariants = {
+      1: { name: 'Quiet Header', kicker: 'keep one calm global control', count: 4 },
+      2: { name: 'Board Toolbar', kicker: 'make the pane canvas primary', count: 4 },
+      3: { name: 'Side Controls', kicker: 'move layout controls to the divider', count: 4 },
+      4: { name: 'Pane Canvas', kicker: 'remove the right-side chrome', count: 4 },
+    };
+    let activeGroup = 0;
+    let activePane = 0;
+    const query = new URLSearchParams(location.search);
+    const refinedMode = query.get('refined') === '1';
+    let currentVariant = Math.max(1, Math.min(4, Number(query.get('variant')) || 1));
+    if (query.get('solo') === '1') document.body.classList.add('solo');
+    if (refinedMode) document.body.classList.add('refined');
+
+    function groupButtons(extraClass = '') {
+      return groups.map((group, index) => `<button type="button" class="group-button ${extraClass} ${index === activeGroup ? 'is-active' : ''}" data-group="${index}">
+        <span class="group-copy"><strong>${group.name}</strong><small>${group.detail}</small></span>
+        <span class="group-count">${group.count}</span>
+      </button>`).join('');
+    }
+
+    function layoutPicker(active = 'grid') {
+      return `<div class="layout-picker" aria-label="Pane layout">
+        <button type="button" class="layout-button ${active === 'single' ? 'active' : ''}" data-action="layout" data-layout="single" aria-label="Single pane">${icon('monitor', 'sm')}</button>
+        <button type="button" class="layout-button ${active === 'split' ? 'active' : ''}" data-action="layout" data-layout="split" aria-label="Left and right panes">${icon('splitColumns', 'sm')}</button>
+        <button type="button" class="layout-button ${active === 'stack' ? 'active' : ''}" data-action="layout" data-layout="stack" aria-label="Top and bottom panes">${icon('splitRows', 'sm')}</button>
+        <button type="button" class="layout-button ${active === 'three' ? 'active' : ''}" data-action="layout" data-layout="three" aria-label="Three panes">${icon('three', 'sm')}</button>
+        <button type="button" class="layout-button ${active === 'grid' ? 'active' : ''}" data-action="layout" data-layout="grid" aria-label="Four panes">${icon('grid', 'sm')}</button>
+      </div>`;
+    }
+
+    function fileRows(items) {
+      return items.map(([name, kind, detail], index) => `<div class="file-row">
+        <div class="file-name">${icon(kind === 'folder' ? 'folder' : 'file', kind === 'folder' ? 'folder-icon sm' : 'file-icon sm')}<span>${name}</span></div>
+        <div class="file-meta">${detail}</div>
+        <div class="file-size">${kind === 'folder' ? 'Folder' : index === 3 ? '1.4 MB' : '—'}</div>
+      </div>`).join('');
+    }
+
+    function paneMarkup(index, mode = '') {
+      const pane = panes[index];
+      const active = index === activePane;
+      return `<section class="pane ${active ? 'is-active' : ''} ${mode}" data-pane="${index}" aria-label="${pane.tab} pane">
+        <div class="pane-tabs">
+          <button type="button" class="tab-button active"><span>${icon('folder', 'folder-icon sm')}</span><span>${pane.tab}</span></button>
+          <button type="button" class="icon-button" data-action="new-tab" aria-label="New tab" title="New tab">${icon('plus', 'sm')}</button>
+        </div>
+        <div class="pane-toolbar">
+          <div class="nav-buttons">
+            <button type="button" class="icon-button" data-action="back" aria-label="Back" title="Back">${icon('back', 'sm')}</button>
+            <button type="button" class="icon-button" data-action="forward" aria-label="Forward" title="Forward">${icon('forward', 'sm')}</button>
+            <button type="button" class="icon-button" data-action="up" aria-label="Parent folder" title="Parent folder">${icon('up', 'sm')}</button>
+          </div>
+          <input class="location" aria-label="Location" value="${pane.path}">
+          <div class="view-tools">
+            <button type="button" class="icon-button" data-action="refresh" aria-label="Refresh" title="Refresh">${icon('refresh', 'sm')}</button>
+            <button type="button" class="icon-button" data-action="view" aria-label="Change view" title="Change view">${icon('list', 'sm')}</button>
+          </div>
+        </div>
+        <div class="file-head"><span>Name</span><span>Date modified</span><span>Type</span></div>
+        <div class="file-body">${fileRows(pane.items)}</div>
+        <div class="pane-status"><span>${pane.items.length} items</span><span>Details view</span></div>
+      </section>`;
+    }
+
+    function appHeader(title, subtitle, picker = 'grid') {
+      return `<header class="topbar">
+        <div class="title-stack"><div class="eyebrow">Active workspace</div><div class="workspace-title">${title}<span class="dot"></span></div><div class="muted">${subtitle}</div></div>
+        <div class="top-actions"><span class="pill"><span class="dot"></span> Saved automatically</span>${layoutPicker(picker)}<button type="button" class="icon-button" data-action="more" aria-label="More workspace actions">${icon('more')}</button></div>
+      </header>`;
+    }
+
+    function variantOne() {
+      return `<div class="app-window v1">
+        <aside class="sidebar">
+          <div class="brand"> <span class="brand-mark">${icon('dock')}</span><span class="brand-name">PaneDock</span></div>
+          <div class="group-area"><div class="sidebar-label"><span class="eyebrow">Groups</span><button type="button" data-action="new-group" aria-label="New group">${icon('plus', 'sm')}</button></div><div class="group-list">${groupButtons()}</div></div>
+          <div class="sidebar-actions"><button type="button" class="action-row" data-action="new-group">${icon('plus', 'sm')} New group</button><button type="button" class="action-row" data-action="settings">${icon('settings', 'sm')} Preferences</button></div>
+        </aside>
+        <main class="main-surface">${appHeader('Client work', 'Last opened today at 09:42', 'grid')}
+          <div class="board-wrap"><div class="pane-board">${[0,1,2,3].map(index => paneMarkup(index)).join('')}</div></div>
+          <div class="workspace-footer"><span>4 panes · 12 tabs restored</span><span>F6 to focus next pane</span></div>
+        </main>
+      </div>`;
+    }
+
+    function variantTwo() {
+      return `<div class="app-window v2">
+        <aside class="icon-rail"><span class="brand-mark">${icon('dock')}</span><button type="button" class="rail-button active" data-action="groups" aria-label="Groups">${icon('briefcase')}</button><button type="button" class="rail-button" data-action="recent" aria-label="Recent locations">${icon('clock')}</button><button type="button" class="rail-button" data-action="cloud" aria-label="Cloud locations">${icon('cloud')}</button><span class="rail-spacer"></span><button type="button" class="rail-button" data-action="settings" aria-label="Settings">${icon('settings')}</button></aside>
+        <aside class="group-dock"><div class="dock-heading"><div><div class="eyebrow">Workspace</div><strong>Groups</strong></div><button type="button" class="icon-button" data-action="new-group" aria-label="New group">${icon('plus', 'sm')}</button></div><div class="group-list">${groupButtons()}</div><div class="dock-bottom"><div class="storage-line"><span>Local storage</span><span>63%</span></div><div class="storage-meter"><span></span></div><button type="button" class="action-row" data-action="manage">Manage groups</button></div></aside>
+        <main class="main-surface"><div class="commandbar"><div class="command-top"><div class="command-title">Client work <small>4 panes · 12 tabs</small></div><div class="command-input">${icon('search', 'sm')}<input aria-label="Search current group" placeholder="Search current group"></div></div><div class="command-bottom"><div class="breadcrumbs">${icon('folder', 'folder-icon sm')}<span>Workspace</span>${icon('chevron', 'sm')}<span>Client work</span>${icon('chevron', 'sm')}<span class="muted">All panes</span></div>${layoutPicker('grid')}</div></div>
+          <div class="board-wrap"><div class="pane-board">${[0,1,2,3].map(index => paneMarkup(index)).join('')}</div></div>
+        </main>
+      </div>`;
+    }
+
+    function variantThree() {
+      return `<div class="app-window v3">
+        <aside class="sidebar"><div class="brand"><span class="brand-mark">${icon('dock')}</span><span class="brand-name">PaneDock</span></div><div class="workspace-card"><div class="eyebrow">Current group</div><strong>Client work</strong><p>Four locations ready to browse</p></div><div class="sidebar-label eyebrow">Switch group</div><div class="group-list">${groupButtons()}</div><div class="recent"><div class="eyebrow">Recent locations</div><a href="#" data-action="recent">${icon('clock', 'sm')} C:\\Projects\\PaneDock</a><a href="#" data-action="recent">${icon('folder', 'folder-icon sm')} C:\\Users\\Public</a></div></aside>
+        <main class="main-surface"><div class="workspace-tabs">${groups.slice(0, 3).map((group, index) => `<button type="button" class="workspace-tab ${index === activeGroup ? 'active' : ''}" data-group="${index}"><span class="dot"></span>${group.name}</button>`).join('')}<button type="button" class="workspace-tab" data-action="new-group">${icon('plus', 'sm')} New</button></div><div class="toolbar"><div class="toolbar-left"><button type="button" class="icon-button" data-action="back" aria-label="Back">${icon('back', 'sm')}</button><button type="button" class="icon-button" data-action="forward" aria-label="Forward">${icon('forward', 'sm')}</button><div class="toolbar-title">Client work <span>· 4 locations</span></div></div>${layoutPicker('split')}</div><div class="canvas-wrap"><div class="pane-board">${[0,1,2].map((index, i) => paneMarkup(index, i === 0 ? 'dominant' : '')).join('')}</div></div></main>
+      </div>`;
+    }
+
+    function variantFour() {
+      return `<div class="app-window v4">
+        <aside class="sidebar"><div class="brand"><span class="brand-mark">${icon('dock')}</span><span class="brand-name">PaneDock</span></div><div class="side-heading"><strong>Groups</strong><button type="button" data-action="new-group" aria-label="New group">${icon('plus', 'sm')}</button></div><div class="group-list">${groupButtons()}</div><div class="sidebar-footnote">${icon('check', 'sm')} <span>All changes saved locally</span></div></aside>
+        <main class="main-surface"><div class="hero-head"><div><div class="eyebrow">Workspace overview</div><h1>Client work</h1><p>Keep the folders for this context in one calm, predictable surface.</p></div><div class="hero-actions"><span class="pill"><span class="dot"></span> 4 locations open</span>${layoutPicker('grid')}</div></div><div class="board-wrap"><div class="pane-board">${[0,1,2,3].map(index => paneMarkup(index)).join('')}</div></div></main>
+      </div>`;
+    }
+
+    function refinedSidebar(withLayout = false) {
+      return `<aside class="sidebar">
+        <div class="brand"><span class="brand-mark">${icon('dock')}</span><span class="brand-name">PaneDock</span></div>
+        <div class="group-area"><div class="sidebar-label"><span class="eyebrow">Groups</span><button type="button" data-action="new-group" aria-label="New group">${icon('plus', 'sm')}</button></div><div class="group-list">${groupButtons()}</div></div>
+        ${withLayout ? `<div class="sidebar-layout"><div class="eyebrow">Pane layout</div>${layoutPicker('grid')}</div>` : ''}
+        <div class="sidebar-actions"><button type="button" class="action-row" data-action="new-group">${icon('plus', 'sm')} New group</button><button type="button" class="action-row" data-action="settings">${icon('settings', 'sm')} Preferences</button></div>
+      </aside>`;
+    }
+
+    function refinedBoard(count = 4) {
+      return `<div class="pane-board">${Array.from({ length: count }, (_, index) => paneMarkup(index)).join('')}</div>`;
+    }
+
+    function verticalLayoutPicker() {
+      return `<div class="layout-picker" aria-label="Pane layout">
+        <button type="button" class="layout-button" data-action="layout" data-layout="single" aria-label="Single pane">${icon('monitor', 'sm')}</button>
+        <button type="button" class="layout-button" data-action="layout" data-layout="split" aria-label="Left and right panes">${icon('splitColumns', 'sm')}</button>
+        <button type="button" class="layout-button" data-action="layout" data-layout="stack" aria-label="Top and bottom panes">${icon('splitRows', 'sm')}</button>
+        <button type="button" class="layout-button" data-action="layout" data-layout="three" aria-label="Three panes">${icon('three', 'sm')}</button>
+        <button type="button" class="layout-button active" data-action="layout" data-layout="grid" aria-label="Four panes">${icon('grid', 'sm')}</button>
+      </div>`;
+    }
+
+    function refinedVariantOne() {
+      return `<div class="app-window refined-shell refined-quiet">${refinedSidebar()}
+        <main class="main-surface"><div class="quietbar"><span class="eyebrow">Pane layout</span>${layoutPicker('grid')}<button type="button" class="icon-button" data-action="more" aria-label="More actions">${icon('more')}</button></div><div class="board-wrap">${refinedBoard()}</div></main>
+      </div>`;
+    }
+
+    function refinedVariantTwo() {
+      return `<div class="app-window refined-shell refined-board-toolbar">${refinedSidebar()}
+        <main class="main-surface"><div class="board-toolbar"><span class="eyebrow">Layout</span>${layoutPicker('grid')}</div><div class="board-wrap">${refinedBoard()}</div></main>
+      </div>`;
+    }
+
+    function refinedVariantThree() {
+      return `<div class="app-window refined-side-controls">${refinedSidebar()}<aside class="control-rail"><span class="rail-label">LAYOUT</span>${verticalLayoutPicker()}</aside>
+        <main class="main-surface"><div class="board-wrap">${refinedBoard()}</div></main>
+      </div>`;
+    }
+
+    function refinedVariantFour() {
+      return `<div class="app-window refined-shell refined-pane-canvas">${refinedSidebar(true)}
+        <main class="main-surface"><div class="board-wrap">${refinedBoard()}</div></main>
+      </div>`;
+    }
+
+    function render() {
+      const renderers = refinedMode ? [refinedVariantOne, refinedVariantTwo, refinedVariantThree, refinedVariantFour] : [variantOne, variantTwo, variantThree, variantFour];
+      const labels = refinedMode ? refinedVariants : variants;
+      const renderer = renderers[currentVariant - 1];
+      document.getElementById('app').innerHTML = renderer();
+      document.querySelector('.switcher-label small').textContent = `${refinedMode ? 'REFINED 01' : 'CONCEPT'} / 0${currentVariant}`;
+      document.querySelector('.switcher-label strong').textContent = labels[currentVariant].name;
+      document.querySelectorAll('[data-variant]').forEach(button => button.classList.toggle('active', Number(button.dataset.variant) === currentVariant));
+    }
+
+    function toast(message) {
+      const element = document.getElementById('toast');
+      element.textContent = message;
+      element.classList.add('show');
+      clearTimeout(toast.timer);
+      toast.timer = setTimeout(() => element.classList.remove('show'), 1200);
+    }
+
+    function setVariant(next) {
+      currentVariant = next < 1 ? 4 : next > 4 ? 1 : next;
+      const url = new URL(location.href);
+      url.searchParams.set('variant', currentVariant);
+      history.replaceState({}, '', url);
+      render();
+    }
+
+    document.addEventListener('click', event => {
+      const variantButton = event.target.closest('[data-variant]');
+      if (variantButton) return setVariant(Number(variantButton.dataset.variant));
+      const switchButton = event.target.closest('[data-switch]');
+      if (switchButton) return setVariant(currentVariant + (switchButton.dataset.switch === 'next' ? 1 : -1));
+      const groupButton = event.target.closest('[data-group]');
+      if (groupButton) { activeGroup = Number(groupButton.dataset.group); activePane = 0; render(); return toast(`Switched to ${groups[activeGroup].name}`); }
+      const pane = event.target.closest('[data-pane]');
+      if (pane && !event.target.closest('button, input')) { activePane = Number(pane.dataset.pane); render(); return; }
+      const action = event.target.closest('[data-action]');
+      if (!action) return;
+      event.preventDefault();
+      if (action.dataset.action === 'layout') return toast(`${action.dataset.layout} layout selected`);
+      if (action.dataset.action === 'new-group') return toast('New group action');
+      if (action.dataset.action === 'settings') return toast('Preferences action');
+      toast(`${action.dataset.action[0].toUpperCase()}${action.dataset.action.slice(1)} action`);
+    });
+    document.addEventListener('keydown', event => {
+      if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable) return;
+      if (event.key === 'ArrowLeft') setVariant(currentVariant - 1);
+      if (event.key === 'ArrowRight') setVariant(currentVariant + 1);
+    });
+    render();
+  </script>
+</body>
+</html>
