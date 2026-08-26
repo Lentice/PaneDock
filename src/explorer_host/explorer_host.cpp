@@ -318,9 +318,24 @@ HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
         return reset_uninitialized_browser(browser_, site_, events_, hr);
     }
 
+    // PD-065: EBO_NOBORDER selects the window styles the browser gives its
+    // internal host windows, and Initialize is what creates them, so setting
+    // it afterwards never had any effect -- the dark 1px line along the top
+    // and left of the file list was that border. SetOptions has to come
+    // first. The failure path here cannot call destroy(): nothing has been
+    // Initialize'd yet, so it uses the same reset_uninitialized_browser as
+    // the other pre-Initialize steps.
+    hr = browser_->SetOptions(EBO_NOBORDER | EBO_NOTRAVELLOG);
+    if (FAILED(hr)) {
+        log_hresult(L"IExplorerBrowser::SetOptions", hr);
+        return reset_uninitialized_browser(browser_, site_, events_, hr);
+    }
+
     FOLDERSETTINGS settings{};
     settings.ViewMode = FVM_DETAILS;
-    settings.fFlags = FWF_AUTOARRANGE | FWF_NOWEBVIEW;
+    // PD-065: FWF_NOCLIENTEDGE asks the view itself not to draw a client
+    // edge, which is the other half of the same border.
+    settings.fFlags = FWF_AUTOARRANGE | FWF_NOWEBVIEW | FWF_NOCLIENTEDGE;
     hr = browser_->Initialize(parent, &rect, &settings);
     if (FAILED(hr)) {
         log_hresult(L"IExplorerBrowser::Initialize", hr);
@@ -328,13 +343,6 @@ HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
     }
     initialized_ = true;
     live_view_.mark_initialized();
-
-    hr = browser_->SetOptions(EBO_NOBORDER | EBO_NOTRAVELLOG);
-    if (FAILED(hr)) {
-        log_hresult(L"IExplorerBrowser::SetOptions", hr);
-        destroy();
-        return hr;
-    }
 
     hr = browser_->Advise(events_.Get(), &advise_cookie_);
     if (FAILED(hr)) {
