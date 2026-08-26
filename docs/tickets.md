@@ -114,6 +114,7 @@
 | PD-074 | 拖曳排序看不到「拖的是哪一個」:placeholder 內畫出淡化的被拖曳項目 | 7 | `ready` | PD-066, PD-061, PD-062 | [PD-074](tickets/PD-074-drag-placeholder-shows-dragged-item.md) |
 | PD-075 | Pane 導覽列五個圖示由三種技術繪製,統一到 `Segoe MDL2 Assets` | 7 | `ready` | PD-052, PD-064 | [PD-075](tickets/PD-075-unify-pane-chrome-icon-style.md) |
 | PD-076 | Group 與 pane tab 的 active/hover 樣式不一致,以 Group 現有樣式為準套用到 tab | 7 | `ready` | PD-061, PD-062, PD-072 | [PD-076](tickets/PD-076-unify-group-tab-active-hover-style.md) |
+| PD-077 | 拖曳調整主視窗大小時,pane 狀態列在舊位置留下殘影 | 7 | `ready` | PD-041, PD-042 | [PD-077](tickets/PD-077-pane-footer-resize-repaint-ghost.md) |
 
 ## Dependency lanes
 
@@ -369,3 +370,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 ### 2026-08-26 — 使用者直接要求 Group/tab active-hover 樣式一致,開 PD-076
 
 使用者原文:「group and pane tab should apply uniform styles on active/hover item. base on current group active/hover style, apply to pane tab. pane tab can use its own proper font.」核對現況:側邊欄 `Sidebar::draw_item`(`kSidebarActiveBackground` 藍底 pill ＋ `kSidebarActiveText` 藍字)active/hover 用「底色 + 文字色」雙重強調;`paint_tab_strip` 的 tab 只靠灰階底色深淺區分,`SetTextColor` 在迴圈外設一次、active/hover/一般三態文字色完全相同,沒有任何強調色。另外發現一個獨立的死碼:tab strip 建立時送的 `WM_SETFONT`(`main.cpp` 第 2736-2739 行)因為 `tab_strip_proc` 把 `WM_PAINT` 整個交給 `paint_tab_strip` 自繪、從未讀回該字型,對實際渲染完全沒有效果——tab 文字目前用的是 GDI 的 stock 字型,不是任何專案定義的字型。此落差不在 PD-062(只處理幾何,色票決策明講不要求對齊側邊欄)或 PD-072(只處理字型 face 語系一致性,Non-goals 明講不改 tab 視覺樣式)範圍內,兩者都是本票的依賴而非涵蓋者。開 PD-076,決策方向:底色/文字色改套用側邊欄既有色票,不建跨模組共用色票標頭(沿用兩模組各自定義相近顏色常數的既有模式);不統一圓角(tab 6px 與側邊欄 10px 的層級關係是 PD-062 定案,不重開);字重不隨 active 改變(側邊欄本身也是靠色彩而非字重做強調);移除死碼 `WM_SETFONT`,改為 `paint_tab_strip` 內明確選字型繪製。
+
+### 2026-08-26 — 拖曳 resize 主視窗時 pane 狀態列殘影,開 PD-077
+
+使用者附截圖回報:拖曳調整主視窗大小後,左下 pane 的檔案列表中段出現一行孤立的舊狀態列文字「80 items」(紅色箭頭標示),與該 pane 真正的狀態列「4 items」並存——不是數字算錯,是舊位置的像素沒有被清除。追出兩個疊加的根因:(1) `WM_SIZE` 只呼叫 `apply_layout` 重新定位每個子視窗,從未主動對整個視窗或變動的 pane 區塊發出強制重繪,完全依賴各個 `SetWindowPos` 呼叫各自的內建失效連鎖;(2) 同一個 pane 內的 `explorer_containers`/導覽按鈕/`address_bars`/`status_bars` 全部沒有 `WS_CLIPSIBLINGS`,只有 `tab_strips` 有——`explorer_containers` 本身「從不處理自己的繪製訊息」(PD-040 既有註解),完全依賴外部正確的失效通知,兩個根因疊加就是「狀態列搬走後,新蓋上來的 container/Shell view 沒收到『這裡要重畫』的通知」的完整因果鏈。開 PD-077,決策方向:五個子視窗補齊 `WS_CLIPSIBLINGS`,並在 `apply_layout` 每個 pane 幾何區塊處理完後明確補一次涵蓋該 pane 矩形的強制重繪(不是每次 `WM_SIZE` 都全視窗重畫,避免閃爍);驗收要求連續拖曳過程中多張中繼尺寸截圖,不能只驗頭尾;若兩個修正仍不夠、根因其實在 Shell view 內部重繪時機,紅線是不得 subclass 或改寫其內部子視窗。
