@@ -110,6 +110,9 @@
 | PD-070 | 診斷模式擋下第三方 extension 時跳出載入器模態對話框,無法無人值守執行 | 7 | `done` | PD-024 | [PD-070](tickets/PD-070-diagnostic-mode-loader-error-dialogs.md) |
 | PD-071 | 移除 Ctrl+Shift+L 熱鍵:註冊失敗會讓程式完全無法啟動 | 7 | `done` | PD-009 | [PD-071](tickets/PD-071-remove-layout-hotkey.md) |
 | PD-072 | chrome 字型改用固定 Latin 字面＋系統字型連結,取代語系相依的 `DEFAULT_GUI_FONT`／`lfMessageFont`(覆寫 PD-061 的 face 來源) | 7 | `ready` | PD-061 | [PD-072](tickets/PD-072-replace-stock-gui-font.md) |
+| PD-073 | Tab 溢出時變成零寬矩形完全無法點擊;加左移/右移捲動按鈕 | 7 | `ready` | PD-055, PD-062, PD-066 | [PD-073](tickets/PD-073-tab-overflow-scroll-buttons.md) |
+| PD-074 | 拖曳排序看不到「拖的是哪一個」:placeholder 內畫出淡化的被拖曳項目 | 7 | `ready` | PD-066, PD-061, PD-062 | [PD-074](tickets/PD-074-drag-placeholder-shows-dragged-item.md) |
+| PD-075 | Pane 導覽列五個圖示由三種技術繪製,統一到 `Segoe MDL2 Assets` | 7 | `ready` | PD-052, PD-064 | [PD-075](tickets/PD-075-unify-pane-chrome-icon-style.md) |
 
 ## Dependency lanes
 
@@ -218,6 +221,7 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | 崩潰迴圈的自動安全模式(連續 N 次不乾淨關閉即自動以 `--diagnostic` 啟動) | PD-025(2026-08-24)刻意排除:沒有真實崩潰資料前 N 是憑空調的,且自動重啟需要 `CreateProcess`,會在單一 process 架構上開一個口子。若使用者實際遇到崩潰迴圈再開票。 |
 | 縮圖 pipeline 的快取與尺寸上限 | 待 PD-003 量出縮圖對記憶體的實際貢獻後再開,避免憑估計調參數。 |
 | `IShellFolder` 自建清單檢視(fallback) | 僅在 PD-001 判定 No-Go 時開。 |
+| 統一 header 版型按鈕圖示與導覽列圖示的筆畫粗細 | PD-075(2026-08-26)刻意排除:版型按鈕的五個圖示是**版面示意圖**(一格／雙欄／上下／2×2／更多),沒有任何 `Segoe MDL2 Assets` 字符能表達「這個版型長什麼樣」,只能手繪。但 `draw_layout_glyph` 用 `CreatePen(PS_SOLID, 1, ...)` 而 `draw_navigation_icon_button` 是 2px,兩者並列時粗細不同是真的。觸發條件:PD-075 完成後若使用者仍覺得 header 與 pane 的圖示不成套,再開票調整手繪線寬(注意 1px 是 `RoundRect` 版面示意圖能保持清晰的實際上限,加粗可能反而糊掉,屆時需先截圖比對)。 |
 | 側邊欄寬度的全域設定持久化 | 若使用者回報每次啟動都要重拖再開;目前預設值可接受。 |
 | Group 圖示與顏色 | Spec 未列為 MVP;若 Group 數量成長到難以用文字辨識再開。 |
 | ~~每個 pane 的導覽列(上一頁／下一頁／上一層按鈕 ＋ editable path bar)~~ | **已於 2026-08-24 開票,不再是候選。** 2026-08-20 使用者提出時 Phase 0 尚無 tab/Group/pane chrome 基礎設施;Phase 2 完成後基礎設施到位,拆成 PD-018(核心導覽歷史)、PD-019(tab 條)、PD-020(網址列與導覽按鈕)三張,PD-021 補上對應鍵盤快速鍵。 |
@@ -351,6 +355,9 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 - **PD-065**:`EBO_NOBORDER` **在 `Initialize` 之後才 `SetOptions`,已經太晚**——該旗標控制的是內部宿主視窗建立時的樣式,對已建立的視窗沒有回溯效果,所以這個旗標從來沒生效過。修法是把 `SetOptions` 移到 `Initialize` 之前,並把失敗路徑從 `destroy()` 改成 `reset_uninitialized_browser`(此時尚未 `Initialize`,不可呼叫 `Destroy`)。**紅線:不得 subclass 或改寫 Shell view 內部子視窗;若公開 API 無法移除該線,正確結果是如實記錄結案。**
 
 - **PD-066**:使用者要求拖曳排序時有 placeholder。調查中發現**第二個 PD-049 遺留的死碼回歸**:`WM_DRAWITEM` 中處理 tab 的分支條件是 `item->CtlType == ODT_TAB`,而 `ODT_TAB` 只有原生 `SysTabControl32` 會送出;PD-049 換成 subclass 的 `STATIC` 之後,該分支永遠不成立,`draw_tab_item` 與 `draw_tab_insertion_indicator` 都成為死碼,而 `paint_tab_strip` 自己完全沒有繪製插入指示線——**所以 tab 拖曳排序至今沒有任何視覺提示**。Group 側的 `draw_group_insertion_indicator` 走 owner-draw `LISTBOX` 路徑,應仍有效但需實機確認。本票一併刪死碼並把細線升級為「撐開空位」的 placeholder。tab 側的正確做法是在 `apply_tab_item_size` 的幾何計算階段就重排矩形(讓位與 hit-test 都免費正確);Group 側受 `LISTBOX` 架構限制無法重排,只能在 `Sidebar::draw_item` 把 placeholder 那一列改畫成空槽。
+- **PD-073**:`apply_tab_item_size` 的等比壓縮地板是 `kTabMinWidth = 72`,當 `tab 數 × 72 > available` 時壓縮已無法生效,接著配置迴圈把 `left`/`right` 都夾在 `available`,**溢出的 tab 因此拿到零寬矩形,`PtInRect` 一律回傳 FALSE,那些 tab 收不到任何滑鼠事件**。實測:單一版型 tab 條 client 寬 560,`available` = 524,`524 / 72` = 7.2,該 Group 的 15 個 tab 中有 8 個不可點擊。**這是功能性缺陷,不是視覺問題。** 使用者 2026-08-26 明確指示:溢出的 tab 應「自然被截斷」——矩形保持完整寬度,靠 GDI clip region 裁切,不得改寫幾何。捲動按鈕放在「+」左側,整格捲動,只在溢出時佔用寬度。
+- **PD-074**:PD-066 的 placeholder 是**空槽**,而來源項目在原位又完全不繪製,所以整個拖曳過程中被拖曳的項目在畫面上不存在——使用者知道會插在哪裡,但不知道拖的是哪一個。做法是把被拖曳項目的內容以 `RGB(148, 163, 184)` 畫進 placeholder 裡,**不重開 PD-066 決策 2 否決的「跟隨游標的浮動縮圖」**。關鍵技術點:owner-draw 的 `item->itemID` 在 placeholder 那一列是**目標**索引,`groups_[itemID]` 是錯的那個 Group,所以 `Sidebar::draw_item` 的 `bool placeholder` 必須換成帶**來源**索引的參數,由呼叫端從 `group_drag->source_index` 傳入。順帶修掉 Group placeholder 用 `Rectangle`(方角)而 tab 用 `RoundRect` 的不一致。
+- **PD-075**:`draw_navigation_icon_button` 的五個 case 走**三種不同繪製技術**——back/forward 是 Common Controls 的 history **點陣圖**(配色完全不受 `color` 控制)、up/view 是 2px 手繪線段(`CreatePen(PS_SOLID, size / 8, ...)`)、refresh 是 `Segoe MDL2 Assets` 字型字符(筆畫粗細由字型決定)。統一到字型字符,理由是 PD-052 為 refresh 手算 `Arc()` 失敗兩輪之後才改用該字型,那個學費不要付第二次。**已知但刻意不處理的差異:** header 版型按鈕 `draw_layout_glyph` 用 1px 畫筆,導覽列是 2px——版型圖示是版面示意圖,沒有字型字符能表達,必須手繪,見下方候選表。
 
 - **PD-067**:使用者要求 Group 超過側邊欄高度時要有捲軸。**開票前先實測,結論是功能已經完整可用,本票因此從「新增功能」降級為「視覺微調」**:`WS_VSCROLL` 早已設定(執行期樣式 `0x50210151`),`GetScrollInfo` 回傳 `min=0 max=17 page=13 pos=5` 完全正確,滑鼠滾輪捲動實測 `LB_GETTOPINDEX` 由 5→0→5 正常,`PrintWindow` 截圖也看得到 thumb。真正的落差只是那條 Windows 11 細型捲軸又細又低對比,在淺色側邊欄上容易被當成不存在。優先解法是加 `LBS_DISABLENOSCROLL` 讓捲軸恆常可見,次要是調整 pill 右內距避免被捲軸壓到。
 
