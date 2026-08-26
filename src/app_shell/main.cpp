@@ -84,6 +84,10 @@ constexpr int kUpButtonIdBase = 320;
 constexpr int kAddressBarIdBase = 330;
 constexpr int kRefreshButtonIdBase = 340;
 constexpr int kViewModeButtonIdBase = 350;
+// View-mode popup commands: four IDs per pane, 360-375, kept separate from
+// the navigation buttons and layout commands above.
+constexpr int kViewModeMenuIdBase = 360;
+constexpr int kViewModeMenuIdCount = static_cast<int>(kExplorerCount * 4);
 constexpr int kLayoutButtonIdBase = 400;
 constexpr int kGroupListId = 100;
 constexpr int kNewGroupId = 101;
@@ -109,6 +113,16 @@ constexpr std::array<panedock::core::LayoutTemplate, 5> kLayoutTemplates{
     panedock::core::LayoutTemplate::top_bottom,
     panedock::core::LayoutTemplate::three_pane,
     panedock::core::LayoutTemplate::four_pane_grid};
+struct ViewModeOption final {
+    FOLDERVIEWMODE mode;
+    const wchar_t* label;
+};
+constexpr std::array<ViewModeOption, 4> kViewModeOptions{{
+    {FVM_ICON, L"Large icons"},
+    {FVM_SMALLICON, L"Small icons"},
+    {FVM_LIST, L"List"},
+    {FVM_DETAILS, L"Details"},
+}};
 const std::array<std::wstring, kExplorerCount> kDefaultLocations{
     L"C:\\", L"C:\\Windows", L"C:\\Users", L"C:\\Program Files"};
 constexpr UINT kDragHoverDelayMilliseconds = 800;
@@ -2021,22 +2035,55 @@ void refresh_pane(AppState& state, std::size_t pane_index) {
     (void)state.explorers[pane_index].refresh();
 }
 
-void cycle_view_mode(AppState& state, std::size_t pane_index) {
+void set_pane_view_mode(AppState& state, std::size_t pane_index,
+                        FOLDERVIEWMODE mode) {
     if (!has_active_group(state) || pane_index >= active_group(state).panes.size())
         return;
-    constexpr std::array<FOLDERVIEWMODE, 4> modes{
-        FVM_ICON, FVM_SMALLICON, FVM_LIST, FVM_DETAILS};
-    FOLDERVIEWMODE current{};
-    if (FAILED(state.explorers[pane_index].get_view_mode(current))) return;
-    const auto found = std::find(modes.begin(), modes.end(), current);
-    const std::size_t next = found == modes.end()
-                                 ? 0
-                                 : (static_cast<std::size_t>(found - modes.begin()) + 1) % modes.size();
-    if (SUCCEEDED(state.explorers[pane_index].set_view_mode(modes[next]))) {
+    if (SUCCEEDED(state.explorers[pane_index].set_view_mode(mode))) {
         active_tab(active_group(state).panes[pane_index]).view_mode =
-            view_mode_name(modes[next]);
+            view_mode_name(mode);
         save_now(state);
     }
+}
+
+void show_view_mode_menu(HWND window, AppState& state,
+                         std::size_t pane_index) {
+    if (!has_active_group(state) || pane_index >= active_group(state).panes.size())
+        return;
+
+    RECT button_rect{};
+    if (!GetWindowRect(state.view_mode_buttons[pane_index], &button_rect))
+        return;
+
+    const auto current = parse_view_mode(
+        active_tab(active_group(state).panes[pane_index]).view_mode);
+    HMENU menu = CreatePopupMenu();
+    if (menu == nullptr) return;
+    const int menu_id_base =
+        kViewModeMenuIdBase +
+        static_cast<int>(pane_index * kViewModeOptions.size());
+    int checked_id = 0;
+    for (std::size_t index = 0; index < kViewModeOptions.size(); ++index) {
+        const bool checked = current.has_value() &&
+                             *current == kViewModeOptions[index].mode;
+        const int id = menu_id_base + static_cast<int>(index);
+        AppendMenuW(menu, MF_STRING | (checked ? MF_CHECKED : 0),
+                    static_cast<UINT_PTR>(id), kViewModeOptions[index].label);
+        if (checked) checked_id = id;
+    }
+    if (checked_id != 0) {
+        CheckMenuRadioItem(menu, menu_id_base,
+                           menu_id_base +
+                               static_cast<int>(kViewModeOptions.size()) - 1,
+                           checked_id, MF_BYCOMMAND);
+    }
+    SetForegroundWindow(window);
+    const int command = TrackPopupMenu(
+        menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, button_rect.left,
+        button_rect.bottom, 0, window, nullptr);
+    DestroyMenu(menu);
+    if (command != 0)
+        SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
 void submit_address(AppState& state, std::size_t pane_index) {
@@ -3054,6 +3101,17 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             if (HIWORD(wparam) == BN_CLICKED) {
                 const int id = LOWORD(wparam);
+                if (id >= kViewModeMenuIdBase &&
+                    id < kViewModeMenuIdBase + kViewModeMenuIdCount) {
+                    const int offset = id - kViewModeMenuIdBase;
+                    const std::size_t pane_index = static_cast<std::size_t>(
+                        offset / static_cast<int>(kViewModeOptions.size()));
+                    const std::size_t mode_index = static_cast<std::size_t>(
+                        offset % static_cast<int>(kViewModeOptions.size()));
+                    set_pane_view_mode(*state, pane_index,
+                                       kViewModeOptions[mode_index].mode);
+                    return 0;
+                }
                 if (id >= kBackButtonIdBase &&
                     id < kBackButtonIdBase + static_cast<int>(kExplorerCount)) {
                     navigate_tab_history(*state,
@@ -3085,8 +3143,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 }
                 if (id >= kViewModeButtonIdBase &&
                     id < kViewModeButtonIdBase + static_cast<int>(kExplorerCount)) {
-                    cycle_view_mode(*state, static_cast<std::size_t>(
-                                             id - kViewModeButtonIdBase));
+                    show_view_mode_menu(
+                        window, *state,
+                        static_cast<std::size_t>(id - kViewModeButtonIdBase));
                     return 0;
                 }
                 if (id >= kLayoutButtonIdBase &&

@@ -111,3 +111,52 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接（2026-08-27）
+
+- `src/app_shell/main.cpp` 已將 View button 的 `WM_COMMAND` 路徑改為 `TrackPopupMenu`：`CreatePopupMenu` → 四次 `AppendMenuW` → `SetForegroundWindow` → `TrackPopupMenu(TPM_RETURNCMD | TPM_RIGHTBUTTON, button_rect.left, button_rect.bottom, ...)` → `DestroyMenu` → 用回傳值送回 `WM_COMMAND`。選單項目依序為 `Large icons` / `Small icons` / `List` / `Details`，對應 `FVM_ICON` / `FVM_SMALLICON` / `FVM_LIST` / `FVM_DETAILS`。
+- 已先盤點檔首既有 ID：`kTabStripIdBase=200`、`kBackButtonIdBase=300`、`kForwardButtonIdBase=310`、`kUpButtonIdBase=320`、`kAddressBarIdBase=330`、`kRefreshButtonIdBase=340`、`kViewModeButtonIdBase=350`、`kLayoutButtonIdBase=400`，以及 Group IDs `100–106`。新增 `kViewModeMenuIdBase=360`、`kViewModeMenuIdCount=16`，明確保留 `360–375` 給 View-mode popup。採用每 pane 四個 ID：`base + pane_index * 4 + mode_index`；這比共用 ID 加可變的來源 pane 狀態多 12 個 ID，但不需要在 `TrackPopupMenu` 的 modal/re-entrant 期間維護共享來源欄位，回傳 command 本身即可決定 pane，故多 pane 與 Shell callback 重入時較安全。
+- radio check 的目前值直接讀 `active_tab(active_group(...).panes[pane_index]).view_mode`，經既有 `parse_view_mode` 轉為列舉；沒有為 popup 去查詢 `IFolderView2`。選擇後用 `ExplorerHost::set_view_mode` 套用，成功才寫回同一個 `TabState::view_mode` 並呼叫既有 `save_now`。既有 `capture_pane_view_mode` 仍只負責導覽完成/存檔時的同步捕獲。
+- `cycle_view_mode` 已完全移除；`rg` 不再找到該符號。未新增 `ExplorerHost`、`core` 或依賴。這段 UI/Shell 行為不能在本專案唯一的 `core` 自動測試 seam 以 fake 有意義地驗證（`docs/testing.md` 明確排除 `IExplorerBrowser` fake 與 flaky UI automation），因此以建置、既有 CTest 和實機檢查取代；本次實機檢查被鎖定桌面阻塞，詳如下。
+
+#### Modal re-entry review
+
+- `TrackPopupMenu` 期間沒有新增 lock、wait、timer 或共享的來源 pane 狀態。四個 command ID 已編碼 pane；若既有 UI thread 上的 Shell navigation-complete callback 在 menu modal loop 中到達，它只會走原有 `handle_navigation_complete` → `apply_pane_view_mode` → `save_now` 路徑，popup 返回後再依 command ID 套用對應 pane。
+- **實機重入結果：未驗證。** 本次用 Windows Computer Use 啟動剛建置的 `build\pd062-output\PaneDock.exe` 並取得視窗狀態時，桌面顯示 Windows 鎖定畫面（時鐘/日期）；依安全規則未送出滑鼠/鍵盤輸入，沒有在 menu 開啟期間觸發 navigation-complete，也沒有宣稱「不卡死/不當機」通過。因而沒有產生 `#32768` menu HWND 的截圖；未使用會受鎖定畫面污染的 `CopyFromScreen`。
+
+#### Agent checks
+
+```text
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+PASS — configure completed; CMAKE_GENERATOR=Ninja, LLVM-MinGW Clang.
+
+cmake --build build
+PASS — linked build\pd062-output\PaneDock.exe.
+
+ctest --test-dir build --output-on-failure
+PASS — 4/4: panedock_diagnostic_flag, panedock_core_model,
+      panedock_core_layout, panedock_core_session.
+
+rg -n "TrackPopupMenu|cycle_view_mode|view_mode_name|parse_view_mode|CheckMenuRadioItem" src\app_shell\main.cpp
+PASS — TrackPopupMenu/CheckMenuRadioItem and existing view-mode mappings found;
+       cycle_view_mode produced no match.
+
+git diff --check
+PASS — no whitespace errors.
+```
+
+#### Acceptance evidence
+
+| # | 結果 | 證據 |
+|---|---|---|
+| 1 | 未驗證 | 實機輸入因 Windows 桌面鎖定未執行；程式碼已建立四項 popup 並以 View button 左下角座標定位。 |
+| 2 | 未驗證 | 未能取得實際 popup 畫面；程式碼對該 pane 的四個 item 呼叫 `MF_CHECKED` + 正確 pane 子範圍的 `CheckMenuRadioItem`。 |
+| 3 | 未驗證 | 未能點選四項並觀察 Shell view；setter/save 路徑已建置通過。 |
+| 4 | 未驗證 | 未能執行 Group switch/restart 的實機流程；`TabState::view_mode` 既有 persistence/restore 路徑未被改動。 |
+| 5 | 未驗證 | 未能在多 pane 實機逐 pane 操作；每 pane 四個 ID 的靜態解碼範圍已覆蓋 4 panes。 |
+| 6 | 未驗證 | 未能送 Esc 或點擊 menu 外部；`TrackPopupMenu` 回傳 `0` 時不送 `WM_COMMAND`，但未作實機觀察。 |
+| 7 | 未驗證 | 未能在 popup 開啟中觸發 Shell navigation-complete；只完成上述程式碼層 modal re-entry review。 |
+| 8 | PASS | LLVM-MinGW/Ninja configure、build 與 CTest 4/4 實際通過。 |
+| 9 | PASS | `git diff --check` 實際通過。 |
+
+因 acceptance 1–7 尚無真實桌面證據，`docs/tickets.md` 的 PD-059 狀態刻意維持 `ready`，沒有改成 `done`。
