@@ -155,3 +155,62 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-26 實作交接
+
+**實作內容。** `src/app_shell/main.cpp` 已完成兩項決策：
+
+- `explorer_containers`、五顆 pane 導覽按鈕、`address_bars`、
+  `status_bars` 的 child style 均補上 `WS_CLIPSIBLINGS`；既有
+  `tab_strips` 的 style 保留。
+- `apply_layout` 以 `laid_out_pane_rects` 記住每個 pane 上一次成功套用的
+  完整矩形。首次顯示、隱藏後重現或矩形確實改變時，在所有子視窗
+  `SetWindowPos`、`set_rect`、`set_visible` 與狀態列更新完成後，對主視窗
+  的 pane 矩形呼叫：
+
+  ```cpp
+  RedrawWindow(window, &pane_rect, nullptr,
+               RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+  ```
+
+  使用 `RedrawWindow` 是為了明確涵蓋 child tree；`RDW_ALLCHILDREN` 使
+  container 下的原生 Shell view 一併進入失效範圍。未使用 `RDW_UPDATENOW`，
+  避免在 Shell API 可能重入的 `apply_layout` 內同步執行 paint；正常訊息迴圈
+  會處理 invalid region。重繪只在 pane 矩形改變時發出，不新增 timer、polling
+  或全視窗重繪路徑。
+
+**決策 6。** 未觸發；沒有修改 `ExplorerHost::set_rect`，也沒有 subclass、
+  改寫或直接操作 `IExplorerBrowser` 內部 child window。由於本環境的
+  Computer Use 輸入層未能成功產生 resize 事件，不能把「Shell view 本身已
+  排除」宣稱為一次完整拖曳實測結論；目前沒有任何像素證據迫使本票走決策 6
+  分支。
+
+**決策 1 與決策 2 的實測界線。** 解鎖後以
+  `computer-use.get_window_state` 取得修正版實際視窗，截圖尺寸為
+  `1386x913`。四個 pane 的原生 Shell view 均可見；當下狀態列文字分別為
+  `80 items`、`138 items`、`4 items`、`0 items`，各自在 pane 底部，畫面
+  未見重複狀態列文字。這是修正版的真實靜態畫面證據，不是 resize 過程證據。
+
+  嘗試從同一個 fresh window observation 做 resize drag（兩組邊框座標）、
+  內容區 click、layout element click，以及 window `Raise`，工具均回報
+  `failed to activate captured window`；重新 `list_apps`、`list_windows`、
+  `get_window` 並重置 node session 後結果相同。實際觀察到的窗口尺寸始終
+  `1386x913`，因此沒有有效的 3–4 張中繼 resize 截圖，也無法用像素證據
+  分離判定「決策 1 單獨足夠」或「決策 2 仍必要」。修改前在鎖定桌面期間的
+  PrintWindow 嘗試產生全黑圖，已刪除且不納入證據；原始使用者截圖仍是本票
+  的修改前殘影來源。
+
+**回歸與資源驗證。** `rg` 確認五類 child style、主視窗既有
+`WS_CLIPCHILDREN`、`apply_layout` pane redraw 及 PD-042 的 `CombineRgn`
+均存在且未被移除。PD-038 的既有 Shell view redraw 路徑、PD-041 的主視窗
+clip、PD-042 的 container region 程式碼均未改動。由於輸入層失敗，以下項目
+標記為未驗證，而非推定通過：連續拖曳 resize 中繼幀、`WM_DPICHANGED`、
+Group 切換、layout 實際切換、tab 新增/關閉、PD-038/041/042 的互動視覺
+回歸，以及 repeated resize 後的 GDI/handle 趨勢。沒有新增 automated UI
+test；`docs/testing.md` 明確指出 live `IExplorerBrowser` 沒有可誠實造假的
+自動測試 seam。
+
+**命令與程序證據。** `cmake --build build` 通過（最後一次為 `ninja: no
+work to do`）；`ctest --test-dir build --output-on-failure` 為 4/4 通過；
+`git diff --check` 通過。測試程序 PID `22520` 以不帶 `/F` 的
+`taskkill /PID 22520` 關閉，約 5 秒後確認程序已退出；沒有使用強制終止。

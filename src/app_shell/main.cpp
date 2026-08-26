@@ -342,6 +342,7 @@ struct AppState {
     // IExplorerBrowser's own HWND, Advise/Unadvise and site contract are
     // untouched (see PD-040 override of PD-030).
     std::array<HWND, kExplorerCount> explorer_containers{};
+    std::array<std::optional<RECT>, kExplorerCount> laid_out_pane_rects{};
     std::array<HWND, kExplorerCount> address_bars{};
     std::array<HWND, kExplorerCount> status_bars{};
     std::array<HWND, kExplorerCount> back_buttons{};
@@ -1530,6 +1531,7 @@ HRESULT apply_layout(HWND window, AppState& state) {
     layout_header(window, state);
     InvalidateRect(window, nullptr, TRUE);
     if (!has_active_group(state)) {
+        state.laid_out_pane_rects.fill(std::nullopt);
         for (std::size_t index = 0; index < state.explorers.size(); ++index) {
             state.explorers[index].set_visible(false);
             ShowWindow(state.explorer_containers[index], SW_HIDE);
@@ -1553,8 +1555,14 @@ HRESULT apply_layout(HWND window, AppState& state) {
     const int container_radius = pane_card_radius(dpi);
     for (std::size_t index = 0; index < state.explorers.size(); ++index) {
         const bool visible = index < group.panes.size();
+        RECT pane_rect{};
+        bool pane_geometry_changed = false;
         if (visible) {
-            const RECT pane_rect = to_win32_rect(rects[index]);
+            pane_rect = to_win32_rect(rects[index]);
+            pane_geometry_changed =
+                !state.laid_out_pane_rects[index].has_value() ||
+                !EqualRect(&state.laid_out_pane_rects[index].value(),
+                           &pane_rect);
             const int strip_height = scaled_value(window, kTabStripHeight);
             const int actual_strip_height =
                 std::min(strip_height, static_cast<int>(pane_rect.bottom -
@@ -1656,7 +1664,9 @@ HRESULT apply_layout(HWND window, AppState& state) {
                 state.explorers[index].set_rect(local_rect);
             }
             refresh_status_bar(state, index);
+            state.laid_out_pane_rects[index] = pane_rect;
         } else {
+            state.laid_out_pane_rects[index].reset();
             ShowWindow(state.explorer_containers[index], SW_HIDE);
             ShowWindow(state.tab_strips[index], SW_HIDE);
             ShowWindow(state.back_buttons[index], SW_HIDE);
@@ -1668,6 +1678,10 @@ HRESULT apply_layout(HWND window, AppState& state) {
             ShowWindow(state.status_bars[index], SW_HIDE);
         }
         state.explorers[index].set_visible(visible);
+        if (visible && pane_geometry_changed) {
+            RedrawWindow(window, &pane_rect, nullptr,
+                         RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+        }
     }
     write_live_view_count();
     return S_OK;
@@ -2718,8 +2732,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 // ExplorerHost::initialize — it never paints or handles
                 // messages of its own, so no custom window class is needed.
                 state->explorer_containers[index] = CreateWindowExW(
-                    0, L"STATIC", nullptr, WS_CHILD | WS_CLIPCHILDREN, 0, 0, 0,
-                    0, window, nullptr, GetModuleHandleW(nullptr), nullptr);
+                    0, L"STATIC", nullptr,
+                    WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 0, 0,
+                    window, nullptr, GetModuleHandleW(nullptr), nullptr);
                 if (state->explorer_containers[index] == nullptr) return -1;
                 state->tab_strips[index] = CreateWindowExW(
                     0, L"STATIC", nullptr,
@@ -2752,8 +2767,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 for (std::size_t button = 0; button < labels.size(); ++button) {
                     *destinations[button] = CreateWindowExW(
                         0, L"BUTTON", labels[button],
-                        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON |
-                            BS_OWNERDRAW,
+                        WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP |
+                            BS_PUSHBUTTON | BS_OWNERDRAW,
                         0, 0, 0, 0,
                         window, reinterpret_cast<HMENU>(ids[button]),
                         GetModuleHandleW(nullptr), nullptr);
@@ -2765,7 +2780,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 }
                 state->address_bars[index] = CreateWindowExW(
                     0, L"EDIT", nullptr,
-                    WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0,
+                    WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | ES_AUTOHSCROLL,
+                    0, 0, 0, 0,
                     window,
                     reinterpret_cast<HMENU>(kAddressBarIdBase +
                                              static_cast<int>(index)),
@@ -2782,7 +2798,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                  GetStockObject(DEFAULT_GUI_FONT)),
                              TRUE);
                 state->status_bars[index] = CreateWindowExW(
-                    0, L"STATIC", L"", WS_CHILD | SS_LEFT | SS_CENTERIMAGE,
+                    0, L"STATIC", L"",
+                    WS_CHILD | WS_CLIPSIBLINGS | SS_LEFT | SS_CENTERIMAGE,
                     0, 0, 0, 0, window, nullptr, GetModuleHandleW(nullptr),
                     nullptr);
                 if (state->status_bars[index] == nullptr) return -1;
