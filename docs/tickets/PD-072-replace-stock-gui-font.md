@@ -1,10 +1,11 @@
-# PD-072 — 除側邊欄以外的 chrome 全都用 `DEFAULT_GUI_FONT`,在中文 Windows 上被解析成襯線字型 PMingLiU
+# PD-072 — chrome 字型:改用固定的 Latin 字面加系統字型連結,取代語系相依的 `DEFAULT_GUI_FONT`/`lfMessageFont`
 
 Phase 7 · app_shell · Depends on: PD-061
 
 - Source: dispatcher 於複驗 PD-061 時發現(2026-08-26)。放大 3 倍的側邊欄截圖顯示 Group 名稱已正確改為粗體無襯線,但同一張圖中的品牌標題「PaneDock」仍是**襯線體**,與設計稿完全不符。
 - Origin: PD-061 複驗的衍生發現(非使用者原文項)。
-- Priority: HIGH——影響整個應用程式幾乎所有文字的外觀,而且只在中文語系的 Windows 上發生,英文語系看不出來。
+- Priority: HIGH——影響整個應用程式幾乎所有文字的外觀。襯線體那一半只在中文語系的 Windows 上發生(英文語系看不出來,所以不能靠「我的機器看起來還可以」結案);而「同一份 UI 在不同語系長得不一樣」則是兩種語系都存在的問題。
+- 追加需求(2026-08-26,使用者原文):「字型最好是採用通用的英文字型,只有中文採用中文字型,避免英文環境下顯示會有差異。」——此項改變了原本「直接沿用 `lfMessageFont`」的作法,見決策 1。
 
 ## 已確認的根因(有實測數值,不是猜測)
 
@@ -26,7 +27,7 @@ NONCLIENTMETRICS.lfMessageFont (SystemParametersInfoW SPI_GETNONCLIENTMETRICS)
 
 ### PD-061 只修了側邊欄的清單項目
 
-PD-061(commit `3e8af43`)在 `src/sidebar/sidebar.cpp` 第 160-173 行改用 `SystemParametersInfoForDpi` 取 `lfMessageFont`,那部分是正確的、**本票不要改動它**。但 `src/app_shell/main.cpp` 仍有 **9 處** `GetStockObject(DEFAULT_GUI_FONT)`:
+PD-061(commit `3e8af43`)在 `src/sidebar/sidebar.cpp` 第 160-173 行改用 `SystemParametersInfoForDpi` 取 `lfMessageFont`,方向正確(脫離 stock 字型),但 face 仍是語系相依的,**因此本票的決策 1 會覆寫它的 face 來源**;PD-061 的字級、字重與列高計算保留。`src/app_shell/main.cpp` 則完全沒改,仍有 **9 處** `GetStockObject(DEFAULT_GUI_FONT)`:
 
 | 行 | 用途 |
 |---|---|
@@ -45,7 +46,29 @@ PD-061(commit `3e8af43`)在 `src/sidebar/sidebar.cpp` 第 160-173 行改用 `Sys
 
 ## 已確認的產品決策
 
-1. **一律改用 `SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, ...)` 的 `lfMessageFont`,與 PD-061 在側邊欄採用的作法一致。** 用 `ForDpi` 版本而不是 `SystemParametersInfoW`,因為前者會回傳對應該 DPI 的字型高度,符合 AGENTS.md 的 Per-Monitor-V2 要求。
+1. **字面(face)一律固定為 `Segoe UI`,字級與字重仍取自 `SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, ...)` 的 `lfMessageFont`。**
+
+   > **本項覆寫 PD-061 的字型來源決策。** PD-061 直接沿用 `lfMessageFont` 的 `lfFaceName`,那在中文 Windows 上是 `Microsoft JhengHei UI`、在英文 Windows 上是 `Segoe UI`——**同一個應用程式在不同語系會長得不一樣**。使用者於 2026-08-26 明確要求:「字型最好是採用通用的英文字型,只有中文採用中文字型,避免英文環境下顯示會有差異。」因此改為釘住 Latin 字面,CJK 交給系統的字型連結(font linking)。PD-061 的其他成果(字級、`FW_BOLD` 的名稱、依字型度量重算的列高)**全部保留**。
+
+   具體寫法:取 `lfMessageFont` 之後只覆寫三個欄位,其餘(尤其 `lfHeight`)不動——這樣使用者在系統設定裡調整的 UI 字級與目前 DPI 都仍然生效:
+
+   ```cpp
+   LOGFONTW logfont = metrics.lfMessageFont;   // keeps lfHeight / lfWeight
+   // PD-072: pin the Latin face so the app looks identical on every
+   // locale. lfMessageFont's face is locale-dependent (Microsoft
+   // JhengHei UI on zh-TW, Segoe UI on en-US). DEFAULT_CHARSET lets GDI
+   // font linking substitute a CJK face for glyphs Segoe UI lacks, so
+   // Chinese folder names still render.
+   wcscpy_s(logfont.lfFaceName, L"Segoe UI");
+   logfont.lfCharSet = DEFAULT_CHARSET;
+   logfont.lfQuality = CLEARTYPE_QUALITY;
+   ```
+
+   **`lfCharSet = DEFAULT_CHARSET` 是這個作法能成立的關鍵**,不要改成 `ANSI_CHARSET`——那會關掉字型連結,中文檔名會變成豆腐方塊。
+
+1a. **`Segoe UI` 不存在時,退回 `lfMessageFont` 原本的 face。** Segoe UI 自 Windows Vista 起隨系統提供,實務上一定在;但精簡版 Windows 映像可能缺字型,一個 `EnumFontFamiliesExW` 或建立後以 `GetTextFaceW` 比對實際 face 的檢查就夠了,不要因此加設定項或安裝字型。
+
+1b. **不要硬寫字級。** `lfHeight` 一律沿用 `lfMessageFont` 的值,不要寫成 `-12` 這類常數——那會讓使用者的「文字大小」系統設定失效。
 
 2. **新增一個共用的取字型函式,不要在 9 個地方各寫一次。** 放在 `main.cpp` 既有的字型輔助函式附近(`brand_font()` 旁邊),簽名比照現有慣例:
 
@@ -92,7 +115,7 @@ PD-061(commit `3e8af43`)在 `src/sidebar/sidebar.cpp` 第 160-173 行改用 `Sys
 
 ## Files to read and trace first
 
-- `src/sidebar/sidebar.cpp` 第 155-180 行——**PD-061 的正確作法,本票照抄這個模式。不要修改這個檔案。**
+- `src/sidebar/sidebar.cpp` 第 155-180 行——PD-061 建立字型的位置。**本票必須一併修改這裡的 face(決策 1 的覆寫),但要保留 PD-061 的字級、`FW_BOLD` 與列高計算。**
 - `src/app_shell/main.cpp` `brand_font()`(約第 1290-1302 行)——決策 2 的改造對象。
 - `src/app_shell/main.cpp` 全部 `GetStockObject(DEFAULT_GUI_FONT)` 的位置,以 `rg -n "DEFAULT_GUI_FONT" src\` 取得。
 - `src/app_shell/main.cpp` `release_navigation_refresh_font()` 與其他 `release_*` 函式,以及它們在 `WM_DESTROY` 的呼叫點——決策 3 的釋放慣例。
@@ -101,26 +124,30 @@ PD-061(commit `3e8af43`)在 `src/sidebar/sidebar.cpp` 第 160-173 行改用 `Sys
 
 ## Scope
 
-1. 新增共用的 `ui_font(HWND)`,以 `SystemParametersInfoForDpi` 的 `lfMessageFont` 為來源。
+1. 新增共用的 `ui_font(HWND)`:以 `SystemParametersInfoForDpi` 的 `lfMessageFont` 為基礎,face 覆寫為 `Segoe UI`、`lfCharSet = DEFAULT_CHARSET`、`lfQuality = CLEARTYPE_QUALITY`,並含 Segoe UI 不存在時的退回。
 2. `main.cpp` 全部 `GetStockObject(DEFAULT_GUI_FONT)` 的使用點改用它。
 3. `brand_font()` 改以 `ui_font` 的 `LOGFONTW` 為基底套用 `FW_BOLD`。
-4. 依 `sidebar.cpp` 的既有策略處理 DPI 變化與字型釋放。
+4. `src/sidebar/sidebar.cpp` 的兩個字型(名稱、副標題)同樣改為固定 `Segoe UI` 的 face,**保留 PD-061 的字級、字重與列高計算**。
+5. 依 `sidebar.cpp` 的既有策略處理 DPI 變化與字型釋放。
 
 ## Non-goals
 
-- 不改 `src/sidebar/sidebar.cpp`(PD-061 已正確)。
-- 不改任何字級、字重(除 `brand_font()` 既有的 `FW_BOLD`)或文字顏色。
+- 不改 PD-061 決定的字級、字重與側邊欄列高;本票在側邊欄只改 face。
+- 不改任何其他字級、字重(除 `brand_font()` 既有的 `FW_BOLD`)或文字顏色。
+- 不硬寫 `lfHeight`,不繞過使用者的系統文字大小設定。
+- 不加字型的使用者設定項,不隨程式安裝或內嵌字型。
 - 不改任何高度、內距或間距常數(PD-069)。
 - 不改 tab 的視覺樣式(PD-062)。
 - 不碰 Explorer view 內部的字型。
-- 不新增字型的使用者設定項。
 
 ## Acceptance
 
 1. **品牌標題「PaneDock」以無襯線的系統 UI 字型渲染**,實機以 `PrintWindow` 截圖後放大至少 3 倍判讀,與修改前的襯線外觀對照。
 2. 「GROUPS」標題、tab 文字、網址列路徑、pane 狀態列文字全部改為系統 UI 字型,同樣以放大截圖確認。
 3. **沒有任何控制項因換字型而截字或溢出**;特別檢查 tab(寬度受 `kTabMinWidth`/`kTabMaxWidth` 限制)與 pane 狀態列。
-4. 側邊欄 Group 名稱與副標題的外觀**與 PD-061 完成時完全一致**(本票不應改變它們)。
+4. **中文檔名/路徑仍正確渲染,沒有豆腐方塊。** 導覽到一個含中文名稱的資料夾(例如 `C:\Users\公用`,或自建 `測試資料夾`),確認 tab 標題與網址列的中文字顯示正常。**這是決策 1 最重要的驗收:`DEFAULT_CHARSET` 一旦寫錯成 `ANSI_CHARSET`,中文就會變方塊。**
+4a. 側邊欄 Group 名稱與副標題的**字級、字重與列高與 PD-061 完成時一致**,只有 face 改變。
+4b. **同一份 UI 在中文與英文語系的 Windows 上,拉丁文字的字面相同。** 若無法取得英文語系環境,以 `GetTextFaceW` 讀回實際 face 為 `Segoe UI` 作為替代證據,並在交接區說明。
 5. 在 150% 或 200% DPI 下字級按比例變化;若本機只有單一 DPI,至少確認取字型的路徑經過 `SystemParametersInfoForDpi` 並傳入當下的 DPI,並在交接區說明未能實測的原因。
 6. 關閉程式不洩漏字型物件:若採用快取,`WM_DESTROY` 的釋放路徑有對應的 `DeleteObject`;若不快取,每次使用後釋放。
 7. `cmake --build build`、`ctest --test-dir build --output-on-failure` 全數通過。
@@ -165,3 +192,18 @@ git diff --check
 - 本機 `NONCLIENTMETRICS.lfMessageFont` → `lfFaceName = "Microsoft JhengHei UI"`、`lfHeight = -12`、`lfWeight = 400`。
 - 兩者 `lfHeight` 相同,因此換 face 預期不改變版面高度;決策 4 的「若截字則記錄不要改高度」是保險條款,不是預期會發生。
 - 撰票時的 3 倍放大側邊欄截圖顯示:Group 名稱與副標題已是無襯線(PD-061 的成果),但同一張圖的品牌標題「PaneDock」明顯是襯線體。這是同一張截圖內的直接對照,可作為修改前的基準。
+
+### 2026-08-26 決策 1 的可行性實測(dispatcher,使用者要求改為固定 Latin 字面後補做)
+
+用**真正的 GDI 路徑**(`CreateFontIndirectW` + `SelectObject` + `DrawTextW`,不是 GDI+)驗證「face 固定 Segoe UI、`lfCharSet = DEFAULT_CHARSET`」能否同時顯示拉丁與中文:
+
+| 請求的 face | `GetTextFaceW` 回報 | 文字 | 墨跡取樣點數 | 目視結果 |
+|---|---|---|---|---|
+| `Segoe UI` | `Segoe UI` | `PaneDock` | 283 | 正常,無襯線 |
+| `Segoe UI` | `Segoe UI` | `測試中文資料夾` | 550 | **中文正常顯示,不是豆腐方塊**(已存圖目視確認) |
+| `Microsoft JhengHei UI` | `Microsoft JhengHei UI` | `PaneDock` | 336 | 正常 |
+| `Microsoft JhengHei UI` | `Microsoft JhengHei UI` | `測試中文資料夾` | 526 | 正常 |
+
+**結論:GDI 的字型連結(font linking)確實會為 Segoe UI 缺少的 CJK 字符自動代換中文字型**,拉丁部分仍由 Segoe UI 渲染。墨跡數與原生中文字型相當(550 vs 526),排除「畫成空框但仍有墨跡」的可能;兩張圖都已目視確認。`Segoe UI` 在本機存在(`InstalledFontCollection` 確認)。
+
+另補一筆:`InstalledFontCollection` 列不出 `PMingLiU`(GDI+ 以不同的家族名列舉),但 GDI 的 `GetStockObject(DEFAULT_GUI_FONT)` 確實回報 `lfFaceName = "PMingLiU"`。**判斷字型時請用 GDI 的 `GetObjectW`/`GetTextFaceW`,不要用 GDI+ 的字型列舉**——本專案的繪製走的是 GDI。

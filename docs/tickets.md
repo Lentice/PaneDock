@@ -109,7 +109,7 @@
 | PD-069 | pane footer 補左右內距;chrome 間距統一為 4px 級距 | 7 | `planned` | PD-060, PD-062, PD-064 | [PD-069](tickets/PD-069-chrome-spacing-scale.md) |
 | PD-070 | 診斷模式擋下第三方 extension 時跳出載入器模態對話框,無法無人值守執行 | 7 | `done` | PD-024 | [PD-070](tickets/PD-070-diagnostic-mode-loader-error-dialogs.md) |
 | PD-071 | 移除 Ctrl+Shift+L 熱鍵:註冊失敗會讓程式完全無法啟動 | 7 | `done` | PD-009 | [PD-071](tickets/PD-071-remove-layout-hotkey.md) |
-| PD-072 | `DEFAULT_GUI_FONT` 在中文 Windows 解析成襯線體 PMingLiU,除側邊欄外全數改用 `lfMessageFont` | 7 | `ready` | PD-061 | [PD-072](tickets/PD-072-replace-stock-gui-font.md) |
+| PD-072 | chrome 字型改用固定 Latin 字面＋系統字型連結,取代語系相依的 `DEFAULT_GUI_FONT`／`lfMessageFont`(覆寫 PD-061 的 face 來源) | 7 | `ready` | PD-061 | [PD-072](tickets/PD-072-replace-stock-gui-font.md) |
 
 ## Dependency lanes
 
