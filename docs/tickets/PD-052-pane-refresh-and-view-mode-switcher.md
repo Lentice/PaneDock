@@ -121,3 +121,9 @@ git diff --check
 實機截圖發現 refresh 圖示原本只有短段 `Arc` 加一條短線，視覺上像 blob/hump，無法辨識為 refresh。已改為接近完整圓弧（保留小缺口）並在弧端加入兩筆線段組成清楚的箭頭尖端，沿用既有 DPI-scaled 尺寸與筆畫寬度。
 
 驗證：已完成程式碼層級的 glyph 幾何檢查；本次環境 `Get-Process` 顯示程式未執行，未能進行新的桌面截圖驗證。
+
+### 實作交接（2026-08-26）
+
+上一版以 GDI `Arc()` 手動畫 refresh 圖示仍無法可靠顯示圓弧，實機畫面只剩箭頭線段而呈現 chevron/tent。已移除該 Arc 路徑，改用 Windows 基線字型 `Segoe MDL2 Assets` 的 `U+E72C` Refresh glyph；字型以 process-lifetime `HFONT` lazy cache 建立，依目前 DPI 使用 16px 視覺尺寸，繪製時以既有啟用／disabled 顏色置中顯示。若字型建立失敗，改以 `Ellipse` 加箭頭線段作可見 fallback，並在 `WM_DESTROY` 釋放。
+
+驗證：本次程式碼已移除 refresh 的 `Arc()` 呼叫並完成建置前檢查；實際截圖結果待建置後確認。

@@ -615,10 +615,30 @@ void release_navigation_history_image_list() noexcept {
     }
 }
 
+HFONT& navigation_refresh_font(HWND button) noexcept {
+    static HFONT font = nullptr;
+    if (font == nullptr && button != nullptr) {
+        font = CreateFontW(-std::max(1, scaled_value(button, 16)), 0, 0, 0,
+                           FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+                           L"Segoe MDL2 Assets");
+    }
+    return font;
+}
+
+void release_navigation_refresh_font() noexcept {
+    HFONT& font = navigation_refresh_font(nullptr);
+    if (font != nullptr) {
+        DeleteObject(font);
+        font = nullptr;
+    }
+}
+
 void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
                                  std::size_t glyph_kind) noexcept {
     // Back(0)/Forward(1) use the public Common Controls history bitmap.
-    // Up/refresh/view use small native stroke glyphs with the same visual weight.
+    // Up/view use small native stroke glyphs; refresh uses the platform icon font.
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
     HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));
     if (background != nullptr) {
@@ -674,19 +694,32 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
                 LineTo(item.hDC, cx, cy - half);
                 LineTo(item.hDC, cx + half / 2, cy - half / 2);
                 break;
-            case 3:  // refresh
-                // Start at the right and end at the upper-right: GDI draws
-                // the long counterclockwise arc between these points.
-                Arc(item.hDC, cx - half, cy - half, cx + half, cy + half,
-                    cx + half, cy, cx + half / 2,
-                    cy - std::max(1, (half * 7) / 8));
-                MoveToEx(item.hDC, cx + half / 2,
-                         cy - std::max(1, (half * 7) / 8), nullptr);
-                LineTo(item.hDC, cx, cy - half / 4);
-                MoveToEx(item.hDC, cx + half / 2,
-                         cy - std::max(1, (half * 7) / 8), nullptr);
-                LineTo(item.hDC, cx + half / 4, cy - half / 2);
+            case 3: {  // refresh
+                HFONT& refresh_font = navigation_refresh_font(item.hwndItem);
+                if (refresh_font != nullptr) {
+                    const HGDIOBJ old_font =
+                        SelectObject(item.hDC, refresh_font);
+                    const int old_bk_mode = SetBkMode(item.hDC, TRANSPARENT);
+                    const COLORREF old_text_color =
+                        SetTextColor(item.hDC, color);
+                    RECT glyph_rect = item.rcItem;
+                    DrawTextW(item.hDC, L"\uE72C", 1, &glyph_rect,
+                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SetTextColor(item.hDC, old_text_color);
+                    SetBkMode(item.hDC, old_bk_mode);
+                    SelectObject(item.hDC, old_font);
+                } else {
+                    // Keep a visible fallback if the guaranteed platform font
+                    // is unavailable.
+                    Ellipse(item.hDC, cx - half, cy - half, cx + half,
+                            cy + half);
+                    MoveToEx(item.hDC, cx + half / 2, cy - half, nullptr);
+                    LineTo(item.hDC, cx, cy - half / 4);
+                    MoveToEx(item.hDC, cx + half / 2, cy - half, nullptr);
+                    LineTo(item.hDC, cx + half / 4, cy - half / 2);
+                }
                 break;
+            }
             case 4:  // view: four small squares
                 for (int row = -1; row <= 1; row += 2)
                     for (int column = -1; column <= 1; column += 2)
@@ -3205,6 +3238,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state != nullptr) revoke_drag_hover_targets(*state);
             UnregisterHotKey(window, kLayoutToggleHotkeyId);
             release_navigation_history_image_list();
+            release_navigation_refresh_font();
             release_address_bar_background_brush();
             PostQuitMessage(0);
             return 0;
