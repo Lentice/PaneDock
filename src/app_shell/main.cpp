@@ -2523,6 +2523,11 @@ void update_group_drag(AppState& state, HWND list, WPARAM wparam,
         if (dx < -threshold || dx > threshold || dy < -threshold ||
             dy > threshold) {
             state.group_drag->dragging = true;
+            // PD-057: take the capture only now. Before this point the
+            // gesture is still an ordinary click and the LISTBOX must keep
+            // its own capture, or it cancels the selection instead of
+            // reporting it.
+            if (GetCapture() != list) SetCapture(list);
         }
     }
     if (!state.group_drag->dragging) return;
@@ -2547,8 +2552,14 @@ LRESULT CALLBACK group_list_proc(HWND window, UINT message, WPARAM wparam,
         }
         const LRESULT result = DefSubclassProc(window, message, wparam, lparam);
         if (pending.has_value() && !state->group_drag.has_value()) {
+            // PD-057: record the potential drag but do NOT take the capture
+            // yet. The LISTBOX runs its own capture-based click tracking
+            // between button-down and button-up; interfering with it makes
+            // the control report LBN_SELCANCEL instead of LBN_SELCHANGE, so
+            // the Group never switches. The capture is taken in
+            // update_group_drag once the drag threshold is actually crossed,
+            // by which point the click is no longer a plain selection.
             state->group_drag = std::move(*pending);
-            SetCapture(window);
         }
         return result;
     }
@@ -2562,8 +2573,23 @@ LRESULT CALLBACK group_list_proc(HWND window, UINT message, WPARAM wparam,
         const bool dragging = state->group_drag.has_value() &&
                               state->group_drag->list == window &&
                               state->group_drag->dragging;
+        // PD-057: a plain click must reach the LISTBOX first. Its selection
+        // is committed — and LBN_SELCHANGE sent — while it processes
+        // WM_LBUTTONUP, and finish_group_drag releases the capture the
+        // control is still relying on. Releasing first makes the LISTBOX
+        // abandon the click via WM_CAPTURECHANGED, so the notification never
+        // arrives and Groups cannot be switched. While actually dragging we
+        // still swallow the message, or ending a reorder would also switch
+        // the Group under the cursor. Mirrors the WM_LBUTTONDOWN branch,
+        // which already defers to the control before touching our state.
+        if (!dragging) {
+            const LRESULT result =
+                DefSubclassProc(window, message, wparam, lparam);
+            finish_group_drag(*state, window);
+            return result;
+        }
         finish_group_drag(*state, window);
-        if (dragging) return 0;
+        return 0;
     } else if (message == WM_CAPTURECHANGED && state != nullptr) {
         cancel_group_drag(*state, window);
     } else if (message == WM_NCDESTROY && state != nullptr) {

@@ -153,3 +153,45 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-26 實作交接
+
+**本票的根因比原始票據所寫的更前面一步,原始診斷只對了一半——這一段是後續維護時最重要的資訊。**
+
+原票斷定問題在 `WM_LBUTTONUP` 分支「在 `DefSubclassProc` 之前就 `finish_group_drag`(內含 `ReleaseCapture`)」。照這個結論修正(button-up 時先 `DefSubclassProc` 再 `finish_group_drag`)之後,**實測仍然完全無效**:`LB_GETCURSEL` 會變、`active_group_id` 不變,症狀一模一樣。
+
+改用外部可讀的暫時性計數器(在 `WM_COMMAND` 中以 `SetPropW` 記錄「收到幾則來自 `kGroupListId` 的通知」「最後一則的通知碼」「收到幾則 `LBN_SELCHANGE`」,測完即移除)才定位到真正原因:
+
+- LISTBOX **確實有送通知**(計數器會增加),
+- 但通知碼是 **`LBN_SELCANCEL`(3)**,不是 `LBN_SELCHANGE`(1);`LBN_SELCHANGE` 的計數從頭到尾都是 `0`。
+
+也就是說 LISTBOX 認定這次點擊是「選取被取消」而不是「選取改變」。真正的元兇是 `WM_LBUTTONDOWN` 分支裡的 `SetCapture(window)`:LISTBOX 在 button-down 到 button-up 之間跑自己的 capture-based 點擊追蹤,我們在它追蹤期間介入 capture,它就把整次點擊判定為取消。**button-up 的順序問題是次要的、真實存在但不足以單獨造成此 bug 的第二個缺陷。**
+
+最終修法是兩處並用:
+
+1. **`group_list_proc` 的 `WM_LBUTTONDOWN` 不再 `SetCapture`**,只記錄可能的拖曳起點(`state->group_drag`)。
+2. **capture 改在 `update_group_drag` 中、拖曳門檻真正被跨過的那一刻才取得**(`if (GetCapture() != list) SetCapture(list);`)。到那時這個手勢已經不是單純點擊,介入 capture 不再有副作用。
+3. `WM_LBUTTONUP` 分支仍照原票修正:非拖曳時先 `DefSubclassProc` 再 `finish_group_drag`;拖曳中維持吞掉訊息並 `return 0`(否則拖曳結束會順帶切換游標下的 Group)。
+
+**實機驗證結果(資料層級,不只截圖):**
+
+視窗置於 50,50 1400x900;以 `LB_GETITEMRECT`(`0x0198`)取得每列矩形換算螢幕座標後點擊(不用截圖目測座標)。每次點擊後同時讀 `LB_GETCURSEL` 與 `session.json` 的 `active_group_id`:
+
+| 操作 | cursel | active_group_id |
+|---|---|---|
+| 點第 1 列 | 0 | `group-1` |
+| 點第 2 列 | 1 | `group-2` |
+| 點第 3 列 | 2 | `default` |
+| 點第 4 列 | 3 | `group-3` |
+| 再點第 1 列 | 0 | `group-1` |
+| 又點第 1 列(已 active) | 0 | `group-1`(無異常,提前返回路徑正確) |
+
+四個 Group 全部可正確切換,兩者永遠一致。
+
+**拖曳排序未回歸:** 按住第 1 列分段移動至第 3 列位置後放開,順序由 `[Group 1, Group 2, Group 3, Group 4]` 變為 `[Group 2, Group 3, Group 1, Group 4]`,且 `active_group_id` 維持 `group-3` **未被順帶切換**——這正是驗收 4 要求的行為。
+
+**建置與測試:** `cmake --build build` 成功;`ctest` `100% tests passed out of 4`;`git diff --check` 通過。
+
+**清理:** 暫時性的 `SetPropW` 診斷計數器已全部移除(`rg "dbg|SetPropW|PD057" src/` 為零筆)。實作過程中產生的輔助腳本 `build\pd057-ui-check.ps1` 亦已刪除。程序以不帶 `/F` 的 `taskkill /PID` 關閉,`clean_shutdown` 為 `true`,無殘留程序。
+
+**給後續票的教訓:** 當「控制項有反應但通知沒送到」時,不要只憑訊息順序推論就改程式——**先用外部可讀的計數器確認通知到底有沒有送、送的是哪一個通知碼**。本票若沒做這一步,會停在一個看似合理、實際無效的修正上。`SetPropW` + 外部 `GetPropW` 是本專案已驗證可用的輕量做法(跨行程可讀,不需要 log 檔)。
