@@ -85,7 +85,6 @@ constexpr int kAddressBarIdBase = 330;
 constexpr int kRefreshButtonIdBase = 340;
 constexpr int kViewModeButtonIdBase = 350;
 constexpr int kLayoutButtonIdBase = 400;
-constexpr int kMoreActionsButtonId = kLayoutButtonIdBase + 5;
 constexpr int kGroupListId = 100;
 constexpr int kNewGroupId = 101;
 constexpr int kDuplicateGroupId = 102;
@@ -325,7 +324,6 @@ struct AppState {
     HWND group_label{nullptr};
     std::array<HWND, kLayoutButtonIds.size()> layout_buttons{};
     std::optional<std::size_t> layout_hover_index;
-    HWND more_actions_button{nullptr};
     HWND layout_tooltip{nullptr};
     HWND empty_message{nullptr};
     struct TabVisual final {
@@ -633,7 +631,10 @@ void release_navigation_history_image_list() noexcept {
     }
 }
 
-HFONT& navigation_refresh_font(HWND button) noexcept {
+// PD-052 (refresh) and PD-064 (up) both use the platform icon font: hand-drawn
+// GDI geometry could not be centered for even pen widths, while the font glyph
+// is always optically centered by DrawText's DT_CENTER | DT_VCENTER.
+HFONT& navigation_icon_font(HWND button) noexcept {
     static HFONT font = nullptr;
     if (font == nullptr && button != nullptr) {
         font = CreateFontW(-std::max(1, scaled_value(button, 16)), 0, 0, 0,
@@ -645,18 +646,36 @@ HFONT& navigation_refresh_font(HWND button) noexcept {
     return font;
 }
 
-void release_navigation_refresh_font() noexcept {
-    HFONT& font = navigation_refresh_font(nullptr);
+void release_navigation_icon_font() noexcept {
+    HFONT& font = navigation_icon_font(nullptr);
     if (font != nullptr) {
         DeleteObject(font);
         font = nullptr;
     }
 }
 
+// Draws one Segoe MDL2 Assets glyph centered on the button. Returns false if
+// the icon font is unavailable so callers can keep a visible stroke fallback.
+bool draw_navigation_font_glyph(const DRAWITEMSTRUCT& item, wchar_t glyph,
+                                COLORREF color) noexcept {
+    HFONT& icon_font = navigation_icon_font(item.hwndItem);
+    if (icon_font == nullptr) return false;
+    const HGDIOBJ old_font = SelectObject(item.hDC, icon_font);
+    const int old_bk_mode = SetBkMode(item.hDC, TRANSPARENT);
+    const COLORREF old_text_color = SetTextColor(item.hDC, color);
+    RECT glyph_rect = item.rcItem;
+    DrawTextW(item.hDC, &glyph, 1, &glyph_rect,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SetTextColor(item.hDC, old_text_color);
+    SetBkMode(item.hDC, old_bk_mode);
+    SelectObject(item.hDC, old_font);
+    return true;
+}
+
 void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
                                  std::size_t glyph_kind) noexcept {
     // Back(0)/Forward(1) use the public Common Controls history bitmap.
-    // Up/view use small native stroke glyphs; refresh uses the platform icon font.
+    // Up/refresh use the platform icon font; view uses small native squares.
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
     HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));
     if (background != nullptr) {
@@ -691,7 +710,8 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
     const int cx = item.rcItem.left + width / 2;
     const int cy = item.rcItem.top + height / 2;
 
-    HPEN pen = CreatePen(PS_SOLID, std::max(1, size / 8), color);
+    const int pen_width = std::max(1, size / 8);
+    HPEN pen = CreatePen(PS_SOLID, pen_width, color);
     if (pen != nullptr) {
         const HGDIOBJ previous = SelectObject(item.hDC, pen);
         switch (glyph_kind) {
@@ -705,28 +725,23 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
                 LineTo(item.hDC, cx + half / 2, cy);
                 LineTo(item.hDC, cx - half / 2, cy + half);
                 break;
-            case 2:  // up: arrow pointing up
-                MoveToEx(item.hDC, cx, cy + half, nullptr);
-                LineTo(item.hDC, cx, cy - half);
-                MoveToEx(item.hDC, cx - half / 2, cy - half / 2, nullptr);
-                LineTo(item.hDC, cx, cy - half);
-                LineTo(item.hDC, cx + half / 2, cy - half / 2);
+            case 2: {  // up: platform arrow glyph (PD-064)
+                if (!draw_navigation_font_glyph(item, L"\uE74A"[0], color)) {
+                    // Fallback if Segoe MDL2 Assets is unavailable: stroke
+                    // arrow with the stem shifted right by half the pen
+                    // width so it shares the arrow wings' center line.
+                    const int stem = cx + pen_width / 2;
+                    MoveToEx(item.hDC, stem, cy + half, nullptr);
+                    LineTo(item.hDC, stem, cy - half);
+                    MoveToEx(item.hDC, stem - half / 2, cy - half / 2,
+                             nullptr);
+                    LineTo(item.hDC, stem, cy - half);
+                    LineTo(item.hDC, stem + half / 2, cy - half / 2);
+                }
                 break;
-            case 3: {  // refresh
-                HFONT& refresh_font = navigation_refresh_font(item.hwndItem);
-                if (refresh_font != nullptr) {
-                    const HGDIOBJ old_font =
-                        SelectObject(item.hDC, refresh_font);
-                    const int old_bk_mode = SetBkMode(item.hDC, TRANSPARENT);
-                    const COLORREF old_text_color =
-                        SetTextColor(item.hDC, color);
-                    RECT glyph_rect = item.rcItem;
-                    DrawTextW(item.hDC, L"\uE72C", 1, &glyph_rect,
-                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SetTextColor(item.hDC, old_text_color);
-                    SetBkMode(item.hDC, old_bk_mode);
-                    SelectObject(item.hDC, old_font);
-                } else {
+            }
+            case 3:  // refresh
+                if (!draw_navigation_font_glyph(item, L"\uE72C"[0], color)) {
                     // Keep a visible fallback if the guaranteed platform font
                     // is unavailable.
                     Ellipse(item.hDC, cx - half, cy - half, cx + half,
@@ -737,7 +752,6 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
                     LineTo(item.hDC, cx + half / 4, cy - half / 2);
                 }
                 break;
-            }
             case 4:  // view: four small squares
                 for (int row = -1; row <= 1; row += 2)
                     for (int column = -1; column <= 1; column += 2)
@@ -753,32 +767,6 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
         DeleteObject(pen);
     }
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
-}
-
-void draw_more_actions_button(const DRAWITEMSTRUCT& item) noexcept {
-    // Visual placeholder only (PD-029 decision 2): always disabled, no menu.
-    HBRUSH background = CreateSolidBrush(RGB(248, 250, 252));
-    if (background != nullptr) {
-        FillRect(item.hDC, &item.rcItem, background);
-        DeleteObject(background);
-    }
-    const int width = static_cast<int>(item.rcItem.right - item.rcItem.left);
-    const int height = static_cast<int>(item.rcItem.bottom - item.rcItem.top);
-    const int dot_size = std::max(3, std::min(width, height) / 6);
-    const int gap = dot_size * 2;
-    const int mid_x = item.rcItem.left + width / 2;
-    const int mid_y = item.rcItem.top + height / 2;
-    HBRUSH dot_brush = CreateSolidBrush(RGB(148, 163, 184));
-    if (dot_brush != nullptr) {
-        for (int offset = -1; offset <= 1; ++offset) {
-            const int cx = mid_x + offset * gap;
-            RECT dot{cx - dot_size / 2, mid_y - dot_size / 2,
-                     cx - dot_size / 2 + dot_size,
-                     mid_y - dot_size / 2 + dot_size};
-            FillRect(item.hDC, &dot, dot_brush);
-        }
-        DeleteObject(dot_brush);
-    }
 }
 
 void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
@@ -1189,29 +1177,21 @@ void layout_header(HWND window, AppState& state) noexcept {
         scaled_value(window, panedock::sidebar::kSidebarWidth));
     const int margin = scaled_value(window, 12);
     const int segment_gap = scaled_value(window, 1);
-    const int more_actions_gap = scaled_value(window, 4);
     const int header_height = std::min(
         scaled_value(window, kLayoutBarHeight),
         std::max(0, static_cast<int>(client.bottom - client.top)));
     const int button_height = std::min(
         scaled_value(window, kLayoutButtonHeight), header_height);
-    // Total slot count is the 5 layout buttons plus the more-actions
-    // placeholder button, sharing the same target width so they shrink
-    // together on narrow windows instead of the placeholder crowding them.
-    constexpr int kButtonSlotCount =
-        static_cast<int>(kLayoutButtonIds.size()) + 1;
-    const int available_width = std::max(
-        0, static_cast<int>(client.right) - sidebar_width - 2 * margin -
-               (static_cast<int>(kLayoutButtonIds.size()) - 1) * segment_gap -
-               more_actions_gap);
     const int button_width = std::max(
         1, std::min(scaled_value(window, kLayoutButtonWidth),
-                    available_width / kButtonSlotCount));
-    const int more_actions_width = button_width;
+                    std::max(0, static_cast<int>(client.right) -
+                                    sidebar_width - 2 * margin -
+                                    (static_cast<int>(kLayoutButtonIds.size()) -
+                                     1) * segment_gap) /
+                        static_cast<int>(kLayoutButtonIds.size())));
     const int total_width =
         static_cast<int>(kLayoutButtonIds.size()) * button_width +
-        (static_cast<int>(kLayoutButtonIds.size()) - 1) * segment_gap +
-        more_actions_gap + more_actions_width;
+        (static_cast<int>(kLayoutButtonIds.size()) - 1) * segment_gap;
     // Right-align the whole group; if the window is too narrow to fit it
     // with room to spare on the left of the sidebar, fall back to the
     // original left-aligned start position instead of overlapping it.
@@ -1227,12 +1207,6 @@ void layout_header(HWND window, AppState& state) noexcept {
         ShowWindow(button, SW_SHOW);
         x += button_width + segment_gap;
     }
-    SetWindowPos(state.more_actions_button, nullptr, x + more_actions_gap -
-                                                       segment_gap,
-                 std::max(0, (header_height - button_height) / 2),
-                 more_actions_width, button_height,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-    ShowWindow(state.more_actions_button, SW_SHOW);
     const bool enabled = has_active_group(state);
     const auto current = enabled ? active_group(state).layout_template
                                  : panedock::core::LayoutTemplate::single;
@@ -2706,15 +2680,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                  GetStockObject(DEFAULT_GUI_FONT)),
                              TRUE);
             }
-            // Visual placeholder only (PD-029 decision 2): no menu is wired
-            // up, so it is disabled at creation and never dispatched in
-            // WM_COMMAND.
-            state->more_actions_button = CreateWindowExW(
-                0, L"BUTTON", L"", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0,
-                0, 0, window, reinterpret_cast<HMENU>(kMoreActionsButtonId),
-                GetModuleHandleW(nullptr), nullptr);
-            if (state->more_actions_button == nullptr) return -1;
-            EnableWindow(state->more_actions_button, FALSE);
             state->layout_tooltip = CreateWindowExW(
                 WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
                 WS_POPUP | TTS_ALWAYSTIP, CW_USEDEFAULT, CW_USEDEFAULT,
@@ -2734,17 +2699,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         state->layout_buttons[index]);
                     info.lpszText = const_cast<wchar_t*>(kLayoutTooltips[index]);
                     SendMessageW(state->layout_tooltip, TTM_ADDTOOLW, 0,
-                                 reinterpret_cast<LPARAM>(&info));
+                                  reinterpret_cast<LPARAM>(&info));
                 }
-                TOOLINFOW more_info{};
-                more_info.cbSize = sizeof(more_info);
-                more_info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
-                more_info.hwnd = window;
-                more_info.uId =
-                    reinterpret_cast<UINT_PTR>(state->more_actions_button);
-                more_info.lpszText = const_cast<wchar_t*>(L"More actions");
-                SendMessageW(state->layout_tooltip, TTM_ADDTOOLW, 0,
-                             reinterpret_cast<LPARAM>(&more_info));
             }
             state->empty_message = CreateWindowExW(
                 0, L"STATIC", L"No Group. Click New Group to get started.",
@@ -2887,14 +2843,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         scaled_value(window, kLayoutButtonHeight));
                     return TRUE;
                 }
-                if (item != nullptr && item->CtlType == ODT_BUTTON &&
-                    item->CtlID == kMoreActionsButtonId) {
-                    item->itemWidth = static_cast<UINT>(
-                        scaled_value(window, kLayoutButtonWidth));
-                    item->itemHeight = static_cast<UINT>(
-                        scaled_value(window, kLayoutButtonHeight));
-                    return TRUE;
-                }
                 if (state->sidebar.measure_item(item, GetDpiForWindow(window)))
                     return TRUE;
             }
@@ -2915,11 +2863,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     draw_layout_button(*item, index,
                                        kLayoutTemplates[index] == current,
                                        state->layout_hover_index == index);
-                    return TRUE;
-                }
-                if (item != nullptr && item->CtlType == ODT_BUTTON &&
-                    item->CtlID == kMoreActionsButtonId) {
-                    draw_more_actions_button(*item);
                     return TRUE;
                 }
                 if (item != nullptr && item->CtlType == ODT_BUTTON &&
@@ -3268,7 +3211,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_DESTROY:
             if (state != nullptr) revoke_drag_hover_targets(*state);
             release_navigation_history_image_list();
-            release_navigation_refresh_font();
+            release_navigation_icon_font();
             release_address_bar_background_brush();
             PostQuitMessage(0);
             return 0;

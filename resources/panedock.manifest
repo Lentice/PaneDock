@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="PaneDock" version="0.1.0.0"/>
+  <!-- Common Controls v6: required for TOOLINFOW with lpReserved (cbSize =
+       sizeof(TOOLINFOW)) to be accepted by TTM_ADDTOOLW; without this the
+       process loads v5 and tooltip registration silently fails. -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32"
+                        name="Microsoft.Windows.Common-Controls"
+                        version="6.0.0.0"
+                        processorArchitecture="*"
+                        publicKeyToken="6595b64144ccf1df"
+                        language="*"/>
+    </dependentAssembly>
+  </dependency>
+</assembly>

@@ -160,3 +160,30 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-26 實作記錄
+
+**缺口一:more-actions 按鈕已完整移除。** 票上列的九個位置全部清乾淨;`rg -n "more_actions|MoreActions|kMoreActionsButtonId" src\` 零筆。`kLayoutButtonIdBase + 5` 空出未挪用(決策 6)。
+
+**`layout_header` 最終形式**(`kButtonSlotCount` 整個移除,不再有 +1 slot):
+- `button_width = max(1, min(scaled(kLayoutButtonWidth), max(0, client.right − sidebar_width − 2·margin − 4·segment_gap) / 5))`
+- `total_width = 5·button_width + 4·segment_gap`
+- 右對齊不變:`x_start = max(sidebar_width + margin, client.right − margin − total_width)`
+
+**實測右對齊**(1400px 寬、100% DPI):修改前 more-actions 右緣 = 1380;修改後 layout_last(ID 404)右緣 = 1380,右側邊距完全一致,無殘留空白。截圖:`PD-064-before-toolbar-3x.png` / `PD-064-after-toolbar-3x.png`(本目錄)。
+
+**缺口二:Up 圖示採用決策 3 的字型圖示方案**——`Segoe MDL2 Assets` `U+E74A`,與 PD-052 的 refresh(`U+E72C`)一致,完全迴避 GDI 偶數筆寬無法置中的問題。實作上把 PD-052 的 `navigation_refresh_font`/`release_navigation_refresh_font` 更名為共用的 `navigation_icon_font`/`release_navigation_icon_font`(process-lifetime lazy cache,`WM_DESTROY` 釋放),並抽出 `draw_navigation_font_glyph(item, glyph, color)` 供 up/refresh 兩分支使用。**字型建立失敗的 fallback**:原本的筆畫箭頭,直立桿 x 補償 `+pen_width/2`(決策 3 第一案),可見且對齊。**View 圖示(四方塊)未一併改字型**:使用者未反映問題,改動會擴大風險,留給 PD-075(該票本來就計畫統一五個圖示)。
+
+**像素探測實證**(100% DPI,Up 按鈕內相對座標,非背景色像素欄位):
+- 修改前:箭頭尖端 row6–10 中心 ≈ col 16,直立桿 row11–15 佔 col 15、16(中心 15.5)→ 偏左 0.5px,與票上根因一致。
+- 修改後:尖端 row6–7 與直立桿 row14–15 同為 col 15、16 → 同一中心線。6 倍對照截圖:`PD-064-before-up-6x.png` / `PD-064-after-up-6x.png`。
+
+**重大發現:tooltip 自 PD-039 起從未顯示過(既有缺陷,非本票回歸),已於本票一併修復。** 驗收 4 要求 tooltip 正常,實機 hover 卻完全沒有 tooltip;用 stash 對照舊版建置同樣沒有,確認是既有問題。根因:**PaneDock 沒有任何 application manifest,行程載入的是 comctl32 v5**;v5 的 `TTTOOLINFOW` 沒有 `lpReserved` 欄位,`TTM_ADDTOOLW` 收到 `cbSize = sizeof(TOOLINFOW)`(x64 為 72)直接拒絕並靜默回傳 FALSE,五顆按鈕的工具從未註冊成功。修法:新增 `resources/panedock.manifest`(宣告 `Microsoft.Windows.Common-Controls 6.0.0.0` side-by-side 依賴)並在 `resources/panedock.rc` 加 `1 24 "panedock.manifest"`。修復後實機 hover(滑鼠移動 + UIA 讀取)量得五個 tooltip 文字全部正確:Single pane / Two panes side by side / Two panes stacked / Three panes / Four panes;原 more-actions 位置無「More actions」tooltip。**注意:v6 同時啟用 visual styles,已比對全窗截圖,位址列圓角、tab、版型按鈕高亮(驗收 5)均無回歸。**
+
+**Disabled 顏色(驗收 7)**:以 `EnableWindow(FALSE)` + 重繪實測,Up 桿部 6×6 區域平均色 enabled = R228 G231 B233、disabled = R244 G245 B247,兩者明確不同(核心色 90,102,122 vs 190,197,209 經背景稀釋後的預期值吻合),disabled 路徑正確。
+
+**DPI 150%/200%(驗收 8):未實測**——本機只有一面 100% 縮放的螢幕,無法在不更動使用者系統設定的前提下量測。字型圖示的縮放路徑(`scaled_value(button, 16)` 的 em size + `DrawTextW` 於 DPI 縮放後的 `rcItem` 置中)與 PD-052 的 refresh 圖示完全相同,而 PD-052 交接區同樣未做 150/200% 實測;此項仍待有雙螢幕/可調縮放環境時補驗。
+
+**ClearType 備註**:字型圖示以 `CLEARTYPE_QUALITY` 建立(沿用 PD-052),6 倍放大截圖可見次像素色邊;1x 實際大小不明顯,與 refresh 一致,未另行處理。
+
+**驗收檢查全數通過**:`cmake --build build`、`ctest`(4/4)、`rg` 零筆、`git diff --check`。建置產物在 `build\pd062-output\PaneDock.exe`(非票上寫的 `build\PaneDock.exe`);截圖驗證腳本留在 `build\pd064_*.ps1`(untracked),以 `PrintWindow(PW_RENDERFULLCONTENT)` + `InterpolationMode.NearestNeighbor` + `Bitmap.GetPixel` 取色。
