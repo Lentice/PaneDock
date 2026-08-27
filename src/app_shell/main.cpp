@@ -90,6 +90,8 @@ constexpr COLORREF kTabBorder = RGB(232, 237, 242);
 constexpr int kNavigationBarHeight = 28;
 constexpr int kStatusBarHeight = 24;
 constexpr int kNavigationButtonWidth = 32;
+constexpr int kNavigationButtonOffsetX = 15;
+constexpr int kNavigationButtonOffsetY = 2;
 constexpr int kNavigationGlyphSize = 16;
 constexpr std::array<wchar_t, 5> kNavigationGlyphs{
     L'\uE72B', L'\uE72A', L'\uE74A', L'\uE72C', L'\uE80A'};
@@ -565,7 +567,8 @@ NavigationGeometry navigation_geometry(HWND window, RECT pane_rect) noexcept {
     const int pane_width = pane_rect.right - pane_rect.left;
     const int button_width = std::min(
         scaled_value(window, kNavigationButtonWidth), pane_width / 6);
-    const int address_left = pane_rect.left + button_width * 5;
+    const int button_offset_x = scaled_value(window, kNavigationButtonOffsetX);
+    const int address_left = pane_rect.left + button_width * 5 + button_offset_x;
     const RECT address_background{address_left, navigation_top,
                                   pane_rect.right,
                                   navigation_top + navigation_height};
@@ -1851,10 +1854,16 @@ HRESULT apply_layout(HWND window, AppState& state) {
                 state.back_buttons[index], state.forward_buttons[index],
                 state.up_buttons[index], state.refresh_buttons[index],
                 state.view_mode_buttons[index]};
-            int x = pane_rect.left;
+            const int button_offset_x =
+                scaled_value(window, kNavigationButtonOffsetX);
+            const int button_offset_y =
+                scaled_value(window, kNavigationButtonOffsetY);
+            const int button_height = navigation_height - button_offset_y;
+            int x = pane_rect.left + button_offset_x;
             for (HWND button : buttons) {
-                SetWindowPos(button, nullptr, x, navigation_top,
-                             geometry.button_width, navigation_height,
+                SetWindowPos(button, nullptr, x,
+                             navigation_top + button_offset_y,
+                             geometry.button_width, button_height,
                              SWP_NOZORDER | SWP_NOACTIVATE);
                 ShowWindow(button, SW_SHOW);
                 x += geometry.button_width;

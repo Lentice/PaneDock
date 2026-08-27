@@ -119,6 +119,8 @@
 | PD-079 | 檢視模式選單擴充為 8 項,對齊真實檔案總管;僅「詳細資料」顯示欄位標題(覆寫 PD-059 決策 3) | 7 | `done` | PD-059 | [PD-079](tickets/PD-079-view-mode-menu-eight-items-and-column-header.md) |
 | PD-080 | Tab 溢出捲動按鈕尺寸過大,和 tab 一樣高,改為緊湊小按鈕 | 7 | `ready` | PD-073 | [PD-080](tickets/PD-080-tab-scroll-buttons-oversized.md) |
 | PD-081 | Tab「+」按鈕手繪十字有缺角,改回字型字符繪製(覆寫 PD-062 決策 5) | 7 | `ready` | PD-062 | [PD-081](tickets/PD-081-tab-add-button-glyph-notch.md) |
+| PD-082 | Tab「+」字符位置往上微調 1px | 7 | `ready` | PD-081 | [PD-082](tickets/PD-082-tab-add-glyph-vertical-nudge.md) |
+| PD-083 | Pane 導覽列五個按鈕整排右移 15px、下移 2px | 7 | `ready` | PD-075 | [PD-083](tickets/PD-083-navigation-buttons-offset.md) |
 
 ## Dependency lanes
 
@@ -396,5 +398,14 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 - **PD-081**:tab 條「+」新增按鈕(PD-062 決策 5 才剛從字型字符改成手繪十字線段)在實機截圖上出現缺角瑕疵,使用者明確要求「用正常的字型達成,除非效能更好才用畫的」。**明確覆寫 PD-062 已確認的決策 5**(手繪加大加粗)與 PD-075 決策 9(因此把「+」列為非目標)——新證據是使用者實機截圖顯示手繪十字交會處不平整,不是風格偏好問題。預設改回字型字符渲染,只有在有實測效能數字支持時才允許保留手繪路徑,且必須先修好缺角。
 
 兩票都歸 Phase 7,分別依賴 PD-073 與 PD-062,彼此互不依賴,可平行處理。
+
+### 2026-08-27 — 使用者實機比對後提出兩個像素級位置微調,開 PD-082/083
+
+使用者直接給出精確位移量:「pane add 往上移 1px」「pane navigate buttons 往右移 15px 往下移 2px」。兩者都是實機比對後的精確數值,不是新的根因調查:
+
+- **PD-082**:tab 條「+」(PD-081 剛改成字型繪製)的字符垂直位置要再上移 1px。`state.tab_add_rects` 本身的 top 已經是 0,不能再往上也不該動(那是點擊熱區),因此只調整 `DrawTextW` 收到的 rect 複本。
+- **PD-083**:pane 導覽列的五個按鈕(back/forward/up/refresh/view)是真正的子視窗,整排右移 15px、下移 2px。追查 `navigation_geometry()` 後發現若只加位移量會有兩個副作用:地址列的 `address_left` 沒有跟著位移會被按鈕蓋到;按鈕下移若不同時縮減高度,下緣會蓋進下方 Shell view 容器 2px。本票要求兩者一併處理,維持既有的地址列/容器邊界不受影響。
+
+兩票都歸 Phase 7,分別依賴 PD-081 與 PD-075,彼此互不依賴。
 
 兩票都歸 Phase 7,PD-078 屬 core 加固,PD-079 依賴 PD-059。
