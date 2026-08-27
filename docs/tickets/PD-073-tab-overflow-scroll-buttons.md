@@ -190,3 +190,20 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-27 — implementation pass
+
+- 實作：`apply_tab_item_size` 先以 tab 最小寬度壓縮後計算 `content_width`；溢出判定為 `content_width > available`。溢出時由 `tab_strip_viewport` 保留兩顆按鈕寬度，所有 `tab_visuals` rect 以完整 tab 寬度按 `tab_scroll_offsets[pane]` 平移，繪製階段才以 `IntersectClipRect` 裁切。未溢出時 offset 為 0、按鈕 rect 為空，原有 tab/add-button 幾何路徑保持不變。
+- `clamp_tab_scroll_offset` 是所有 offset 邊界更新的共同入口，並保存每個 pane 的 max offset；最大位移為 `content_width - viewport_width`，因此最後一個 tab 的右緣會貼齊 viewport 右緣。offset 只存在 `AppState`，沒有寫入 core 或 session。
+- 左右按鈕位於 tab viewport 與 `+` 之間，按鈕 glyph 使用既有 navigation palette，disabled 色為 `RGB(190,197,209)`；每次按鈕或滾輪事件以目前可視邊緣 tab 的完整寬度前進/後退一個 tab。tab hit-test 先限制在 viewport，故不會把按鈕或 `+` 當成 tab。
+- active-tab reveal 掛在 `refresh_tab_strip` 的 active refresh 路徑；因此使用者切 tab、close/add tab、Group restore/switch、導航完成與 reorder refresh 都會讓 active tab 進入 viewport。`apply_layout` 的 resize、`WM_DPICHANGED`、layout switch 與 drag reflow 路徑使用同一套 clamp，但不會因一般 resize/滾輪而強制跳回 active tab。
+- 新增 `src/app_shell/tab_overflow.h` 與 `tests/unit/tab_overflow_test.cpp`，focused test 以 `static_assert` 覆蓋未溢出、溢出按鈕佔位及 offset 的 lower/inside/upper clamp；Debug app-shell 路徑另有每個 visual rect 寬度等於計算寬度的 assertion。header 不包含 HWND、COM 或 `windows.h`。
+
+Agent evidence:
+
+- `cmake --build build`：成功，LLVM-MinGW `E:\Dev\LLVM-MinGW\bin\clang++.exe` 編譯並連結 `PaneDock.exe` 與 `panedock_tab_overflow_test.exe`。
+- `ctest --test-dir build --output-on-failure`：5/5 passed，包含 `panedock_tab_overflow`。
+- `rg -n "apply_tab_item_size|tab_item_at_point|tab_add_rects|WM_MOUSEWHEEL" src\app_shell\main.cpp`：確認 `apply_tab_item_size` 的呼叫點涵蓋 `refresh_tab_strip`、`apply_layout`、`scroll_tab_strip`、`cancel_tab_drag`、`finish_tab_drag`、`update_tab_drag`；`tab_item_at_point` 與 `WM_MOUSEWHEEL` 均在 tab strip 路徑。
+- `git diff --check`：成功，沒有 whitespace error。
+
+驗證邊界：依本票指定的 single click + screenshot 政策，本次沒有建立 15 個 tab，也沒有執行重複點擊、滾輪序列、拖曳、Group/layout/resize/DPI 操作或 10 秒 idle measurement；因此 Acceptance 1、2、2a、3、4、5、6、7、8、9、10 均明確未驗證。沒有宣稱 direct `tab_visuals` dump、4× `PrintWindow(PW_RENDERFULLCONTENT)` screenshot、實際第 15 個 tab navigation 或 CPU/disk evidence；需由人類在桌面上以短操作補驗後，才可將 tracker 狀態改為 done。

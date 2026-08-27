@@ -33,6 +33,7 @@
 #include <wrl/client.h>
 
 #include "app_shell/diagnostic_mode.h"
+#include "app_shell/tab_overflow.h"
 #include "core/layout.h"
 #include "core/model.h"
 #include "core/session.h"
@@ -57,6 +58,8 @@ constexpr UINT kTabStripSelectionMessage = WM_APP + 49;
 constexpr int kTabMinWidth = 72;
 constexpr int kTabMaxWidth = 200;
 constexpr int kTabAddButtonWidth = 36;
+// PD-073: reserved only while the tab content overflows its viewport.
+constexpr int kTabScrollButtonWidth = 28;
 // PD-062: independent 96-DPI tab visual metrics. Gap is split across the
 // two sides of each tab; text padding is inside the rounded tab; vertical
 // padding is independent so the tab row can grow without changing either.
@@ -368,6 +371,11 @@ struct AppState {
     std::array<std::vector<TabVisual>, kExplorerCount> tab_visuals{};
     std::array<std::optional<RECT>, kExplorerCount> tab_placeholder_rects{};
     std::array<RECT, kExplorerCount> tab_add_rects{};
+    // PD-073: UI-only scroll state; never persisted with the session.
+    std::array<std::array<RECT, 2>, kExplorerCount>
+        tab_scroll_button_rects{};
+    std::array<int, kExplorerCount> tab_scroll_offsets{};
+    std::array<int, kExplorerCount> tab_scroll_max_offsets{};
     // A tab index is stored here; pane.tabs.size() represents the add button.
     std::array<std::optional<std::size_t>, kExplorerCount> tab_hover_indices{};
     // PD-040: one clipping container child window per pane, sitting between
@@ -1113,7 +1121,20 @@ std::wstring tab_display_text(const panedock::core::TabState& tab) {
     return parsing_name.substr(separator + 1);
 }
 
-void apply_tab_item_size(AppState& state, std::size_t pane_index) {
+int clamp_tab_scroll_offset(AppState& state, std::size_t pane_index,
+                            int requested, int content_width,
+                            int viewport_width) noexcept {
+    const int maximum = std::max(
+        0, content_width - viewport_width);
+    state.tab_scroll_max_offsets[pane_index] = maximum;
+    state.tab_scroll_offsets[pane_index] =
+        panedock::app_shell::clamp_tab_scroll_offset(
+            requested, content_width, viewport_width);
+    return state.tab_scroll_offsets[pane_index];
+}
+
+void apply_tab_item_size(AppState& state, std::size_t pane_index,
+                         bool reveal_active = false) {
     if (pane_index >= state.tab_strips.size()) return;
     const HWND strip = state.tab_strips[pane_index];
     RECT client{};
@@ -1149,6 +1170,21 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index) {
         for (int& width : widths)
             width = std::max(min_width, MulDiv(width, available, total));
     }
+    const int content_width = std::accumulate(widths.begin(), widths.end(), 0);
+    const auto viewport = panedock::app_shell::tab_strip_viewport(
+        content_width, available, scaled_value(strip, kTabScrollButtonWidth));
+    state.tab_add_rects[pane_index] = {
+        available, 0, client.right, client.bottom};
+    state.tab_scroll_button_rects[pane_index] = {};
+    if (viewport.overflow && viewport.scroll_button_width > 0) {
+        const int button_left = viewport.width;
+        state.tab_scroll_button_rects[pane_index][0] = {
+            button_left, 0, button_left + viewport.scroll_button_width,
+            client.bottom};
+        state.tab_scroll_button_rects[pane_index][1] = {
+            button_left + viewport.scroll_button_width, 0, available,
+            client.bottom};
+    }
     std::vector<std::size_t> order(visuals.size());
     std::iota(order.begin(), order.end(), 0);
     if (state.tab_drag.has_value() && state.tab_drag->dragging &&
@@ -1160,12 +1196,45 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index) {
         order.erase(order.begin() + source);
         order.insert(order.begin() + *state.tab_drag->target_index, source);
     }
+
+    std::optional<std::size_t> active_index;
+    if (reveal_active && has_active_group(state) &&
+        pane_index < active_group(state).panes.size()) {
+        const auto& pane = active_group(state).panes[pane_index];
+        for (std::size_t index = 0; index < pane.tabs.size(); ++index) {
+            if (pane.tabs[index].id == pane.active_tab_id) {
+                active_index = index;
+                break;
+            }
+        }
+    }
+    int active_left = 0;
+    int active_right = 0;
+    int content_x = 0;
+    if (active_index.has_value()) {
+        for (const std::size_t index : order) {
+            if (index == *active_index) {
+                active_left = content_x;
+                active_right = content_x + widths[index];
+                break;
+            }
+            content_x += widths[index];
+        }
+    }
+    int requested_offset = state.tab_scroll_offsets[pane_index];
+    if (active_index.has_value()) {
+        if (active_left < requested_offset)
+            requested_offset = active_left;
+        else if (active_right > requested_offset + viewport.width)
+            requested_offset = active_right - viewport.width;
+    }
+    const int scroll_offset = clamp_tab_scroll_offset(
+        state, pane_index, requested_offset, content_width, viewport.width);
     int x = 0;
     for (const std::size_t index : order) {
         const int width = widths[index];
-        const int left = std::min(x, available);
-        const int right = std::max(left, std::min(x + width, available));
-        const RECT rect{left, 0, right, client.bottom};
+        const RECT rect{x - scroll_offset, 0, x + width - scroll_offset,
+                        client.bottom};
         if (state.tab_drag.has_value() && state.tab_drag->dragging &&
             state.tab_drag->pane_index == pane_index &&
             state.tab_drag->target_index.has_value() &&
@@ -1177,9 +1246,14 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index) {
         }
         x += width;
     }
-    state.tab_add_rects[pane_index] = {
-        std::max(0, static_cast<int>(client.right) - add_width), 0,
-        client.right, client.bottom};
+#ifndef NDEBUG
+    for (std::size_t index = 0; index < visuals.size(); ++index) {
+        const RECT& rect = visuals[index].rect;
+        const bool empty = rect.left == 0 && rect.top == 0 &&
+                           rect.right == 0 && rect.bottom == 0;
+        assert(empty || rect.right - rect.left == widths[index]);
+    }
+#endif
     InvalidateRect(strip, nullptr, FALSE);
 }
 
@@ -1197,7 +1271,7 @@ void refresh_tab_strip(AppState& state, std::size_t pane_index) {
     const auto& pane = active_group(state).panes[pane_index];
     for (const auto& tab : pane.tabs)
         state.tab_visuals[pane_index].push_back({tab_display_text(tab), {}});
-    apply_tab_item_size(state, pane_index);
+    apply_tab_item_size(state, pane_index, true);
     refresh_navigation_chrome(state, pane_index);
 }
 
@@ -2338,6 +2412,13 @@ void close_tab_at_point(HWND window, AppState& state, POINT point) {
     close_tab_in_pane(window, state, pane_index, id);
 }
 
+RECT tab_viewport_rect(const AppState& state, std::size_t pane_index) noexcept {
+    const RECT add = state.tab_add_rects[pane_index];
+    const RECT back = state.tab_scroll_button_rects[pane_index][0];
+    const int right = back.right > back.left ? back.left : add.left;
+    return {0, 0, right, add.bottom};
+}
+
 std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
                                              POINT point) noexcept {
     const auto pane_index = tab_strip_index(state, strip);
@@ -2345,6 +2426,8 @@ std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
         *pane_index >= active_group(state).panes.size()) {
         return std::nullopt;
     }
+    const RECT viewport = tab_viewport_rect(state, *pane_index);
+    if (!PtInRect(&viewport, point)) return std::nullopt;
     if (state.tab_drag.has_value() && state.tab_drag->strip == strip &&
         state.tab_drag->target_index.has_value() &&
         state.tab_placeholder_rects[*pane_index].has_value() &&
@@ -2354,6 +2437,44 @@ std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
     for (std::size_t index = 0; index < visuals.size(); ++index)
         if (PtInRect(&visuals[index].rect, point)) return index;
     return std::nullopt;
+}
+
+int tab_scroll_step(const AppState& state, std::size_t pane_index,
+                    bool forward) noexcept {
+    const RECT viewport = tab_viewport_rect(state, pane_index);
+    const auto& visuals = state.tab_visuals[pane_index];
+    auto width_if_visible = [&viewport](const AppState::TabVisual& visual) {
+        if (visual.rect.right <= visual.rect.left ||
+            visual.rect.right <= viewport.left ||
+            visual.rect.left >= viewport.right) return 0;
+        return static_cast<int>(visual.rect.right - visual.rect.left);
+    };
+    int edge = forward ? std::numeric_limits<int>::max()
+                       : std::numeric_limits<int>::min();
+    int step = 0;
+    for (const auto& visual : visuals) {
+        const int width = width_if_visible(visual);
+        if (width <= 0) continue;
+        const int candidate = forward ? visual.rect.left : visual.rect.right;
+        if ((forward && candidate < edge) || (!forward && candidate > edge)) {
+            edge = candidate;
+            step = width;
+        }
+    }
+    return step;
+}
+
+void scroll_tab_strip(AppState& state, std::size_t pane_index, bool forward) {
+    if (pane_index >= state.tab_scroll_offsets.size() ||
+        state.tab_scroll_max_offsets[pane_index] <= 0) return;
+    const int offset = state.tab_scroll_offsets[pane_index];
+    const int maximum = state.tab_scroll_max_offsets[pane_index];
+    if ((!forward && offset <= 0) || (forward && offset >= maximum)) return;
+    const int step = tab_scroll_step(state, pane_index, forward);
+    if (step <= 0) return;
+    state.tab_scroll_offsets[pane_index] =
+        offset + (forward ? step : -step);
+    apply_tab_item_size(state, pane_index);
 }
 
 void cancel_tab_drag(AppState& state, HWND strip) noexcept {
@@ -2417,6 +2538,34 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
     apply_tab_item_size(state, state.tab_drag->pane_index);
 }
 
+void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
+                            bool forward, bool disabled) noexcept {
+    if (rect.right <= rect.left || rect.bottom <= rect.top) return;
+    HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));
+    if (background != nullptr) {
+        FillRect(dc, &rect, background);
+        DeleteObject(background);
+    }
+    const int half = std::max(
+        2, std::min(scaled_value(window, 8),
+                    std::min(static_cast<int>(rect.right - rect.left),
+                             static_cast<int>(rect.bottom - rect.top)) /
+                        2));
+    const int center_x = (rect.left + rect.right) / 2;
+    const int center_y = (rect.top + rect.bottom) / 2;
+    const int direction = forward ? 1 : -1;
+    const COLORREF color =
+        disabled ? RGB(190, 197, 209) : RGB(90, 102, 122);
+    HPEN pen = CreatePen(PS_SOLID, scaled_value(window, 1), color);
+    if (pen == nullptr) return;
+    const HGDIOBJ old_pen = SelectObject(dc, pen);
+    MoveToEx(dc, center_x - direction * half, center_y - half, nullptr);
+    LineTo(dc, center_x + direction * half, center_y);
+    LineTo(dc, center_x - direction * half, center_y + half);
+    SelectObject(dc, old_pen);
+    DeleteObject(pen);
+}
+
 void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
                      HDC dc) noexcept {
     RECT client{};
@@ -2436,6 +2585,10 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
     const int border_width = scaled_value(window, 1);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(31, 41, 55));
+    const RECT viewport = tab_viewport_rect(state, pane_index);
+    const int saved_dc = SaveDC(dc);
+    IntersectClipRect(dc, viewport.left, viewport.top, viewport.right,
+                      viewport.bottom);
     for (std::size_t index = 0; index < visuals.size(); ++index) {
         if (state.tab_drag.has_value() && state.tab_drag->dragging &&
             state.tab_drag->pane_index == pane_index &&
@@ -2494,6 +2647,17 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
         if (fill != nullptr) DeleteObject(fill);
         if (border != nullptr) DeleteObject(border);
     }
+    if (saved_dc != 0) RestoreDC(dc, saved_dc);
+    const auto& scroll_buttons = state.tab_scroll_button_rects[pane_index];
+    if (scroll_buttons[0].right > scroll_buttons[0].left) {
+        draw_tab_scroll_button(
+            window, dc, scroll_buttons[0], false,
+            state.tab_scroll_offsets[pane_index] <= 0);
+        draw_tab_scroll_button(
+            window, dc, scroll_buttons[1], true,
+            state.tab_scroll_offsets[pane_index] >=
+                state.tab_scroll_max_offsets[pane_index]);
+    }
     RECT add = state.tab_add_rects[pane_index];
     RECT hover = add;
     const int add_inset = scaled_value(window, 5);
@@ -2543,9 +2707,26 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         }
         if (message == WM_ERASEBKGND) return 1;
+        if (message == WM_MOUSEWHEEL && has_active_group(*state) &&
+            pane_index < active_group(*state).panes.size()) {
+            const int delta = GET_WHEEL_DELTA_WPARAM(wparam);
+            if (delta != 0)
+                scroll_tab_strip(*state, pane_index, delta < 0);
+            return 0;
+        }
         if (message == WM_LBUTTONDOWN && has_active_group(*state) &&
             pane_index < active_group(*state).panes.size()) {
             const POINT point = point_from_lparam(lparam);
+            const auto& scroll_buttons =
+                state->tab_scroll_button_rects[pane_index];
+            if (PtInRect(&scroll_buttons[0], point)) {
+                scroll_tab_strip(*state, pane_index, false);
+                return 0;
+            }
+            if (PtInRect(&scroll_buttons[1], point)) {
+                scroll_tab_strip(*state, pane_index, true);
+                return 0;
+            }
             const auto item = tab_item_at_point(*state, window, point);
             if (item.has_value()) {
                 const auto& tabs = active_group(*state).panes[pane_index].tabs;
