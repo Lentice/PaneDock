@@ -82,4 +82,40 @@ rg -n "draw_tab_scroll_button" src/app_shell/main.cpp
 
 ## 交接區
 
-（實作完成後由實作者填寫）
+### 新函式最終簽名(`src/app_shell/tab_overflow.h`)
+
+```cpp
+struct TabScrollButtonVisual final {  // left/top/right/bottom + width()/height()
+constexpr TabScrollButtonVisual tab_scroll_button_visual(
+    int rect_left, int rect_top, int rect_right, int rect_bottom,
+    int visual_width, int visual_height, int visual_offset_x,
+    int visual_offset_y, bool forward) noexcept;
+constexpr int tab_scroll_button_corner_radius(int requested_radius,
+                                              int visual_width,
+                                              int visual_height) noexcept;
+constexpr int tab_scroll_button_glyph_half(int requested_half,
+                                           int visual_width,
+                                           int visual_height) noexcept;
+struct TabScrollButtonGlyph final {  // start_x/y, tip_x/y, end_x/y
+constexpr TabScrollButtonGlyph tab_scroll_button_glyph(
+    const TabScrollButtonVisual& visual, int half, bool forward) noexcept;
+```
+
+分組理由:圓角半徑與 glyph half 兩個夾住式計算保持獨立函式(而非併入 `tab_scroll_button_visual`),因為它們各自的 requested 值來自不同常數(`kTabScrollButtonCornerRadius`、`kTabScrollButtonGlyphHalf`),合併會讓單一函式吃 2 個額外參數並回傳一個混合結構,反而比現有 `tab_overflow.h` 的函式粒度更粗。`TabScrollButtonVisual` 提供 `width()`/`height()`,讓這兩個函式的呼叫端不必自行重算寬高。所有輸入都是呼叫端已經 DPI 縮放過的值,函式本身不含任何 HWND/HDC/COM 相依。
+
+`RECT` 未出現在 `tab_overflow.h`(維持不 include `windows.h`),改由呼叫端把 `rect.left/top/right/bottom` 以 `static_cast<int>` 傳入;`TabScrollButtonVisual` 的欄位刻意沿用 `left/top/right/bottom` 命名,讓原本的 `RoundRect(dc, visual.left, ...)` 呼叫完全不必改。
+
+### 顏色決策
+
+**未抽出**,留在 `main.cpp`。理由:它們是兩個單行三元運算式,直接產生 `COLORREF` 並立刻餵給 `CreateSolidBrush`/`CreatePen`;抽到 `tab_overflow.h` 會需要引入 `COLORREF`(來自 `windows.h`)或自訂等價顏色型別再轉換,兩者都比原地一行更複雜,不符合本票「最小改動、不新增抽象」的限制。本票核心目標(幾何計算可 `static_assert` 驗證)不受影響。
+
+### 驗證結果
+
+- `cmake --build build`:通過(僅 `main.cpp` 需重編 + 連結 `PaneDock.exe`)。
+- `ctest --test-dir build --output-on-failure`:5/5 全數通過,`panedock_tab_overflow` 含本票新增的 20 條 `static_assert`(forward、非 forward、視覺尺寸大於 hit-test rect 被夾住、以及 glyph half 下限 2 的邊界案例)。
+- `git diff --check`:通過(exit 0)。
+- `rg -n "draw_tab_scroll_button" src/app_shell/main.cpp`:定義在 2672,兩個呼叫點在 2822、2826,均未被改動。
+
+### 額外視覺驗證
+
+**無**。依本票 Agent Checks 的規定,這是機械式純重構,以 diff 比對確認等價即可:抽出的三段計算式與原本 `main.cpp:2676-2692`、`2701-2703`、`2713-2726` 逐項相同(僅把區域變數改為結構欄位、把 `visual_width`/`visual_height` 改為 `visual.width()`/`visual.height()`,兩者都等於原本已夾住的值),同樣輸入必然產生相同的視覺矩形、圓角半徑與箭頭端點座標。

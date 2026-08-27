@@ -2673,23 +2673,12 @@ void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
                             bool forward, bool disabled,
                             bool hovered) noexcept {
     if (rect.right <= rect.left || rect.bottom <= rect.top) return;
-    const int width = static_cast<int>(rect.right - rect.left);
-    const int height = static_cast<int>(rect.bottom - rect.top);
-    const int visual_width = std::min(
-        scaled_value(window, kTabScrollButtonVisualWidth), width);
-    const int visual_height = std::min(
-        scaled_value(window, kTabScrollButtonVisualHeight), height);
-    // The two hit-test rects are adjacent. Inset them toward their shared edge
-    // so the compact visual buttons stay together in the middle, nudged
-    // slightly toward the add button and down per user pixel feedback.
-    const int visual_offset_x = scaled_value(window, 6);
-    const int visual_offset_y = scaled_value(window, 1);
-    const int visual_top =
-        rect.top + (height - visual_height) / 2 + visual_offset_y;
-    const int visual_left =
-        (forward ? rect.left : rect.right - visual_width) + visual_offset_x;
-    const RECT visual{visual_left, visual_top, visual_left + visual_width,
-                      visual_top + visual_height};
+    const auto visual = panedock::app_shell::tab_scroll_button_visual(
+        static_cast<int>(rect.left), static_cast<int>(rect.top),
+        static_cast<int>(rect.right), static_cast<int>(rect.bottom),
+        scaled_value(window, kTabScrollButtonVisualWidth),
+        scaled_value(window, kTabScrollButtonVisualHeight),
+        scaled_value(window, 6), scaled_value(window, 1), forward);
     const COLORREF background_color =
         !disabled && hovered ? RGB(236, 240, 244) : RGB(255, 255, 255);
     HBRUSH background = CreateSolidBrush(background_color);
@@ -2698,9 +2687,9 @@ void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
     if (background != nullptr && border != nullptr) {
         const HGDIOBJ old_brush = SelectObject(dc, background);
         const HGDIOBJ old_pen = SelectObject(dc, border);
-        const int radius = std::min(
+        const int radius = panedock::app_shell::tab_scroll_button_corner_radius(
             scaled_value(window, kTabScrollButtonCornerRadius),
-            std::min(visual_width, visual_height) / 2);
+            visual.width(), visual.height());
         RoundRect(dc, visual.left, visual.top, visual.right, visual.bottom,
                   radius, radius);
         SelectObject(dc, old_pen);
@@ -2710,20 +2699,20 @@ void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
         DeleteObject(background);
     }
     if (border != nullptr) DeleteObject(border);
-    const int half = std::max(
-        2, std::min(scaled_value(window, kTabScrollButtonGlyphHalf),
-                    std::min(visual_width, visual_height) / 2));
-    const int center_x = (visual.left + visual.right) / 2;
-    const int center_y = (visual.top + visual.bottom) / 2;
-    const int direction = forward ? 1 : -1;
+    const auto glyph = panedock::app_shell::tab_scroll_button_glyph(
+        visual,
+        panedock::app_shell::tab_scroll_button_glyph_half(
+            scaled_value(window, kTabScrollButtonGlyphHalf), visual.width(),
+            visual.height()),
+        forward);
     const COLORREF color =
         disabled ? RGB(190, 197, 209) : RGB(90, 102, 122);
     HPEN pen = CreatePen(PS_SOLID, scaled_value(window, 1), color);
     if (pen == nullptr) return;
     const HGDIOBJ old_pen = SelectObject(dc, pen);
-    MoveToEx(dc, center_x - direction * half, center_y - half, nullptr);
-    LineTo(dc, center_x + direction * half, center_y);
-    LineTo(dc, center_x - direction * half, center_y + half);
+    MoveToEx(dc, glyph.start_x, glyph.start_y, nullptr);
+    LineTo(dc, glyph.tip_x, glyph.tip_y);
+    LineTo(dc, glyph.end_x, glyph.end_y);
     SelectObject(dc, old_pen);
     DeleteObject(pen);
 }
