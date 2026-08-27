@@ -74,4 +74,15 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作完成後由實作者填寫）
+- 實作：`src/app_shell/main.cpp` 新增 `WM_APP + 52` 的一次性 deferred-realize 訊息與 generation token。啟動 pending 期間，`apply_layout()` 只同步 realize active pane；其餘可見 pane 在啟動警告對話框結束、`UpdateWindow()` 已完成後由 posted message 一次完成。關閉與系統結束會使 pending message 失效；`PostMessageW` 失敗時採同步 fallback，避免留下未 realize 的 pane。
+- 實作：`SHAutoComplete` 已從控制項建立迴圈移至 `ExplorerHost::initialize()` 成功且 pane 標記為 realized 之後，因此非 active pane 不會在啟動期間提前呼叫。`src/explorer_host/explorer_host.cpp` 未修改。
+- Agent Checks：
+  - `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`：通過。
+  - `cmake --build build`：通過，重新編譯並連結 `PaneDock.exe`。
+  - `ctest --test-dir build --output-on-failure`：通過，5/5 tests passed。
+  - `git diff --check`：通過。
+- Acceptance Criteria：
+  - AC-001：未由 Agent 在實機重現離線 UNC／網路路徑並量測冷啟動；依票據驗證政策留給使用者驗證主視窗先顯示且可互動。
+  - AC-002：已由 source inspection 確認 deferred path 重用同一個 `apply_layout()`，只改變 realize 時機；未由 Agent 執行 live Shell view 的視覺 regression，留給使用者驗證。
+  - AC-003：已由 source inspection 確認 `SHAutoComplete` 僅位於成功 realize 路徑，並會隨 deferred pane 一起延後；未做實機 API 呼叫計時，留給使用者按需確認。
+  - AC-004：上述 configure、build、ctest 全部通過。

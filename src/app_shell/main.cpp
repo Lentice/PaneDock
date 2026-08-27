@@ -52,6 +52,8 @@ constexpr ULONGLONG kSingleInstanceWindowRetryTimeoutMs = 5000;
 constexpr UINT kActivateExistingInstanceMessage = WM_APP + 50;
 // PD-090: run drag-hover callbacks after the WM_TIMER handler returns.
 constexpr UINT kDragHoverMessage = WM_APP + 51;
+// PD-093: realize non-active startup panes after the first window paint.
+constexpr UINT kDeferredRealizeMessage = WM_APP + 52;
 // PD-091: coalesce navigation completions without keeping a polling timer.
 constexpr UINT kSessionSaveDelayMilliseconds = 500;
 constexpr UINT_PTR kSessionSaveTimerId = 0xD050;
@@ -384,6 +386,10 @@ struct Splitter {
 struct AppState {
     std::array<panedock::explorer_host::ExplorerHost, kExplorerCount> explorers;
     std::array<bool, kExplorerCount> realized{};
+    // PD-093: startup shows the active Shell view first; the posted message
+    // realizes the remaining visible panes after the window is interactive.
+    bool startup_realize_pending{};
+    UINT_PTR startup_realize_generation{};
     panedock::core::ApplicationState application;
     panedock::core::SessionDocument session_document;
     std::filesystem::path session_directory;
@@ -1879,7 +1885,8 @@ void destroy_explorers(AppState& state) noexcept {
     write_live_view_count();
 }
 
-HRESULT apply_layout(HWND window, AppState& state) {
+HRESULT apply_layout(HWND window, AppState& state,
+                     bool realize_deferred_panes = false) {
     layout_sidebar(window, state);
     layout_header(window, state);
     InvalidateRect(window, nullptr, TRUE);
@@ -1904,6 +1911,7 @@ HRESULT apply_layout(HWND window, AppState& state) {
     ShowWindow(state.empty_message, SW_HIDE);
     auto& group = active_group(state);
     const auto rects = layout_rects(window, group);
+    const std::size_t active = active_pane_index(group);
     const UINT dpi = GetDpiForWindow(window);
     const int container_radius = pane_card_radius(dpi);
     struct LayoutFailure final {
@@ -2000,7 +2008,9 @@ HRESULT apply_layout(HWND window, AppState& state) {
                                         container_width, container_height,
                                         container_radius);
             const RECT local_rect{0, 0, container_width, container_height};
-            if (!state.realized[index]) {
+            if (!state.realized[index] &&
+                (realize_deferred_panes || !state.startup_realize_pending ||
+                 index == active)) {
                 const HRESULT hr = state.explorers[index].initialize(
                     state.explorer_containers[index], local_rect,
                     active_tab(group.panes[index]).location.parsing_name);
@@ -2010,6 +2020,8 @@ HRESULT apply_layout(HWND window, AppState& state) {
                     continue;
                 }
                 state.realized[index] = true;
+                (void)SHAutoComplete(state.address_bars[index],
+                                     SHACF_FILESYS_DIRS);
                 try {
                     state.explorers[index].set_navigation_callback(
                         [&state, index](std::wstring_view new_location) {
@@ -3264,6 +3276,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
 
     switch (message) {
         case WM_CREATE: {
+            state->startup_realize_pending = true;
             INITCOMMONCONTROLSEX controls{
                 sizeof(controls), ICC_TAB_CLASSES | ICC_WIN95_CLASSES};
             if (!InitCommonControlsEx(&controls)) return -1;
@@ -3406,8 +3419,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                        address_edit_proc, index,
                                        reinterpret_cast<DWORD_PTR>(state)))
                     return -1;
-                (void)SHAutoComplete(state->address_bars[index],
-                                     SHACF_FILESYS_DIRS);
                 state->status_bars[index] = CreateWindowExW(
                     0, L"STATIC", L"",
                     WS_CHILD | WS_CLIPSIBLINGS | SS_OWNERDRAW,
@@ -3437,6 +3448,18 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 destroy_explorers(*state);
                 return -1;
             }
+            return 0;
+        }
+        case kDeferredRealizeMessage: {
+            if (state == nullptr || !state->startup_realize_pending ||
+                static_cast<UINT_PTR>(lparam) !=
+                    state->startup_realize_generation)
+                return 0;
+            const HRESULT hr = apply_layout(window, *state, true);
+            state->startup_realize_pending = false;
+            if (FAILED(hr))
+                OutputDebugStringW(
+                    L"PaneDock: deferred Shell view realization failed\n");
             return 0;
         }
         case kTabStripSelectionMessage:
@@ -3878,6 +3901,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         case WM_CLOSE:
             if (state != nullptr) {
+                state->startup_realize_pending = false;
+                ++state->startup_realize_generation;
                 revoke_drag_hover_targets(*state);
                 cancel_session_save_timer(*state);
                 capture_window_placement(window, *state);
@@ -3889,6 +3914,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         case WM_DESTROY:
             if (state != nullptr) {
+                state->startup_realize_pending = false;
+                ++state->startup_realize_generation;
                 revoke_drag_hover_targets(*state);
                 cancel_session_save_timer(*state);
                 if (state->session_dirty) {
@@ -3916,7 +3943,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return TRUE;
         case WM_ENDSESSION:
             if (wparam) {
-                if (state != nullptr) destroy_explorers(*state);
+                if (state != nullptr) {
+                    state->startup_realize_pending = false;
+                    ++state->startup_realize_generation;
+                    destroy_explorers(*state);
+                }
             }
             return 0;
         default: break;
@@ -4112,6 +4143,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             L"happening, start it with --diagnostic to run without "
             L"third-party shell extensions.",
             L"PaneDock", MB_OK | MB_ICONWARNING);
+    }
+    if (state.startup_realize_pending) {
+        const UINT_PTR generation = ++state.startup_realize_generation;
+        if (!PostMessageW(window, kDeferredRealizeMessage, 0,
+                          static_cast<LPARAM>(generation))) {
+            OutputDebugStringW(
+                L"PaneDock: could not queue deferred Shell view realization\n");
+            state.startup_realize_pending = false;
+            ++state.startup_realize_generation;
+            if (FAILED(apply_layout(window, state)))
+                OutputDebugStringW(
+                    L"PaneDock: fallback Shell view realization failed\n");
+        }
     }
     MSG message{};
     int result = 0;
