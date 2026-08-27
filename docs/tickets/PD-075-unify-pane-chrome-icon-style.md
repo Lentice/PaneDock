@@ -146,3 +146,16 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-27 實作交接
+
+- 最終 glyph table：Back `U+E72B`、Forward `U+E72A`、Up `U+E74A`、Refresh `U+E72C`、View/Grid `U+E80A`。前四個沿用 ticket 首選與 PD-064/PD-052 已實機採用的字符；View 選 `U+E80A` 是因為它保留原本四方塊 grid 的語意。備選字符（Back ``/``、Forward ``/``、Up ``/``、View ``/``）沒有在本次第二輪實機比較中逐一渲染，因此記錄為未選而不是宣稱「視覺否決」或「字型不存在」；本次只保留一張核心 UI 證據截圖。
+- `draw_navigation_icon_button` 現在只做 glyph table lookup、共用 `navigation_icon_font`，再走一次 `DrawTextW`；字面基準是 `kNavigationGlyphSize = 16`，font failure 或 `DrawTextW` 失敗時統一轉入 `draw_navigation_fallback_glyph`，五個 `glyph_kind` 都有 fallback。`WM_DPICHANGED` 先釋放共用 font，下一次繪製依新的 `scaled_value(button, 16)` lazy 建立。
+- 單次目前桌面截圖（視窗顯示五個導覽 glyph）及 4× nearest-neighbor 放大檔：[PD-075-after-nav-icons-4x.png](assets/PD-075-after-nav-icons-4x.png)。視覺上五個 glyph 均可見，Back/Forward 的淡色是當時 disabled 狀態。
+- 顏色設定值統一為 enabled `RGB(90, 102, 122)`、disabled `RGB(190, 197, 209)`，五個按鈕共用同一段選色程式碼。實際 `Bitmap.GetPixel` exact-match 取色未能作為 PASS：目標 HWND 位於 Computer Use desktop，PowerShell 無法取得/列舉它，`PrintWindow(PW_RENDERFULLCONTENT)` 回傳失敗；改存同一張 Computer Use screenshot，故不宣稱驗收 2/3 已通過。
+- ImageList 清除證據：修改前 `git grep -n -E "navigation_history_image_list|ILD_BLEND50|HIST_BACK|HIST_FORWARD" HEAD -- src` 命中 7 行（672、682、683、745、751、754、3654）；修改後 `rg -n "navigation_history_image_list|ILD_BLEND50|HIST_BACK|HIST_FORWARD" src` 為 0 筆。`navigation_refresh_font` 亦為 0 筆。
+- fallback 未強制注入或截圖驗證；使用者限定本次只做一次單擊/截圖，不進行改名 font、重繪或多步驟互動。因此 fallback 的程式碼路徑已建置，但實機證據仍待後續專門驗證。
+- DPI：已保留 96-DPI 基準的單次畫面截圖；未切換 150% 或其他高 DPI 設定，故高 DPI 截圖與跨 DPI 實機結果未驗證。GDI `GetGuiResources(GR_GDIOBJECTS)` 前後對照也未量測；程式碼層面 `WM_DESTROY` 釋放共用 HFONT，fallback pen 在 helper 內 `DeleteObject`。
+- 決策 8 的已知差異保留：`draw_layout_glyph` 仍使用 1px 手繪版型示意圖，而 pane 導覽列正常路徑改為 Segoe MDL2 字型 glyph（不再以 2px 手繪描邊）；版型示意圖沒有可替代的字型字符，本票不處理。該差異已存在於 `docs/tickets.md` 的候選項目。
+- 與 PD-064 的關係：PD-064 已把 Up 定為 `U+E74A` 並建立共用 `navigation_icon_font`；本票是接續該決策，將 Back/Forward/View 收進同一字型路徑，Refresh 繼續使用 PD-052 的 `U+E72C`，沒有覆寫 Up。
+- 驗證結果：LLVM-MinGW/Ninja configure、`cmake --build build`、`ctest --test-dir build --output-on-failure`（5/5）通過；尚未滿足所有實機驗收條件，因此 `docs/tickets.md` 的 PD-075 狀態維持 `ready`。

@@ -75,6 +75,9 @@ constexpr int kTabPlusLineWidth = 2;
 constexpr int kNavigationBarHeight = 28;
 constexpr int kStatusBarHeight = 24;
 constexpr int kNavigationButtonWidth = 32;
+constexpr int kNavigationGlyphSize = 16;
+constexpr std::array<wchar_t, 5> kNavigationGlyphs{
+    L'\uE72B', L'\uE72A', L'\uE74A', L'\uE72C', L'\uE80A'};
 // PD-031: rounded light-gray pill drawn behind the address bar EDIT to fake
 // a rounded input box (see docs/tickets/PD-031-*.md decision 2). Radius is
 // smaller than the design mock's 6px .location radius because the fixed
@@ -669,31 +672,14 @@ void draw_layout_segment_background(HDC dc, RECT rect, UINT dpi) noexcept {
     if (fill != nullptr) DeleteObject(fill);
 }
 
-HIMAGELIST& navigation_history_image_list() noexcept {
-    static HIMAGELIST image_list = nullptr;
-    if (image_list == nullptr) {
-        image_list = ImageList_LoadImageW(
-            HINST_COMMCTRL, MAKEINTRESOURCEW(IDB_HIST_SMALL_COLOR), 16, 0,
-            CLR_DEFAULT, IMAGE_BITMAP, LR_DEFAULTCOLOR | LR_CREATEDIBSECTION);
-    }
-    return image_list;
-}
-
-void release_navigation_history_image_list() noexcept {
-    HIMAGELIST& image_list = navigation_history_image_list();
-    if (image_list != nullptr) {
-        ImageList_Destroy(image_list);
-        image_list = nullptr;
-    }
-}
-
 // PD-052 (refresh) and PD-064 (up) both use the platform icon font: hand-drawn
 // GDI geometry could not be centered for even pen widths, while the font glyph
 // is always optically centered by DrawText's DT_CENTER | DT_VCENTER.
 HFONT& navigation_icon_font(HWND button) noexcept {
     static HFONT font = nullptr;
     if (font == nullptr && button != nullptr) {
-        font = CreateFontW(-std::max(1, scaled_value(button, 16)), 0, 0, 0,
+        font = CreateFontW(
+            -std::max(1, scaled_value(button, kNavigationGlyphSize)), 0, 0, 0,
                            FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
@@ -720,48 +706,19 @@ bool draw_navigation_font_glyph(const DRAWITEMSTRUCT& item, wchar_t glyph,
     const int old_bk_mode = SetBkMode(item.hDC, TRANSPARENT);
     const COLORREF old_text_color = SetTextColor(item.hDC, color);
     RECT glyph_rect = item.rcItem;
-    DrawTextW(item.hDC, &glyph, 1, &glyph_rect,
-              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    const int drawn = DrawTextW(item.hDC, &glyph, 1, &glyph_rect,
+                                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SetTextColor(item.hDC, old_text_color);
     SetBkMode(item.hDC, old_bk_mode);
     SelectObject(item.hDC, old_font);
-    return true;
+    return drawn != 0;
 }
 
-void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
-                                 std::size_t glyph_kind) noexcept {
-    // Back(0)/Forward(1) use the public Common Controls history bitmap.
-    // Up/refresh use the platform icon font; view uses small native squares.
-    const bool disabled = (item.itemState & ODS_DISABLED) != 0;
-    HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));
-    if (background != nullptr) {
-        FillRect(item.hDC, &item.rcItem, background);
-        DeleteObject(background);
-    }
-
+void draw_navigation_fallback_glyph(const DRAWITEMSTRUCT& item,
+                                    std::size_t glyph_kind, COLORREF color,
+                                    int size) noexcept {
     const int width = static_cast<int>(item.rcItem.right - item.rcItem.left);
     const int height = static_cast<int>(item.rcItem.bottom - item.rcItem.top);
-    if (glyph_kind < 2) {
-        const HIMAGELIST image_list = navigation_history_image_list();
-        if (image_list != nullptr) {
-            const int icon_size = scaled_value(item.hwndItem, 16);
-            const int x = item.rcItem.left + (width - icon_size) / 2;
-            const int y = item.rcItem.top + (height - icon_size) / 2;
-            ImageList_DrawEx(image_list,
-                             glyph_kind == 0 ? HIST_BACK : HIST_FORWARD,
-                             item.hDC, x, y, icon_size, icon_size, CLR_NONE,
-                             CLR_NONE,
-                             disabled ? ILD_BLEND50 : ILD_TRANSPARENT);
-            if ((item.itemState & ODS_FOCUS) != 0)
-                DrawFocusRect(item.hDC, &item.rcItem);
-            return;
-        }
-    }
-
-    const COLORREF color = disabled ? RGB(190, 197, 209) : RGB(90, 102, 122);
-    // Keep Up at the same DPI-scaled visual size as the history bitmap rather
-    // than deriving a smaller glyph from the button's client rectangle.
-    const int size = std::max(4, scaled_value(item.hwndItem, 16));
     const int half = size / 2;
     const int cx = item.rcItem.left + width / 2;
     const int cy = item.rcItem.top + height / 2;
@@ -771,44 +728,35 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
     if (pen != nullptr) {
         const HGDIOBJ previous = SelectObject(item.hDC, pen);
         switch (glyph_kind) {
-            case 0:  // back: <
+            case 0:  // fallback back: <
                 MoveToEx(item.hDC, cx + half / 2, cy - half, nullptr);
                 LineTo(item.hDC, cx - half / 2, cy);
                 LineTo(item.hDC, cx + half / 2, cy + half);
                 break;
-            case 1:  // forward: >
+            case 1:  // fallback forward: >
                 MoveToEx(item.hDC, cx - half / 2, cy - half, nullptr);
                 LineTo(item.hDC, cx + half / 2, cy);
                 LineTo(item.hDC, cx - half / 2, cy + half);
                 break;
-            case 2: {  // up: platform arrow glyph (PD-064)
-                if (!draw_navigation_font_glyph(item, L"\uE74A"[0], color)) {
-                    // Fallback if Segoe MDL2 Assets is unavailable: stroke
-                    // arrow with the stem shifted right by half the pen
-                    // width so it shares the arrow wings' center line.
-                    const int stem = cx + pen_width / 2;
-                    MoveToEx(item.hDC, stem, cy + half, nullptr);
-                    LineTo(item.hDC, stem, cy - half);
-                    MoveToEx(item.hDC, stem - half / 2, cy - half / 2,
-                             nullptr);
-                    LineTo(item.hDC, stem, cy - half);
-                    LineTo(item.hDC, stem + half / 2, cy - half / 2);
-                }
+            case 2: {  // fallback up
+                // Shift the stem right by half the pen width so its center
+                // line matches the arrow wings when GDI uses an even width.
+                const int stem = cx + pen_width / 2;
+                MoveToEx(item.hDC, stem, cy + half, nullptr);
+                LineTo(item.hDC, stem, cy - half);
+                MoveToEx(item.hDC, stem - half / 2, cy - half / 2, nullptr);
+                LineTo(item.hDC, stem, cy - half);
+                LineTo(item.hDC, stem + half / 2, cy - half / 2);
                 break;
             }
-            case 3:  // refresh
-                if (!draw_navigation_font_glyph(item, L"\uE72C"[0], color)) {
-                    // Keep a visible fallback if the guaranteed platform font
-                    // is unavailable.
-                    Ellipse(item.hDC, cx - half, cy - half, cx + half,
-                            cy + half);
-                    MoveToEx(item.hDC, cx + half / 2, cy - half, nullptr);
-                    LineTo(item.hDC, cx, cy - half / 4);
-                    MoveToEx(item.hDC, cx + half / 2, cy - half, nullptr);
-                    LineTo(item.hDC, cx + half / 4, cy - half / 2);
-                }
+            case 3:  // fallback refresh
+                Ellipse(item.hDC, cx - half, cy - half, cx + half, cy + half);
+                MoveToEx(item.hDC, cx + half / 2, cy - half, nullptr);
+                LineTo(item.hDC, cx, cy - half / 4);
+                MoveToEx(item.hDC, cx + half / 2, cy - half, nullptr);
+                LineTo(item.hDC, cx + half / 4, cy - half / 2);
                 break;
-            case 4:  // view: four small squares
+            case 4:  // fallback view: four small squares
                 for (int row = -1; row <= 1; row += 2)
                     for (int column = -1; column <= 1; column += 2)
                         Rectangle(item.hDC, cx + column * half / 2 - 1,
@@ -822,6 +770,31 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
         SelectObject(item.hDC, previous);
         DeleteObject(pen);
     }
+}
+
+void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
+                                 std::size_t glyph_kind) noexcept {
+    const bool disabled = (item.itemState & ODS_DISABLED) != 0;
+    HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));
+    if (background != nullptr) {
+        FillRect(item.hDC, &item.rcItem, background);
+        DeleteObject(background);
+    }
+
+    const COLORREF color = disabled ? RGB(190, 197, 209) : RGB(90, 102, 122);
+    const int size =
+        std::max(4, scaled_value(item.hwndItem, kNavigationGlyphSize));
+    if (glyph_kind < kNavigationGlyphs.size() &&
+        draw_navigation_font_glyph(item, kNavigationGlyphs[glyph_kind],
+                                   color)) {
+        if ((item.itemState & ODS_FOCUS) != 0)
+            DrawFocusRect(item.hDC, &item.rcItem);
+        return;
+    }
+
+    // The font-failure path keeps all five controls visible without the
+    // platform icon font.
+    draw_navigation_fallback_glyph(item, glyph_kind, color, size);
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
 }
 
@@ -3552,6 +3525,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         case WM_DPICHANGED: {
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);
+            release_navigation_icon_font();
             SetWindowPos(window, nullptr, suggested->left, suggested->top,
                          suggested->right - suggested->left,
                          suggested->bottom - suggested->top,
@@ -3651,7 +3625,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         case WM_DESTROY:
             if (state != nullptr) revoke_drag_hover_targets(*state);
-            release_navigation_history_image_list();
             release_navigation_icon_font();
             release_address_bar_background_brush();
             PostQuitMessage(0);
