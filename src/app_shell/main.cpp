@@ -61,6 +61,12 @@ constexpr int kTabMaxWidth = 200;
 constexpr int kTabAddButtonWidth = 36;
 // PD-073: reserved only while the tab content overflows its viewport.
 constexpr int kTabScrollButtonWidth = 28;
+// PD-080: keep the larger PD-073 rect as the hit-test target, but paint a
+// compact button inside it so the visual control is smaller than the tab row.
+constexpr int kTabScrollButtonVisualWidth = 18;
+constexpr int kTabScrollButtonVisualHeight = 16;
+constexpr int kTabScrollButtonCornerRadius = 4;
+constexpr int kTabScrollButtonGlyphHalf = 5;
 // PD-062: independent 96-DPI tab visual metrics. Gap is split across the
 // two sides of each tab; text padding is inside the rounded tab; vertical
 // padding is independent so the tab row can grow without changing either.
@@ -2614,18 +2620,41 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
 void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
                             bool forward, bool disabled) noexcept {
     if (rect.right <= rect.left || rect.bottom <= rect.top) return;
+    const int width = static_cast<int>(rect.right - rect.left);
+    const int height = static_cast<int>(rect.bottom - rect.top);
+    const int visual_width = std::min(
+        scaled_value(window, kTabScrollButtonVisualWidth), width);
+    const int visual_height = std::min(
+        scaled_value(window, kTabScrollButtonVisualHeight), height);
+    const int visual_top = rect.top + (height - visual_height) / 2;
+    // The two hit-test rects are adjacent. Inset them toward their shared edge
+    // so the compact visual buttons stay together in the middle.
+    const int visual_left = forward ? rect.left : rect.right - visual_width;
+    const RECT visual{visual_left, visual_top, visual_left + visual_width,
+                      visual_top + visual_height};
     HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));
+    HPEN border = CreatePen(PS_SOLID, scaled_value(window, 1),
+                            RGB(226, 232, 240));
+    if (background != nullptr && border != nullptr) {
+        const HGDIOBJ old_brush = SelectObject(dc, background);
+        const HGDIOBJ old_pen = SelectObject(dc, border);
+        const int radius = std::min(
+            scaled_value(window, kTabScrollButtonCornerRadius),
+            std::min(visual_width, visual_height) / 2);
+        RoundRect(dc, visual.left, visual.top, visual.right, visual.bottom,
+                  radius, radius);
+        SelectObject(dc, old_pen);
+        SelectObject(dc, old_brush);
+    }
     if (background != nullptr) {
-        FillRect(dc, &rect, background);
         DeleteObject(background);
     }
+    if (border != nullptr) DeleteObject(border);
     const int half = std::max(
-        2, std::min(scaled_value(window, 8),
-                    std::min(static_cast<int>(rect.right - rect.left),
-                             static_cast<int>(rect.bottom - rect.top)) /
-                        2));
-    const int center_x = (rect.left + rect.right) / 2;
-    const int center_y = (rect.top + rect.bottom) / 2;
+        2, std::min(scaled_value(window, kTabScrollButtonGlyphHalf),
+                    std::min(visual_width, visual_height) / 2));
+    const int center_x = (visual.left + visual.right) / 2;
+    const int center_y = (visual.top + visual.bottom) / 2;
     const int direction = forward ? 1 : -1;
     const COLORREF color =
         disabled ? RGB(190, 197, 209) : RGB(90, 102, 122);
