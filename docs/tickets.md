@@ -131,7 +131,7 @@
 | PD-091 | 每次資料夾導覽完成都同步寫入 session(多次 JSON 解析＋兩次強制 flush) | 7 | `done` | PD-078 | [PD-091](tickets/PD-091-session-save-synchronous-on-every-navigation.md) |
 | PD-092 | `apply_layout` 單一 pane 初始化失敗時整段退出,遺留未完成排版與不一致狀態 | 7 | `done` | 無 | [PD-092](tickets/PD-092-apply-layout-aborts-mid-loop-on-pane-init-failure.md) |
 | PD-093 | 啟動時同步 realize 所有可見 pane,違反 spec §9.3 延後 realize 規則 | 7 | `ready` | 無 | [PD-093](tickets/PD-093-startup-eagerly-realizes-all-panes-violates-deferred-realize-spec.md) |
-| PD-094 | 啟動時讀完 session 立刻做一次完全冗餘的同步寫回,發生在主視窗建立之前 | 7 | `ready` | 無 | [PD-094](tickets/PD-094-redundant-session-save-before-main-window-created.md) |
+| PD-094 | ~~啟動時讀完 session 立刻做一次完全冗餘的同步寫回~~(前提有誤,已撤回,見 ticket 文件與計畫決策紀錄) | 7 | `deferred` | 無 | [PD-094](tickets/PD-094-redundant-session-save-before-main-window-created.md) |
 | PD-095 | 拖曳分隔線/縮放視窗時,每個 mousemove 都跑完整 `apply_layout`,含最多 1000 項 Shell property 重掃 | 7 | `ready` | 無 | [PD-095](tickets/PD-095-splitter-drag-full-relayout-and-item-count-rescan-per-mousemove.md) |
 | PD-096 | `draw_brand_bar` 每次 `WM_ERASEBKGND` 都重新載入圖示、建立/刪除字型 | 7 | `ready` | 無 | [PD-096](tickets/PD-096-brand-bar-recreates-icon-and-font-every-erasebkgnd.md) |
 
@@ -250,6 +250,7 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | 拖到 tab 標題以複製到該 tab 的資料夾 | PD-023(2026-08-24)列為 non-goal:這是 Windows 檔案總管沒有的加值互動,spec 未要求。若使用者實際使用後想要,再開 ticket。 |
 | 網址列自動完成(`IAutoComplete2`) | PD-020(2026-08-24)刻意排除,只做純 `EDIT` + Enter。若使用者實際使用後認為缺自動完成造成明顯不便,再開 ticket 接 Shell 的 `IAutoComplete2`,不預先做。 |
 | 讓 `compute_layout_rects` 接收 DPI 縮放後的最小尺寸／分隔線厚度,取代目前寫死的 96-DPI 基準常數 | PD-005 2026-08-24 交接發現:`docs/design-spec.md` §FR-004a 的敘述預期呼叫端傳入「已按 DPI 縮放過的最小值常數」,但 PD-005 定義的函式簽章只收 client size、版型、比例,常數是寫死在 `src/core/layout.h` 的 96-DPI 基準值,呼叫端目前無法覆寫。等 app_shell 接上 Per-Monitor-V2 `WM_DPICHANGED`(NFR-004)且需要跨 DPI 正確縮放時開票,把最小尺寸/分隔線厚度改成函式參數,矩形演算法本身不需要動。 |
+| 啟動時的不乾淨關閉標記(`clean_shutdown`)改用比整份 `write_session` 更輕量的單欄位寫入 | PD-094(2026-08-27)撤回時發現:目前啟動時仍會呼叫完整 `save_now`/`write_session` 管線(重新解析整份 `preserved_json`+雙 flush+備份複製)只為了把 `clean_shutdown` 這一個布林欄位改成 `false`,PD-025 決策 2 已判定這次寫入本身可接受,但沒有評估過「用更輕量的手段達成同一個標記語意」。觸發條件:先用 PD-026 排除的計時儀器或使用者實際回報量到啟動延遲確實可感知,再開票設計專屬的輕量標記寫入(需注意仍要遵守 `AGENTS.md` 的 atomic-replace 與 schema 前向相容規則,不能只是省略 flush)。 |
 
 ## 計畫決策紀錄
 
@@ -287,6 +288,10 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 **已知會被 PD-091(尚未實作)大幅緩解、故不重複開票的一群發現**:Claude F1/F2/F3/F18(`save_now` 的雙 flush + 全量重新解析 + `AppState`/`SessionDocument` 兩份 model 並存)、Codex #3(每次導覽完成同步持久化)、OpenCode H1/S3(全域「冗餘儲存」)——這些全部指向同一根因「每次導覽完成/使用者動作都同步觸發完整 `write_session`」,而 PD-091 的 dirty-flag + 防抖已經是這群發現的正確修法,其「可選次要優化」一節也已涵蓋 F1 提到的「寫入後又讀回驗證」這項細節。三方都各自獨立收斂到同一根因但沒有另開新票,是刻意決定,避免與 PD-091 範圍重疊。
 
 **未開票的單一/低優先級發現**(信心較低、影響範圍小,或發現者自評為低優先):Claude F4(訊息迴圈逐訊息的線性掃描與 `GetKeyState`)、F7(`write_live_view_count()` 未受診斷模式 gate,已併入 PD-095 的 Scope 第 3 點,不獨立開票)、F8(sidebar hover 逐列重建字型)、F10/F11(`layout_rects`/`apply_tab_item_size` 的小型堆積配置,已在 PD-095 的討論脈絡內,不獨立開票)、F15(view mode 讀回兩次)、F16(`decode()` 對 no-op migration 的全量深拷貝)、F17(關閉路徑的兩次 save 與三次 `revoke_drag_hover_targets`,Codex 明確稽核後認定關閉路徑本身乾淨,且會隨 PD-091 一併緩解)、F19(`TabState::history` 無上限成長)、F20/Codex #6(Group 名稱三份儲存 + sidebar 全量重建,發現者自評「低至中」)、F21(`AppState` 固定 4 pane 陣列,發現者自評「correctness-neutral, low-priority, 僅供參考」)、OpenCode M3(`tab_visuals` 快取)。這些暫不個別開票,留待之後有更多證據或使用者實際感受到影響再處理。
+
+### 2026-08-27 — PD-094 撤回:三方效能研究誤判 PD-025 的崩潰偵測標記為冗餘寫入
+
+實作前派工檢查(Codex 在動手前先讀 `docs/tickets/PD-025-crash-recovery-path.md`)發現 PD-094 的前提是錯的:啟動時 `save_now(state)` 這次寫入**不是**「內容和讀入時相同、純屬冗餘」,而是 PD-025 已確認的產品決策 2 明文要求的不乾淨關閉偵測標記——把 `clean_shutdown` 欄位從上次關閉留下的 `true` 改寫成 `false`,讓「啟動後、任何操作前就崩潰」這個最重要的情境也能被下次啟動偵測到。PD-025 決策 2 已經明確評估過這次啟動多一次磁碟寫入的成本並判定可接受(NFR-001 只要求閒置期間零 I/O,啟動不算閒置)。三方效能研究(Claude/Codex/OpenCode)都只從「寫入內容是否變化」判斷冗餘,沒有比對 PD-025 的既有決策記錄,才會把一個刻意設計的機制誤判成死碼——本頁撰票時沿用了同樣的誤判,沒有先核對 PD-025。依 ticket authoring rules,覆寫既有決策必須有新證據,而三方研究提供的並不是新證據,只是誤讀,故 PD-094 整票撤回,標記為 `deferred`,詳細說明見 [PD-094](tickets/PD-094-redundant-session-save-before-main-window-created.md) 檔案內的撤回說明。若未來要降低這次寫入的成本,正確方向是保留「啟動時必須標記 `clean_shutdown = false`」的語意,只把達成手段換成更輕量的單欄位寫入(而非整份 `write_session` 管線),已列入下方候選,觸發條件為量到啟動延遲確實可感知。
 
 ### 2026-08-20 — 專案建立與選型收斂
 
