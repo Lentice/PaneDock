@@ -130,6 +130,10 @@
 | PD-090 | 拖曳懸停自動切換 Group/tab 在 OLE 拖曳迴圈內同步做 Shell view 建立/銷毀與 session 寫入 | 7 | `ready` | PD-034 | [PD-090](tickets/PD-090-drag-hover-group-switch-reenters-ole-drag-loop.md) |
 | PD-091 | 每次資料夾導覽完成都同步寫入 session(多次 JSON 解析＋兩次強制 flush) | 7 | `ready` | PD-078 | [PD-091](tickets/PD-091-session-save-synchronous-on-every-navigation.md) |
 | PD-092 | `apply_layout` 單一 pane 初始化失敗時整段退出,遺留未完成排版與不一致狀態 | 7 | `ready` | 無 | [PD-092](tickets/PD-092-apply-layout-aborts-mid-loop-on-pane-init-failure.md) |
+| PD-093 | 啟動時同步 realize 所有可見 pane,違反 spec §9.3 延後 realize 規則 | 7 | `ready` | 無 | [PD-093](tickets/PD-093-startup-eagerly-realizes-all-panes-violates-deferred-realize-spec.md) |
+| PD-094 | 啟動時讀完 session 立刻做一次完全冗餘的同步寫回,發生在主視窗建立之前 | 7 | `ready` | 無 | [PD-094](tickets/PD-094-redundant-session-save-before-main-window-created.md) |
+| PD-095 | 拖曳分隔線/縮放視窗時,每個 mousemove 都跑完整 `apply_layout`,含最多 1000 項 Shell property 重掃 | 7 | `ready` | 無 | [PD-095](tickets/PD-095-splitter-drag-full-relayout-and-item-count-rescan-per-mousemove.md) |
+| PD-096 | `draw_brand_bar` 每次 `WM_ERASEBKGND` 都重新載入圖示、建立/刪除字型 | 7 | `ready` | 無 | [PD-096](tickets/PD-096-brand-bar-recreates-icon-and-font-every-erasebkgnd.md) |
 
 ## Dependency lanes
 
@@ -270,6 +274,19 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 - **PD-092**(Claude #13 + OpenCode #7 收斂):`apply_layout` 迴圈中單一 pane 初始化失敗就整段 `return`,其餘健康 pane 連帶維持未完成排版,沒有錯誤降級。
 
 未開票的單一 agent 專屬發現(例如 Claude 指出的 `scaled_value` 最小 1px 箝制讓「歸零」的間距常數失效、`ExplorerHost::navigate` 回傳值恆為 `S_OK` 使呼叫端錯誤處理成為死碼、session parser 無遞迴深度上限;OpenCode 指出的 known-folder identity/fallback 欄位從未被填入、`explorer_host_lifetime_check` 測試未註冊進 ctest)因為只有單一報告提及、信心較低或影響範圍較小,暫不個別開票,留待之後有更多證據或使用者實際遇到再處理。過度工程/死碼類發現(三份報告都各自列出一批,如 `kTabCloseButtonSpace`、`Site::QueryService` 的除錯 log)依此次稽核指示「secondary,只列不修」,不在本批次開票範圍。
+
+### 2026-08-27 — 三個 agent(Claude/Codex/OpenCode)平行執行效能研究(啟動/關閉速度、記憶體重複、CPU),新增 PD-093~096
+
+再次同一份 codebase 上同時開三個 Herdr tab,這次分別以 Claude、Codex、OpenCode 各自做唯讀效能研究,聚焦四軸:app 啟動速度、關閉速度、記憶體重複使用、CPU 使用(熱路徑)。三份報告(Codex/OpenCode 直接輸出於終端機;Claude 同樣因終端機替代畫面問題,改請其把完整報告寫成暫存 Markdown 檔後讀取,檔案未進 repo,讀取後即刪除)獨立產出 21(Claude,F1~F21)/6+關閉結論(Codex)/S1~S4+H1+M1~M3+C1~C7(OpenCode)項發現。收斂到高信心、開票的項目:
+
+- **PD-093**(Claude F14/F13 + Codex #1 + OpenCode S1/S4,三方一致,本次收斂最高):啟動時 `apply_layout` 在 `WM_CREATE` 內同步 realize 所有可見 pane(而非只有 active pane),直接違反 `docs/design-spec.md` §9.3 明文的「先 realize active pane,其餘延後,避免被網路或離線路徑阻塞」——這不是效能建議,是 spec 未被落實的行為。`SHAutoComplete` 對所有 pane 同步呼叫是同一根因的第二個症狀,併入同票。
+- **PD-094**(Claude F12 + Codex #2 + OpenCode S2,三方一致):啟動時 `read_session` 之後、`CreateWindowExW` 之前,立刻做一次沒有任何資料變更的完整同步 `save_now`,純屬冗餘,直接延後主視窗顯示。
+- **PD-095**(Claude F5/F6 + Codex #4 + OpenCode C1/C2,三方一致,CPU 熱路徑收斂最高的一項):拖曳分隔線/視窗縮放時,每個 `WM_MOUSEMOVE`/`WM_SIZE` 都觸發完整 `apply_layout`,其中 `refresh_status_bar`→`item_counts` 在有選取項目時最多逐一查詢 1000 次 Shell property,三方都指名同一組呼叫鏈。
+- **PD-096**(Claude F9 + OpenCode C4 收斂):`draw_brand_bar` 每次 `WM_ERASEBKGND` 都重新載入 App 圖示、建立/刪除兩個字型,疊加在 PD-095 描述的高頻重繪路徑上時被放大。
+
+**已知會被 PD-091(尚未實作)大幅緩解、故不重複開票的一群發現**:Claude F1/F2/F3/F18(`save_now` 的雙 flush + 全量重新解析 + `AppState`/`SessionDocument` 兩份 model 並存)、Codex #3(每次導覽完成同步持久化)、OpenCode H1/S3(全域「冗餘儲存」)——這些全部指向同一根因「每次導覽完成/使用者動作都同步觸發完整 `write_session`」,而 PD-091 的 dirty-flag + 防抖已經是這群發現的正確修法,其「可選次要優化」一節也已涵蓋 F1 提到的「寫入後又讀回驗證」這項細節。三方都各自獨立收斂到同一根因但沒有另開新票,是刻意決定,避免與 PD-091 範圍重疊。
+
+**未開票的單一/低優先級發現**(信心較低、影響範圍小,或發現者自評為低優先):Claude F4(訊息迴圈逐訊息的線性掃描與 `GetKeyState`)、F7(`write_live_view_count()` 未受診斷模式 gate,已併入 PD-095 的 Scope 第 3 點,不獨立開票)、F8(sidebar hover 逐列重建字型)、F10/F11(`layout_rects`/`apply_tab_item_size` 的小型堆積配置,已在 PD-095 的討論脈絡內,不獨立開票)、F15(view mode 讀回兩次)、F16(`decode()` 對 no-op migration 的全量深拷貝)、F17(關閉路徑的兩次 save 與三次 `revoke_drag_hover_targets`,Codex 明確稽核後認定關閉路徑本身乾淨,且會隨 PD-091 一併緩解)、F19(`TabState::history` 無上限成長)、F20/Codex #6(Group 名稱三份儲存 + sidebar 全量重建,發現者自評「低至中」)、F21(`AppState` 固定 4 pane 陣列,發現者自評「correctness-neutral, low-priority, 僅供參考」)、OpenCode M3(`tab_visuals` 快取)。這些暫不個別開票,留待之後有更多證據或使用者實際感受到影響再處理。
 
 ### 2026-08-20 — 專案建立與選型收斂
 
