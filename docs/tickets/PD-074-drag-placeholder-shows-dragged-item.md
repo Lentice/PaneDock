@@ -143,3 +143,13 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-27 — 實作交接
+
+- `Sidebar::draw_item` 最終簽章為 `draw_item(const DRAWITEMSTRUCT*, std::optional<std::size_t> placeholder_source, bool dragged) const noexcept`。`WM_DRAWITEM` 呼叫端從 `state->group_drag->source_index` 傳入來源索引；owner-draw placeholder 列的 `itemID` 是目標索引，`Sidebar` 自己保存拖曳狀態會造成第二份狀態且仍無法可靠區分來源，因此不在 `Sidebar` 內存狀態。
+- 淡化前景色集中定義為 `panedock::sidebar::kPlaceholderContent = RGB(148, 163, 184)`（`src/sidebar/sidebar.h`），tab placeholder 文字與 Group placeholder 的名稱／副標題／badge 文字共用此值。Group 正常副標題原本即使用此色值，未另建重複色常數。
+- tab placeholder 在既有 `RoundRect` 填色／點線框後，使用正常 tab 相同的 `text_padding`、chrome font 與 `DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX` 繪製來源 tab 文字；來源 tab 仍在原位完全跳過。
+- Group placeholder 讀取 `groups_[placeholder_source]` 後沿用既有兩行版面與 badge 幾何繪製名稱、副標題及數字；placeholder 外框由原本的方角 `Rectangle` 改為 `RoundRect`，半徑與正常 pill 同為 `MulDiv(10, dpi, 96)`。填色 `RGB(238, 242, 246)` 與外框 `RGB(203, 213, 225)` 未改。
+- 未新增 timer、動畫或拖曳狀態；`update_tab_drag`／`update_group_drag` 的 target 未變即 return、不 invalidate 保護維持原樣。
+- 靜態／自動檢查：LLVM-MinGW Clang/LLD + Ninja configure 成功；`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 為 5/5；`rg -n "draw_item|placeholder|kPlaceholder" ...` 命中預期實作；`rg -n "ODT_TAB|draw_tab_item|draw_tab_insertion_indicator" src` 為零筆；`git diff --check` 通過。
+- 依本票驗證邊界，本輪沒有使用 computer-use、滑鼠按下／移動／放開或拖曳訊息注入，也沒有擷取拖曳中的截圖。因此驗收 1–10（tab／Group 拖曳畫面、來源不重複、圓角與逐像素色值、放開／Esc／原位取消復原、排序、重繪次數及靜止 CPU）均未由 agent 實機證明；tab 與 Group 各一張按住未放開的 4× 截圖、逐像素比對、`WM_PAINT`／`InvalidateRect` 數字與 CPU delta 留給使用者手動驗證。

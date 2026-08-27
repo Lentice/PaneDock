@@ -14,7 +14,6 @@ constexpr COLORREF kSidebarActiveBackground = RGB(234, 241, 255);
 constexpr COLORREF kSidebarHoverBackground = RGB(242, 245, 248);
 constexpr COLORREF kSidebarText = RGB(75, 85, 101);
 constexpr COLORREF kSidebarActiveText = RGB(23, 75, 180);
-constexpr COLORREF kSidebarSubtitleText = RGB(148, 163, 184);
 constexpr COLORREF kBadgeBackground = RGB(228, 231, 236);
 constexpr COLORREF kBadgeText = RGB(71, 85, 105);
 constexpr COLORREF kPlaceholderBackground = RGB(238, 242, 246);
@@ -130,12 +129,16 @@ bool Sidebar::measure_item(MEASUREITEMSTRUCT* item, UINT dpi) const noexcept {
     return true;
 }
 
-bool Sidebar::draw_item(const DRAWITEMSTRUCT* item,
-                        bool placeholder, bool dragged) const noexcept {
+bool Sidebar::draw_item(
+    const DRAWITEMSTRUCT* item,
+    std::optional<std::size_t> placeholder_source,
+    bool dragged) const noexcept {
     if (item == nullptr || item->CtlType != ODT_LISTBOX ||
         item->CtlID != static_cast<UINT>(control_id_)) return false;
     if (item->itemID == static_cast<UINT>(-1) ||
         item->itemID >= groups_.size()) return true;
+    const bool placeholder = placeholder_source.has_value();
+    if (placeholder && *placeholder_source >= groups_.size()) return true;
 
     const bool selected = (item->itemState & ODS_SELECTED) != 0;
     const bool hovered = hover_index_ == item->itemID;
@@ -151,28 +154,27 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item,
     pill.right -= MulDiv(14, static_cast<int>(dpi_), 96);
     pill.top += MulDiv(2, static_cast<int>(dpi_), 96);
     pill.bottom -= MulDiv(2, static_cast<int>(dpi_), 96);
+    const int radius = MulDiv(10, static_cast<int>(dpi_), 96);
     if (placeholder) {
         HBRUSH fill = CreateSolidBrush(kPlaceholderBackground);
         HPEN border = CreatePen(PS_DOT, 1, kPlaceholderBorder);
         if (fill != nullptr && border != nullptr) {
             const HGDIOBJ old_brush = SelectObject(item->hDC, fill);
             const HGDIOBJ old_pen = SelectObject(item->hDC, border);
-            Rectangle(item->hDC, pill.left, pill.top, pill.right, pill.bottom);
+            RoundRect(item->hDC, pill.left, pill.top, pill.right, pill.bottom,
+                      radius, radius);
             SelectObject(item->hDC, old_pen);
             SelectObject(item->hDC, old_brush);
         }
         if (fill != nullptr) DeleteObject(fill);
         if (border != nullptr) DeleteObject(border);
-        return true;
-    }
-    if (selected || hovered) {
+    } else if (selected || hovered) {
         HBRUSH pill_brush = CreateSolidBrush(
             selected ? kSidebarActiveBackground : kSidebarHoverBackground);
         if (pill_brush != nullptr) {
             const HGDIOBJ old_brush = SelectObject(item->hDC, pill_brush);
             const HGDIOBJ old_pen =
                 SelectObject(item->hDC, GetStockObject(NULL_PEN));
-            const int radius = MulDiv(10, static_cast<int>(dpi_), 96);
             RoundRect(item->hDC, pill.left, pill.top, pill.right, pill.bottom,
                       radius, radius);
             SelectObject(item->hDC, old_brush);
@@ -181,7 +183,9 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item,
         }
     }
 
-    const auto& group = groups_[item->itemID];
+    const std::size_t group_index =
+        placeholder ? *placeholder_source : item->itemID;
+    const auto& group = groups_[group_index];
     const int badge_size = MulDiv(22, static_cast<int>(dpi_), 96);
     const int badge_margin = MulDiv(6, static_cast<int>(dpi_), 96);
     RECT badge{pill.right - badge_size - badge_margin,
@@ -218,7 +222,9 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item,
     }
 
     SetBkMode(item->hDC, TRANSPARENT);
-    SetTextColor(item->hDC, selected ? kSidebarActiveText : kSidebarText);
+    SetTextColor(item->hDC,
+                 placeholder ? kPlaceholderContent
+                             : selected ? kSidebarActiveText : kSidebarText);
     const HGDIOBJ old_name_font =
         name_font != nullptr ? SelectObject(item->hDC, name_font) : nullptr;
     DrawTextW(item->hDC, group.name.c_str(), -1, &name_rect,
@@ -228,7 +234,7 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item,
     const HGDIOBJ old_font =
         subtitle_font != nullptr ? SelectObject(item->hDC, subtitle_font)
                                  : nullptr;
-    SetTextColor(item->hDC, kSidebarSubtitleText);
+    SetTextColor(item->hDC, kPlaceholderContent);
     const std::wstring subtitle =
         format_subtitle(group.pane_count, group.tab_count);
     DrawTextW(item->hDC, subtitle.c_str(), -1, &subtitle_rect,
@@ -244,7 +250,7 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item,
         SelectObject(item->hDC, old_pen);
         DeleteObject(badge_brush);
     }
-    SetTextColor(item->hDC, kBadgeText);
+    SetTextColor(item->hDC, placeholder ? kPlaceholderContent : kBadgeText);
     const std::wstring badge_text = std::to_wstring(group.tab_count);
     DrawTextW(item->hDC, badge_text.c_str(), -1, &badge,
               DT_CENTER | DT_SINGLELINE | DT_VCENTER);

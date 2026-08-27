@@ -19,6 +19,7 @@ namespace panedock::sidebar {
 
 inline constexpr int kSidebarWidth = 226;
 inline constexpr int kGroupRowHeight = 52;
+inline constexpr COLORREF kPlaceholderContent = RGB(148, 163, 184);
 inline constexpr UINT kRenameCommitMessage = WM_APP + 1;
 
 struct GroupSummary final {
@@ -38,7 +39,8 @@ public:
     void set_selected_index(std::size_t index) noexcept;
     void set_hover_index(std::optional<std::size_t> index) noexcept;
     bool measure_item(MEASUREITEMSTRUCT* item, UINT dpi) const noexcept;
-    bool draw_item(const DRAWITEMSTRUCT* item, bool placeholder,
+    bool draw_item(const DRAWITEMSTRUCT* item,
+                   std::optional<std::size_t> placeholder_source,
                    bool dragged) const noexcept;
 
     bool begin_rename();

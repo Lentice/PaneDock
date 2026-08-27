@@ -2722,6 +2722,21 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
         }
         if (fill != nullptr) DeleteObject(fill);
         if (border != nullptr) DeleteObject(border);
+        if (state.tab_drag.has_value() && state.tab_drag->dragging &&
+            state.tab_drag->pane_index == pane_index &&
+            state.tab_drag->source_index < visuals.size()) {
+            RECT text_rect = rect;
+            text_rect.left = std::min(text_rect.right,
+                                      text_rect.left + text_padding);
+            text_rect.right = std::max(text_rect.left,
+                                       text_rect.right - text_padding);
+            SetTextColor(dc, panedock::sidebar::kPlaceholderContent);
+            DrawTextW(dc,
+                      visuals[state.tab_drag->source_index].text.c_str(), -1,
+                      &text_rect,
+                      DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS |
+                          DT_NOPREFIX);
+        }
     }
     if (saved_dc != 0) RestoreDC(dc, saved_dc);
     const auto& scroll_buttons = state.tab_scroll_button_rects[pane_index];
@@ -3332,18 +3347,20 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 }
                 const auto* list_item =
                     reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
-                const bool placeholder =
-                    list_item != nullptr && state->group_drag.has_value() &&
+                std::optional<std::size_t> placeholder_source;
+                if (list_item != nullptr && state->group_drag.has_value() &&
                     state->group_drag->dragging &&
                     state->group_drag->target_index.has_value() &&
-                    *state->group_drag->target_index == list_item->itemID;
+                    *state->group_drag->target_index == list_item->itemID) {
+                    placeholder_source = state->group_drag->source_index;
+                }
                 const bool dragged =
                     list_item != nullptr && state->group_drag.has_value() &&
                     state->group_drag->dragging &&
                     state->group_drag->source_index == list_item->itemID;
                 if (state->sidebar.draw_item(
                         reinterpret_cast<DRAWITEMSTRUCT*>(lparam),
-                        placeholder, dragged)) {
+                        placeholder_source, dragged)) {
                     return TRUE;
                 }
             }
