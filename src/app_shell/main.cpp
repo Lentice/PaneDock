@@ -879,8 +879,11 @@ void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi) noexcept {
     std::array<wchar_t, 256> text{};
     GetWindowTextW(item.hwndItem, text.data(),
                    static_cast<int>(text.size()));
+    const int text_inset = MulDiv(kSpaceBase, static_cast<int>(dpi), 96);
     RECT text_rect = rect;
     text_rect.top += separator_height;
+    text_rect.left += text_inset;
+    text_rect.right -= text_inset;
     const HFONT font = reinterpret_cast<HFONT>(
         SendMessageW(item.hwndItem, WM_GETFONT, 0, 0));
     const HGDIOBJ old_font =
@@ -1893,10 +1896,8 @@ HRESULT apply_layout(HWND window, AppState& state) {
             const int status_height = std::min(
                 scaled_value(window, kStatusBarHeight),
                 std::max(0, static_cast<int>(rect.bottom - rect.top)));
-            const int status_inset = scaled_value(window, kSpaceBase);
-            const RECT status_rect{rect.left + status_inset,
-                                   rect.bottom - status_height,
-                                   rect.right - status_inset, rect.bottom};
+            const RECT status_rect{rect.left, rect.bottom - status_height,
+                                   rect.right, rect.bottom};
             SetWindowPos(state.status_bars[index], nullptr, status_rect.left,
                          status_rect.top, status_rect.right - status_rect.left,
                          status_rect.bottom - status_rect.top,
