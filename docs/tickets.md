@@ -106,7 +106,7 @@
 | PD-066 | 拖曳排序改用撐開空位的 placeholder;修復 tab 插入指示線死碼 | 7 | `done` | PD-055, PD-050, PD-036 | [PD-066](tickets/PD-066-drag-reorder-placeholder-gap.md) |
 | PD-067 | Group 清單捲軸視覺存在感過低(捲動功能實測已正常) | 7 | `superseded` | PD-028, PD-061 | [PD-067](tickets/PD-067-group-list-scrollbar-visibility.md) |
 | PD-068 | 關閉程式時在 `SHELL32.dll` 當機:`SetCallback` 的 out 參數傳 `nullptr` | 7 | `done` | PD-051 | [PD-068](tickets/PD-068-shell-folder-view-setcallback-null-out-param.md) |
-| PD-069 | pane footer 補左右內距;chrome 間距統一為 4px 級距 | 7 | `planned` | PD-060, PD-062, PD-064 | [PD-069](tickets/PD-069-chrome-spacing-scale.md) |
+| PD-069 | pane footer 補左右內距;chrome 間距統一為 4px 級距 | 7 | `ready` | PD-060, PD-062, PD-064 | [PD-069](tickets/PD-069-chrome-spacing-scale.md) |
 | PD-070 | 診斷模式擋下第三方 extension 時跳出載入器模態對話框,無法無人值守執行 | 7 | `done` | PD-024 | [PD-070](tickets/PD-070-diagnostic-mode-loader-error-dialogs.md) |
 | PD-071 | 移除 Ctrl+Shift+L 熱鍵:註冊失敗會讓程式完全無法啟動 | 7 | `done` | PD-009 | [PD-071](tickets/PD-071-remove-layout-hotkey.md) |
 | PD-072 | chrome 字型改用固定 Latin 字面＋系統字型連結,取代語系相依的 `DEFAULT_GUI_FONT`／`lfMessageFont`(覆寫 PD-061 的 face 來源) | 7 | `ready` | PD-061 | [PD-072](tickets/PD-072-replace-stock-gui-font.md) |
