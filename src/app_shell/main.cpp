@@ -359,6 +359,7 @@ struct AppState {
     panedock::sidebar::Sidebar sidebar;
     std::array<HWND, kButtonIds.size()> sidebar_buttons{};
     HWND group_label{nullptr};
+    HFONT chrome_font{nullptr};
     std::array<HWND, kLayoutButtonIds.size()> layout_buttons{};
     std::optional<std::size_t> layout_hover_index;
     HWND layout_tooltip{nullptr};
@@ -883,10 +884,15 @@ void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi) noexcept {
                    static_cast<int>(text.size()));
     RECT text_rect = rect;
     text_rect.top += separator_height;
+    const HFONT font = reinterpret_cast<HFONT>(
+        SendMessageW(item.hwndItem, WM_GETFONT, 0, 0));
+    const HGDIOBJ old_font =
+        font != nullptr ? SelectObject(item.hDC, font) : nullptr;
     SetBkMode(item.hDC, TRANSPARENT);
     SetTextColor(item.hDC, RGB(100, 116, 139));
     DrawTextW(item.hDC, text.data(), -1, &text_rect,
               DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    if (old_font != nullptr) SelectObject(item.hDC, old_font);
 }
 
 RECT pane_area(HWND window) noexcept {
@@ -1151,7 +1157,7 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
     const int text_reserve = scaled_value(
         strip, 2 * kTabTextHorizontalPadding + kTabCloseButtonSpace);
     HDC dc = GetDC(strip);
-    HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    const HFONT font = state.chrome_font;
     HGDIOBJ previous = dc == nullptr ? nullptr : SelectObject(dc, font);
     for (const auto& visual : visuals) {
         SIZE size{};
@@ -1411,16 +1417,102 @@ void layout_header(HWND window, AppState& state) noexcept {
     }
 }
 
-HFONT brand_font() noexcept {
-    static const HFONT font = [] {
-        LOGFONTW logfont{};
-        HFONT base = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-        if (base == nullptr || GetObjectW(base, sizeof(logfont), &logfont) == 0)
-            return static_cast<HFONT>(nullptr);
-        logfont.lfWeight = FW_BOLD;
-        return CreateFontIndirectW(&logfont);
-    }();
-    return font;
+// PD-072: DEFAULT_GUI_FONT is a Win16 stock object that resolves to a serif
+// CJK face on Chinese Windows. Build one owned font from the current
+// per-window message font, pinning Latin text to Segoe UI while preserving
+// the system's height, weight and other metrics.
+HFONT ui_font(HWND window) noexcept {
+    if (window == nullptr) return nullptr;
+    const UINT dpi = GetDpiForWindow(window);
+    if (dpi == 0) return nullptr;
+
+    NONCLIENTMETRICSW metrics{};
+    metrics.cbSize = sizeof(metrics);
+    if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics),
+                                   &metrics, 0, dpi) == FALSE)
+        return nullptr;
+
+    const LOGFONTW fallback = metrics.lfMessageFont;
+    LOGFONTW requested = fallback;
+    if (wcscpy_s(requested.lfFaceName, LF_FACESIZE, L"Segoe UI") != 0)
+        return CreateFontIndirectW(&fallback);
+    requested.lfCharSet = DEFAULT_CHARSET;
+    requested.lfQuality = CLEARTYPE_QUALITY;
+
+    HFONT font = CreateFontIndirectW(&requested);
+    if (font == nullptr) return CreateFontIndirectW(&fallback);
+
+    bool has_requested_face = true;
+    HDC dc = GetDC(window);
+    if (dc != nullptr) {
+        const HGDIOBJ old_font = SelectObject(dc, font);
+        if (old_font != nullptr && old_font != HGDI_ERROR) {
+            wchar_t actual_face[LF_FACESIZE]{};
+            const int length = GetTextFaceW(
+                dc, LF_FACESIZE, actual_face);
+            has_requested_face =
+                length > 0 && lstrcmpiW(actual_face, L"Segoe UI") == 0;
+            SelectObject(dc, old_font);
+        }
+        ReleaseDC(window, dc);
+    }
+    if (has_requested_face) return font;
+    DeleteObject(font);
+    return CreateFontIndirectW(&fallback);
+}
+
+void set_ui_font(HWND control, HFONT font) noexcept {
+    if (control != nullptr && font != nullptr)
+        SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+}
+
+void apply_ui_font(AppState& state) noexcept {
+    const HFONT font = state.chrome_font;
+    if (font == nullptr) return;
+    set_ui_font(state.sidebar.window(), font);
+    set_ui_font(state.group_label, font);
+    for (HWND button : state.sidebar_buttons) set_ui_font(button, font);
+    for (HWND button : state.layout_buttons) set_ui_font(button, font);
+    set_ui_font(state.empty_message, font);
+    for (std::size_t index = 0; index < state.tab_strips.size(); ++index) {
+        set_ui_font(state.tab_strips[index], font);
+        set_ui_font(state.back_buttons[index], font);
+        set_ui_font(state.forward_buttons[index], font);
+        set_ui_font(state.up_buttons[index], font);
+        set_ui_font(state.refresh_buttons[index], font);
+        set_ui_font(state.view_mode_buttons[index], font);
+        set_ui_font(state.address_bars[index], font);
+        set_ui_font(state.status_bars[index], font);
+    }
+}
+
+void refresh_ui_font(HWND window, AppState& state) noexcept {
+    const HFONT next = ui_font(window);
+    if (next == nullptr) return;
+    const HFONT previous = state.chrome_font;
+    state.chrome_font = next;
+    apply_ui_font(state);
+    if (previous != nullptr) DeleteObject(previous);
+}
+
+void release_ui_font(AppState& state) noexcept {
+    if (state.chrome_font != nullptr) {
+        DeleteObject(state.chrome_font);
+        state.chrome_font = nullptr;
+    }
+}
+
+HFONT brand_font(HWND window) noexcept {
+    HFONT base = ui_font(window);
+    if (base == nullptr) return nullptr;
+    LOGFONTW logfont{};
+    if (GetObjectW(base, sizeof(logfont), &logfont) == 0) {
+        DeleteObject(base);
+        return nullptr;
+    }
+    DeleteObject(base);
+    logfont.lfWeight = FW_BOLD;
+    return CreateFontIndirectW(&logfont);
 }
 
 void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
@@ -1447,12 +1539,13 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
 
     RECT title{icon.right + scaled_value(window, 10), rect.top,
               rect.right - scaled_value(window, 8), rect.bottom};
-    const HFONT font = brand_font();
+    const HFONT font = brand_font(window);
     const HGDIOBJ old_font = font != nullptr ? SelectObject(dc, font) : nullptr;
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(30, 41, 59));
     DrawTextW(dc, L"PaneDock", -1, &title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     if (old_font != nullptr) SelectObject(dc, old_font);
+    if (font != nullptr) DeleteObject(font);
 }
 
 // Shared by draw_pane_card's background/border RoundRects and the PD-040
@@ -2583,6 +2676,9 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
     const int vertical_padding = scaled_value(window, kTabVerticalPadding);
     const int radius = scaled_value(window, kTabCornerRadius);
     const int border_width = scaled_value(window, 1);
+    const HGDIOBJ old_font = state.chrome_font != nullptr
+                                 ? SelectObject(dc, state.chrome_font)
+                                 : nullptr;
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(31, 41, 55));
     const RECT viewport = tab_viewport_rect(state, pane_index);
@@ -2692,6 +2788,7 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
             DeleteObject(plus_pen);
         }
     }
+    if (old_font != nullptr) SelectObject(dc, old_font);
 }
 
 LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
@@ -2990,10 +3087,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE, 0, 0, 0, 0,
                 window, nullptr, GetModuleHandleW(nullptr), nullptr);
             if (state->group_label == nullptr) return -1;
-            SendMessageW(state->group_label, WM_SETFONT,
-                         reinterpret_cast<WPARAM>(
-                             GetStockObject(DEFAULT_GUI_FONT)),
-                         TRUE);
             for (std::size_t index = 0; index < state->sidebar_buttons.size();
                  ++index) {
                 state->sidebar_buttons[index] = CreateWindowExW(
@@ -3004,10 +3097,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     reinterpret_cast<HMENU>(kButtonIds[index]),
                     GetModuleHandleW(nullptr), nullptr);
                 if (state->sidebar_buttons[index] == nullptr) return -1;
-                SendMessageW(state->sidebar_buttons[index], WM_SETFONT,
-                             reinterpret_cast<WPARAM>(
-                                 GetStockObject(DEFAULT_GUI_FONT)),
-                             TRUE);
             }
             for (std::size_t index = 0; index < state->layout_buttons.size();
                  ++index) {
@@ -3023,10 +3112,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                        layout_button_proc, index,
                                        reinterpret_cast<DWORD_PTR>(state)))
                     return -1;
-                SendMessageW(state->layout_buttons[index], WM_SETFONT,
-                             reinterpret_cast<WPARAM>(
-                                 GetStockObject(DEFAULT_GUI_FONT)),
-                             TRUE);
             }
             state->layout_tooltip = CreateWindowExW(
                 WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
@@ -3055,10 +3140,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 WS_CHILD | SS_CENTER | SS_CENTERIMAGE, 0, 0, 0, 0, window,
                 nullptr, GetModuleHandleW(nullptr), nullptr);
             if (state->empty_message == nullptr) return -1;
-            SendMessageW(state->empty_message, WM_SETFONT,
-                         reinterpret_cast<WPARAM>(
-                             GetStockObject(DEFAULT_GUI_FONT)),
-                         TRUE);
             for (std::size_t index = 0; index < state->tab_strips.size();
                  ++index) {
                 // PD-040: plain STATIC child used purely as a clipping
@@ -3082,10 +3163,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                        index,
                                        reinterpret_cast<DWORD_PTR>(state)))
                     return -1;
-                SendMessageW(state->tab_strips[index], WM_SETFONT,
-                             reinterpret_cast<WPARAM>(
-                                 GetStockObject(DEFAULT_GUI_FONT)),
-                             TRUE);
                 const std::array<const wchar_t*, 5> labels{
                     L"<", L">", L"Up", L"Refresh", L"View"};
                 const std::array<int, 5> ids{
@@ -3107,10 +3184,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         window, reinterpret_cast<HMENU>(ids[button]),
                         GetModuleHandleW(nullptr), nullptr);
                     if (*destinations[button] == nullptr) return -1;
-                    SendMessageW(*destinations[button], WM_SETFONT,
-                                 reinterpret_cast<WPARAM>(
-                                     GetStockObject(DEFAULT_GUI_FONT)),
-                                 TRUE);
                 }
                 state->address_bars[index] = CreateWindowExW(
                     0, L"EDIT", nullptr,
@@ -3127,21 +3200,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     return -1;
                 (void)SHAutoComplete(state->address_bars[index],
                                      SHACF_FILESYS_DIRS);
-                SendMessageW(state->address_bars[index], WM_SETFONT,
-                             reinterpret_cast<WPARAM>(
-                                 GetStockObject(DEFAULT_GUI_FONT)),
-                             TRUE);
                 state->status_bars[index] = CreateWindowExW(
                     0, L"STATIC", L"",
                     WS_CHILD | WS_CLIPSIBLINGS | SS_OWNERDRAW,
                     0, 0, 0, 0, window, nullptr, GetModuleHandleW(nullptr),
                     nullptr);
                 if (state->status_bars[index] == nullptr) return -1;
-                SendMessageW(state->status_bars[index], WM_SETFONT,
-                             reinterpret_cast<WPARAM>(
-                                 GetStockObject(DEFAULT_GUI_FONT)),
-                             TRUE);
             }
+            refresh_ui_font(window, *state);
             refresh_sidebar(*state);
             refresh_tab_strips(*state);
             if (FAILED(apply_layout(window, *state))) {
@@ -3476,6 +3542,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                          suggested->right - suggested->left,
                          suggested->bottom - suggested->top,
                          SWP_NOZORDER | SWP_NOACTIVATE);
+            if (state != nullptr) refresh_ui_font(window, *state);
             if (state != nullptr && FAILED(apply_layout(window, *state)))
                 OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
             return 0;
@@ -3578,6 +3645,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_NCDESTROY:
             if (state != nullptr) {
                 revoke_drag_hover_targets(*state);
+                release_ui_font(*state);
                 SetWindowLongPtrW(window, GWLP_USERDATA, 0);
             }
             break;

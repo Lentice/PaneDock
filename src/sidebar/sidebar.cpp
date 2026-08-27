@@ -28,6 +28,31 @@ std::wstring format_subtitle(std::size_t pane_count, std::size_t tab_count) {
     return text;
 }
 
+HFONT create_ui_font(HDC dc, const LOGFONTW& fallback) noexcept {
+    LOGFONTW requested = fallback;
+    if (wcscpy_s(requested.lfFaceName, LF_FACESIZE, L"Segoe UI") != 0)
+        return CreateFontIndirectW(&fallback);
+    requested.lfCharSet = DEFAULT_CHARSET;
+    requested.lfQuality = CLEARTYPE_QUALITY;
+
+    HFONT font = CreateFontIndirectW(&requested);
+    if (font == nullptr) return CreateFontIndirectW(&fallback);
+    bool has_requested_face = true;
+    if (dc != nullptr) {
+        const HGDIOBJ old_font = SelectObject(dc, font);
+        if (old_font != nullptr && old_font != HGDI_ERROR) {
+            wchar_t actual_face[LF_FACESIZE]{};
+            const int length = GetTextFaceW(dc, LF_FACESIZE, actual_face);
+            has_requested_face =
+                length > 0 && lstrcmpiW(actual_face, L"Segoe UI") == 0;
+            SelectObject(dc, old_font);
+        }
+    }
+    if (has_requested_face) return font;
+    DeleteObject(font);
+    return CreateFontIndirectW(&fallback);
+}
+
 }  // namespace
 
 bool Sidebar::create(HWND parent, int control_id,
@@ -183,13 +208,13 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item,
     if (have_system_font) {
         LOGFONTW name_logfont = metrics.lfMessageFont;
         name_logfont.lfWeight = FW_SEMIBOLD;
-        name_font = CreateFontIndirectW(&name_logfont);
+        name_font = create_ui_font(item->hDC, name_logfont);
 
         LOGFONTW subtitle_logfont = metrics.lfMessageFont;
         subtitle_logfont.lfHeight = static_cast<LONG>(std::lround(
             static_cast<double>(subtitle_logfont.lfHeight) * 0.9));
         subtitle_logfont.lfWeight = FW_NORMAL;
-        subtitle_font = CreateFontIndirectW(&subtitle_logfont);
+        subtitle_font = create_ui_font(item->hDC, subtitle_logfont);
     }
 
     SetBkMode(item->hDC, TRANSPARENT);

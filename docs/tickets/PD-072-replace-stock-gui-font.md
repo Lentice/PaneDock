@@ -207,3 +207,20 @@ git diff --check
 **結論:GDI 的字型連結(font linking)確實會為 Segoe UI 缺少的 CJK 字符自動代換中文字型**,拉丁部分仍由 Segoe UI 渲染。墨跡數與原生中文字型相當(550 vs 526),排除「畫成空框但仍有墨跡」的可能;兩張圖都已目視確認。`Segoe UI` 在本機存在(`InstalledFontCollection` 確認)。
 
 另補一筆:`InstalledFontCollection` 列不出 `PMingLiU`(GDI+ 以不同的家族名列舉),但 GDI 的 `GetStockObject(DEFAULT_GUI_FONT)` 確實回報 `lfFaceName = "PMingLiU"`。**判斷字型時請用 GDI 的 `GetObjectW`/`GetTextFaceW`,不要用 GDI+ 的字型列舉**——本專案的繪製走的是 GDI。
+
+### 2026-08-27 — implementation pass
+
+- `git grep -n "GetStockObject(DEFAULT_GUI_FONT)" HEAD -- src` 的修改前實際清單共有 10 處，位於 `main.cpp` 的 tab 寬度量測、`brand_font()`、GROUPS label、sidebar action buttons、layout buttons、empty message、tab strip、五組 pane navigation buttons、address bars、status bars。全部改由一支 `ui_font(HWND)`／`chrome_font` 路徑供應；目前 `rg -n "DEFAULT_GUI_FONT" src` 只剩 PD-072 說明註解，沒有實際呼叫。
+- `ui_font(HWND)` 以 `GetDpiForWindow(window)` 傳入 `SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, ...)`，從 `lfMessageFont` 複製後只覆寫 `lfFaceName = "Segoe UI"`、`lfCharSet = DEFAULT_CHARSET`、`lfQuality = CLEARTYPE_QUALITY`。建立後以 `GetTextFaceW` 驗證實際 face；若不是 Segoe UI，刪除該 HFONT 並以未改動的 `lfMessageFont` face 建立 fallback。這也確認目前 LLVM-MinGW headers/linker 可用該 API。
+- 原生控制項共用 `AppState::chrome_font`；WM_CREATE 完成控制項建立後套用，WM_DPICHANGED 重新建立並重新套用後才刪除舊字型，WM_NCDESTROY 經 `release_ui_font` 刪除最後一個 handle。品牌標題的 `brand_font(HWND)` 每次由 `ui_font` 衍生 `FW_BOLD` 字型並在繪製後刪除；sidebar 的 Group name/subtitle 每次 owner-draw 建立並在繪製後各自 `DeleteObject`。不採跨 DPI cache，避免 cache invalidation 與跨螢幕 stale font。
+- sidebar 保留 PD-061 的 `FW_SEMIBOLD`/`FW_NORMAL`、subtitle `0.9` 高度倍率與 `kGroupRowHeight = 52`，本票只固定 face/charset/quality；tab measurement、tab 自繪、status 自繪也明確 `SelectObject` 同一個 chrome font。未改任何字級、字重（品牌既有 bold 除外）、顏色、列高或間距常數。
+
+Agent evidence:
+
+- `cmake -S . -B build -G Ninja '-DCMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake' -DCMAKE_BUILD_TYPE=Release`：成功。
+- `cmake --build build`：成功，使用 `E:\Dev\LLVM-MinGW\bin\clang++.exe` 編譯並連結 `PaneDock.exe`。
+- `ctest --test-dir build --output-on-failure`：5/5 passed。
+- `rg -n "DEFAULT_GUI_FONT" src`：只回報 `main.cpp` 的 PD-072 註解；`rg -n "SystemParametersInfoForDpi|lfMessageFont|ui_font|brand_font" src`：回報 app_shell 共用路徑與 sidebar 兩個 owner-draw 字型建立點。
+- `git diff --check`：成功，沒有 whitespace error。
+
+驗證邊界：依本票指定的 single click + screenshot 政策，本次沒有啟動或多步驟操作 UI，因此 Acceptance 1（品牌截圖）、2（各 chrome 截圖）、3（截字/溢出）、4（中文檔名實畫）、4a（側邊欄實畫對照）、4b（跨語系實機對照）、5（150%/200% 實機）、6（關閉後以工具量測 GDI handle）均未以桌面證據驗證；沒有宣稱修改後 `GetObjectW` 品牌/狀態列實測值，也沒有新增放大 3 倍截圖。Acceptance 7、8 有上述命令輸出證據；tracker 的 PD-072 狀態仍維持 `ready`，待人類補足視覺、中文與 DPI/資源量測後才能改為 done。
