@@ -428,6 +428,9 @@ struct AppState {
     std::array<HWND, kExplorerCount> refresh_buttons{};
     std::array<HWND, kExplorerCount> view_mode_buttons{};
     std::array<bool, kExplorerCount> suppress_history_record{};
+    // BrowseToObject may synchronously re-enter navigation_complete while the
+    // remaining panes still display the outgoing Group's folders.
+    bool suppress_location_capture{};
     Microsoft::WRL::ComPtr<DragHoverTarget> sidebar_drag_target;
     std::array<Microsoft::WRL::ComPtr<DragHoverTarget>, kExplorerCount>
         tab_drag_targets{};
@@ -1309,7 +1312,7 @@ void refresh_tab_strips(AppState& state) {
 }
 
 void capture_pane_location(AppState& state, std::size_t pane_index) {
-    if (!has_active_group(state)) return;
+    if (state.suppress_location_capture || !has_active_group(state)) return;
     auto& group = active_group(state);
     if (pane_index >= group.panes.size() || !state.realized[pane_index] ||
         state.explorers[pane_index].location().empty()) return;
@@ -1322,7 +1325,7 @@ void capture_pane_location(AppState& state, std::size_t pane_index) {
 }
 
 void capture_locations(AppState& state) {
-    if (!has_active_group(state)) return;
+    if (state.suppress_location_capture || !has_active_group(state)) return;
     for (std::size_t index = 0; index < active_group(state).panes.size();
          ++index) {
         capture_pane_location(state, index);
@@ -1782,6 +1785,7 @@ void paint_client_background(HWND window, HDC dc,
 }
 
 void save_now(AppState& state, bool clean_shutdown = false) noexcept {
+    if (state.suppress_location_capture) return;
     capture_locations(state);
     state.session_document.application = state.application;
     state.session_document.clean_shutdown = clean_shutdown;
@@ -2057,6 +2061,7 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
     capture_locations(state);
     state.application.active_group_id = target_id;
     refresh_tab_strips(state);
+    state.suppress_location_capture = true;
     auto& group = active_group(state);
     for (std::size_t pane = 0; pane < group.panes.size(); ++pane) {
         if (state.realized[pane]) {
@@ -2064,6 +2069,7 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
                 active_tab(group.panes[pane]).location.parsing_name);
         }
     }
+    state.suppress_location_capture = false;
     if (FAILED(apply_layout(window, state)))
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
     state.explorers[active_pane_index(group)].focus();
@@ -2134,12 +2140,14 @@ void delete_group(HWND window, AppState& state) {
     if (!panedock::core::delete_group(state.application, id)) return;
     refresh_tab_strips(state);
     if (deleted_active && has_active_group(state)) {
+        state.suppress_location_capture = true;
         auto& group = active_group(state);
         for (std::size_t pane = 0; pane < group.panes.size(); ++pane) {
             if (state.realized[pane])
                 state.explorers[pane].navigate(
                     active_tab(group.panes[pane]).location.parsing_name);
         }
+        state.suppress_location_capture = false;
     }
     if (FAILED(apply_layout(window, state)))
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");

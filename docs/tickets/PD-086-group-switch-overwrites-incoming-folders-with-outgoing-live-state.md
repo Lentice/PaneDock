@@ -76,4 +76,39 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作完成後由實作者填寫）
+### 實作內容
+
+- 在 `src/app_shell/main.cpp` 的 `AppState` 新增暫時性的
+  `suppress_location_capture` guard。
+- `capture_pane_location`、`capture_locations` 與 `save_now` 在 guard 生效時
+  都不會擷取 live pane 路徑或寫入 session。
+- `activate_group` 以及刪除 active Group 後的 realized-pane `navigate` 迴圈，
+  在第一個 `navigate` 前開啟 guard，待所有 `navigate` 呼叫發出後關閉；既有
+  迴圈結尾的 `save_now` 負責最後一次正常擷取與持久化。
+- 保留既有的 live view 與重新導覽策略，未重建 pane HWND，也未改動
+  `ExplorerHost`/Shell 回呼行為。
+
+### 驗證結果
+
+- Fix mechanism：同步 `BrowseToObject` 回呼在剩餘 pane 尚未發出 `navigate` 時，
+  會被 guard 阻止進入 capture/save；所有目標 pane 都發出導覽後才由既有的
+  `save_now` 保存完整狀態。
+- Agent Checks：
+  - `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`：PASS。
+  - `cmake --build build`：PASS，Release `PaneDock.exe` 成功建置。
+  - `ctest --test-dir build --output-on-failure`：PASS，5/5 tests passed。
+  - `git diff --check`：PASS。
+- 未新增 app_shell/COM fake self-check；依 `docs/testing.md` 的測試政策，
+  `core` 是唯一自動測試 seam，而本票的 guard 位於 HWND/COM 回呼時序，抽出
+  測試 seam 會擴大本票範圍。已以完整編譯與既有 ctest 驗證無回歸；同步導覽
+  污染情境仍需真實 Shell view 才能等價觀察。
+
+### Acceptance Criteria
+
+1. 未驗證,需真實桌面：建立至少兩個多 pane、不同路徑的 Group，連續切換並檢查
+   `session.json`。
+2. 未驗證,需真實桌面：以本機資料夾重現同步完成導覽，確認新 Group 沒有被舊
+   Group 路徑污染。
+3. PASS：上述 configure/build/ctest 全數通過。
+4. 未驗證,需真實桌面：需在實機確認 pane 內容更新與視覺無 regression；程式碼
+   保留原有 live view/`navigate`/`apply_layout` 流程。

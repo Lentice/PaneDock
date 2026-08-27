@@ -123,7 +123,7 @@
 | PD-083 | 導覽按鈕/New Group 按鈕/tab 捲動按鈕完全沒有 hover;版型按鈕 hover 對比度不足 | 7 | `ready` | PD-058, PD-047 | [PD-083](tickets/PD-083-remaining-buttons-missing-or-weak-hover.md) |
 | PD-084 | 限制單一 App 實例;第二次啟動改為喚醒既有視窗 | 7 | `ready` | 無 | [PD-084](tickets/PD-084-single-instance-activate-existing-window.md) |
 | PD-085 | 把 tab 捲動按鈕的幾何計算抽成純函式(可單元測試) | 7 | `ready` | 無 | [PD-085](tickets/PD-085-tab-scroll-button-geometry-to-pure-module.md) |
-| PD-086 | 切換 Group 時,同步完成的導覽把舊 Group 的路徑寫進新 Group 的儲存分頁(資料遺失) | 7 | `ready` | 無 | [PD-086](tickets/PD-086-group-switch-overwrites-incoming-folders-with-outgoing-live-state.md) |
+| PD-086 | 切換 Group 時,同步完成的導覽把舊 Group 的路徑寫進新 Group 的儲存分頁(資料遺失) | 7 | `done` | 無 | [PD-086](tickets/PD-086-group-switch-overwrites-incoming-folders-with-outgoing-live-state.md) |
 | PD-087 | 版型縮小時被隱藏的 pane 沒有 destroy `IExplorerBrowser`,放大回去顯示過期資料夾 | 7 | `ready` | 無 | [PD-087](tickets/PD-087-layout-shrink-leaks-hidden-explorerhost.md) |
 | PD-088 | `Site`/`ViewCallback` 持有的 `ExplorerHost*` 在 destroy 後未清空,延遲回呼可能觸碰已銷毀物件 | 7 | `ready` | 無 | [PD-088](tickets/PD-088-explorerhost-callback-use-after-destroy.md) |
 | PD-089 | PD-084 單一實例喚醒常見情境下靜默失敗(`SetForegroundWindow` 被拒絕、輪詢逾時無回饋) | 7 | `ready` | PD-084 | [PD-089](tickets/PD-089-single-instance-activation-unreliable.md) |
