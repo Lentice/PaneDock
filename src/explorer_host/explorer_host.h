@@ -25,6 +25,8 @@ public:
     struct ItemCounts {
         int total{};
         int selected{};
+        unsigned long long selected_bytes{};
+        bool selected_bytes_valid{};
     };
 
     ExplorerHost() noexcept = default;

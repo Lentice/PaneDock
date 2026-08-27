@@ -136,3 +136,33 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接
+
+2026-08-27
+
+- `ItemCounts` 最終形狀為 `{ int total; int selected; unsigned long long selected_bytes; bool selected_bytes_valid; }`；`item_counts` 簽章為 `HRESULT item_counts(ItemCounts& counts) const noexcept`。
+- 大小統計上限為 1000 個選取項目。`selected > 1000` 時不呼叫 `IFolderView2::Items`，回傳 `S_OK`、保留項目數、設定 `selected_bytes_valid=false`；狀態列顯示 `N items   M selected`，省略大小。
+- 上限內使用 `IFolderView2::Items(SVGIO_SELECTION, IID_PPV_ARGS(&items))`，逐項取得 `IShellItem2` 並呼叫 `GetUInt64(PKEY_Size)`；資料夾或其他沒有 `PKEY_Size` 的項目在 `GetUInt64` 失敗時跳過，不視為錯誤。成功計算但總和為 0 時為 `selected_bytes_valid=true`，UI 省略大小段；因此它與 cap 的 `false` 在資料層可區分。
+- 文字格式為 `N items   M selected   <StrFormatByteSizeW result>`，段落間固定 3 個空白；無選取仍為 `N items`。大小只傳入 `StrFormatByteSizeW`，沒有手算單位或遞迴資料夾大小。
+- 狀態列改為 `STATIC` + `SS_OWNERDRAW`，由主視窗 `WM_DRAWITEM` 直接繪製。footer 背景為 `RGB(249,250,251)`，上緣分隔線為按 DPI 縮放的 1px、`RGB(232,237,242)`，文字維持 `RGB(100,116,139)`；舊的狀態列 `WM_CTLCOLORSTATIC` 路徑已移除。
+- 選取通知沿用 PD-051 已驗證的 `IShellFolderView::SetCallback` + `IShellFolderViewCB` `SFVM_SELECTIONCHANGED`，本票未增加輪詢；`navigation_complete` 與既有 callback 仍會更新狀態列。
+- 可執行檢查：指定 LLVM-MinGW/Ninja Release configure 成功；`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 為 4/4 passed；`build\\pd062-output\\panedock_explorer_host_lifetime_check.exe` 輸出 `PASSED: explorer_host_lifetime_check`；API `rg` 檢查命中 `Items`、`PKEY_Size`、`GetUInt64`、`StrFormatByteSizeW` 與 owner-draw 路徑。
+- 實機 UI 證據：未完成。`computer-use` 原生通道在初始化、一次重試及重置 JS session 後均回報 `Computer Use native pipe is unavailable: failed to connect native pipe: 系統找不到指定的檔案。`；依本票限制未改用 PowerShell/其他長序列輸入，也未使用 `CopyFromScreen`，因此沒有可附的 `PrintWindow(PW_RENDERFULLCONTENT)` 截圖。
+- `Ctrl+A` 全選 `C:\Windows` 反應時間：未量測；需人類在解鎖桌面以單次 Ctrl+A 檢查。idle 0% CPU／無磁碟 I/O 同樣未量測，因票券要求的 10 分鐘 soak 不屬快速互動驗證。
+- `git diff --check` 全域檢查目前被工作樹中先於本票的 `docs/tickets.md` PD-078/PD-079 未提交變更之 trailing whitespace 阻塞（行 117–119、376–386）；本票修改檔案的 scoped `git diff --check` 通過，未改動或清理該使用者變更。
+
+#### Acceptance evidence
+
+| # | 結果 | 證據 |
+|---|---|---|
+| 1 | 未驗證 | 未取得 GUI 截圖；程式碼已保留 `N items` 無選取分支。 |
+| 2 | 未驗證 | 未執行檔案選取或取得 `PrintWindow` 截圖；三段格式已建置。 |
+| 3 | 未驗證 | 未能在 Shell view 選取資料夾；程式碼對缺少 `PKEY_Size` 的項目跳過並對 0 總和省略大小。 |
+| 4 | 未驗證 | 未能在 GUI 執行超過 1000 項選取；上限分支與省略大小行為已編譯。 |
+| 5 | 未驗證 | 未執行 `C:\Windows` 的 Ctrl+A；未取得可負責任的反應時間。 |
+| 6 | 未驗證 | 未取得 `PrintWindow(..., 2)` 實機截圖；owner-draw 路徑已建置。 |
+| 7 | 未驗證 | 未執行選取/取消選取互動；既有 `SFVM_SELECTIONCHANGED` callback 未改動。 |
+| 8 | 未驗證 | 未執行 10 分鐘 idle 量測；不可用短暫命令輸出代替。 |
+| 9 | PASS | `cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 4/4 passed。 |
+| 10 | 未驗證 | 全域 `git diff --check` 被既有 `docs/tickets.md` 變更的 trailing whitespace 阻塞；本票檔案 scoped check 通過。 |

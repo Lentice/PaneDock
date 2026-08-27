@@ -6,8 +6,12 @@
 int main() {
     using panedock::explorer_host::LiveViewRegistration;
     using panedock::explorer_host::live_view_count;
+    using ItemCounts = panedock::explorer_host::ExplorerHost::ItemCounts;
 
     EXPECT(live_view_count() == 0);
+    const ItemCounts empty_counts{};
+    EXPECT(empty_counts.selected_bytes == 0);
+    EXPECT(!empty_counts.selected_bytes_valid);
 
     {
         LiveViewRegistration view;
@@ -38,6 +42,11 @@ int main() {
             host.initialize(parent, rect, L"shell:Desktop");
         EXPECT(SUCCEEDED(initialize_result));
         if (SUCCEEDED(initialize_result)) {
+            ItemCounts counts;
+            EXPECT(SUCCEEDED(host.item_counts(counts)));
+            EXPECT(counts.selected == 0);
+            EXPECT(counts.selected_bytes == 0);
+            EXPECT(counts.selected_bytes_valid);
             constexpr std::wstring_view missing =
                 L"?:\\PaneDock-PD-022-definitely-not-there";
             EXPECT(SUCCEEDED(host.navigate(missing)));

@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <new>
 #include <numeric>
 #include <optional>
@@ -818,6 +819,38 @@ void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
 }
 
+void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi) noexcept {
+    const RECT rect = item.rcItem;
+    HBRUSH background = CreateSolidBrush(RGB(249, 250, 251));
+    if (background != nullptr) {
+        FillRect(item.hDC, &rect, background);
+        DeleteObject(background);
+    }
+
+    const int height = std::max(0, static_cast<int>(rect.bottom - rect.top));
+    const int separator_height = std::min(
+        std::max(1, MulDiv(1, static_cast<int>(dpi), 96)), height);
+    if (separator_height > 0) {
+        RECT separator = rect;
+        separator.bottom = separator.top + separator_height;
+        HBRUSH line = CreateSolidBrush(RGB(232, 237, 242));
+        if (line != nullptr) {
+            FillRect(item.hDC, &separator, line);
+            DeleteObject(line);
+        }
+    }
+
+    std::array<wchar_t, 256> text{};
+    GetWindowTextW(item.hwndItem, text.data(),
+                   static_cast<int>(text.size()));
+    RECT text_rect = rect;
+    text_rect.top += separator_height;
+    SetBkMode(item.hDC, TRANSPARENT);
+    SetTextColor(item.hDC, RGB(100, 116, 139));
+    DrawTextW(item.hDC, text.data(), -1, &text_rect,
+              DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+}
+
 RECT pane_area(HWND window) noexcept {
     RECT area = client_rect(window);
     area.left = std::min(area.right,
@@ -995,11 +1028,26 @@ void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
         SetWindowTextW(state.status_bars[pane_index], L"");
         return;
     }
-    const std::wstring text = counts.selected == 0
-                                  ? std::to_wstring(counts.total) + L" items"
-                                  : std::to_wstring(counts.selected) + L" of " +
-                                        std::to_wstring(counts.total) +
-                                        L" selected";
+    std::wstring text = std::to_wstring(counts.total) + L" items";
+    if (counts.selected != 0) {
+        text += L"   ";
+        text += std::to_wstring(counts.selected);
+        text += L" selected";
+        if (counts.selected_bytes_valid && counts.selected_bytes != 0) {
+            std::array<wchar_t, 64> size_text{};
+            const auto bytes = std::min(
+                counts.selected_bytes,
+                static_cast<unsigned long long>(
+                    std::numeric_limits<LONGLONG>::max()));
+            if (StrFormatByteSizeW(static_cast<LONGLONG>(bytes),
+                                   size_text.data(),
+                                   static_cast<UINT>(size_text.size())) !=
+                nullptr) {
+                text += L"   ";
+                text += size_text.data();
+            }
+        }
+    }
     SetWindowTextW(state.status_bars[pane_index], text.c_str());
 }
 
@@ -2846,7 +2894,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                              TRUE);
                 state->status_bars[index] = CreateWindowExW(
                     0, L"STATIC", L"",
-                    WS_CHILD | WS_CLIPSIBLINGS | SS_LEFT | SS_CENTERIMAGE,
+                    WS_CHILD | WS_CLIPSIBLINGS | SS_OWNERDRAW,
                     0, 0, 0, 0, window, nullptr, GetModuleHandleW(nullptr),
                     nullptr);
                 if (state->status_bars[index] == nullptr) return -1;
@@ -2914,6 +2962,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_DRAWITEM:
             if (state != nullptr) {
                 const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+                if (item != nullptr &&
+                    std::find(state->status_bars.begin(),
+                              state->status_bars.end(),
+                              item->hwndItem) != state->status_bars.end()) {
+                    draw_status_bar(*item, GetDpiForWindow(item->hwndItem));
+                    return TRUE;
+                }
                 if (item != nullptr && item->CtlType == ODT_BUTTON &&
                     item->CtlID >= kLayoutButtonIdBase &&
                     item->CtlID < kLayoutButtonIdBase +
@@ -3002,16 +3057,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     SetBkMode(dc, TRANSPARENT);
                     SetTextColor(dc, RGB(152, 162, 179));
                     SetTextCharacterExtra(dc, scaled_value(window, 1));
-                    return reinterpret_cast<LRESULT>(
-                        GetSysColorBrush(COLOR_WINDOW));
-                }
-                if (std::find(state->status_bars.begin(),
-                              state->status_bars.end(),
-                              control) != state->status_bars.end()) {
-                    const HDC dc = reinterpret_cast<HDC>(wparam);
-                    SetBkMode(dc, OPAQUE);
-                    SetBkColor(dc, RGB(255, 255, 255));
-                    SetTextColor(dc, RGB(100, 116, 139));
                     return reinterpret_cast<LRESULT>(
                         GetSysColorBrush(COLOR_WINDOW));
                 }

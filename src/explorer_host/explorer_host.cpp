@@ -8,12 +8,16 @@
 
 #include <shlwapi.h>
 #include <shlobj.h>
+#include <propkey.h>
 
 namespace panedock::explorer_host {
 namespace {
 
 constexpr wchar_t kErrorWindowClassName[] = L"PaneDock.ErrorPanel";
 constexpr int kRetryButtonId = 1;
+// ponytail: fixed 1000-item UI ceiling; raise only with measured
+// non-blocking Shell enumeration.
+constexpr int kSelectionSizeItemLimit = 1000;
 constexpr GUID kIidShellFolderView{
     0x37a378c0, 0xf82d, 0x11ce,
     {0xae, 0x65, 0x08, 0x00, 0x2b, 0x2e, 0x12, 0x62}};
@@ -441,7 +445,35 @@ HRESULT ExplorerHost::item_counts(ItemCounts& counts) const noexcept {
     if (FAILED(hr)) return hr;
     hr = folder_view->ItemCount(SVGIO_ALLVIEW, &counts.total);
     if (FAILED(hr)) return hr;
-    return folder_view->ItemCount(SVGIO_SELECTION, &counts.selected);
+    hr = folder_view->ItemCount(SVGIO_SELECTION, &counts.selected);
+    if (FAILED(hr)) return hr;
+    if (counts.selected < 0) return E_UNEXPECTED;
+    if (counts.selected == 0) {
+        counts.selected_bytes_valid = true;
+        return S_OK;
+    }
+    if (counts.selected > kSelectionSizeItemLimit) return S_OK;
+
+    Microsoft::WRL::ComPtr<IShellItemArray> items;
+    hr = folder_view->Items(SVGIO_SELECTION, IID_PPV_ARGS(&items));
+    if (FAILED(hr)) return hr;
+    DWORD item_count = 0;
+    hr = items->GetCount(&item_count);
+    if (FAILED(hr)) return hr;
+    if (item_count > static_cast<UINT>(kSelectionSizeItemLimit)) return S_OK;
+
+    counts.selected_bytes_valid = true;
+    for (UINT index = 0; index < item_count; ++index) {
+        Microsoft::WRL::ComPtr<IShellItem> item;
+        if (FAILED(items->GetItemAt(index, &item))) continue;
+        Microsoft::WRL::ComPtr<IShellItem2> item2;
+        if (FAILED(item.As(&item2))) continue;
+        ULONGLONG size = 0;
+        if (SUCCEEDED(item2->GetUInt64(PKEY_Size, &size)))
+            counts.selected_bytes +=
+                static_cast<unsigned long long>(size);
+    }
+    return S_OK;
 }
 
 void ExplorerHost::selection_changed() noexcept {
