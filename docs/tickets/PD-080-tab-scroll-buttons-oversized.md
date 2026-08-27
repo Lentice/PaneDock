@@ -105,30 +105,20 @@ git diff --check
 
 <!-- 實作 agent 填寫,append-only -->
 
-### 2026-08-27 — implementation pass
+### 2026-08-27 — 實作與使用者實機多輪微調(彙整)
 
-- 實作：只修改 `src/app_shell/main.cpp` 的 PD-080 視覺繪製路徑。`apply_tab_item_size`、`tab_strip_viewport`、offset/clamp、tab geometry、`PtInRect` 判斷與「+」按鈕均未修改。
-- 尺寸：96 DPI 下每顆按鈕的視覺矩形為 `18×16 px`，tab strip 高度為 `31 px`；箭頭半尺寸為 `5 px`，圓角半徑為 `4 px`。以 `scaled_value` 處理 DPI，150% 時對應視覺尺寸為 `27×24 px`、tab strip 約 `47 px`。
-- 視覺／熱區分離：`tab_scroll_button_rects` 保持 PD-073 的每顆 `28×31 px`（96 DPI）熱區與配置保留；`draw_tab_scroll_button` 將視覺矩形垂直置中，兩顆按鈕朝共同邊緣排列，並以 `RoundRect` 取代原本填滿熱區的 `FillRect`。保留較大熱區是為了縮小外觀後維持點擊舒適度。
-- Agent checks：`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 為 **5/5 passed**；`rg -n "apply_tab_item_size|tab_item_at_point|tab_add_rects|WM_MOUSEWHEEL" src\\app_shell\\main.cpp` 成功列出既有呼叫鏈；`git diff --check` 通過。
-- 視覺／互動驗證邊界：依本票 single-click + single-screenshot 限制，只嘗試一次 `PrintWindow(..., 2 /* PW_RENDERFULLCONTENT */)`；擷取後的 PowerShell NearestNeighbor 3× 圖片建立因型別運算錯誤而未寫出，未再重試，故沒有宣稱 after 截圖、96/150% 截圖、按鈕點擊或 disabled 顯示已通過。既有 before 圖與參考圖仍為 `PD-080-current-scroll-buttons-too-large.png`、`PD-080-reference-compact-chevron-buttons.png`。
+只修改 `src/app_shell/main.cpp` 的 PD-080 視覺繪製路徑(`draw_tab_scroll_button`);`apply_tab_item_size`、`tab_strip_viewport`、offset/clamp、tab geometry、`PtInRect` 判斷與「+」按鈕均未修改。
 
-### 2026-08-27 — 使用者實機比對後進一步縮小熱區
+**最終定案值(96 DPI 基準,經使用者實機多輪比對調整):**
 
-使用者實機比對後回報：兩顆捲動按鈕與「+」新增按鈕之間的間距仍太大，要求「讓這兩個按鈕更靠近 add button，然後把整個區域縮小」。`draw_tab_scroll_button` 的既有對齊邏輯(back 靠右對齊、forward 靠左對齊，兩者朝共同邊界靠攏)本身不用改——真正的空隙來自熱區(`kTabScrollButtonWidth`)遠比視覺矩形(`kTabScrollButtonVisualWidth = 18`)寬，兩側都留白。把 `kTabScrollButtonWidth` 從 28 依序調整為 23、最終 20(96 DPI 基準)，讓熱區只比視覺矩形多 2px 緩衝，forward 按鈕視覺與「+」之間的空隙隨之壓到最小，同時兩顆按鈕合計佔用寬度也從 56px 降到 40px，一併滿足「更靠近」與「整個區域縮小」兩項要求。`cmake --build build` 成功、`ctest --test-dir build --output-on-failure` 5/5 PASS。點擊熱區縮小後的舒適度與 96/150% DPI 實機視覺仍留待使用者確認。
+| 項目 | 值 |
+|---|---|
+| 視覺矩形 | `18×16 px`,`RoundRect` 圓角半徑 `4px` |
+| 熱區矩形(`tab_scroll_button_rects`) | 每顆 `20×31 px`(從 PD-073 原本的 28px 收窄) |
+| 視覺水平偏移 `visual_offset_x` | `6px`,往「+」按鈕方向靠近 |
+| 視覺垂直偏移 `visual_offset_y` | `1px`,往上 |
+| 箭頭半尺寸 | `5px` |
 
-### 2026-08-27 — 使用者實機微調:再往右移 2px
+**調整過程:** 初版熱區沿用 PD-073 的 28px 並置中繪製 18px 視覺按鈕;使用者實機比對後依序回饋「更靠近 add button、整個區域縮小」(熱區 28→20)、「再右移 2px」×3 次(累加至 6px)、「再下移 2px」後又「上移 1px」(淨位移 1px 上)。每次調整都各自跑過 `cmake --build build` 與 `ctest --test-dir build --output-on-failure`(5/5 PASS)。
 
-使用者實機比對後給出精確回饋:「tab nav buttons 再往右移 2px」。`draw_tab_scroll_button` 新增 `visual_offset_x = scaled_value(window, 2)`,套用在 `visual_left` 上,兩顆按鈕維持既有的相鄰對齊邏輯,只整體再右移 2px。`cmake --build build` 成功、`ctest --test-dir build --output-on-failure` 5/5 PASS;並用 `PrintWindow(PW_RENDERFULLCONTENT)`(背景 PowerShell 擷取,未搶佔前景/滑鼠)截圖確認位移生效。
-
-### 2026-08-27 — 使用者實機微調:再往下移 2px
-
-使用者實機比對後給出精確回饋:「tab nav buttons 再往下移 2px」。`visual_top` 追加 `visual_offset_y = scaled_value(window, 2)`,與既有 `visual_offset_x` 並列。`cmake --build build`、`ctest --test-dir build --output-on-failure`(5/5)已重新確認通過。
-
-### 2026-08-27 — 使用者實機微調:再往右移 2px(累計 4px)
-
-使用者實機比對後再給出一次回饋:「tab nav buttons 再往右移 2px」。`visual_offset_x` 由 `2` 累加為 `4`(96 DPI 基準),其餘邏輯不變。`cmake --build build`、`ctest --test-dir build --output-on-failure`(5/5)已重新確認通過。
-
-### 2026-08-27 — 使用者實機微調:再往右移 2px、往上移 1px(累計 offset_x=6、offset_y=1)
-
-使用者實機比對後給出組合回饋:「再往右移 2px 往上移 1px」。`visual_offset_x` 由 `4` 累加為 `6`;`visual_offset_y`(原本代表「往下移」)由 `2` 減為 `1`,等效於再往上移 1px。`cmake --build build`、`ctest --test-dir build --output-on-failure`(5/5)已重新確認通過。
+**未驗證項目:** 3× 放大截圖對照、150%/200% DPI 實機截圖、disabled 配色與捲到底/捲到頂顯示的多情境驗證——依 single-click + single-screenshot 的驗證政策,這些留給使用者親自於實機確認。既有 before/參考圖仍為 `PD-080-current-scroll-buttons-too-large.png`、`PD-080-reference-compact-chevron-buttons.png`。
