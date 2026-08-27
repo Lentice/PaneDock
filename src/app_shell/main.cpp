@@ -50,6 +50,8 @@ constexpr DWORD kSingleInstanceWindowRetryIntervalMs = 50;
 constexpr ULONGLONG kSingleInstanceWindowRetryTimeoutMs = 5000;
 // PD-089: the first instance handles this on its own UI thread.
 constexpr UINT kActivateExistingInstanceMessage = WM_APP + 50;
+// PD-090: run drag-hover callbacks after the WM_TIMER handler returns.
+constexpr UINT kDragHoverMessage = WM_APP + 51;
 constexpr std::size_t kExplorerCount = 4;
 constexpr int kLayoutBarHeight = 44;
 constexpr int kLayoutButtonHeight = 30;
@@ -265,9 +267,21 @@ public:
     void timer_expired() noexcept {
         if (!hover_index_.has_value() || hover_triggered_ || invoking_)
             return;
-        const std::size_t index = *hover_index_;
         hover_triggered_ = true;
         stop_timer();
+        pending_generation_ = ++hover_generation_;
+        if (!PostMessageW(timer_window_, kDragHoverMessage, timer_id_,
+                          static_cast<LPARAM>(pending_generation_))) {
+            OutputDebugStringW(
+                L"PaneDock: could not queue drag hover callback\n");
+        }
+    }
+
+    void invoke_hover(UINT_PTR generation) noexcept {
+        if (!hover_index_.has_value() || !hover_triggered_ ||
+            pending_generation_ != generation || invoking_)
+            return;
+        const std::size_t index = *hover_index_;
         invoking_ = true;
         try {
             hover_callback_(index);
@@ -319,6 +333,8 @@ private:
     bool timer_running_{false};
     bool hover_triggered_{false};
     bool invoking_{false};
+    UINT_PTR hover_generation_{0};
+    UINT_PTR pending_generation_{0};
 };
 
 Microsoft::WRL::ComPtr<DragHoverTarget> make_drag_hover_target(
@@ -3402,6 +3418,26 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 return 0;
             }
             break;
+        case kDragHoverMessage: {
+            if (state == nullptr) return 0;
+            const UINT_PTR timer = static_cast<UINT_PTR>(wparam);
+            const UINT_PTR generation = static_cast<UINT_PTR>(lparam);
+            if (timer == kDragHoverSidebarTimerId &&
+                state->sidebar_drag_target != nullptr) {
+                state->sidebar_drag_target->invoke_hover(generation);
+                return 0;
+            }
+            if (timer >= kDragHoverTabTimerIdBase &&
+                timer < kDragHoverTabTimerIdBase + kExplorerCount) {
+                const std::size_t pane_index = static_cast<std::size_t>(
+                    timer - kDragHoverTabTimerIdBase);
+                if (state->tab_drag_targets[pane_index] != nullptr)
+                    state->tab_drag_targets[pane_index]->invoke_hover(
+                        generation);
+                return 0;
+            }
+            return 0;
+        }
         case kActivateExistingInstanceMessage:
             activate_main_window_on_own_thread(window);
             return 0;

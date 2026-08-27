@@ -127,7 +127,7 @@
 | PD-087 | 版型縮小時被隱藏的 pane 沒有 destroy `IExplorerBrowser`,放大回去顯示過期資料夾 | 7 | `done` | 無 | [PD-087](tickets/PD-087-layout-shrink-leaks-hidden-explorerhost.md) |
 | PD-088 | `Site`/`ViewCallback` 持有的 `ExplorerHost*` 在 destroy 後未清空,延遲回呼可能觸碰已銷毀物件 | 7 | `done` | 無 | [PD-088](tickets/PD-088-explorerhost-callback-use-after-destroy.md) |
 | PD-089 | PD-084 單一實例喚醒常見情境下靜默失敗(`SetForegroundWindow` 被拒絕、輪詢逾時無回饋) | 7 | `ready` | PD-084 | [PD-089](tickets/PD-089-single-instance-activation-unreliable.md) |
-| PD-090 | 拖曳懸停自動切換 Group/tab 在 OLE 拖曳迴圈內同步做 Shell view 建立/銷毀與 session 寫入 | 7 | `ready` | PD-034 | [PD-090](tickets/PD-090-drag-hover-group-switch-reenters-ole-drag-loop.md) |
+| PD-090 | 拖曳懸停自動切換 Group/tab 在 OLE 拖曳迴圈內同步做 Shell view 建立/銷毀與 session 寫入 | 7 | `done` | PD-034 | [PD-090](tickets/PD-090-drag-hover-group-switch-reenters-ole-drag-loop.md) |
 | PD-091 | 每次資料夾導覽完成都同步寫入 session(多次 JSON 解析＋兩次強制 flush) | 7 | `ready` | PD-078 | [PD-091](tickets/PD-091-session-save-synchronous-on-every-navigation.md) |
 | PD-092 | `apply_layout` 單一 pane 初始化失敗時整段退出,遺留未完成排版與不一致狀態 | 7 | `ready` | 無 | [PD-092](tickets/PD-092-apply-layout-aborts-mid-loop-on-pane-init-failure.md) |
 | PD-093 | 啟動時同步 realize 所有可見 pane,違反 spec §9.3 延後 realize 規則 | 7 | `ready` | 無 | [PD-093](tickets/PD-093-startup-eagerly-realizes-all-panes-violates-deferred-realize-spec.md) |

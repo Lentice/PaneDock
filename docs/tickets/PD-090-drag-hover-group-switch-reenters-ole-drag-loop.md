@@ -75,4 +75,12 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作完成後由實作者填寫）
+- 實作：`DragHoverTarget::timer_expired` 現在只停止計時器並以 `PostMessageW` 排入 `WM_APP + 51`；`WndProc` 收到後才呼叫既有的 sidebar/tab hover callback。以 generation token 讓取消懸停或重新懸停後的舊 deferred message 不會誤觸發。
+- 未改動拖曳判定、`IDataObject`、游標回饋或 Drop 邏輯；未處理 PD-091 的完整 save 防抖修正。現有 `activate_group` 的 `save_now` 會在 deferred callback 中照常執行。
+- Agent Checks：
+  - `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`：通過。
+  - `cmake --build build`：通過，重新編譯並連結 `PaneDock.exe`。
+  - `ctest --test-dir build --output-on-failure`：通過，5/5 tests passed。
+  - `git diff --check`：通過。
+- Acceptance Criteria：AC-003 已由上述建置與測試驗證；AC-004 已提供下述聚焦驗證方式。AC-001、AC-002 的實機連續拖曳與放開檔案尚未由 Agent 執行，留給使用者依票據政策在實機驗證。
+- 聚焦驗證：在 debugger 對 `DragHoverTarget::timer_expired`、`DragHoverTarget::invoke_hover` 與 `activate_group` 設 breakpoint，實際拖曳並懸停。應先命中 `timer_expired` 且其 stack 不含 `activate_group`；返回後由 `WndProc` 處理 `WM_APP + 51`，才經 `invoke_hover` 命中 `activate_group`。接著在仍持有拖曳項目時移動並放開，確認游標與 Drop 行為正常。
