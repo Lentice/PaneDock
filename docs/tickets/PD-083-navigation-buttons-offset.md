@@ -109,3 +109,7 @@ git diff --check
 - `navigation_geometry()` 的第二個呼叫點仍只消費 `geometry.address_background`，會自動取得新的 `address_left`。
 - 驗證：`cmake --build build` 通過；`ctest --test-dir build --output-on-failure` 通過，5/5；ticket Agent checks 的 `rg` 與 `git diff --check` 後續檢查均通過。
 - 未擷取單擊／PrintWindow 截圖，也未進行五個按鈕逐一點擊或 150% DPI 實機驗證；依本票最小化驗證政策留待使用者確認。未新增獨立測試，因本幾何配置直接依賴 app_shell 的 HWND/Win32 DPI，既有 CTest 無對應 seam。
+
+### 2026-08-27 — 使用者實機比對後微調水平位移量
+
+使用者實機比對後回報:「nav button row shifted right 12px」——把 `kNavigationButtonOffsetX` 從 15 改為 12。`kNavigationButtonOffsetY`(2)與其餘幾何(`address_left` 隨 `button_offset_x` 連動、按鈕高度隨 `button_offset_y` 縮減以維持下緣不變)完全沿用上面實作交接的邏輯,不需要改動,只改了常數值本身。`cmake --build build` 成功、`ctest --test-dir build --output-on-failure` 5/5 PASS。
