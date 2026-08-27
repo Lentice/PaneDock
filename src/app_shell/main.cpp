@@ -72,6 +72,14 @@ constexpr int kTabCornerRadius = 6;
 constexpr int kTabCloseButtonSpace = 16;
 constexpr int kTabPlusSize = 12;
 constexpr int kTabPlusLineWidth = 2;
+// PD-076: keep tab active/hover colors aligned with sidebar.cpp without
+// introducing a cross-module palette.
+constexpr COLORREF kTabActiveBackground = RGB(234, 241, 255);
+constexpr COLORREF kTabHoverBackground = RGB(242, 245, 248);
+constexpr COLORREF kTabActiveText = RGB(23, 75, 180);
+constexpr COLORREF kTabText = RGB(31, 41, 55);
+constexpr COLORREF kTabActiveBorder = RGB(191, 211, 245);
+constexpr COLORREF kTabBorder = RGB(232, 237, 242);
 constexpr int kNavigationBarHeight = 28;
 constexpr int kStatusBarHeight = 24;
 constexpr int kNavigationButtonWidth = 32;
@@ -1449,7 +1457,6 @@ void apply_ui_font(AppState& state) noexcept {
     for (HWND button : state.layout_buttons) set_ui_font(button, font);
     set_ui_font(state.empty_message, font);
     for (std::size_t index = 0; index < state.tab_strips.size(); ++index) {
-        set_ui_font(state.tab_strips[index], font);
         set_ui_font(state.back_buttons[index], font);
         set_ui_font(state.forward_buttons[index], font);
         set_ui_font(state.up_buttons[index], font);
@@ -2653,7 +2660,6 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
                                  ? SelectObject(dc, state.chrome_font)
                                  : nullptr;
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, RGB(31, 41, 55));
     const RECT viewport = tab_viewport_rect(state, pane_index);
     const int saved_dc = SaveDC(dc);
     IntersectClipRect(dc, viewport.left, viewport.top, viewport.right,
@@ -2672,10 +2678,10 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
                              state.tab_hover_indices[pane_index] == index;
         if (rect.right > rect.left && rect.bottom > rect.top) {
             const COLORREF fill_color =
-                active ? RGB(226, 232, 240)
-                       : hovered ? RGB(236, 240, 244) : RGB(244, 246, 248);
+                active ? kTabActiveBackground
+                       : hovered ? kTabHoverBackground : RGB(244, 246, 248);
             const COLORREF border_color =
-                active ? RGB(203, 213, 225) : RGB(232, 237, 242);
+                active ? kTabActiveBorder : kTabBorder;
             HBRUSH fill = CreateSolidBrush(fill_color);
             HPEN border = CreatePen(PS_SOLID, border_width, border_color);
             if (fill != nullptr && border != nullptr) {
@@ -2694,6 +2700,7 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
                                   text_rect.left + text_padding);
         text_rect.right = std::max(text_rect.left,
                                    text_rect.right - text_padding);
+        SetTextColor(dc, active ? kTabActiveText : kTabText);
         DrawTextW(dc, visuals[index].text.c_str(), -1, &text_rect,
                   DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
     }

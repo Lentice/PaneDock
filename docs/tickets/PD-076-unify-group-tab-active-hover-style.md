@@ -165,3 +165,42 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-27 — implementation pass
+
+- `src/app_shell/main.cpp` 的 `paint_tab_strip` 已改用以下固定色票；沒有修改
+  `src/sidebar/sidebar.cpp`：
+
+  | Tab 狀態 | Tab 最終色值 | Sidebar 對應 |
+  |---|---|---|
+  | active background | `RGB(234, 241, 255)` | `kSidebarActiveBackground`，同值 |
+  | active text | `RGB(23, 75, 180)` | `kSidebarActiveText`，同值 |
+  | non-active hover background | `RGB(242, 245, 248)` | `kSidebarHoverBackground`，同值 |
+  | normal text | `RGB(31, 41, 55)` | 維持 tab 原值；對應 sidebar 的深灰文字語言 |
+  | active border | `RGB(191, 211, 245)` | sidebar pill 無外框；採協調 active 藍色的淡藍描邊 |
+  | normal border | `RGB(232, 237, 242)` | 維持既有 tab 描邊 |
+
+- 字型採用已落地的 PD-072 `ui_font(HWND)`／`AppState::chrome_font`。`paint_tab_strip`
+  在 `DrawTextW` 前以 `SelectObject` 選入共用字型，維持 `lfMessageFont` 的原生字級與
+  常規字重；active 只改文字色，不加粗。字型來源經 `SystemParametersInfoForDpi`
+  取得並由 `WM_DPICHANGED` 重建，未另建 tab-specific helper 或 cache。
+- 移除 `apply_ui_font` 對自繪 tab strip 的 `set_ui_font(..., WM_SETFONT)` 呼叫；該
+  呼叫對 `paint_tab_strip` 不生效。原生控制項仍沿用 `set_ui_font`，tab 實際字型只由
+  `paint_tab_strip` 的 `SelectObject` 控制。
+- 最終字級維持 `lfMessageFont` 原生高度，沒有為 31px tab row 下修；既有
+  `DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS` 保留。程式碼檢查確認長標題仍走
+  ellipsis 路徑，但本次沒有做多 tab 或長標題的互動操作。
+- LLVM-MinGW/Ninja 驗證：configure 成功、`cmake --build build` 成功、
+  `ctest --test-dir build --output-on-failure` 為 5/5 PASS、`git diff --check` PASS；
+  ticket 指定的 `rg` 檢查亦完成。
+- 依本回合 single-click + screenshot 限制，只啟動一次 Release `build\\PaneDock.exe`，
+  對第一個 pane 的 tab 做一次左鍵點擊，取得一張 1186x773 的視窗畫面。畫面中
+  `Progra...` tab 顯示 active 淡藍底與藍色文字，sidebar 與 tab 同時可見；截圖未另存
+  為 3 倍 NearestNeighbor 的 repository asset，也沒有做修改前/後或 active/hover/一般
+  三態的多張 `PrintWindow` 對照，因此 Acceptance 7 的「修改前後 sidebar 對照」及
+  Handoff 要求的完整放大截圖證據仍未驗證。
+- GDI：新增程式碼沒有建立常駐 GDI 物件，既有 `chrome_font` 選取路徑會在繪製後還原；
+  但依限制未做反覆切換或長時間 `GetGuiResources` 趨勢量測，Acceptance 8 未驗證。
+- 高 DPI：字型仍經 `ui_font` 的目前 window DPI 與既有 `WM_DPICHANGED` 路徑，程式碼
+  路徑已確認；未切換 150%/200% 實機設定，Acceptance 9 未驗證。PD-076 tracker
+  狀態維持 `ready`，因上述視覺對照、GDI 趨勢與高 DPI 實機證據尚不完整。
