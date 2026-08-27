@@ -50,6 +50,7 @@ constexpr int kLayoutButtonHeight = 30;
 constexpr int kLayoutButtonWidth = 30;
 constexpr int kPaneCanvasPadding = 15;
 constexpr int kPaneDividerThickness = 8;
+constexpr int kActivePaneIndicatorHeight = 3;
 constexpr int kSidebarHeadingHeight = 20;
 constexpr int kTabStripHeight = 31;
 constexpr int kTabStripIdBase = 200;
@@ -1588,13 +1589,13 @@ void apply_pane_container_region(HWND container, int width, int height,
     }
 }
 
-void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi, bool is_active) noexcept {
+void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi) noexcept {
     // Card visuals: white body, shadow one step darker (product decision 3).
     // Radius 10px@96dpi matches the design mock's .pane { border-radius:
     // 10px }. Shadow is a flat offset RoundRect, not a real blur (product
-    // decision 1 — no AlphaBlend/GradientFill). Active panes use the shared
-    // accent blue and a 2px border; inactive panes retain the 1px quiet-gray
-    // border.
+    // decision 1 — no AlphaBlend/GradientFill). The active-pane indicator is
+    // the straight accent bar painted by paint_tab_strip; every card keeps
+    // the same quiet-gray border so no active rounded outline is drawn here.
     const int radius = pane_card_radius(dpi);
     const int shadow_offset = std::max(1, MulDiv(2, static_cast<int>(dpi), 96));
     // The card is drawn a couple of pixels outside pane_rect on the left/
@@ -1636,10 +1637,8 @@ void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi, bool is_active) noexcept {
         DeleteObject(card_brush);
     }
 
-    const int border_width = std::max(
-        1, MulDiv(is_active ? 2 : 1, static_cast<int>(dpi), 96));
-    const COLORREF border_color =
-        is_active ? RGB(37, 99, 235) : RGB(232, 237, 242);
+    const int border_width = std::max(1, MulDiv(1, static_cast<int>(dpi), 96));
+    const COLORREF border_color = RGB(232, 237, 242);
     HPEN border_pen = CreatePen(PS_SOLID, border_width, border_color);
     if (border_pen != nullptr) {
         const HGDIOBJ old_pen = SelectObject(dc, border_pen);
@@ -1753,8 +1752,7 @@ void paint_client_background(HWND window, HDC dc,
             std::min(group.panes.size(), rects.size());
         for (std::size_t index = 0; index < visible; ++index) {
             const RECT pane_rect = to_win32_rect(rects[index]);
-            draw_pane_card(dc, pane_rect, dpi,
-                           index == active_pane_index(group));
+            draw_pane_card(dc, pane_rect, dpi);
             const NavigationGeometry geometry =
                 navigation_geometry(window, pane_rect);
             draw_navigation_bar_background(dc, geometry.address_background,
@@ -2146,6 +2144,8 @@ void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
     if (previous == pane ||
         !panedock::core::set_active_pane(group, group.panes[pane].id)) return;
     state.explorers[pane].focus();
+    InvalidateRect(state.tab_strips[previous], nullptr, FALSE);
+    InvalidateRect(state.tab_strips[pane], nullptr, FALSE);
     InvalidateRect(window, nullptr, TRUE);
     save_now(state);
 }
@@ -2786,6 +2786,20 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
             LineTo(dc, center_x, center_y + half);
             SelectObject(dc, old_pen);
             DeleteObject(plus_pen);
+        }
+    }
+    if (pane_index == active_pane_index(active_group(state))) {
+        const int indicator_height = std::min(
+            static_cast<int>(client.bottom),
+            scaled_value(window, kActivePaneIndicatorHeight));
+        if (indicator_height > 0) {
+            const RECT indicator{client.left, client.top, client.right,
+                                 client.top + indicator_height};
+            HBRUSH brush = CreateSolidBrush(RGB(37, 99, 235));
+            if (brush != nullptr) {
+                FillRect(dc, &indicator, brush);
+                DeleteObject(brush);
+            }
         }
     }
     if (old_font != nullptr) SelectObject(dc, old_font);

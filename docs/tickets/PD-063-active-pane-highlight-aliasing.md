@@ -139,3 +139,18 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-27 實作交接
+
+**方案比較與截圖證據。** 先以原始版本建立 baseline，再實作並截圖比較路徑 B、C；三組都使用 `PrintWindow(hwnd, hdc, 2 /* PW_RENDERFULLCONTENT */)`，裁切 `(175,40,300,180)` 後以 nearest-neighbor 放大 3 倍。
+
+- Baseline：active pane 是 `RGB(37,99,235)`、2px 的 GDI `RoundRect`，放大後可見左上角與上緣的階梯像素：[PD-063-before-3x.png](PD-063-before-3x.png)、[PD-063-before-full.png](PD-063-before-full.png)。
+- 路徑 B（比較用）：純 GDI 三層填色 halo，96-DPI 外擴 4/3/2px，色值依序為 `RGB(219,234,254)`、`RGB(191,219,254)`、`RGB(147,197,253)`：[PD-063-route-b-3x.png](PD-063-route-b-3x.png)、[PD-063-route-b-full.png](PD-063-route-b-full.png)。它把高對比鋸齒柔化了，但 3× 仍看得到分層圓弧，且小 pane 會增加視覺厚度。
+- 路徑 C（採用）：移除 active pane 的圓角藍框；所有卡片統一保留既有 1px `RGB(232,237,242)` 外框，active 狀態改在自繪 tab strip 最上方畫 3px、DPI-scaled 的 `RGB(37,99,235)` 直線。直線不經過圓弧描邊，因此 3× 沒有階梯狀圓角；同時比 B 更輕、更容易在五種版型辨識：[PD-063-route-c-3x.png](PD-063-route-c-3x.png)、[PD-063-route-c-full.png](PD-063-route-c-full.png)。
+- 最終 Release 的再次截圖確認 C 方案已編入正式 `build\PaneDock.exe`：[PD-063-after-3x.png](PD-063-after-3x.png)、[PD-063-after-full.png](PD-063-after-full.png)。
+
+**實作細節。** `draw_pane_card` 不再接收 active flag，也不再畫 active 圓角藍框；`paint_tab_strip` 在所有 tab、scroll button、`+` 圖示完成後畫 active indicator，避免 overflow 控制項覆蓋直線。`set_active_pane` 額外 invalidate 前一個與新的 tab strip，確保單次 active pane 變更立即重繪。inactive 卡片的幾何、陰影、外框色值未改動。`pane_card_radius` 與 `apply_pane_container_region` 完全未改動；full screenshot 未看到新的 active 外框與既有 HRGN 裁切產生接縫，HRGN 的硬邊界仍是既有容器機制，未在本票內重做。
+
+**驗證紀錄。** 新增邏輯位於 `app_shell` 的真實 Win32 paint path，不屬於本專案唯一的 `src/core` 自動化 seam；本票以真實 Release `PrintWindow` 截圖作 focused self-check。LLVM-MinGW/Clang + Ninja 的 `cmake --build build` 通過，`ctest --test-dir build --output-on-failure` 為 5/5 通過，指定 `rg` 檢查與 `git diff --check` 通過。
+
+依使用者指定的 single-click + screenshot 限制，只做了一次右下 pane tab 區單擊嘗試；Computer Use 回報無法 activate captured window，依規則沒有重試。因此 active pane 點擊路由、五種版型、分隔線拖曳流暢度、150%/200% DPI、長時間 GDI 物件趨勢與 idle CPU 均明確未驗證，沒有以單張 4-pane 截圖宣稱通過這些 acceptance。關閉最終 Release 使用不帶 `/F` 的 `taskkill /PID`，無殘留可見視窗。
