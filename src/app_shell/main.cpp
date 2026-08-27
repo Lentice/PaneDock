@@ -60,7 +60,7 @@ constexpr int kTabMinWidth = 72;
 constexpr int kTabMaxWidth = 200;
 constexpr int kTabAddButtonWidth = 36;
 // PD-073: reserved only while the tab content overflows its viewport.
-constexpr int kTabScrollButtonWidth = 20;
+constexpr int kTabScrollButtonWidth = 28;
 // PD-080: keep the larger PD-073 rect as the hit-test target, but paint a
 // compact button inside it so the visual control is smaller than the tab row.
 constexpr int kTabScrollButtonVisualWidth = 18;
@@ -90,8 +90,6 @@ constexpr COLORREF kTabBorder = RGB(232, 237, 242);
 constexpr int kNavigationBarHeight = 28;
 constexpr int kStatusBarHeight = 24;
 constexpr int kNavigationButtonWidth = 32;
-constexpr int kNavigationButtonOffsetX = 15;
-constexpr int kNavigationButtonOffsetY = 2;
 constexpr int kNavigationGlyphSize = 16;
 constexpr std::array<wchar_t, 5> kNavigationGlyphs{
     L'\uE72B', L'\uE72A', L'\uE74A', L'\uE72C', L'\uE80A'};
@@ -567,8 +565,7 @@ NavigationGeometry navigation_geometry(HWND window, RECT pane_rect) noexcept {
     const int pane_width = pane_rect.right - pane_rect.left;
     const int button_width = std::min(
         scaled_value(window, kNavigationButtonWidth), pane_width / 6);
-    const int button_offset_x = scaled_value(window, kNavigationButtonOffsetX);
-    const int address_left = pane_rect.left + button_width * 5 + button_offset_x;
+    const int address_left = pane_rect.left + button_width * 5;
     const RECT address_background{address_left, navigation_top,
                                   pane_rect.right,
                                   navigation_top + navigation_height};
@@ -1854,16 +1851,10 @@ HRESULT apply_layout(HWND window, AppState& state) {
                 state.back_buttons[index], state.forward_buttons[index],
                 state.up_buttons[index], state.refresh_buttons[index],
                 state.view_mode_buttons[index]};
-            const int button_offset_x =
-                scaled_value(window, kNavigationButtonOffsetX);
-            const int button_offset_y =
-                scaled_value(window, kNavigationButtonOffsetY);
-            const int button_height = navigation_height - button_offset_y;
-            int x = pane_rect.left + button_offset_x;
+            int x = pane_rect.left;
             for (HWND button : buttons) {
-                SetWindowPos(button, nullptr, x,
-                             navigation_top + button_offset_y,
-                             geometry.button_width, button_height,
+                SetWindowPos(button, nullptr, x, navigation_top,
+                             geometry.button_width, navigation_height,
                              SWP_NOZORDER | SWP_NOACTIVATE);
                 ShowWindow(button, SW_SHOW);
                 x += geometry.button_width;
@@ -2636,10 +2627,14 @@ void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
         scaled_value(window, kTabScrollButtonVisualWidth), width);
     const int visual_height = std::min(
         scaled_value(window, kTabScrollButtonVisualHeight), height);
-    const int visual_top = rect.top + (height - visual_height) / 2;
     // The two hit-test rects are adjacent. Inset them toward their shared edge
-    // so the compact visual buttons stay together in the middle.
-    const int visual_left = forward ? rect.left : rect.right - visual_width;
+    // so the compact visual buttons stay together in the middle, then nudge
+    // the whole pair toward the add button per user-reported pixel offsets.
+    const int offset_x = scaled_value(window, 15);
+    const int offset_y = scaled_value(window, 2);
+    const int visual_top = rect.top + (height - visual_height) / 2 + offset_y;
+    const int visual_left =
+        (forward ? rect.left : rect.right - visual_width) + offset_x;
     const RECT visual{visual_left, visual_top, visual_left + visual_width,
                       visual_top + visual_height};
     HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));
