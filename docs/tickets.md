@@ -120,6 +120,7 @@
 | PD-080 | Tab 溢出捲動按鈕尺寸過大,和 tab 一樣高,改為緊湊小按鈕 | 7 | `done` | PD-073 | [PD-080](tickets/PD-080-tab-scroll-buttons-oversized.md) |
 | PD-081 | Tab「+」按鈕手繪十字有缺角,改回字型字符繪製(覆寫 PD-062 決策 5) | 7 | `done` | PD-062 | [PD-081](tickets/PD-081-tab-add-button-glyph-notch.md) |
 | PD-082 | 非「詳細資料」檢視模式仍顯示 column header | 7 | `ready` | PD-079 | [PD-082](tickets/PD-082-view-mode-header-leaks-into-non-details-modes.md) |
+| PD-083 | 導覽按鈕/New Group 按鈕/tab 捲動按鈕完全沒有 hover;版型按鈕 hover 對比度不足 | 7 | `ready` | PD-058, PD-047 | [PD-083](tickets/PD-083-remaining-buttons-missing-or-weak-hover.md) |
 
 ## Dependency lanes
 
@@ -389,6 +390,10 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 - **PD-079**:使用者附真實 Windows 檔案總管「檢視」選單截圖,要求 8 個項目(超大/大/中/小圖示、清單、詳細資料、並排、內容)而非 PD-059 剛完成的 4 項,且只有「詳細資料」該顯示欄位標題。**明確覆寫 PD-059 已確認的產品決策 3**——PD-059 當時依據 PD-052 決策 2「額外模式是否加入由實作 agent 決定,不強制」只做了最低限度的 4 項,新證據(使用者截圖)把範圍變成強制的 8 項。根因調查發現「超大/大/中/小圖示」四級在真實 Shell 裡不是四個不同的 `FOLDERVIEWMODE`,而是同一個圖示模式配上 `IFolderView2::SetViewModeAndIconSize` 控制的不同像素尺寸——本票明確要求實作 agent 查證這個 API 在目前 LLVM-MinGW 工具鏈下的可用性,不得憑空假設像素值。Column header 只在「詳細資料」顯示很可能是真實 Shell view 的原生行為,不需要新程式碼,要求實作 agent 先截圖驗證再決定是否動手。
 
 **同時記錄一條新的驗證方法約定(即時生效,適用於所有後續票):** 只有單次點擊/操作 + 截圖的驗證由 Agent(或本人)執行;需要連續、多步驟操控滑鼠鍵盤的測試(例如連續拖曳、多步驟 hover 序列)交給使用者本人執行,理由是電腦操作工具(computer-use)會佔用實體滑鼠鍵盤,長時間自動化操作會干擾使用者同時使用同一台機器。這條約定不寫進 `AGENTS.md`(那是產品/工程規則,這是協作流程規則),但後續每張票的 dispatch prompt 都應該包含這個限制。
+
+### 2026-08-27 — 使用者實機回報 hover 覆蓋不全與對比度不足,開 PD-083
+
+使用者原文兩項:「所有的 buttons 都應該有 onhover style」、「現在的 layout onhover style 不明顯,需要重新調整」。追查發現 PD-058(已完成)當時的 Scope 明確只涵蓋版型按鈕、tab、tab 的「+」、Group 側邊欄列四項,導覽按鈕(每 pane 五個)、側邊欄 New Group 按鈕、PD-080 新增的 tab 捲動按鈕三組從未被納入,`draw_navigation_icon_button`/`draw_sidebar_action_button`/`draw_tab_scroll_button` 完全沒有讀取 `ODS_HOTLIGHT` 或追蹤滑鼠的程式碼——不是回歸,是原本就沒做。版型按鈕的 hover 對比度問題根因與 PD-076 完全同一種缺陷:常態 `RGB(248,250,252)` 與 hover `RGB(242,245,248)` 只差 `6/5/4`,肉眼難以分辨。
 
 ### 2026-08-27 — 使用者實機回報 tab 條兩個視覺瑕疵,開 PD-080/081
 
