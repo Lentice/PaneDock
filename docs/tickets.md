@@ -122,6 +122,7 @@
 | PD-082 | 非「詳細資料」檢視模式仍顯示 column header | 7 | `ready` | PD-079 | [PD-082](tickets/PD-082-view-mode-header-leaks-into-non-details-modes.md) |
 | PD-083 | 導覽按鈕/New Group 按鈕/tab 捲動按鈕完全沒有 hover;版型按鈕 hover 對比度不足 | 7 | `ready` | PD-058, PD-047 | [PD-083](tickets/PD-083-remaining-buttons-missing-or-weak-hover.md) |
 | PD-084 | 限制單一 App 實例;第二次啟動改為喚醒既有視窗 | 7 | `ready` | 無 | [PD-084](tickets/PD-084-single-instance-activate-existing-window.md) |
+| PD-085 | 把 tab 捲動按鈕的幾何計算抽成純函式(可單元測試) | 7 | `ready` | 無 | [PD-085](tickets/PD-085-tab-scroll-button-geometry-to-pure-module.md) |
 
 ## Dependency lanes
 
@@ -240,6 +241,10 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | 讓 `compute_layout_rects` 接收 DPI 縮放後的最小尺寸／分隔線厚度,取代目前寫死的 96-DPI 基準常數 | PD-005 2026-08-24 交接發現:`docs/design-spec.md` §FR-004a 的敘述預期呼叫端傳入「已按 DPI 縮放過的最小值常數」,但 PD-005 定義的函式簽章只收 client size、版型、比例,常數是寫死在 `src/core/layout.h` 的 96-DPI 基準值,呼叫端目前無法覆寫。等 app_shell 接上 Per-Monitor-V2 `WM_DPICHANGED`(NFR-004)且需要跨 DPI 正確縮放時開票,把最小尺寸/分隔線厚度改成函式參數,矩形演算法本身不需要動。 |
 
 ## 計畫決策紀錄
+
+### 2026-08-27 — 三個 agent(Claude/Codex/OpenCode)平行執行 `improve-codebase-architecture`,新增 PD-085
+
+在同一份 codebase 上同時開三個 Herdr tab,分別以 Claude、Codex、OpenCode 各自執行架構審查(Claude/Codex 用各自的 skill/custom-prompt 機制,OpenCode 沒有對應命令,改用等價的純文字指示)。三份報告(存於系統 Temp 目錄,不進 repo)獨立得出同一個結論:`src/app_shell/main.cpp`(4051 行,81/150 個 source commit 集中於此)是專案的 god module,且都點名同一個最高槓桿切片——chrome 繪製函式把「純幾何計算」與「HDC 繪製」揉在一起,PD-073/080/081 這類像素微調 commit 正是這個缺陷的直接證據。三份報告都引用專案既有的 `tab_overflow.h`(`tab_strip_viewport`/`clamp_tab_scroll_offset`,已有 `static_assert` 測試)作為已驗證可行的正確模式,建議推廣到其餘 chrome 幾何計算。開票時刻意只取其中最小、最低風險的一塊(`draw_tab_scroll_button` 的視覺矩形/圓角/箭頭端點計算)為 [PD-085](tickets/PD-085-tab-scroll-button-geometry-to-pure-module.md),其餘候選(layout-button glyph 幾何、status-bar compartments、pane-card 圓角、拖曳排序 slot 計算、`AppState` 拆分)留待後續個別開票,避免單票過大。本票明確定調為**純重構,不改變任何視覺輸出數值**。
 
 ### 2026-08-27 — 新增 PD-084(單一實例限制)
 
