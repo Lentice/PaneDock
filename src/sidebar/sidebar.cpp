@@ -61,8 +61,7 @@ bool Sidebar::create(HWND parent, int control_id,
     list_box_ = CreateWindowExW(
         0, L"LISTBOX", nullptr,
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_HASSTRINGS |
-            LBS_NOINTEGRALHEIGHT | LBS_NOTIFY | LBS_OWNERDRAWFIXED |
-            LBS_DISABLENOSCROLL,
+            LBS_NOINTEGRALHEIGHT | LBS_NOTIFY | LBS_OWNERDRAWFIXED,
         0, 0, 0, 0, parent, reinterpret_cast<HMENU>(control_id),
         GetModuleHandleW(nullptr), nullptr);
     if (list_box_ != nullptr) {
@@ -151,7 +150,7 @@ bool Sidebar::draw_item(
 
     RECT pill = item->rcItem;
     pill.left += MulDiv(4, static_cast<int>(dpi_), 96);
-    pill.right -= MulDiv(14, static_cast<int>(dpi_), 96);
+    pill.right -= MulDiv(4, static_cast<int>(dpi_), 96);
     pill.top += MulDiv(2, static_cast<int>(dpi_), 96);
     pill.bottom -= MulDiv(2, static_cast<int>(dpi_), 96);
     const int radius = MulDiv(10, static_cast<int>(dpi_), 96);

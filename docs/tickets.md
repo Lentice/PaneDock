@@ -96,7 +96,7 @@
 | PD-056 | 切換版型後舊的 active 版型按鈕未重繪,highlight 沒清除 | 7 | `done` | PD-047 | [PD-056](tickets/PD-056-layout-button-stale-highlight.md) |
 | PD-057 | Group 拖曳在 button-down 搶走 LISTBOX capture,通知變成 `LBN_SELCANCEL`,無法切換 Group | 7 | `done` | PD-036 | [PD-057](tickets/PD-057-group-list-selection-notification-suppressed.md) |
 | PD-058 | 版型按鈕/tab/「+」/Group 列補上滑鼠 hover 視覺回饋 | 7 | `done` | PD-055, PD-046 | [PD-058](tickets/PD-058-hover-feedback-for-interactive-chrome.md) |
-| PD-059 | 檢視模式按鈕改為下拉選單,取代單向循環切換 | 7 | `ready` | PD-052 | [PD-059](tickets/PD-059-view-mode-dropdown-menu.md) |
+| PD-059 | 檢視模式按鈕改為下拉選單,取代單向循環切換 | 7 | `done` | PD-052 | [PD-059](tickets/PD-059-view-mode-dropdown-menu.md) |
 | PD-060 | Pane 狀態列補上選取檔案總大小,並加上分隔線/底色 | 7 | `ready` | PD-051 | [PD-060](tickets/PD-060-pane-status-bar-selection-size-and-separator.md) |
 | PD-061 | 側邊欄 Group 名稱與副標題字級太小,改用系統 UI 字型 | 7 | `done` | PD-028 | [PD-061](tickets/PD-061-sidebar-group-typography.md) |
 | PD-062 | Tab 改圓角外框,拆分 padding/gap/列高,「+」加大加粗 | 7 | `done` | PD-049, PD-055 | [PD-062](tickets/PD-062-tab-strip-visual-polish.md) |
@@ -104,21 +104,21 @@
 | PD-064 | 移除無作用的 more-actions「...」按鈕,修正 Up 圖示對齊 | 7 | `done` | PD-029, PD-043 | [PD-064](tickets/PD-064-header-and-nav-icon-cleanup.md) |
 | PD-065 | `EBO_NOBORDER` 在 `Initialize` 之後才設定,檔案區殘留深色細外框 | 7 | `done` | PD-040, PD-048 | [PD-065](tickets/PD-065-explorer-view-residual-border.md) |
 | PD-066 | 拖曳排序改用撐開空位的 placeholder;修復 tab 插入指示線死碼 | 7 | `done` | PD-055, PD-050, PD-036 | [PD-066](tickets/PD-066-drag-reorder-placeholder-gap.md) |
-| PD-067 | Group 清單捲軸視覺存在感過低(捲動功能實測已正常) | 7 | `ready` | PD-028, PD-061 | [PD-067](tickets/PD-067-group-list-scrollbar-visibility.md) |
+| PD-067 | Group 清單捲軸視覺存在感過低(捲動功能實測已正常) | 7 | `superseded` | PD-028, PD-061 | [PD-067](tickets/PD-067-group-list-scrollbar-visibility.md) |
 | PD-068 | 關閉程式時在 `SHELL32.dll` 當機:`SetCallback` 的 out 參數傳 `nullptr` | 7 | `done` | PD-051 | [PD-068](tickets/PD-068-shell-folder-view-setcallback-null-out-param.md) |
 | PD-069 | pane footer 補左右內距;chrome 間距統一為 4px 級距 | 7 | `planned` | PD-060, PD-062, PD-064 | [PD-069](tickets/PD-069-chrome-spacing-scale.md) |
 | PD-070 | 診斷模式擋下第三方 extension 時跳出載入器模態對話框,無法無人值守執行 | 7 | `done` | PD-024 | [PD-070](tickets/PD-070-diagnostic-mode-loader-error-dialogs.md) |
 | PD-071 | 移除 Ctrl+Shift+L 熱鍵:註冊失敗會讓程式完全無法啟動 | 7 | `done` | PD-009 | [PD-071](tickets/PD-071-remove-layout-hotkey.md) |
 | PD-072 | chrome 字型改用固定 Latin 字面＋系統字型連結,取代語系相依的 `DEFAULT_GUI_FONT`／`lfMessageFont`(覆寫 PD-061 的 face 來源) | 7 | `ready` | PD-061 | [PD-072](tickets/PD-072-replace-stock-gui-font.md) |
 | PD-073 | Tab 溢出時變成零寬矩形完全無法點擊;加左移/右移捲動按鈕 | 7 | `done` | PD-055, PD-062, PD-066 | [PD-073](tickets/PD-073-tab-overflow-scroll-buttons.md) |
-| PD-074 | 拖曳排序看不到「拖的是哪一個」:placeholder 內畫出淡化的被拖曳項目 | 7 | `ready` | PD-066, PD-061, PD-062 | [PD-074](tickets/PD-074-drag-placeholder-shows-dragged-item.md) |
+| PD-074 | 拖曳排序看不到「拖的是哪一個」:placeholder 內畫出淡化的被拖曳項目 | 7 | `done` | PD-066, PD-061, PD-062 | [PD-074](tickets/PD-074-drag-placeholder-shows-dragged-item.md) |
 | PD-075 | Pane 導覽列五個圖示由三種技術繪製,統一到 `Segoe MDL2 Assets` | 7 | `done` | PD-052, PD-064 | [PD-075](tickets/PD-075-unify-pane-chrome-icon-style.md) |
 | PD-076 | Group 與 pane tab 的 active/hover 樣式不一致,以 Group 現有樣式為準套用到 tab | 7 | `ready` | PD-061, PD-062, PD-072 | [PD-076](tickets/PD-076-unify-group-tab-active-hover-style.md) |
 | PD-077 | 拖曳調整主視窗大小時,pane 狀態列在舊位置留下殘影 | 7 | `done` | PD-041, PD-042 | [PD-077](tickets/PD-077-pane-footer-resize-repaint-ghost.md) |
 | PD-078 | 確保電腦當機/斷電時 session.json 不會毀損 | 7 | `done` | PD-006 | [PD-078](tickets/PD-078-crash-safe-session-write.md) |
 | PD-079 | 檢視模式選單擴充為 8 項,對齊真實檔案總管;僅「詳細資料」顯示欄位標題(覆寫 PD-059 決策 3) | 7 | `done` | PD-059 | [PD-079](tickets/PD-079-view-mode-menu-eight-items-and-column-header.md) |
-| PD-080 | Tab 溢出捲動按鈕尺寸過大,和 tab 一樣高,改為緊湊小按鈕 | 7 | `ready` | PD-073 | [PD-080](tickets/PD-080-tab-scroll-buttons-oversized.md) |
-| PD-081 | Tab「+」按鈕手繪十字有缺角,改回字型字符繪製(覆寫 PD-062 決策 5) | 7 | `ready` | PD-062 | [PD-081](tickets/PD-081-tab-add-button-glyph-notch.md) |
+| PD-080 | Tab 溢出捲動按鈕尺寸過大,和 tab 一樣高,改為緊湊小按鈕 | 7 | `done` | PD-073 | [PD-080](tickets/PD-080-tab-scroll-buttons-oversized.md) |
+| PD-081 | Tab「+」按鈕手繪十字有缺角,改回字型字符繪製(覆寫 PD-062 決策 5) | 7 | `done` | PD-062 | [PD-081](tickets/PD-081-tab-add-button-glyph-notch.md) |
 
 ## Dependency lanes
 
@@ -199,6 +199,7 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | 任意遞迴 pane 分割 | `docs/design-spec.md` §3.2 | 固定五種版型已涵蓋實際需求,遞迴分割使版型狀態、還原與矩形計算複雜度大幅上升。要重開需先有使用者實際回報五種版型不足的情境。 |
 | 每個 tab 都保留 live `IExplorerBrowser` | `docs/design-spec.md` §NFR-002 | 這是記憶體無上界成長的唯一原因;閒置資源目標與完整 tab 狀態的共存,靠的就是「只有可見 pane 的 active tab 是 live」。要重開必須先量到 realize-on-activation 的延遲對使用者可感知。 |
 | C# UI 殼層 ＋ C++ shell host DLL 混合 | `docs/adr/0001` | 同一 process 仍須付 .NET runtime,RAM 沒有改善,卻多出 ABI、除錯與打包複雜度;本專案 UI 只有側邊欄與固定版型,C# 殼層可省的工作量趨近於零。唯一值得重開的情境是改為**獨立 process** 隔離第三方 extension 崩潰,且需先有實際崩潰紀錄。 |
+| PD-067 的 `LBS_DISABLENOSCROLL` + pill 右側內距加大(4px→14px) | 2026-08-27 使用者實機驗收 | 使用者認為改回原本樣式(無 `LBS_DISABLENOSCROLL`、右側內距 4px)即可,已在 `src/sidebar/sidebar.cpp` revert。要重開需先有使用者具體回報捲軸仍不可見的情境。 |
 
 **2026-08-24 註記(PD-024 撰寫時的界線確認)**:PD-024「診斷模式:抑制第三方 shell extension」**沒有**重開上表最後一列,也沒有重開 `docs/design-spec.md` §3.2／§14 的「以獨立 process 隔離第三方 shell extension」。兩者目標不同:NFR-006 要的是「可**抑制**」——讓 extension 不要載入本 process,用來歸因崩潰;被否決的是「**隔離**」——讓 extension 在另一個 process 崩潰而不影響我們。PD-024 的手段是同一 process 內的 `SetProcessMitigationPolicy(ProcessSignaturePolicy)` `MicrosoftSignedOnly`,不新增 process、不新增 IPC、不寫 registry。若日後真的累積到實際的 extension 崩潰紀錄,要開的是另一張獨立 process 的票,並依本節規則寫出覆寫與新證據。
 
