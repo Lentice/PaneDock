@@ -123,6 +123,13 @@
 | PD-083 | 導覽按鈕/New Group 按鈕/tab 捲動按鈕完全沒有 hover;版型按鈕 hover 對比度不足 | 7 | `ready` | PD-058, PD-047 | [PD-083](tickets/PD-083-remaining-buttons-missing-or-weak-hover.md) |
 | PD-084 | 限制單一 App 實例;第二次啟動改為喚醒既有視窗 | 7 | `ready` | 無 | [PD-084](tickets/PD-084-single-instance-activate-existing-window.md) |
 | PD-085 | 把 tab 捲動按鈕的幾何計算抽成純函式(可單元測試) | 7 | `ready` | 無 | [PD-085](tickets/PD-085-tab-scroll-button-geometry-to-pure-module.md) |
+| PD-086 | 切換 Group 時,同步完成的導覽把舊 Group 的路徑寫進新 Group 的儲存分頁(資料遺失) | 7 | `ready` | 無 | [PD-086](tickets/PD-086-group-switch-overwrites-incoming-folders-with-outgoing-live-state.md) |
+| PD-087 | 版型縮小時被隱藏的 pane 沒有 destroy `IExplorerBrowser`,放大回去顯示過期資料夾 | 7 | `ready` | 無 | [PD-087](tickets/PD-087-layout-shrink-leaks-hidden-explorerhost.md) |
+| PD-088 | `Site`/`ViewCallback` 持有的 `ExplorerHost*` 在 destroy 後未清空,延遲回呼可能觸碰已銷毀物件 | 7 | `ready` | 無 | [PD-088](tickets/PD-088-explorerhost-callback-use-after-destroy.md) |
+| PD-089 | PD-084 單一實例喚醒常見情境下靜默失敗(`SetForegroundWindow` 被拒絕、輪詢逾時無回饋) | 7 | `ready` | PD-084 | [PD-089](tickets/PD-089-single-instance-activation-unreliable.md) |
+| PD-090 | 拖曳懸停自動切換 Group/tab 在 OLE 拖曳迴圈內同步做 Shell view 建立/銷毀與 session 寫入 | 7 | `ready` | PD-034 | [PD-090](tickets/PD-090-drag-hover-group-switch-reenters-ole-drag-loop.md) |
+| PD-091 | 每次資料夾導覽完成都同步寫入 session(多次 JSON 解析＋兩次強制 flush) | 7 | `ready` | PD-078 | [PD-091](tickets/PD-091-session-save-synchronous-on-every-navigation.md) |
+| PD-092 | `apply_layout` 單一 pane 初始化失敗時整段退出,遺留未完成排版與不一致狀態 | 7 | `ready` | 無 | [PD-092](tickets/PD-092-apply-layout-aborts-mid-loop-on-pane-init-failure.md) |
 
 ## Dependency lanes
 
@@ -249,6 +256,20 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 ### 2026-08-27 — 新增 PD-084(單一實例限制)
 
 使用者需求:「only one ap instance allowed. activate the window when 2nd executed. notice the race condition.」全新需求,`docs/design-spec.md`／已否決的方向皆無相關記載。根因分析:`save_now` 是整份 `ApplicationState` 覆寫寫入 `session.json`(atomic replace),若允許多實例同時執行,後寫入的實例會用自己記憶體內的完整快照覆蓋先寫入實例的所有變更(last-writer-wins on the whole document),不是欄位級衝突而是整份設定檔遺失。決策採具名 kernel mutex(而非 `FindWindow` 標題比對——診斷模式視窗標題與正常模式不同,標題比對會漏判),第二實例偵測到已有實例時只喚醒既有視窗、完全不觸碰 session 讀寫即結束;啟動期間目標視窗尚未建立完成的短暫空窗期用有限次數輪詢處理,不做成 busy loop。開票為 [PD-084](tickets/PD-084-single-instance-activate-existing-window.md)。
+
+### 2026-08-27 — 三個 agent(Claude/Codex/OpenCode)平行執行全面稽核(race condition/架構/control flow),新增 PD-086~092
+
+同一份 codebase 上再次同時開三個 Herdr tab,這次不限於過度工程,而是分別以 Claude、Codex、OpenCode 各自對 `src/`、`tests/` 做唯讀稽核,涵蓋 race condition/reentrancy、架構、control-flow 正確性,over-engineering 為次要項目。三份報告(Codex/OpenCode 直接輸出於終端機;Claude 因終端機使用替代畫面、`recent-unwrapped` 讀不到完整內容,改請其把完整報告寫成暫存 Markdown 檔後讀取,檔案未進 repo)獨立產出 15(Claude)/12(OpenCode)/7(Codex)項發現,多項發現在兩到三份報告中**各自獨立**收斂到同一根因,信心最高的收斂項目據此開票:
+
+- **PD-086**(Claude #1 + Codex #2 收斂,信心最高):`activate_group` 切換 Group 時,若 `IExplorerBrowser::BrowseToObject` 同步完成,`OnNavigationComplete` 會在 pane 導覽迴圈跑到一半、`active_group_id` 已指向新 Group 但其餘 pane 仍顯示舊 Group 資料夾時觸發 capture,把舊 Group 的路徑寫進新 Group 的儲存分頁並持久化——靜默資料遺失,直接打破「一鍵還原完整版面配置」的產品核心承諾。
+- **PD-087**(Claude/Codex/OpenCode 三方一致):版型縮小時,`apply_layout` 隱藏多餘 pane 只 `ShowWindow(SW_HIDE)`,未呼叫 `destroy()`,違反 `AGENTS.md`「只有可見 pane 的 active tab 持有 live view」;版型放大回去時因為已標記 `realized` 而跳過重新導覽,顯示縮小前的過期資料夾。
+- **PD-088**(Claude #3 + Codex #3 收斂):`ExplorerHost::destroy()` 未清空 `Site`/`ViewCallback` 內部指回 host 的原始指標,Shell 端(`CDefView`/extension)延遲持有的參照可能在 destroy 後仍觸發回呼,觸碰邏輯上已銷毀的物件。
+- **PD-089**(Claude/Codex/OpenCode 三方一致,且是本次稽核中最新、最值得立即處理的一項——標的是剛完成的 PD-084):第二實例喚醒第一實例時直接呼叫 `SetForegroundWindow`,在呼叫方不擁有前景權限的常見情境(使用者雙擊圖示、PaneDock 在背景)下會被 Windows 靜默拒絕,PD-084 交接區已誠實記錄「未取得截圖驗證前景化」,本次稽核確認這不是驗證缺口而是邏輯缺陷。
+- **PD-090**(Claude #4 + OpenCode #4 收斂):拖曳懸停自動切換(PD-034)的 `WM_TIMER` 在 `DoDragDrop` 的 OLE 拖曳迴圈重入期間觸發,同步做 Shell view 建立/銷毀與 session 寫入,是 `AGENTS.md` 明確點名的高風險重入路徑。
+- **PD-091**(Claude #6 + OpenCode #2 收斂):每次導覽完成都同步呼叫 `save_now`,單次寫入含 3 次 JSON 解析與 2 次強制 `FlushFileBuffers`,Group 切換時可疊乘到 4 次,在 UI 執行緒上執行,與 PD-090 的拖曳重入路徑疊加風險更高。
+- **PD-092**(Claude #13 + OpenCode #7 收斂):`apply_layout` 迴圈中單一 pane 初始化失敗就整段 `return`,其餘健康 pane 連帶維持未完成排版,沒有錯誤降級。
+
+未開票的單一 agent 專屬發現(例如 Claude 指出的 `scaled_value` 最小 1px 箝制讓「歸零」的間距常數失效、`ExplorerHost::navigate` 回傳值恆為 `S_OK` 使呼叫端錯誤處理成為死碼、session parser 無遞迴深度上限;OpenCode 指出的 known-folder identity/fallback 欄位從未被填入、`explorer_host_lifetime_check` 測試未註冊進 ctest)因為只有單一報告提及、信心較低或影響範圍較小,暫不個別開票,留待之後有更多證據或使用者實際遇到再處理。過度工程/死碼類發現(三份報告都各自列出一批,如 `kTabCloseButtonSpace`、`Site::QueryService` 的除錯 log)依此次稽核指示「secondary,只列不修」,不在本批次開票範圍。
 
 ### 2026-08-20 — 專案建立與選型收斂
 
