@@ -121,6 +121,7 @@
 | PD-081 | Tab「+」按鈕手繪十字有缺角,改回字型字符繪製(覆寫 PD-062 決策 5) | 7 | `done` | PD-062 | [PD-081](tickets/PD-081-tab-add-button-glyph-notch.md) |
 | PD-082 | 非「詳細資料」檢視模式仍顯示 column header | 7 | `ready` | PD-079 | [PD-082](tickets/PD-082-view-mode-header-leaks-into-non-details-modes.md) |
 | PD-083 | 導覽按鈕/New Group 按鈕/tab 捲動按鈕完全沒有 hover;版型按鈕 hover 對比度不足 | 7 | `ready` | PD-058, PD-047 | [PD-083](tickets/PD-083-remaining-buttons-missing-or-weak-hover.md) |
+| PD-084 | 限制單一 App 實例;第二次啟動改為喚醒既有視窗 | 7 | `ready` | 無 | [PD-084](tickets/PD-084-single-instance-activate-existing-window.md) |
 
 ## Dependency lanes
 
@@ -239,6 +240,10 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | 讓 `compute_layout_rects` 接收 DPI 縮放後的最小尺寸／分隔線厚度,取代目前寫死的 96-DPI 基準常數 | PD-005 2026-08-24 交接發現:`docs/design-spec.md` §FR-004a 的敘述預期呼叫端傳入「已按 DPI 縮放過的最小值常數」,但 PD-005 定義的函式簽章只收 client size、版型、比例,常數是寫死在 `src/core/layout.h` 的 96-DPI 基準值,呼叫端目前無法覆寫。等 app_shell 接上 Per-Monitor-V2 `WM_DPICHANGED`(NFR-004)且需要跨 DPI 正確縮放時開票,把最小尺寸/分隔線厚度改成函式參數,矩形演算法本身不需要動。 |
 
 ## 計畫決策紀錄
+
+### 2026-08-27 — 新增 PD-084(單一實例限制)
+
+使用者需求:「only one ap instance allowed. activate the window when 2nd executed. notice the race condition.」全新需求,`docs/design-spec.md`／已否決的方向皆無相關記載。根因分析:`save_now` 是整份 `ApplicationState` 覆寫寫入 `session.json`(atomic replace),若允許多實例同時執行,後寫入的實例會用自己記憶體內的完整快照覆蓋先寫入實例的所有變更(last-writer-wins on the whole document),不是欄位級衝突而是整份設定檔遺失。決策採具名 kernel mutex(而非 `FindWindow` 標題比對——診斷模式視窗標題與正常模式不同,標題比對會漏判),第二實例偵測到已有實例時只喚醒既有視窗、完全不觸碰 session 讀寫即結束;啟動期間目標視窗尚未建立完成的短暫空窗期用有限次數輪詢處理,不做成 busy loop。開票為 [PD-084](tickets/PD-084-single-instance-activate-existing-window.md)。
 
 ### 2026-08-20 — 專案建立與選型收斂
 
