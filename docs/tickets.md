@@ -115,6 +115,8 @@
 | PD-075 | Pane 導覽列五個圖示由三種技術繪製,統一到 `Segoe MDL2 Assets` | 7 | `ready` | PD-052, PD-064 | [PD-075](tickets/PD-075-unify-pane-chrome-icon-style.md) |
 | PD-076 | Group 與 pane tab 的 active/hover 樣式不一致,以 Group 現有樣式為準套用到 tab | 7 | `ready` | PD-061, PD-062, PD-072 | [PD-076](tickets/PD-076-unify-group-tab-active-hover-style.md) |
 | PD-077 | 拖曳調整主視窗大小時,pane 狀態列在舊位置留下殘影 | 7 | `done` | PD-041, PD-042 | [PD-077](tickets/PD-077-pane-footer-resize-repaint-ghost.md) |
+| PD-078 | 確保電腦當機/斷電時 session.json 不會毀損 | 7 | `ready` | PD-006 | [PD-078](tickets/PD-078-crash-safe-session-write.md) |
+| PD-079 | 檢視模式選單擴充為 8 項,對齊真實檔案總管;僅「詳細資料」顯示欄位標題(覆寫 PD-059 決策 3) | 7 | `ready` | PD-059 | [PD-079](tickets/PD-079-view-mode-menu-eight-items-and-column-header.md) |
 
 ## Dependency lanes
 
@@ -374,3 +376,14 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 ### 2026-08-26 — 拖曳 resize 主視窗時 pane 狀態列殘影,開 PD-077
 
 使用者附截圖回報:拖曳調整主視窗大小後,左下 pane 的檔案列表中段出現一行孤立的舊狀態列文字「80 items」(紅色箭頭標示),與該 pane 真正的狀態列「4 items」並存——不是數字算錯,是舊位置的像素沒有被清除。追出兩個疊加的根因:(1) `WM_SIZE` 只呼叫 `apply_layout` 重新定位每個子視窗,從未主動對整個視窗或變動的 pane 區塊發出強制重繪,完全依賴各個 `SetWindowPos` 呼叫各自的內建失效連鎖;(2) 同一個 pane 內的 `explorer_containers`/導覽按鈕/`address_bars`/`status_bars` 全部沒有 `WS_CLIPSIBLINGS`,只有 `tab_strips` 有——`explorer_containers` 本身「從不處理自己的繪製訊息」(PD-040 既有註解),完全依賴外部正確的失效通知,兩個根因疊加就是「狀態列搬走後,新蓋上來的 container/Shell view 沒收到『這裡要重畫』的通知」的完整因果鏈。開 PD-077,決策方向:五個子視窗補齊 `WS_CLIPSIBLINGS`,並在 `apply_layout` 每個 pane 幾何區塊處理完後明確補一次涵蓋該 pane 矩形的強制重繪(不是每次 `WM_SIZE` 都全視窗重畫,避免閃爍);驗收要求連續拖曳過程中多張中繼尺寸截圖,不能只驗頭尾;若兩個修正仍不夠、根因其實在 Shell view 內部重繪時機,紅線是不得 subclass 或改寫其內部子視窗。
+
+### 2026-08-27 — 使用者要求斷電安全與檢視模式對齊真實檔案總管,開 PD-078/079
+
+使用者提出兩項需求:
+
+- **PD-078**:「要保證電腦突然當機或斷電時,不會造成設定檔/記憶檔毀損」。讀 `src/core/session.cpp` 的 `write_session` 後確認:PD-006 決策 2 要求的「temp 檔 + flush + rename、備份保留」結構已經存在,但 `stream.flush()` 只把資料推進 OS 頁快取,不代表已經落盤,`std::filesystem::rename` 底層的 `MoveFileExW` 沒有帶 `MOVEFILE_WRITE_THROUGH` 也不保證同步。真正落盤需要 `FlushFileBuffers`,但那是 `windows.h` API,不能直接寫進 `core`(`AGENTS.md` 硬規則)。本票的核心是這個分層問題:落盤的**邏輯順序**留在 `core` 可測試,實際 Win32 呼叫由 `app_shell` 注入,具體介面形狀留給實作 agent 決定並在交接區說明理由。
+- **PD-079**:使用者附真實 Windows 檔案總管「檢視」選單截圖,要求 8 個項目(超大/大/中/小圖示、清單、詳細資料、並排、內容)而非 PD-059 剛完成的 4 項,且只有「詳細資料」該顯示欄位標題。**明確覆寫 PD-059 已確認的產品決策 3**——PD-059 當時依據 PD-052 決策 2「額外模式是否加入由實作 agent 決定,不強制」只做了最低限度的 4 項,新證據(使用者截圖)把範圍變成強制的 8 項。根因調查發現「超大/大/中/小圖示」四級在真實 Shell 裡不是四個不同的 `FOLDERVIEWMODE`,而是同一個圖示模式配上 `IFolderView2::SetViewModeAndIconSize` 控制的不同像素尺寸——本票明確要求實作 agent 查證這個 API 在目前 LLVM-MinGW 工具鏈下的可用性,不得憑空假設像素值。Column header 只在「詳細資料」顯示很可能是真實 Shell view 的原生行為,不需要新程式碼,要求實作 agent 先截圖驗證再決定是否動手。
+
+**同時記錄一條新的驗證方法約定(即時生效,適用於所有後續票):** 只有單次點擊/操作 + 截圖的驗證由 Agent(或本人)執行;需要連續、多步驟操控滑鼠鍵盤的測試(例如連續拖曳、多步驟 hover 序列)交給使用者本人執行,理由是電腦操作工具(computer-use)會佔用實體滑鼠鍵盤,長時間自動化操作會干擾使用者同時使用同一台機器。這條約定不寫進 `AGENTS.md`(那是產品/工程規則,這是協作流程規則),但後續每張票的 dispatch prompt 都應該包含這個限制。
+
+兩票都歸 Phase 7,PD-078 屬 core 加固,PD-079 依賴 PD-059。
