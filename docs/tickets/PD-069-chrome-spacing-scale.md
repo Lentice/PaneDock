@@ -173,3 +173,12 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-27 實作交接
+
+- 新增 96-DPI 邏輯像素級距常數：`kSpaceTight = 4`、`kSpaceSnug = 8`、`kSpaceBase = 12`、`kSpaceRoomy = 16`；所有使用點均經 `scaled_value(window, ...)` 換算。
+- 間距替換：`kPaneCanvasPadding` `15 → kSpaceRoomy` `16`（舊常數與唯一使用點已更新）；`layout_sidebar` 的 `margin` `8 → kSpaceSnug` `8`、`gap` `4 → kSpaceTight` `4`；`layout_header` 的 `margin` `12 → kSpaceBase` `12`；`draw_brand_bar` 的圖示外距 `14 → kSpaceRoomy` `16`、圖示與標題間距 `10 → kSpaceBase` `12`、右側留白 `8 → kSpaceRoomy` `16`。
+- status bar 矩形由原本貼齊 pane 的左右邊界改為 `rect.left + scaled_value(window, kSpaceBase)` 與 `rect.right - scaled_value(window, kSpaceBase)`；高度、上下位置與 status bar 文字內容未改動。`segment_gap`、`kAddressBarInset`、所有元件尺寸/顏色/字級/圓角均未改動。
+- 未發現與 PD-062 或 PD-064 的衝突，未修改兩張 ticket。PD-060 目前 tracker 狀態仍為 `ready`，現行 `SS_OWNERDRAW` 的 `draw_status_bar()` 會在 status child 的 `item.rcItem` 內繪製分隔線；本票縮小 child 後該線也會縮短，尚未符合「分隔線橫跨完整 pane 寬度」的 PD-060 決策。依範圍約束未改動 PD-060 程式碼或文件，這個完整寬度修正留給 PD-060 後續收斂。
+- status bar 文字左緣與四個 pane 左緣的實機像素值：未量測；本次未啟動 UI／PrintWindow。150%/200% DPI 也未切換實機驗證，但所有新增級距在使用點都確認走 `scaled_value`。
+- Agent checks：`cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release` 成功；`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 5/5 passed；`rg -n "kSpaceTight|kSpaceSnug|kSpaceBase|kSpaceRoomy|kPaneCanvasPadding|status_rect" src\app_shell\main.cpp` 確認四個新常數與 status 矩形使用點，且 `kPaneCanvasPadding` 無殘留；`git diff --check` 通過。

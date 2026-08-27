@@ -48,7 +48,12 @@ constexpr std::size_t kExplorerCount = 4;
 constexpr int kLayoutBarHeight = 44;
 constexpr int kLayoutButtonHeight = 30;
 constexpr int kLayoutButtonWidth = 30;
-constexpr int kPaneCanvasPadding = 15;
+// PD-069: 4px spacing scale for app-shell chrome. All values are logical
+// pixels and must be passed through scaled_value at their use sites.
+constexpr int kSpaceTight = 4;
+constexpr int kSpaceSnug = 8;
+constexpr int kSpaceBase = 12;
+constexpr int kSpaceRoomy = 16;
 constexpr int kPaneDividerThickness = 8;
 constexpr int kActivePaneIndicatorHeight = 3;
 constexpr int kSidebarHeadingHeight = 20;
@@ -911,7 +916,7 @@ LayoutMetrics layout_metrics(HWND window) noexcept {
 RECT pane_content_area(HWND window) noexcept {
     RECT area = pane_area(window);
     const LayoutMetrics metrics = layout_metrics(window);
-    const int padding = scaled_value(window, kPaneCanvasPadding);
+    const int padding = scaled_value(window, kSpaceRoomy);
     const int width = area.right - area.left;
     const int height = area.bottom - area.top;
     if (width < metrics.minimum_pane_width + 2 * padding ||
@@ -1329,8 +1334,8 @@ void layout_sidebar(HWND window, AppState& state) noexcept {
     const int width = std::min(static_cast<int>(client.right - client.left),
                                scaled_value(window,
                                             panedock::sidebar::kSidebarWidth));
-    const int margin = scaled_value(window, 8);
-    const int gap = scaled_value(window, 4);
+    const int margin = scaled_value(window, kSpaceSnug);
+    const int gap = scaled_value(window, kSpaceTight);
     const int brand_height = scaled_value(window, kBrandBarHeight);
     const int heading_height = scaled_value(window, kSidebarHeadingHeight);
     const int button_height = scaled_value(window, 28);
@@ -1364,7 +1369,7 @@ void layout_header(HWND window, AppState& state) noexcept {
     const int sidebar_width = std::min(
         static_cast<int>(client.right - client.left),
         scaled_value(window, panedock::sidebar::kSidebarWidth));
-    const int margin = scaled_value(window, 12);
+    const int margin = scaled_value(window, kSpaceBase);
     const int segment_gap = scaled_value(window, 1);
     const int header_height = std::min(
         scaled_value(window, kLayoutBarHeight),
@@ -1513,7 +1518,7 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
         DeleteObject(background);
     }
     const int icon_size = scaled_value(window, 28);
-    const int icon_margin = scaled_value(window, 14);
+    const int icon_margin = scaled_value(window, kSpaceRoomy);
     const RECT icon{rect.left + icon_margin,
                     rect.top + ((rect.bottom - rect.top) - icon_size) / 2,
                     rect.left + icon_margin + icon_size,
@@ -1528,8 +1533,8 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
         DestroyIcon(app_icon);
     }
 
-    RECT title{icon.right + scaled_value(window, 10), rect.top,
-              rect.right - scaled_value(window, 8), rect.bottom};
+    RECT title{icon.right + scaled_value(window, kSpaceBase), rect.top,
+              rect.right - scaled_value(window, kSpaceRoomy), rect.bottom};
     const HFONT font = brand_font(window);
     const HGDIOBJ old_font = font != nullptr ? SelectObject(dc, font) : nullptr;
     SetBkMode(dc, TRANSPARENT);
@@ -1888,8 +1893,10 @@ HRESULT apply_layout(HWND window, AppState& state) {
             const int status_height = std::min(
                 scaled_value(window, kStatusBarHeight),
                 std::max(0, static_cast<int>(rect.bottom - rect.top)));
-            const RECT status_rect{rect.left, rect.bottom - status_height,
-                                   rect.right, rect.bottom};
+            const int status_inset = scaled_value(window, kSpaceBase);
+            const RECT status_rect{rect.left + status_inset,
+                                   rect.bottom - status_height,
+                                   rect.right - status_inset, rect.bottom};
             SetWindowPos(state.status_bars[index], nullptr, status_rect.left,
                          status_rect.top, status_rect.right - status_rect.left,
                          status_rect.bottom - status_rect.top,
