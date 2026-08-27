@@ -119,6 +119,7 @@
 | PD-079 | 檢視模式選單擴充為 8 項,對齊真實檔案總管;僅「詳細資料」顯示欄位標題(覆寫 PD-059 決策 3) | 7 | `done` | PD-059 | [PD-079](tickets/PD-079-view-mode-menu-eight-items-and-column-header.md) |
 | PD-080 | Tab 溢出捲動按鈕尺寸過大,和 tab 一樣高,改為緊湊小按鈕 | 7 | `done` | PD-073 | [PD-080](tickets/PD-080-tab-scroll-buttons-oversized.md) |
 | PD-081 | Tab「+」按鈕手繪十字有缺角,改回字型字符繪製(覆寫 PD-062 決策 5) | 7 | `done` | PD-062 | [PD-081](tickets/PD-081-tab-add-button-glyph-notch.md) |
+| PD-082 | 非「詳細資料」檢視模式仍顯示 column header | 7 | `ready` | PD-079 | [PD-082](tickets/PD-082-view-mode-header-leaks-into-non-details-modes.md) |
 
 ## Dependency lanes
 
@@ -399,3 +400,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 兩票都歸 Phase 7,分別依賴 PD-073 與 PD-062,彼此互不依賴,可平行處理。
 
 兩票都歸 Phase 7,PD-078 屬 core 加固,PD-079 依賴 PD-059。
+
+### 2026-08-27 — 使用者實機截圖回報 column header 在非詳細資料模式仍顯示,開 PD-082
+
+使用者附截圖(大圖示檢視,folder 為 7-7zip/Adobe/AMD/Application):畫面上方仍有一列「名稱、修改日期、類型、大小」欄位標題。這正是 PD-079 決策 5「Column header 只在『詳細資料』顯示」所依賴、但**從未實機驗證**的假設(該票驗收項 6 明確記為「未驗證」)。PD-079 文件依規則不編輯,開新票 PD-082 追根因與修正,並列出兩個尚待查證的假設(全新 tab 從未套用過 view mode、或從詳細資料切走時 header 沒有跟著隱藏),交給實作 agent 用單次點擊+截圖分別驗證再動手。
