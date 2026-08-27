@@ -97,7 +97,7 @@
 | PD-057 | Group 拖曳在 button-down 搶走 LISTBOX capture,通知變成 `LBN_SELCANCEL`,無法切換 Group | 7 | `done` | PD-036 | [PD-057](tickets/PD-057-group-list-selection-notification-suppressed.md) |
 | PD-058 | 版型按鈕/tab/「+」/Group 列補上滑鼠 hover 視覺回饋 | 7 | `done` | PD-055, PD-046 | [PD-058](tickets/PD-058-hover-feedback-for-interactive-chrome.md) |
 | PD-059 | 檢視模式按鈕改為下拉選單,取代單向循環切換 | 7 | `done` | PD-052 | [PD-059](tickets/PD-059-view-mode-dropdown-menu.md) |
-| PD-060 | Pane 狀態列補上選取檔案總大小,並加上分隔線/底色 | 7 | `ready` | PD-051 | [PD-060](tickets/PD-060-pane-status-bar-selection-size-and-separator.md) |
+| PD-060 | Pane 狀態列補上選取檔案總大小,並加上分隔線/底色 | 7 | `done` | PD-051 | [PD-060](tickets/PD-060-pane-status-bar-selection-size-and-separator.md) |
 | PD-061 | 側邊欄 Group 名稱與副標題字級太小,改用系統 UI 字型 | 7 | `done` | PD-028 | [PD-061](tickets/PD-061-sidebar-group-typography.md) |
 | PD-062 | Tab 改圓角外框,拆分 padding/gap/列高,「+」加大加粗 | 7 | `done` | PD-049, PD-055 | [PD-062](tickets/PD-062-tab-strip-visual-polish.md) |
 | PD-063 | Active pane 圓角外框鋸齒,改用不依賴圓角描邊的強調方式 | 7 | `done` | PD-040, PD-048 | [PD-063](tickets/PD-063-active-pane-highlight-aliasing.md) |
@@ -109,7 +109,7 @@
 | PD-069 | pane footer 補左右內距;chrome 間距統一為 4px 級距 | 7 | `ready` | PD-060, PD-062, PD-064 | [PD-069](tickets/PD-069-chrome-spacing-scale.md) |
 | PD-070 | 診斷模式擋下第三方 extension 時跳出載入器模態對話框,無法無人值守執行 | 7 | `done` | PD-024 | [PD-070](tickets/PD-070-diagnostic-mode-loader-error-dialogs.md) |
 | PD-071 | 移除 Ctrl+Shift+L 熱鍵:註冊失敗會讓程式完全無法啟動 | 7 | `done` | PD-009 | [PD-071](tickets/PD-071-remove-layout-hotkey.md) |
-| PD-072 | chrome 字型改用固定 Latin 字面＋系統字型連結,取代語系相依的 `DEFAULT_GUI_FONT`／`lfMessageFont`(覆寫 PD-061 的 face 來源) | 7 | `ready` | PD-061 | [PD-072](tickets/PD-072-replace-stock-gui-font.md) |
+| PD-072 | chrome 字型改用固定 Latin 字面＋系統字型連結,取代語系相依的 `DEFAULT_GUI_FONT`／`lfMessageFont`(覆寫 PD-061 的 face 來源) | 7 | `done` | PD-061 | [PD-072](tickets/PD-072-replace-stock-gui-font.md) |
 | PD-073 | Tab 溢出時變成零寬矩形完全無法點擊;加左移/右移捲動按鈕 | 7 | `done` | PD-055, PD-062, PD-066 | [PD-073](tickets/PD-073-tab-overflow-scroll-buttons.md) |
 | PD-074 | 拖曳排序看不到「拖的是哪一個」:placeholder 內畫出淡化的被拖曳項目 | 7 | `done` | PD-066, PD-061, PD-062 | [PD-074](tickets/PD-074-drag-placeholder-shows-dragged-item.md) |
 | PD-075 | Pane 導覽列五個圖示由三種技術繪製,統一到 `Segoe MDL2 Assets` | 7 | `done` | PD-052, PD-064 | [PD-075](tickets/PD-075-unify-pane-chrome-icon-style.md) |
