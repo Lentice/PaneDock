@@ -113,7 +113,7 @@
 | PD-073 | Tab 溢出時變成零寬矩形完全無法點擊;加左移/右移捲動按鈕 | 7 | `done` | PD-055, PD-062, PD-066 | [PD-073](tickets/PD-073-tab-overflow-scroll-buttons.md) |
 | PD-074 | 拖曳排序看不到「拖的是哪一個」:placeholder 內畫出淡化的被拖曳項目 | 7 | `done` | PD-066, PD-061, PD-062 | [PD-074](tickets/PD-074-drag-placeholder-shows-dragged-item.md) |
 | PD-075 | Pane 導覽列五個圖示由三種技術繪製,統一到 `Segoe MDL2 Assets` | 7 | `done` | PD-052, PD-064 | [PD-075](tickets/PD-075-unify-pane-chrome-icon-style.md) |
-| PD-076 | Group 與 pane tab 的 active/hover 樣式不一致,以 Group 現有樣式為準套用到 tab | 7 | `ready` | PD-061, PD-062, PD-072 | [PD-076](tickets/PD-076-unify-group-tab-active-hover-style.md) |
+| PD-076 | Group 與 pane tab 的 active/hover 樣式不一致,以 Group 現有樣式為準套用到 tab | 7 | `done` | PD-061, PD-062, PD-072 | [PD-076](tickets/PD-076-unify-group-tab-active-hover-style.md) |
 | PD-077 | 拖曳調整主視窗大小時,pane 狀態列在舊位置留下殘影 | 7 | `done` | PD-041, PD-042 | [PD-077](tickets/PD-077-pane-footer-resize-repaint-ghost.md) |
 | PD-078 | 確保電腦當機/斷電時 session.json 不會毀損 | 7 | `done` | PD-006 | [PD-078](tickets/PD-078-crash-safe-session-write.md) |
 | PD-079 | 檢視模式選單擴充為 8 項,對齊真實檔案總管;僅「詳細資料」顯示欄位標題(覆寫 PD-059 決策 3) | 7 | `done` | PD-059 | [PD-079](tickets/PD-079-view-mode-menu-eight-items-and-column-header.md) |
