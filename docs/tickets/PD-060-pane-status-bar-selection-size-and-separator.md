@@ -166,3 +166,9 @@ git diff --check
 | 8 | 未驗證 | 未執行 10 分鐘 idle 量測；不可用短暫命令輸出代替。 |
 | 9 | PASS | `cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 4/4 passed。 |
 | 10 | 未驗證 | 全域 `git diff --check` 被既有 `docs/tickets.md` 變更的 trailing whitespace 阻塞；本票檔案 scoped check 通過。 |
+
+### 2026-08-27 補充:使用者手動驗證 Ctrl+A
+
+使用者本人在真實桌面對 `C:\Windows` 執行 `Ctrl+A` 全選,回報「ok」——UI 沒有出現可察覺的卡頓或無回應。
+
+**Acceptance 項目 5 更新為已驗證**(1000 項上限保護生效,大量選取時不卡 UI)。其餘項目(1-4、6-8、10)仍維持未驗證,tracker 狀態維持 `ready`。
