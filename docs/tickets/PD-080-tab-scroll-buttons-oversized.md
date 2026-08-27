@@ -112,3 +112,7 @@ git diff --check
 - 視覺／熱區分離：`tab_scroll_button_rects` 保持 PD-073 的每顆 `28×31 px`（96 DPI）熱區與配置保留；`draw_tab_scroll_button` 將視覺矩形垂直置中，兩顆按鈕朝共同邊緣排列，並以 `RoundRect` 取代原本填滿熱區的 `FillRect`。保留較大熱區是為了縮小外觀後維持點擊舒適度。
 - Agent checks：`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 為 **5/5 passed**；`rg -n "apply_tab_item_size|tab_item_at_point|tab_add_rects|WM_MOUSEWHEEL" src\\app_shell\\main.cpp` 成功列出既有呼叫鏈；`git diff --check` 通過。
 - 視覺／互動驗證邊界：依本票 single-click + single-screenshot 限制，只嘗試一次 `PrintWindow(..., 2 /* PW_RENDERFULLCONTENT */)`；擷取後的 PowerShell NearestNeighbor 3× 圖片建立因型別運算錯誤而未寫出，未再重試，故沒有宣稱 after 截圖、96/150% 截圖、按鈕點擊或 disabled 顯示已通過。既有 before 圖與參考圖仍為 `PD-080-current-scroll-buttons-too-large.png`、`PD-080-reference-compact-chevron-buttons.png`。
+
+### 2026-08-27 — 使用者實機比對後進一步縮小熱區
+
+使用者實機比對後回報：兩顆捲動按鈕與「+」新增按鈕之間的間距仍太大，要求「讓這兩個按鈕更靠近 add button，然後把整個區域縮小」。`draw_tab_scroll_button` 的既有對齊邏輯(back 靠右對齊、forward 靠左對齊，兩者朝共同邊界靠攏)本身不用改——真正的空隙來自熱區(`kTabScrollButtonWidth`)遠比視覺矩形(`kTabScrollButtonVisualWidth = 18`)寬，兩側都留白。把 `kTabScrollButtonWidth` 從 28 依序調整為 23、最終 20(96 DPI 基準)，讓熱區只比視覺矩形多 2px 緩衝，forward 按鈕視覺與「+」之間的空隙隨之壓到最小，同時兩顆按鈕合計佔用寬度也從 56px 降到 40px，一併滿足「更靠近」與「整個區域縮小」兩項要求。`cmake --build build` 成功、`ctest --test-dir build --output-on-failure` 5/5 PASS。點擊熱區縮小後的舒適度與 96/150% DPI 實機視覺仍留待使用者確認。
