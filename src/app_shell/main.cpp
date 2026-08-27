@@ -44,6 +44,10 @@
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PaneDockMainWindow";
+constexpr wchar_t kSingleInstanceMutexName[] =
+    L"PaneDock-SingleInstanceMutex";
+constexpr DWORD kSingleInstanceWindowRetryIntervalMs = 50;
+constexpr ULONGLONG kSingleInstanceWindowRetryTimeoutMs = 5000;
 constexpr std::size_t kExplorerCount = 4;
 constexpr int kLayoutBarHeight = 44;
 constexpr int kLayoutButtonHeight = 30;
@@ -3743,9 +3747,38 @@ bool register_window_class(HINSTANCE instance) noexcept {
     return RegisterClassExW(&window_class) != 0;
 }
 
+HWND find_existing_main_window() noexcept {
+    const ULONGLONG deadline =
+        GetTickCount64() + kSingleInstanceWindowRetryTimeoutMs;
+    for (;;) {
+        HWND window = FindWindowW(kWindowClassName, nullptr);
+        if (window != nullptr || GetTickCount64() >= deadline) return window;
+        Sleep(kSingleInstanceWindowRetryIntervalMs);
+    }
+}
+
+void activate_existing_main_window() noexcept {
+    const HWND window = find_existing_main_window();
+    if (window == nullptr) return;
+    if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
+    SetForegroundWindow(window);
+}
+
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
+    const HANDLE single_instance_mutex =
+        CreateMutexW(nullptr, FALSE, kSingleInstanceMutexName);
+    if (single_instance_mutex == nullptr) {
+        OutputDebugStringW(L"PaneDock: CreateMutexW failed\n");
+        return 1;
+    }
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        activate_existing_main_window();
+        CloseHandle(single_instance_mutex);
+        return 0;
+    }
+
     bool diagnostic_mode = false;
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -3780,7 +3813,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     }
 
     const HRESULT com_result = OleInitialize(nullptr);
-    if (FAILED(com_result)) return static_cast<int>(com_result);
+    if (FAILED(com_result)) {
+        CloseHandle(single_instance_mutex);
+        return static_cast<int>(com_result);
+    }
 
     int exit_code = 1;
     if (!SetProcessDpiAwarenessContext(
@@ -3788,6 +3824,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         OutputDebugStringW(L"PaneDock: SetProcessDpiAwarenessContext failed\n");
     if (!register_window_class(instance)) {
         OleUninitialize();
+        CloseHandle(single_instance_mutex);
         return exit_code;
     }
 
@@ -3796,6 +3833,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     if (!directory.has_value()) {
         OutputDebugStringW(L"PaneDock: LocalAppData resolution failed\n");
         OleUninitialize();
+        CloseHandle(single_instance_mutex);
         return exit_code;
     }
     state.session_directory = *directory;
@@ -3827,6 +3865,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         destroy_explorers(state);
         assert(panedock::explorer_host::live_view_count() == 0);
         OleUninitialize();
+        CloseHandle(single_instance_mutex);
         return exit_code;
     }
     ShowWindow(window, placement.maximized ? SW_SHOWMAXIMIZED : show_command);
@@ -3912,5 +3951,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     destroy_explorers(state);
     assert(panedock::explorer_host::live_view_count() == 0);
     OleUninitialize();
+    CloseHandle(single_instance_mutex);
     return exit_code;
 }

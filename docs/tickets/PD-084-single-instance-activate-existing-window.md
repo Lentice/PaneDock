@@ -105,3 +105,44 @@ ctest --test-dir build --output-on-failure
 ## 交接區
 
 （實作完成後由實作者填寫）
+
+### 2026-08-27 實作交接
+
+- 實作檔案只有 `src/app_shell/main.cpp`。啟動最前面以 `CreateMutexW` 取得單一實例標記；已有實例時只用 `FindWindowW(kWindowClassName, nullptr)` 找主視窗、必要時 `ShowWindow(SW_RESTORE)`，再呼叫既有慣例的 `SetForegroundWindow`，不進入 OLE、session 或新視窗建立流程。
+- Mutex 名稱為 `L"PaneDock-SingleInstanceMutex"`。沿用票據建議值，因為名稱固定、與正常/診斷模式共用，且判定不依賴會變動的視窗標題。
+- 視窗搜尋重試間隔為 50 ms，總逾時上限為 5000 ms；先立即搜尋，找不到才以 `Sleep(50)` 重試，使用 `GetTickCount64` 截止。這只涵蓋啟動空窗期的一次性有限等待，不是常駐 timer 或 tight loop；5 秒上限是給慢速 Shell 初始化留下餘裕，同時避免第二實例無限等待。
+- Mutex 以 `CloseHandle` 顯式釋放：第二實例在喚醒嘗試後立即關閉自己的 handle；第一實例持有 handle 從 `wWinMain` 開始直到 Explorer view 清理及 `OleUninitialize()` 完成後才關閉，沒有在 `WM_CLOSE`／視窗銷毀中提前釋放。若 process 異常結束，Windows 仍會自動回收 handle。
+
+#### Agent checks
+
+```text
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release：PASS。
+cmake --build build：PASS；LLVM-MinGW Clang/Ninja 成功編譯並連結 PaneDock.exe。
+ctest --test-dir build --output-on-failure：PASS；5/5 tests passed。
+git diff --check：交接區寫入後另行重跑，結果記於本交接最後的驗證更新。
+```
+
+#### Focused runtime self-check
+
+- 以 `Start-Process` 背靠背啟動兩次 Release `build\PaneDock.exe`：第一個 PID 為 `16568`，第二個 PID 為 `22572`；第二次啟動前 `Get-Process` 數量為 1，等待 6 秒後第二個 process 已退出，數量仍為 1。這驗證了第二實例不留下 process，且本次啟動 race 沒有產生第二個運作中的實例。
+- sandbox 內的 `tasklist /FI "IMAGENAME eq PaneDock.exe"` 三次均回報 `Access denied`，因此程序數量以 `Get-Process -Name PaneDock` 交叉檢查；沒有取得截圖，也沒有使用 Computer Use（0 次），所以第一視窗實際被帶到前景／還原最小化狀態留給使用者在互動桌面驗證。
+- 測試程序的主視窗 handle 為 0，sandbox 中以不帶 `/F` 的 `taskkill /PID 16568`（提升權限）成功送出終止訊號，但 5 秒後仍存活；未使用 `/F` 或 `Stop-Process -Force`。這個無可見視窗的清理限制與視覺結果均未冒充 acceptance PASS。
+
+#### Acceptance evidence
+
+| # | 結果 | 證據 |
+|---|---|---|
+| 1 | 部分驗證 | 第一個 Release process 能啟動並持續運作；session／視窗建立前的既有路徑未改動。無互動桌面畫面，未宣稱視窗外觀 PASS。 |
+| 2 | 程序層通過，前景化未驗證 | 第二個 PID 已退出，第二次啟動後只剩第一個 PID；`FindWindowW`、`SW_RESTORE`、`SetForegroundWindow` 路徑已編譯。未取得截圖。 |
+| 3 | 通過（程序數量） | `Get-Process` 在第二次啟動後回報 1；`tasklist` 因 sandbox 權限限制無法讀取。 |
+| 4 | 通過（本次背靠背執行） | 第一個 process 存活、第二個 process 結束，未出現兩個存活的 `PaneDock` process；未做更密集的同時啟動壓力測試。 |
+| 5 | 未驗證 | 第一個測試程序在無可見主視窗的 sandbox 中未能以不帶 `/F` 的 taskkill 完成退出，因此未執行第三次啟動；請使用者在互動桌面正常關閉後驗證。 |
+| 6 | 通過 | LLVM-MinGW Release configure、build 與 CTest 5/5 全數成功。 |
+| 7 | 程序碼／建置通過，診斷實機未驗證 | `diagnostic_requested`、`SetProcessMitigationPolicy` 與 PD-070 的 `SetErrorMode` 路徑未改動；mutex 早於診斷判定，診斷模式第二次啟動會依單一實例規則直接退出，符合本票不支援正常/診斷並行的決策。 |
+
+`git diff --check` 在交接區寫入後重跑；未新增 focused unit test，因這段邏輯依賴 Win32 process、kernel mutex 與真實 top-level window，不屬於 `core` 自動測試 seam；以本段 `Start-Process`／`Get-Process` 啟動 self-check 及上述人工視覺驗證替代。
+
+#### 驗證更新（2026-08-27）
+
+- 交接區寫入後再次執行 `cmake --build build`：PASS（Ninja 回報 `no work to do`）；`ctest --test-dir build --output-on-failure`：PASS，5/5 tests passed。
+- 交接區寫入後執行 `git diff --check`：PASS，沒有 whitespace error。
