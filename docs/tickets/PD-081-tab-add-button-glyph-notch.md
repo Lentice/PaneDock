@@ -122,7 +122,3 @@ git diff --check
 - 視覺比較基準保留為：[PD-081 修改前手繪缺角](assets/PD-081-current-plus-button-notched.png)、[PD-062 修改前 3×](assets/PD-062-tab-strip-before-3x.png)、[PD-062 修改後 3×](assets/PD-062-tab-strip-after-3x.png) 與 [PD-062 修改後 hover 3×](assets/PD-062-tab-strip-after-plus-hover-3x.png)。本次唯一一次桌面視覺擷取嘗試啟動 `build\\PaneDock.exe` 後找到主視窗，但 `GetDlgItem(main, 200)` 找不到 tab strip，因此未呼叫 `PrintWindow(hwnd, hdc, 2)`、沒有產生本次修改後截圖；依驗證限制不重試。故本次 18px 粗體 glyph 相對 PD-062 修改後畫面的實機視覺、hover 與 96 DPI 結果尚未人工確認。
 - 高 DPI（150%）截圖未執行；跨 DPI 的縮放程式碼沿用 `scaled_value(window, kTabPlusFontSize)`，但需使用者後續在實機確認沒有裁切或模糊。
 - Agent checks：`cmake --build build` 通過；`ctest --test-dir build --output-on-failure` 為 5/5 PASS；`rg -n "kTabPlusLineWidth|kTabPlusSize" src\\app_shell\\main.cpp` 無命中；`git diff --check` 通過。未新增單元測試：繪製路徑屬 `app_shell` 的 HWND/HDC UI 邏輯，不在 `core` 的自動測試 seam，已以建置、既有 CTest、靜態路徑檢查及一次受限視覺嘗試驗證。
-
-### 2026-08-27 — 使用者實機微調:「+」上移 1px
-
-使用者附截圖給出精確像素回饋:「+」符號應往上移 1px。實作為 `plus_rect` 在 `DrawTextW` 前 `OffsetRect(&plus_rect, 0, -scaled_value(window, 1))`,不改字型、字重、顏色或按鈕矩形本身。`cmake --build build` 與 `ctest --test-dir build --output-on-failure`(5/5)已重新確認通過。實機截圖仍未取得,由使用者自行確認位移後的視覺結果。
