@@ -1979,6 +1979,10 @@ HRESULT apply_layout(HWND window, AppState& state) {
             state.laid_out_pane_rects[index] = pane_rect;
         } else {
             state.laid_out_pane_rects[index].reset();
+            if (state.realized[index]) {
+                state.explorers[index].destroy();
+                state.realized[index] = false;
+            }
             ShowWindow(state.explorer_containers[index], SW_HIDE);
             ShowWindow(state.tab_strips[index], SW_HIDE);
             ShowWindow(state.back_buttons[index], SW_HIDE);

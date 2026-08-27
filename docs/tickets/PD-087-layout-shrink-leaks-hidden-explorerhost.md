@@ -85,4 +85,42 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作完成後由實作者填寫）
+### 實作
+
+- `src/app_shell/main.cpp` 的 `apply_layout` 在隱藏多餘 pane 前，若該 pane 已
+  `realized`，現在會呼叫 `ExplorerHost::destroy()` 並清除
+  `state.realized[index]`。
+- `ExplorerHost::destroy()` 會釋放該 view 的 `LiveViewRegistration`，因此
+  `live_view_count()` 會隨版型縮小正確遞減；版型放大時同一 pane 會重新走既有的
+  `initialize` + `navigate` 路徑。
+- 沒有新增自動測試：這段邏輯直接依賴 Win32 HWND 與真實 `IExplorerBrowser`，不在
+  專案的 `core` 自動測試 seam；以本票 Agent Checks 加上真實桌面驗證取代 fake。
+
+### Agent Checks
+
+以下命令均成功：
+
+```text
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+- Configure：成功。
+- Release build：成功，完成 `PaneDock.exe` link。
+- CTest：`5/5` 通過（`panedock_diagnostic_flag`、`panedock_tab_overflow`、
+  `panedock_core_model`、`panedock_core_layout`、`panedock_core_session`）。
+- `git diff --check`：成功。
+
+### Acceptance Criteria 驗證狀態
+
+1. **部分由程式碼驗證，實機結果留給使用者**：已確認隱藏已 realize pane 會
+   `destroy()`、清除 `realized`，且計數由 `LiveViewRegistration` 遞減；未在本次
+   Agent session 啟動真實 Shell UI 量測 4→1 後的 stdout 數值。
+2. **部分由程式碼驗證，實機結果留給使用者**：已確認 1→4 時清除後的 pane 會走
+   既有未 realize 分支，使用目前 Group tab 的 parsing name 初始化並導覽；未以真實
+   視窗截圖逐 pane 比對路徑。
+3. **留給使用者**：需要在實機反覆執行 4→1→4→2→4，觀察無舊路徑殘留，並以工作
+   管理員或 handle/working-set 取樣確認沒有隨次數線性增長。
+4. **已驗證**：configure、`cmake --build build`、`ctest --test-dir build
+   --output-on-failure` 均成功。
