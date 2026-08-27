@@ -99,7 +99,7 @@ constexpr COLORREF kTabBorder = RGB(232, 237, 242);
 constexpr int kNavigationBarHeight = 28;
 constexpr int kStatusBarHeight = 24;
 constexpr int kNavigationButtonWidth = 32;
-constexpr int kNavigationButtonOffsetX = 15;
+constexpr int kNavigationButtonOffsetX = 0;
 constexpr int kNavigationButtonOffsetY = 2;
 constexpr int kNavigationGlyphSize = 16;
 constexpr std::array<wchar_t, 5> kNavigationGlyphs{
