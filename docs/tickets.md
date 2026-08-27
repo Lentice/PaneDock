@@ -251,6 +251,7 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | 網址列自動完成(`IAutoComplete2`) | PD-020(2026-08-24)刻意排除,只做純 `EDIT` + Enter。若使用者實際使用後認為缺自動完成造成明顯不便,再開 ticket 接 Shell 的 `IAutoComplete2`,不預先做。 |
 | 讓 `compute_layout_rects` 接收 DPI 縮放後的最小尺寸／分隔線厚度,取代目前寫死的 96-DPI 基準常數 | PD-005 2026-08-24 交接發現:`docs/design-spec.md` §FR-004a 的敘述預期呼叫端傳入「已按 DPI 縮放過的最小值常數」,但 PD-005 定義的函式簽章只收 client size、版型、比例,常數是寫死在 `src/core/layout.h` 的 96-DPI 基準值,呼叫端目前無法覆寫。等 app_shell 接上 Per-Monitor-V2 `WM_DPICHANGED`(NFR-004)且需要跨 DPI 正確縮放時開票,把最小尺寸/分隔線厚度改成函式參數,矩形演算法本身不需要動。 |
 | 啟動時的不乾淨關閉標記(`clean_shutdown`)改用比整份 `write_session` 更輕量的單欄位寫入 | PD-094(2026-08-27)撤回時發現:目前啟動時仍會呼叫完整 `save_now`/`write_session` 管線(重新解析整份 `preserved_json`+雙 flush+備份複製)只為了把 `clean_shutdown` 這一個布林欄位改成 `false`,PD-025 決策 2 已判定這次寫入本身可接受,但沒有評估過「用更輕量的手段達成同一個標記語意」。觸發條件:先用 PD-026 排除的計時儀器或使用者實際回報量到啟動延遲確實可感知,再開票設計專屬的輕量標記寫入(需注意仍要遵守 `AGENTS.md` 的 atomic-replace 與 schema 前向相容規則,不能只是省略 flush)。 |
+| 把 PD-095 的「幾何重排/內容重算」分離套用到 `WM_SIZE`(拖曳主視窗邊框即時縮放) | PD-095(2026-08-27)只把 `update_splitter_drag` 的逐幀呼叫改成幾何模式,`WM_SIZE`(`main.cpp:3809-3811` 一帶)仍呼叫預設的完整內容重算 `apply_layout`。這是同一類熱路徑(Windows 預設的 live resize 會在拖曳視窗邊框期間連續送出 `WM_SIZE`),PD-095 原始三方發現的背景段落也點名過,但 Scope/Acceptance Criteria 最終只鎖定分隔線拖曳,是撰票時的範圍疏漏,不是實作缺陷。觸發條件:若使用者實際感受到拖曳視窗邊框縮放時的卡頓,可直接沿用 PD-095 已經做好的 `apply_layout(window, state, false, recompute_content)` 參數,讓 `WM_SIZE` 也在連續縮放期間傳 `false`,只在縮放結束(`WM_EXITSIZEMOVE`)時做一次完整重算。 |
 
 ## 計畫決策紀錄
 
