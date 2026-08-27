@@ -54,6 +54,8 @@ class ViewCallback final : public IShellFolderViewCB {
 public:
     explicit ViewCallback(ExplorerHost* host) noexcept : host_(host) {}
 
+    void detach() noexcept { host_ = nullptr; }
+
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,
                                               void** object) override {
         if (object == nullptr) return E_POINTER;
@@ -84,6 +86,7 @@ public:
 
     HRESULT STDMETHODCALLTYPE MessageSFVCB(UINT message, WPARAM wparam,
                                             LPARAM lparam) noexcept override {
+        if (host_ == nullptr) return E_NOTIMPL;
         if (previous_ != nullptr) {
             (void)previous_->MessageSFVCB(message, wparam, lparam);
         }
@@ -102,6 +105,8 @@ private:
 class Site final : public IServiceProvider, public IExplorerBrowserEvents {
 public:
     explicit Site(ExplorerHost* host) noexcept : host_(host) {}
+
+    void detach() noexcept { host_ = nullptr; }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,
                                               void** object) override {
@@ -142,6 +147,9 @@ public:
             return E_POINTER;
         }
         *object = nullptr;
+        if (host_ == nullptr) {
+            return E_NOINTERFACE;
+        }
         log_service_query(service_id);
         (void)iid;
         return E_NOINTERFACE;
@@ -149,29 +157,29 @@ public:
 
     HRESULT STDMETHODCALLTYPE OnNavigationPending(
         PCIDLIST_ABSOLUTE) override {
+        if (host_ == nullptr) return S_OK;
         log_message(L"ExplorerHost: navigation pending");
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE OnViewCreated(IShellView*) override {
+        if (host_ == nullptr) return S_OK;
         log_message(L"ExplorerHost: view created");
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE OnNavigationComplete(
         PCIDLIST_ABSOLUTE pidl) override {
+        if (host_ == nullptr) return S_OK;
         log_message(L"ExplorerHost: navigation complete");
-        if (host_ != nullptr) {
-            host_->navigation_complete(pidl);
-        }
+        host_->navigation_complete(pidl);
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE OnNavigationFailed(PCIDLIST_ABSOLUTE) override {
+        if (host_ == nullptr) return S_OK;
         log_message(L"ExplorerHost: navigation failed");
-        if (host_ != nullptr) {
-            host_->navigation_failed();
-        }
+        host_->navigation_failed();
         return S_OK;
     }
 
@@ -689,6 +697,13 @@ void ExplorerHost::destroy() noexcept {
 
     destroying_ = true;
     initialized_ = false;
+
+    if (site_ != nullptr) {
+        static_cast<Site*>(site_.Get())->detach();
+    }
+    if (view_callback_ != nullptr) {
+        static_cast<ViewCallback*>(view_callback_.Get())->detach();
+    }
 
     if (advised_) {
         log_hresult(L"IExplorerBrowser::Unadvise",

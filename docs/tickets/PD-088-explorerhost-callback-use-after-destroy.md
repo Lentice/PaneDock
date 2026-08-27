@@ -66,4 +66,14 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作完成後由實作者填寫）
+- 修正 `src/explorer_host/explorer_host.cpp`：`Site` 與 `ViewCallback` 新增 `detach()`，`ExplorerHost::destroy()` 在 teardown guard 生效後、既有 `Unadvise`/`SetSite(nullptr)`/`SetCallback`/`Reset()` 順序開始前清空兩個 raw `ExplorerHost*`。延遲進入的 `MessageSFVCB`、`QueryService`、Site 事件回呼現在會回傳原本的空/失敗結果，不再存取 host；正常 host 存在時的流程未改變。
+- 驗證結果：
+  - `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`：PASS。
+  - `cmake --build build`：PASS。
+  - `ctest --test-dir build --output-on-failure`：PASS，5/5。
+  - `./build/panedock_explorer_host_lifetime_check.exe`：PASS；實際完成 Initialize、導覽、view mode、失敗導覽與 Destroy，`live_view_count` 與子視窗清理檢查通過。
+- Acceptance criteria：
+  - 1：程式碼路徑已驗證（detach 發生在所有 teardown 呼叫前，所有會觸碰 host 的入口均有 null guard）；未加入直接持有匿名 namespace 內部 COM callback 類別的測試 harness，因此 Shell 真實延遲回呼仍留給使用者在診斷模式/第三方 extension 環境確認。
+  - 2：已驗證，既有 `explorer_host_lifetime_check` 通過，未修改其斷言。
+  - 3：已驗證，configure/build/ctest 全數通過。
+  - 4：Shell Initialize → 導覽 → Destroy 的自動檢查通過；實際視覺行為仍需使用者在真實桌面確認。

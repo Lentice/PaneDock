@@ -125,7 +125,7 @@
 | PD-085 | 把 tab 捲動按鈕的幾何計算抽成純函式(可單元測試) | 7 | `ready` | 無 | [PD-085](tickets/PD-085-tab-scroll-button-geometry-to-pure-module.md) |
 | PD-086 | 切換 Group 時,同步完成的導覽把舊 Group 的路徑寫進新 Group 的儲存分頁(資料遺失) | 7 | `done` | 無 | [PD-086](tickets/PD-086-group-switch-overwrites-incoming-folders-with-outgoing-live-state.md) |
 | PD-087 | 版型縮小時被隱藏的 pane 沒有 destroy `IExplorerBrowser`,放大回去顯示過期資料夾 | 7 | `done` | 無 | [PD-087](tickets/PD-087-layout-shrink-leaks-hidden-explorerhost.md) |
-| PD-088 | `Site`/`ViewCallback` 持有的 `ExplorerHost*` 在 destroy 後未清空,延遲回呼可能觸碰已銷毀物件 | 7 | `ready` | 無 | [PD-088](tickets/PD-088-explorerhost-callback-use-after-destroy.md) |
+| PD-088 | `Site`/`ViewCallback` 持有的 `ExplorerHost*` 在 destroy 後未清空,延遲回呼可能觸碰已銷毀物件 | 7 | `done` | 無 | [PD-088](tickets/PD-088-explorerhost-callback-use-after-destroy.md) |
 | PD-089 | PD-084 單一實例喚醒常見情境下靜默失敗(`SetForegroundWindow` 被拒絕、輪詢逾時無回饋) | 7 | `ready` | PD-084 | [PD-089](tickets/PD-089-single-instance-activation-unreliable.md) |
 | PD-090 | 拖曳懸停自動切換 Group/tab 在 OLE 拖曳迴圈內同步做 Shell view 建立/銷毀與 session 寫入 | 7 | `ready` | PD-034 | [PD-090](tickets/PD-090-drag-hover-group-switch-reenters-ole-drag-loop.md) |
 | PD-091 | 每次資料夾導覽完成都同步寫入 session(多次 JSON 解析＋兩次強制 flush) | 7 | `ready` | PD-078 | [PD-091](tickets/PD-091-session-save-synchronous-on-every-navigation.md) |
