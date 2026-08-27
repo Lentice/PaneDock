@@ -48,6 +48,8 @@ constexpr wchar_t kSingleInstanceMutexName[] =
     L"PaneDock-SingleInstanceMutex";
 constexpr DWORD kSingleInstanceWindowRetryIntervalMs = 50;
 constexpr ULONGLONG kSingleInstanceWindowRetryTimeoutMs = 5000;
+// PD-089: the first instance handles this on its own UI thread.
+constexpr UINT kActivateExistingInstanceMessage = WM_APP + 50;
 constexpr std::size_t kExplorerCount = 4;
 constexpr int kLayoutBarHeight = 44;
 constexpr int kLayoutButtonHeight = 30;
@@ -3194,6 +3196,8 @@ LRESULT CALLBACK group_list_proc(HWND window, UINT message, WPARAM wparam,
     return DefSubclassProc(window, message, wparam, lparam);
 }
 
+void activate_main_window_on_own_thread(HWND window) noexcept;
+
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                              LPARAM lparam) {
     auto* state = reinterpret_cast<AppState*>(
@@ -3398,6 +3402,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 return 0;
             }
             break;
+        case kActivateExistingInstanceMessage:
+            activate_main_window_on_own_thread(window);
+            return 0;
         case WM_MEASUREITEM:
             if (state != nullptr) {
                 auto* item = reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
@@ -3853,11 +3860,39 @@ HWND find_existing_main_window() noexcept {
     }
 }
 
+void activate_main_window_on_own_thread(HWND window) noexcept {
+    if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
+
+    const DWORD current_thread = GetCurrentThreadId();
+    const HWND foreground_window = GetForegroundWindow();
+    const DWORD foreground_thread =
+        foreground_window == nullptr
+            ? 0
+            : GetWindowThreadProcessId(foreground_window, nullptr);
+    const bool attached =
+        foreground_thread != 0 && foreground_thread != current_thread &&
+        AttachThreadInput(current_thread, foreground_thread, TRUE) != FALSE;
+    const BOOL activated = SetForegroundWindow(window);
+    if (attached) {
+        (void)AttachThreadInput(current_thread, foreground_thread, FALSE);
+    }
+    if (activated == FALSE)
+        OutputDebugStringW(L"PaneDock: existing window activation failed\n");
+}
+
 void activate_existing_main_window() noexcept {
     const HWND window = find_existing_main_window();
-    if (window == nullptr) return;
-    if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
-    SetForegroundWindow(window);
+    if (window == nullptr) {
+        OutputDebugStringW(
+            L"PaneDock: timed out waiting for existing main window\n");
+        return;
+    }
+
+    DWORD process_id = 0;
+    if (GetWindowThreadProcessId(window, &process_id) != 0 && process_id != 0)
+        (void)AllowSetForegroundWindow(process_id);
+    if (!PostMessageW(window, kActivateExistingInstanceMessage, 0, 0))
+        OutputDebugStringW(L"PaneDock: could not request window activation\n");
 }
 
 }  // namespace

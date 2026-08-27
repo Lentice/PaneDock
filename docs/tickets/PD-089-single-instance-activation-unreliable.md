@@ -82,4 +82,37 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作完成後由實作者填寫）
+### 2026-08-27 實作交接
+
+- `src/app_shell/main.cpp` 新增私有 `WM_APP + 50` 訊息。第二實例找到第一實例後，先以 `AllowSetForegroundWindow` 將前景權限交給第一實例，再以 `PostMessageW` 要求它自行喚醒；第二實例不再直接呼叫 `SetForegroundWindow`。第一實例在自己的 `WndProc` 中必要時 `ShowWindow(SW_RESTORE)`，暫時以 `AttachThreadInput` 附著目前前景視窗的輸入執行緒，呼叫 `SetForegroundWindow` 後立即解除附著。沒有修改全域 `SPI_SETFOREGROUNDLOCKTIMEOUT`。
+- 選用的 Win32 API 依據：[SetForegroundWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow) 說明呼叫者的前景限制；[AllowSetForegroundWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-allowsetforegroundwindow) 允許有權限的第二實例把權限轉交第一實例；[AttachThreadInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-attachthreadinput) 提供第一實例執行緒的最小範圍補強，避免改動使用者的全域前景鎖定設定。
+- Mutex 名稱仍為 `L"PaneDock-SingleInstanceMutex"`，未改動 PD-084 決策；它固定、由正常／診斷模式共用，且不依賴視窗標題。第二實例仍在 mutex 已存在時直接結束，不進入 OLE、session 或新視窗建立流程。
+- 視窗搜尋仍使用 50 ms 間隔、5000 ms 總逾時的啟動空窗期有限等待；這是既有 PD-084 的數值，且不屬於常駐 idle polling。未採用可選的具名 ready event，因目前一次性有限等待已滿足範圍，新增 event 會增加另一個具名同步物件與建立時序；逾時現在會以既有 `OutputDebugStringW` 留下 `timed out waiting for existing main window` 訊號。若日後量測到啟動常超過 5 秒或需要更精確的 ready 時點，再改用具名 event。
+- Mutex handle 的實作仍是顯式 `CloseHandle`：第二實例在喚醒請求後釋放自己的 handle；第一實例從 `wWinMain` 持有至所有 view 清理與 `OleUninitialize()` 完成後才釋放，沒有在視窗關閉中途提前釋放。若 process 異常結束，Windows 仍會自動回收 handle。
+
+#### Agent checks
+
+```text
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release：PASS。
+cmake --build build：PASS；LLVM-MinGW 編譯並連結 PaneDock.exe 成功。
+ctest --test-dir build --output-on-failure：PASS；5/5 tests passed。
+git diff --check：PASS；無 whitespace error。
+```
+
+#### Focused runtime self-check
+
+- 以 Release `build\PaneDock.exe` 背靠背啟動兩次：第一 PID `46016`、第二 PID `42300`。第二實例在 7 秒內退出，`Get-Process -Name PaneDock` 回報只剩第一個 PID；這驗證了第二實例不持續存活，且有限等待路徑可返回。
+- sandbox 中第一個 process 的 `MainWindowHandle` 為 0，無法取得互動桌面的前景視窗或截圖；`tasklist` 未取得證據，程序數量是以 `Get-Process` 檢查。優雅終止訊號因沒有可用視窗 handle 未能完成，最後只對已確認的 self-check PID 做了必要的 `/F` 清理；這不是產品流程的驗證結果。
+
+#### Acceptance evidence
+
+| # | 結果 | 證據 |
+|---|---|---|
+| 1 | 留給使用者 | 未在互動桌面切換到其他程式，也沒有截圖；因此未宣稱第一視窗確實前景化。 |
+| 2 | 留給使用者 | 未取得可操作的最小化視窗 handle，未驗證 `SW_RESTORE` 的實際畫面結果。 |
+| 3 | 部分驗證 | 程式碼仍為 50 ms／5000 ms 有限等待；runtime self-check 中第二實例已在 7 秒內結束，但沒有用 debugger 或大型 session 量測精確逾時行為。 |
+| 4 | 通過 | Release configure、build 與 CTest 5/5 全部成功。 |
+| 5 | 部分驗證 | 第一實例 process 能啟動，且正常單一實例的 session／視窗建立程式碼未改動；sandbox 沒有可見畫面，未做互動桌面確認。 |
+| 6 | 程式碼驗證，實機留給使用者 | mutex 檢查仍早於 `--diagnostic` 解析，第二次診斷啟動會直接依單一實例規則結束；`diagnostic_requested`、`SetProcessMitigationPolicy` 與 PD-070 的 `SetErrorMode` 路徑未改動。 |
+
+未新增 `core` 單元測試：這段行為依賴 Win32 kernel mutex、跨 process message 與真實 top-level window，無法透過既有 `core` seam 驗證；本次以建置、CTest 與上述程序層 self-check 驗證可自動驗證的部分，視窗真正前景化／最小化還原留給使用者在互動桌面完成。
