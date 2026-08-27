@@ -100,7 +100,7 @@
 | PD-060 | Pane 狀態列補上選取檔案總大小,並加上分隔線/底色 | 7 | `ready` | PD-051 | [PD-060](tickets/PD-060-pane-status-bar-selection-size-and-separator.md) |
 | PD-061 | 側邊欄 Group 名稱與副標題字級太小,改用系統 UI 字型 | 7 | `done` | PD-028 | [PD-061](tickets/PD-061-sidebar-group-typography.md) |
 | PD-062 | Tab 改圓角外框,拆分 padding/gap/列高,「+」加大加粗 | 7 | `done` | PD-049, PD-055 | [PD-062](tickets/PD-062-tab-strip-visual-polish.md) |
-| PD-063 | Active pane 圓角外框鋸齒,改用不依賴圓角描邊的強調方式 | 7 | `ready` | PD-040, PD-048 | [PD-063](tickets/PD-063-active-pane-highlight-aliasing.md) |
+| PD-063 | Active pane 圓角外框鋸齒,改用不依賴圓角描邊的強調方式 | 7 | `done` | PD-040, PD-048 | [PD-063](tickets/PD-063-active-pane-highlight-aliasing.md) |
 | PD-064 | 移除無作用的 more-actions「...」按鈕,修正 Up 圖示對齊 | 7 | `done` | PD-029, PD-043 | [PD-064](tickets/PD-064-header-and-nav-icon-cleanup.md) |
 | PD-065 | `EBO_NOBORDER` 在 `Initialize` 之後才設定,檔案區殘留深色細外框 | 7 | `done` | PD-040, PD-048 | [PD-065](tickets/PD-065-explorer-view-residual-border.md) |
 | PD-066 | 拖曳排序改用撐開空位的 placeholder;修復 tab 插入指示線死碼 | 7 | `done` | PD-055, PD-050, PD-036 | [PD-066](tickets/PD-066-drag-reorder-placeholder-gap.md) |
@@ -110,13 +110,15 @@
 | PD-070 | 診斷模式擋下第三方 extension 時跳出載入器模態對話框,無法無人值守執行 | 7 | `done` | PD-024 | [PD-070](tickets/PD-070-diagnostic-mode-loader-error-dialogs.md) |
 | PD-071 | 移除 Ctrl+Shift+L 熱鍵:註冊失敗會讓程式完全無法啟動 | 7 | `done` | PD-009 | [PD-071](tickets/PD-071-remove-layout-hotkey.md) |
 | PD-072 | chrome 字型改用固定 Latin 字面＋系統字型連結,取代語系相依的 `DEFAULT_GUI_FONT`／`lfMessageFont`(覆寫 PD-061 的 face 來源) | 7 | `ready` | PD-061 | [PD-072](tickets/PD-072-replace-stock-gui-font.md) |
-| PD-073 | Tab 溢出時變成零寬矩形完全無法點擊;加左移/右移捲動按鈕 | 7 | `ready` | PD-055, PD-062, PD-066 | [PD-073](tickets/PD-073-tab-overflow-scroll-buttons.md) |
+| PD-073 | Tab 溢出時變成零寬矩形完全無法點擊;加左移/右移捲動按鈕 | 7 | `done` | PD-055, PD-062, PD-066 | [PD-073](tickets/PD-073-tab-overflow-scroll-buttons.md) |
 | PD-074 | 拖曳排序看不到「拖的是哪一個」:placeholder 內畫出淡化的被拖曳項目 | 7 | `ready` | PD-066, PD-061, PD-062 | [PD-074](tickets/PD-074-drag-placeholder-shows-dragged-item.md) |
-| PD-075 | Pane 導覽列五個圖示由三種技術繪製,統一到 `Segoe MDL2 Assets` | 7 | `ready` | PD-052, PD-064 | [PD-075](tickets/PD-075-unify-pane-chrome-icon-style.md) |
+| PD-075 | Pane 導覽列五個圖示由三種技術繪製,統一到 `Segoe MDL2 Assets` | 7 | `done` | PD-052, PD-064 | [PD-075](tickets/PD-075-unify-pane-chrome-icon-style.md) |
 | PD-076 | Group 與 pane tab 的 active/hover 樣式不一致,以 Group 現有樣式為準套用到 tab | 7 | `ready` | PD-061, PD-062, PD-072 | [PD-076](tickets/PD-076-unify-group-tab-active-hover-style.md) |
 | PD-077 | 拖曳調整主視窗大小時,pane 狀態列在舊位置留下殘影 | 7 | `done` | PD-041, PD-042 | [PD-077](tickets/PD-077-pane-footer-resize-repaint-ghost.md) |
 | PD-078 | 確保電腦當機/斷電時 session.json 不會毀損 | 7 | `done` | PD-006 | [PD-078](tickets/PD-078-crash-safe-session-write.md) |
-| PD-079 | 檢視模式選單擴充為 8 項,對齊真實檔案總管;僅「詳細資料」顯示欄位標題(覆寫 PD-059 決策 3) | 7 | `ready` | PD-059 | [PD-079](tickets/PD-079-view-mode-menu-eight-items-and-column-header.md) |
+| PD-079 | 檢視模式選單擴充為 8 項,對齊真實檔案總管;僅「詳細資料」顯示欄位標題(覆寫 PD-059 決策 3) | 7 | `done` | PD-059 | [PD-079](tickets/PD-079-view-mode-menu-eight-items-and-column-header.md) |
+| PD-080 | Tab 溢出捲動按鈕尺寸過大,和 tab 一樣高,改為緊湊小按鈕 | 7 | `ready` | PD-073 | [PD-080](tickets/PD-080-tab-scroll-buttons-oversized.md) |
+| PD-081 | Tab「+」按鈕手繪十字有缺角,改回字型字符繪製(覆寫 PD-062 決策 5) | 7 | `ready` | PD-062 | [PD-081](tickets/PD-081-tab-add-button-glyph-notch.md) |
 
 ## Dependency lanes
 
@@ -385,5 +387,14 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 - **PD-079**:使用者附真實 Windows 檔案總管「檢視」選單截圖,要求 8 個項目(超大/大/中/小圖示、清單、詳細資料、並排、內容)而非 PD-059 剛完成的 4 項,且只有「詳細資料」該顯示欄位標題。**明確覆寫 PD-059 已確認的產品決策 3**——PD-059 當時依據 PD-052 決策 2「額外模式是否加入由實作 agent 決定,不強制」只做了最低限度的 4 項,新證據(使用者截圖)把範圍變成強制的 8 項。根因調查發現「超大/大/中/小圖示」四級在真實 Shell 裡不是四個不同的 `FOLDERVIEWMODE`,而是同一個圖示模式配上 `IFolderView2::SetViewModeAndIconSize` 控制的不同像素尺寸——本票明確要求實作 agent 查證這個 API 在目前 LLVM-MinGW 工具鏈下的可用性,不得憑空假設像素值。Column header 只在「詳細資料」顯示很可能是真實 Shell view 的原生行為,不需要新程式碼,要求實作 agent 先截圖驗證再決定是否動手。
 
 **同時記錄一條新的驗證方法約定(即時生效,適用於所有後續票):** 只有單次點擊/操作 + 截圖的驗證由 Agent(或本人)執行;需要連續、多步驟操控滑鼠鍵盤的測試(例如連續拖曳、多步驟 hover 序列)交給使用者本人執行,理由是電腦操作工具(computer-use)會佔用實體滑鼠鍵盤,長時間自動化操作會干擾使用者同時使用同一台機器。這條約定不寫進 `AGENTS.md`(那是產品/工程規則,這是協作流程規則),但後續每張票的 dispatch prompt 都應該包含這個限制。
+
+### 2026-08-27 — 使用者實機回報 tab 條兩個視覺瑕疵,開 PD-080/081
+
+使用者附截圖回報兩項獨立瑕疵(PD-073/075/076/079 已交付但尚未完成使用者實機驗證的期間發現):
+
+- **PD-080**:tab 溢出時的左移/右移捲動按鈕(PD-073 新增)「太大,不好看」,並附一張瀏覽器分頁常見的緊湊小箭頭按鈕作為參考樣式。根因是 `kTabScrollButtonWidth`(28px)只控制寬度,高度直接沿用整個 tab strip 高度(`client.bottom`),沒有獨立的視覺高度收縮,導致按鈕外框和 tab 本身一樣大,箭頭本身很小,比例失衡。不涉及可點擊性(PD-073 已修好),純視覺尺寸調整。
+- **PD-081**:tab 條「+」新增按鈕(PD-062 決策 5 才剛從字型字符改成手繪十字線段)在實機截圖上出現缺角瑕疵,使用者明確要求「用正常的字型達成,除非效能更好才用畫的」。**明確覆寫 PD-062 已確認的決策 5**(手繪加大加粗)與 PD-075 決策 9(因此把「+」列為非目標)——新證據是使用者實機截圖顯示手繪十字交會處不平整,不是風格偏好問題。預設改回字型字符渲染,只有在有實測效能數字支持時才允許保留手繪路徑,且必須先修好缺角。
+
+兩票都歸 Phase 7,分別依賴 PD-073 與 PD-062,彼此互不依賴,可平行處理。
 
 兩票都歸 Phase 7,PD-078 屬 core 加固,PD-079 依賴 PD-059。
