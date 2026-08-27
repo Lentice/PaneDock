@@ -63,6 +63,13 @@ SetTextColor(dc, RGB(31, 41, 55));   // 迴圈外設一次,active/hover/一般�
 5. **Hover 狀態的判定邏輯不變。** `active`/`hovered` 布林值與其計算方式(`pane.tabs[index].id == pane.active_tab_id`、`state.tab_hover_indices[pane_index] == index`)完全沿用,本票只改「這兩個布林值決定的視覺輸出」,不改「這兩個布林值怎麼算出來」。
 6. **不改「+」按鈕、拖曳 placeholder(虛線框)、拖曳插入指示線的顏色。** 這些元素各自有既有色票決策(PD-062 決策 6、PD-066 的 placeholder 樣式),本票範圍限定在 active/hover 的**一般 tab** 視覺與文字。
 
+### 2026-08-27 — 使用者實機驗收回饋:hover 樣式不明顯,追加決策 7
+
+使用者實機測試後回報:「pane tab onhover style 不明顯,換成更好的 style」。追查第一輪實作(見下方交接區「2026-08-27 — implementation pass」)後找到具體根因:`paint_tab_strip` 的一般(非 hover)tab 底色是 `RGB(244, 246, 248)`(第 2682 行),而第一輪實作把 hover 底色設成與側邊欄逐位元相同的 `RGB(242, 245, 248)`——**兩者每個色版只差 2,肉眼幾乎無法分辨**,等於 hover 狀態視覺上和「什麼都沒變」一樣。這不是使用者主觀偏好問題,是色值選擇本身的量化證據:直接比較兩個 `RGB` 常數就能重現。
+
+7. **hover 底色必須與一般(非 hover)tab 底色之間有肉眼可辨的對比度**,不是逐位元照搬側邊欄 `kSidebarHoverBackground` 的絕對值(側邊欄的一般底色是透明/視窗底色,tab 的一般底色是 `RGB(244,246,248)`,兩者的「基準色」不同,不能假設同一個 hover 色值套用在不同基準色上會有一樣的可辨識度)。實作者需要挑一個明顯深於 `RGB(244,246,248)` 的 hover 底色(可以維持整體「淺灰中性、不用側邊欄的藍色」的方向,但飽和度/明度差距必須足夠),並在交接區附上一般/hover/active 三態並排的放大截圖與三者的實際 `Bitmap.GetPixel` 取色值,證明三態兩兩可辨,不能只給色票數字。
+8. **hover 的邊框也一併檢視。** 第一輪實作沒有給 hover 一個獨立的 `border_color`(只有 active 有 `kTabActiveBorder`,hover 仍落到一般的 `kTabBorder`)。若把底色對比拉開後仍覺得 hover 不夠明顯,允許同時給 hover 一個比一般更深一階的邊框色,由實作者依實機截圖判斷是否需要,不強制。
+
 ## Binding constraints — quoted, do not go looking for them
 
 `AGENTS.md`:
@@ -118,7 +125,7 @@ SetTextColor(dc, RGB(31, 41, 55));   // 迴圈外設一次,active/hover/一般�
 
 1. Tab active 狀態的底色改為藍色調(對應側邊欄 `kSidebarActiveBackground` 色值),不再是純灰階。
 2. Tab active 狀態的文字顏色改為強調藍(對應側邊欄 `kSidebarActiveText` 色值),與 hover/一般 tab 文字色可清楚區分。
-3. Tab hover(非 active)狀態的底色對應側邊欄 `kSidebarHoverBackground` 色值。
+3. Tab hover(非 active)狀態的底色與一般 tab 底色(`RGB(244,246,248)`)之間有肉眼可辨的對比度,並附三態(一般/hover/active)並排放大截圖與實際取色值佐證(決策 7)——不得逐位元沿用側邊欄 `kSidebarHoverBackground` 而不檢查與 tab 自身基準色的對比。
 4. `paint_tab_strip` 明確 `SelectObject` 了一個字型再呼叫 `DrawTextW`(不再依賴 DC 預設字型),且該字型隨目前 DPI 正確縮放。
 5. 死碼 `WM_SETFONT` 呼叫已移除或已改為真正生效的字型設定路徑(依決策 3 選擇的方案,在交接區說明採用哪一種)。
 6. Tab 標題文字不因字型改變而截斷或溢出圓角外框(長標題仍走 `DT_END_ELLIPSIS`)。
@@ -204,3 +211,21 @@ git diff --check
 - 高 DPI：字型仍經 `ui_font` 的目前 window DPI 與既有 `WM_DPICHANGED` 路徑，程式碼
   路徑已確認；未切換 150%/200% 實機設定，Acceptance 9 未驗證。PD-076 tracker
   狀態維持 `ready`，因上述視覺對照、GDI 趨勢與高 DPI 實機證據尚不完整。
+
+### 2026-08-27 — hover contrast follow-up
+
+- 依決策 7/8 只調整 `src/app_shell/main.cpp` 的 `kTabHoverBackground`：由
+  `RGB(242, 245, 248)` 改為中性灰 `RGB(226, 232, 240)`。一般 tab 維持
+  `RGB(244, 246, 248)`，active background、active text、active border、字型、圓角與
+  hover 判定邏輯均未修改；未新增 hover border，填色差異已是本次最小修正。
+- 三態程式色值為：一般 `RGB(244, 246, 248)`、hover `RGB(226, 232, 240)`、active
+  `RGB(234, 241, 255)`。一般與 hover 的每通道差為 `18/14/8`，hover 保持中性灰階，
+  並與 active 的淡藍色調分開。
+- 驗證：`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 為
+  5/5 PASS；`git diff --check` 於程式碼驗證時通過。第一次 link 因既有 PaneDock
+  PID 32176 鎖住輸出而失敗，之後用不帶 `/F` 的 `taskkill /PID 32176` 優雅關閉並重建
+  成功；本回合啟動的驗證程序 PID 10928 亦以不帶 `/F` 的 `taskkill /PID 10928` 關閉。
+- 依本回合 single-click + single-screenshot 限制，未取得實機 hover 的
+  `PrintWindow(PW_RENDERFULLCONTENT)`／3 倍 NearestNeighbor 截圖，也未取得
+  `Bitmap.GetPixel` 實測值；Computer Use 視窗啟用重試仍失敗後即停止操作並釋放 session。
+  因此三態的 live screenshot、GDI 趨勢與 150%/200% 實機驗證仍交由使用者手動確認。

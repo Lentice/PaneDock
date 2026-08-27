@@ -72,10 +72,10 @@ constexpr int kTabCornerRadius = 6;
 constexpr int kTabCloseButtonSpace = 16;
 constexpr int kTabPlusSize = 12;
 constexpr int kTabPlusLineWidth = 2;
-// PD-076: keep tab active/hover colors aligned with sidebar.cpp without
-// introducing a cross-module palette.
+// PD-076: keep tab active colors aligned with sidebar.cpp without introducing
+// a cross-module palette; use a stronger neutral hover fill for tab contrast.
 constexpr COLORREF kTabActiveBackground = RGB(234, 241, 255);
-constexpr COLORREF kTabHoverBackground = RGB(242, 245, 248);
+constexpr COLORREF kTabHoverBackground = RGB(226, 232, 240);
 constexpr COLORREF kTabActiveText = RGB(23, 75, 180);
 constexpr COLORREF kTabText = RGB(31, 41, 55);
 constexpr COLORREF kTabActiveBorder = RGB(191, 211, 245);
