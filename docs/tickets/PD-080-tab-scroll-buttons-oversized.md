@@ -120,3 +120,7 @@ git diff --check
 ### 2026-08-27 — 使用者實機微調:再往右移 2px
 
 使用者實機比對後給出精確回饋:「tab nav buttons 再往右移 2px」。`draw_tab_scroll_button` 新增 `visual_offset_x = scaled_value(window, 2)`,套用在 `visual_left` 上,兩顆按鈕維持既有的相鄰對齊邏輯,只整體再右移 2px。`cmake --build build` 成功、`ctest --test-dir build --output-on-failure` 5/5 PASS;並用 `PrintWindow(PW_RENDERFULLCONTENT)`(背景 PowerShell 擷取,未搶佔前景/滑鼠)截圖確認位移生效。
+
+### 2026-08-27 — 使用者實機微調:再往下移 2px
+
+使用者實機比對後給出精確回饋:「tab nav buttons 再往下移 2px」。`visual_top` 追加 `visual_offset_y = scaled_value(window, 2)`,與既有 `visual_offset_x` 並列。`cmake --build build`、`ctest --test-dir build --output-on-failure`(5/5)已重新確認通過。
