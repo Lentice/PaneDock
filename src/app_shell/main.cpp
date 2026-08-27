@@ -60,7 +60,7 @@ constexpr int kTabMinWidth = 72;
 constexpr int kTabMaxWidth = 200;
 constexpr int kTabAddButtonWidth = 36;
 // PD-073: reserved only while the tab content overflows its viewport.
-constexpr int kTabScrollButtonWidth = 28;
+constexpr int kTabScrollButtonWidth = 20;
 // PD-080: keep the larger PD-073 rect as the hit-test target, but paint a
 // compact button inside it so the visual control is smaller than the tab row.
 constexpr int kTabScrollButtonVisualWidth = 18;
@@ -90,7 +90,7 @@ constexpr COLORREF kTabBorder = RGB(232, 237, 242);
 constexpr int kNavigationBarHeight = 28;
 constexpr int kStatusBarHeight = 24;
 constexpr int kNavigationButtonWidth = 32;
-constexpr int kNavigationButtonOffsetX = 12;
+constexpr int kNavigationButtonOffsetX = 15;
 constexpr int kNavigationButtonOffsetY = 2;
 constexpr int kNavigationGlyphSize = 16;
 constexpr std::array<wchar_t, 5> kNavigationGlyphs{
