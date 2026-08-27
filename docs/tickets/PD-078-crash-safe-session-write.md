@@ -126,3 +126,41 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-27 實作交接
+
+#### Durability 分層
+
+- `src/core/session.h` 新增 `SessionDurabilityHook`：`bool (*)(const std::filesystem::path&)`，`write_session()` 以預設 `nullptr` 保持既有呼叫端相容。core 只負責順序與失敗傳播，不引入 `windows.h`、HWND 或 COM；選 callback 而不是讓 core 產生 I/O 計畫，是因為本票只需要兩個平台相依的落盤切點，callback 讓既有標準程式庫寫入流程與 core test seam 保持最小。
+- `write_session()` 的實際順序為：寫入並 `stream.flush()`/關閉 temp → 呼叫 durability hook(temp) → 驗證既有 primary → 複製 primary 到 backup → 呼叫 durability hook(backup) → `std::filesystem::rename(temp, primary)`。temp 或 backup hook 回傳 `false` 時，清除 temp 並回傳 `false`，不進行 rename。
+- `src/app_shell/main.cpp` 的 `flush_session_file()` 使用 `CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, ..., OPEN_EXISTING, ...)` 開啟檔案，呼叫 `FlushFileBuffers(file)`，再 `CloseHandle(file)`；只有 flush 與 close 都成功才回傳 `true`。`save_now()` 是唯一 app shell 的 `write_session()` caller，現在把這個實作 callback 傳入，其他 save caller 的呼叫方式與 clean-shutdown 語意不變。
+- 除 `session.json` 外，未發現其他跨啟動存活的 app persistence；本組固定檔案仍是 `%LOCALAPPDATA%\PaneDock\session.json`、`session.json.bak` 與 `session.json.tmp`。`.claude/settings.local.json` 是工作樹既有的未追蹤開發設定，不是 app persistence，未納入修改。
+
+#### Focused self-check
+
+- `tests/unit/core_session_test.cpp` 新增 `test_durability_hook_order_and_failure()`。fake hook 記錄 callback 的檔名與每次 callback 當下的 primary bytes，證明 temp callback 與 backup callback 都發生在 rename 前且順序正確；另分別讓 temp、backup hook 失敗，確認 `write_session()` 回傳 `false`、primary 保持原 bytes、temp 被清除。
+- 這個測試涵蓋 core 能自動驗證的完整契約：平台 hook 是否被呼叫、temp/backup 的順序、rename 前 primary 不變，以及失敗傳播。實體磁碟是否真的在斷電時保留資料無法由 unit test 證明；Windows 實作則由 `FlushFileBuffers` source evidence 與 LLVM-MinGW link/build 驗證。
+
+#### 驗證證據
+
+- `cmake -S . -B build -G Ninja '-DCMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake' -DCMAKE_BUILD_TYPE=Release`：成功。
+- `cmake --build build`：成功；使用 LLVM-MinGW Clang/Ninja，未使用 MSVC。
+- `ctest --test-dir build --output-on-failure`：4/4 passed。
+- `./build/tests/panedock_core_session_test.exe`：`PASSED: core_session`。
+- `rg -n "FlushFileBuffers|write_session|stream\.flush" ...` 命中 `FlushFileBuffers`、core hook call sites 與 `stream.flush()`；`rg -n "windows\.h|HWND|IUnknown" src/core` 無輸出（命令後輸出 `NO_CORE_WINDOWS_LEAKS`）。
+- `git diff --check`：通過。沒有執行 UI 操作；本票 acceptance 全部是 core/app source、focused test、build 或 diff evidence，沒有需要單次 click/screenshot 的項目，也沒有進行任何 sustained interactive sequence。
+
+#### Acceptance
+
+| # | 結果 | 證據 |
+|---|---|---|
+| 1 | PASS | focused test 記錄 temp hook 並確認發生在 primary rename 前；app shell 的 hook 使用 `FlushFileBuffers`。 |
+| 2 | PASS | focused test 在 backup copy 後記錄 backup hook，且兩個 callback 的順序為 temp → backup → rename。 |
+| 3 | PASS | focused test 的 temp/backup fake failure 均回傳 `false`、保持 primary、不進行 rename 並清除 temp。 |
+| 4 | PASS | `main.cpp` 的 `flush_session_file()` 使用 `CreateFileW` + `FlushFileBuffers`，檢查 flush 與 close 回傳值；LLVM-MinGW build 成功。 |
+| 5 | PASS | `rg` 顯示 `write_session()` 只有 `save_now()` 這個 app caller；既有 `save_now()` callers 保持原呼叫方式，只有共用 persistence 路徑注入 callback。 |
+| 6 | PASS | `panedock_core_session_test.exe` 輸出 `PASSED: core_session`，完整 CTest 4/4 passed。 |
+| 7 | PASS | `cmake --build build` 與 `ctest --test-dir build --output-on-failure` 成功。 |
+| 8 | PASS | `git diff --check` 通過。 |
+
+`save_now()` 沒有任何 caller 在 `destroy_explorers()`/`DestroyWindow()` 之後執行；`WM_CLOSE` 與 `WM_QUERYENDSESSION` 的既有關閉路徑仍在收尾前寫入，未發現會把已完成寫入覆蓋掉的後置 save。

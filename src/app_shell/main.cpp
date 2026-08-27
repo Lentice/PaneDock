@@ -413,6 +413,17 @@ std::optional<std::filesystem::path> session_directory() noexcept {
     return directory;
 }
 
+bool flush_session_file(const std::filesystem::path& path) noexcept {
+    const HANDLE file = CreateFileW(
+        path.c_str(), GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    const BOOL flushed = FlushFileBuffers(file);
+    const BOOL closed = CloseHandle(file);
+    return flushed != FALSE && closed != FALSE;
+}
+
 panedock::core::ShellLocation location(std::wstring parsing_name) {
     return {std::move(parsing_name), {}, {}};
 }
@@ -1590,7 +1601,8 @@ void save_now(AppState& state, bool clean_shutdown = false) noexcept {
     state.session_document.application = state.application;
     state.session_document.clean_shutdown = clean_shutdown;
     if (!panedock::core::write_session(state.session_directory,
-                                       state.session_document)) {
+                                       state.session_document,
+                                       flush_session_file)) {
         OutputDebugStringW(L"PaneDock: session persistence failed\n");
     }
 }

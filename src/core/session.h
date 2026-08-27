@@ -31,8 +31,12 @@ struct SessionReadResult final {
 std::string serialize_session(const SessionDocument& document);
 std::optional<SessionDocument> deserialize_session(std::string_view json);
 
+using SessionDurabilityHook =
+    bool (*)(const std::filesystem::path& path);
+
 bool write_session(const std::filesystem::path& directory,
-                   const SessionDocument& document);
+                   const SessionDocument& document,
+                   SessionDurabilityHook durability_hook = nullptr);
 SessionReadResult read_session(const std::filesystem::path& directory,
                                ApplicationState default_state = {});
 

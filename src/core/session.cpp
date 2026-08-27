@@ -518,7 +518,8 @@ std::optional<SessionDocument> deserialize_session(std::string_view json) {
 }
 
 bool write_session(const std::filesystem::path& directory,
-                   const SessionDocument& document) {
+                   const SessionDocument& document,
+                   SessionDurabilityHook durability_hook) {
     std::error_code error;
     std::filesystem::create_directories(directory, error);
     if (error) return false;
@@ -534,6 +535,10 @@ bool write_session(const std::filesystem::path& directory,
         stream.flush();
         if (!stream) { stream.close(); std::filesystem::remove(temporary, error); return false; }
     }
+    if (durability_hook != nullptr && !durability_hook(temporary)) {
+        std::filesystem::remove(temporary, error);
+        return false;
+    }
     const bool had_primary = std::filesystem::exists(primary, error);
     if (error) { std::filesystem::remove(temporary, error); return false; }
     if (had_primary) {
@@ -543,6 +548,10 @@ bool write_session(const std::filesystem::path& directory,
                 primary, backup,
                 std::filesystem::copy_options::overwrite_existing, error);
             if (error) {
+                std::filesystem::remove(temporary, error);
+                return false;
+            }
+            if (durability_hook != nullptr && !durability_hook(backup)) {
                 std::filesystem::remove(temporary, error);
                 return false;
             }

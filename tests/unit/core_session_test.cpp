@@ -1,6 +1,7 @@
 #include "core/session.h"
 #include "unit/test_util.h"
 
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -47,6 +48,33 @@ void write_text(const std::filesystem::path& path, std::string_view text) {
 std::string read_text(const std::filesystem::path& path) {
     std::ifstream stream(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(stream), {}};
+}
+
+enum class DurabilityFailure { none, temporary, backup };
+
+struct DurabilityProbe final {
+    std::filesystem::path primary;
+    std::array<std::filesystem::path, 2> calls{};
+    std::array<std::string, 2> primary_snapshots{};
+    std::size_t call_count{};
+    DurabilityFailure failure{DurabilityFailure::none};
+};
+
+DurabilityProbe* active_probe = nullptr;
+
+bool fake_durability_hook(const std::filesystem::path& path) {
+    if (active_probe == nullptr) return false;
+    if (active_probe->call_count < active_probe->calls.size()) {
+        const std::size_t index = active_probe->call_count++;
+        active_probe->calls[index] = path.filename();
+        active_probe->primary_snapshots[index] =
+            read_text(active_probe->primary);
+    }
+    const auto name = path.filename();
+    if (active_probe->failure == DurabilityFailure::temporary &&
+        name == std::filesystem::path(kSessionTemporaryFileName)) return false;
+    return active_probe->failure != DurabilityFailure::backup ||
+           name != std::filesystem::path(kSessionBackupFileName);
 }
 
 void test_round_trip_and_plain_json() {
@@ -199,6 +227,48 @@ void test_corrupt_primary_does_not_replace_good_backup() {
                .has_value());
 }
 
+void test_durability_hook_order_and_failure() {
+    TemporaryDirectory directory;
+    SessionDocument document{sample(), {}};
+    EXPECT(write_session(directory.path, document));
+    const auto primary = directory.path / kSessionFileName;
+    const std::string old_primary = read_text(primary);
+
+    document.application.window_placement.width = 1440;
+    DurabilityProbe probe{primary};
+    active_probe = &probe;
+    EXPECT(write_session(directory.path, document, fake_durability_hook));
+    active_probe = nullptr;
+    EXPECT(probe.call_count == 2);
+    EXPECT(probe.calls[0] == std::filesystem::path(kSessionTemporaryFileName));
+    EXPECT(probe.calls[1] == std::filesystem::path(kSessionBackupFileName));
+    EXPECT(probe.primary_snapshots[0] == old_primary);
+    EXPECT(probe.primary_snapshots[1] == old_primary);
+    const std::string new_primary = read_text(primary);
+    EXPECT(new_primary != old_primary);
+
+    DurabilityProbe temporary_failure{primary};
+    temporary_failure.failure = DurabilityFailure::temporary;
+    active_probe = &temporary_failure;
+    EXPECT(!write_session(directory.path, document, fake_durability_hook));
+    active_probe = nullptr;
+    EXPECT(temporary_failure.call_count == 1);
+    EXPECT(read_text(primary) == new_primary);
+    EXPECT(!std::filesystem::exists(
+        directory.path / kSessionTemporaryFileName));
+
+    DurabilityProbe backup_failure{primary};
+    backup_failure.failure = DurabilityFailure::backup;
+    document.application.window_placement.width = 1600;
+    active_probe = &backup_failure;
+    EXPECT(!write_session(directory.path, document, fake_durability_hook));
+    active_probe = nullptr;
+    EXPECT(backup_failure.call_count == 2);
+    EXPECT(read_text(primary) == new_primary);
+    EXPECT(!std::filesystem::exists(
+        directory.path / kSessionTemporaryFileName));
+}
+
 }  // namespace
 
 int main() {
@@ -209,5 +279,6 @@ int main() {
     test_read_fallbacks();
     test_atomic_write_and_backup();
     test_corrupt_primary_does_not_replace_good_backup();
+    test_durability_hook_order_and_failure();
     return panedock::test::summary("core_session");
 }
