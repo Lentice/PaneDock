@@ -2638,8 +2638,11 @@ void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
         scaled_value(window, kTabScrollButtonVisualHeight), height);
     const int visual_top = rect.top + (height - visual_height) / 2;
     // The two hit-test rects are adjacent. Inset them toward their shared edge
-    // so the compact visual buttons stay together in the middle.
-    const int visual_left = forward ? rect.left : rect.right - visual_width;
+    // so the compact visual buttons stay together in the middle, nudged
+    // slightly toward the add button per user pixel feedback.
+    const int visual_offset_x = scaled_value(window, 2);
+    const int visual_left =
+        (forward ? rect.left : rect.right - visual_width) + visual_offset_x;
     const RECT visual{visual_left, visual_top, visual_left + visual_width,
                       visual_top + visual_height};
     HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));

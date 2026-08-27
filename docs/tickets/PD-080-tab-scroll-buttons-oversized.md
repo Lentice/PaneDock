@@ -116,3 +116,7 @@ git diff --check
 ### 2026-08-27 — 使用者實機比對後進一步縮小熱區
 
 使用者實機比對後回報：兩顆捲動按鈕與「+」新增按鈕之間的間距仍太大，要求「讓這兩個按鈕更靠近 add button，然後把整個區域縮小」。`draw_tab_scroll_button` 的既有對齊邏輯(back 靠右對齊、forward 靠左對齊，兩者朝共同邊界靠攏)本身不用改——真正的空隙來自熱區(`kTabScrollButtonWidth`)遠比視覺矩形(`kTabScrollButtonVisualWidth = 18`)寬，兩側都留白。把 `kTabScrollButtonWidth` 從 28 依序調整為 23、最終 20(96 DPI 基準)，讓熱區只比視覺矩形多 2px 緩衝，forward 按鈕視覺與「+」之間的空隙隨之壓到最小，同時兩顆按鈕合計佔用寬度也從 56px 降到 40px，一併滿足「更靠近」與「整個區域縮小」兩項要求。`cmake --build build` 成功、`ctest --test-dir build --output-on-failure` 5/5 PASS。點擊熱區縮小後的舒適度與 96/150% DPI 實機視覺仍留待使用者確認。
+
+### 2026-08-27 — 使用者實機微調:再往右移 2px
+
+使用者實機比對後給出精確回饋:「tab nav buttons 再往右移 2px」。`draw_tab_scroll_button` 新增 `visual_offset_x = scaled_value(window, 2)`,套用在 `visual_left` 上,兩顆按鈕維持既有的相鄰對齊邏輯,只整體再右移 2px。`cmake --build build` 成功、`ctest --test-dir build --output-on-failure` 5/5 PASS;並用 `PrintWindow(PW_RENDERFULLCONTENT)`(背景 PowerShell 擷取,未搶佔前景/滑鼠)截圖確認位移生效。
