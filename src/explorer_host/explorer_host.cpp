@@ -394,7 +394,11 @@ HRESULT ExplorerHost::set_view_mode(FOLDERVIEWMODE mode,
     Microsoft::WRL::ComPtr<IFolderView2> folder_view;
     const HRESULT hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
     if (FAILED(hr)) return hr;
-    return folder_view->SetViewModeAndIconSize(mode, image_size);
+    const HRESULT view_mode_hr =
+        folder_view->SetViewModeAndIconSize(mode, image_size);
+    if (FAILED(view_mode_hr)) return view_mode_hr;
+    const DWORD flags = mode == FVM_DETAILS ? 0 : FWF_NOCOLUMNHEADER;
+    return folder_view->SetCurrentFolderFlags(FWF_NOCOLUMNHEADER, flags);
 }
 
 HRESULT ExplorerHost::get_view_mode(FOLDERVIEWMODE& mode,

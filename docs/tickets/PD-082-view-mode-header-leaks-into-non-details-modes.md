@@ -128,3 +128,44 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接（2026-08-27）
+
+- 假設 1（全新 tab 的 `view_mode` 為空字串）：**修正前重現**。在修正前的 Release binary 中，單次點擊新增 tab 並等候首次導覽完成，該 `C:\` 圖示檢視仍顯示「名稱／修改日期／類型／大小」header；程式碼也確認 `parse_view_mode("")` 使 `apply_pane_view_mode` 完全跳過 setter。**修正後不再重現**：同樣新增 tab 的單次點擊後截圖為 Large icons，第一個 pane 沒有 header。
+- 假設 2（模式切換不會同步 header）：**修正前重現**。在同一 tab 先單次選取 Details，截圖顯示欄位 header；再單次選取 Large icons，圖示已切換但 header 仍然存在。這證明 `SetViewModeAndIconSize` 不會獨立更新欄位 header 的可見性。**修正後不再重現**：Details 截圖仍顯示 header，接著切回 Large icons 的截圖沒有 header。
+- 實際根因是兩條路徑共同暴露同一個 Shell 狀態缺口：`SetViewModeAndIconSize` 只設定 view mode／圖示尺寸，`FWF_NOCOLUMNHEADER` 是獨立的 folder-view flag；空 `view_mode` 路徑則連前述 Shell API 都沒有呼叫。
+- 修正點：`src/explorer_host/explorer_host.cpp` 的 `ExplorerHost::set_view_mode` 在 `SetViewModeAndIconSize` 成功後，透過公開的 `IFolderView2::SetCurrentFolderFlags` 更新 `FWF_NOCOLUMNHEADER`；`FVM_DETAILS` 清除該旗標，其餘模式設定該旗標。這個共享入口同時涵蓋首次套用與 View 選單切換，不操作 Shell 子視窗。API 契約：[SetCurrentFolderFlags](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifolderview2-setcurrentfolderflags)、[SetViewModeAndIconSize](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifolderview2-setviewmodeandiconsize)。
+- `src/app_shell/main.cpp` 的 `apply_pane_view_mode` 對空字串明確套用 `FVM_ICON` + `kLargeIconSize`。選擇 Large icons（96 px）是沿用既有 `FVM_ICON` 舊值映射與 PD-079 的已驗證尺寸，之後仍由 `capture_pane_view_mode` 寫回既有 `FVM_ICON:96` 格式；沒有改變持久化 schema 或既有字串格式。
+
+#### Agent checks
+
+```text
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+PASS — configure/generate completed with LLVM-MinGW and Ninja.
+
+cmake --build build
+PASS — PaneDock.exe and all targets linked after the stale PID 28308 was gracefully terminated with taskkill (no /F).
+
+ctest --test-dir build --output-on-failure
+PASS — 5/5 tests passed.
+
+rg -n "apply_pane_view_mode|capture_pane_view_mode|set_view_mode|parse_view_mode|view_mode_name" src\app_shell\main.cpp src\explorer_host\explorer_host.h src\explorer_host\explorer_host.cpp
+PASS — all required view-mode call sites and mappings found; shared set_view_mode now also applies FWF_NOCOLUMNHEADER.
+
+git diff --check
+PASS — final handoff append and source diff have no whitespace errors.
+```
+
+#### Acceptance evidence
+
+| # | 結果 | 證據 |
+|---|---|---|
+| 1 | PASS（單次操作+截圖） | 修正後新增 tab 的首次導覽使用 Large icons，截圖與 accessibility tree 均沒有第一個 pane 的 header；空值路徑現在會明確呼叫 `set_view_mode(FVM_ICON, 96)`。 |
+| 2 | PASS（單次操作+截圖） | 同一 tab 的 Details 截圖有 header；下一次單次選取 Large icons 後截圖沒有 header。 |
+| 3 | 部分驗證 | Large icons 與 Details 已各自用單次選取+截圖驗證；Extra large icons、Medium icons、Small icons、List、Tiles、Content 尚未逐一截圖。依票據協作原則，請使用者分別選取這 6 項並以 `PrintWindow(hwnd, hdc, 2)` 截圖確認無 header。 |
+| 4 | PASS（部分） | Details 的 header 在切換流程中仍正確顯示；PD-079 的 256/96/48/16 round-trip self-check 未改動。Tiles/Content 的畫面仍需使用者手動確認。 |
+| 5 | 部分驗證 | 修正後重新啟動 binary 並還原既有 session 時，已觀察 Large icons 沒有 header；完整 Group 切換再切回及 Details/其餘模式的還原矩陣尚未做連續操作，請使用者手動補驗。 |
+| 6 | PASS | `cmake --build build` 通過；`ctest --test-dir build --output-on-failure` 顯示 5/5 通過。 |
+| 7 | PASS | 最終 `git diff --check` 通過。 |
+
+視窗驗證前均重新取得唯一的 PaneDock window、啟用視窗並等待 2 秒；每個操作都在最新觀察後只執行一次，再立即擷取畫面。視覺證據使用 Computer Use 的視窗擷取，未使用 `Graphics.CopyFromScreen`；未完成的 6 種模式與完整 Group/restart 矩陣保留給使用者依上述步驟補驗。暫存視覺 probe 已刪除，沒有納入產品或提交內容。

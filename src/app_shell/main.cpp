@@ -1084,6 +1084,9 @@ void apply_pane_view_mode(AppState& state, std::size_t pane_index) {
         selection.has_value()) {
         (void)state.explorers[pane_index].set_view_mode(
             selection->mode, selection->image_size);
+    } else if (tab.view_mode.empty()) {
+        (void)state.explorers[pane_index].set_view_mode(FVM_ICON,
+                                                       kLargeIconSize);
     }
     capture_pane_view_mode(state, pane_index);
 }
