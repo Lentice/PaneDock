@@ -66,4 +66,41 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作完成後由實作者填寫）
+### 實作
+
+- `src/app_shell/main.cpp` 的 `apply_layout` 現在記錄第一個失敗的 pane index
+  與 `HRESULT`；初始化失敗時維持 `state.realized[index] == false`，跳過該
+  `ExplorerHost` 後續需要有效 live view 的操作，繼續排版其餘 pane。
+- 迴圈結束後仍會執行 `write_live_view_count()`，若有失敗則回傳第一個失敗的
+  `HRESULT`，否則維持 `S_OK`。所有 `apply_layout` 呼叫端未變更。
+- 沒有新增 app_shell/COM fake 測試；這段流程依賴 Win32 HWND 與真實
+  `IExplorerBrowser`，不在專案的 `core` 自動測試 seam。
+
+### Agent Checks
+
+以下命令均成功：
+
+```text
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+- Configure：成功。
+- Release build：成功，完成 `PaneDock.exe` link。
+- CTest：`5/5` 通過（`panedock_diagnostic_flag`、`panedock_tab_overflow`、
+  `panedock_core_model`、`panedock_core_layout`、`panedock_core_session`）。
+- `git diff --check`：成功。
+
+### Acceptance Criteria 驗證狀態
+
+1. **部分由程式碼驗證，實機結果留給使用者**：已確認初始化失敗會記錄後
+   `continue`，後續 pane 仍會進入排版迴圈；未以除錯注入或真實 Shell 故障在
+   本次 Agent session 啟動 UI 重現。
+2. **已由程式碼驗證**：失敗路徑在 `state.realized[index] = true` 之前離開，且
+   不會執行該 host 的後續操作；未在實機執行後續互動確認。
+3. **部分由建置與程式碼驗證，實機結果留給使用者**：正常成功路徑僅新增失敗
+   記錄與結尾回傳判斷，並由 Agent Checks 確認無編譯／既有測試 regression；
+   未在本次 session 操作真實多 pane UI。
+4. **已驗證**：configure、`cmake --build build`、`ctest --test-dir build
+   --output-on-failure` 均成功。

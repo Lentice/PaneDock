@@ -1906,6 +1906,11 @@ HRESULT apply_layout(HWND window, AppState& state) {
     const auto rects = layout_rects(window, group);
     const UINT dpi = GetDpiForWindow(window);
     const int container_radius = pane_card_radius(dpi);
+    struct LayoutFailure final {
+        HRESULT result;
+        std::size_t pane_index;
+    };
+    std::optional<LayoutFailure> first_failure;
     for (std::size_t index = 0; index < state.explorers.size(); ++index) {
         const bool visible = index < group.panes.size();
         RECT pane_rect{};
@@ -2000,7 +2005,9 @@ HRESULT apply_layout(HWND window, AppState& state) {
                     state.explorer_containers[index], local_rect,
                     active_tab(group.panes[index]).location.parsing_name);
                 if (FAILED(hr)) {
-                    return hr;
+                    if (!first_failure.has_value())
+                        first_failure = LayoutFailure{hr, index};
+                    continue;
                 }
                 state.realized[index] = true;
                 try {
@@ -2047,7 +2054,7 @@ HRESULT apply_layout(HWND window, AppState& state) {
         }
     }
     write_live_view_count();
-    return S_OK;
+    return first_failure.has_value() ? first_failure->result : S_OK;
 }
 
 std::string unique_group_id(const panedock::core::ApplicationState& application) {
