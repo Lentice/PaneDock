@@ -124,3 +124,14 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-27 — implementation pass
+
+- `src/app_shell/main.cpp` 已完成本票四項範圍：導覽按鈕、側邊欄 `New Group`、tab 左右捲動按鈕，以及版型按鈕 hover 對比度。
+- 導覽按鈕與 `New Group` 最終採用 `ODS_HOTLIGHT` 加上 `TrackMouseEvent(TME_LEAVE)` fallback。兩者共用 `AppState::owner_draw_hovered_button` 儲存目前被追蹤的 HWND；移入、移出或由另一顆按鈕接手時，只 invalidate 受影響的按鈕。採 fallback 的理由是既有 PD-058 已證實 owner-draw radio button 的 `ODS_HOTLIGHT` 不可靠，且本回合無法在鎖定桌面上另做實機確認。
+- `ODS_HOTLIGHT` 導覽按鈕／`New Group` 實測結果：**未判定送達或不送達**。本回合唯一一次 Computer Use 視窗狀態擷取顯示 Windows 鎖定畫面／黑色視窗內容，依安全規範在任何點擊前停止；未把該畫面當成控制項證據。使用者需在真實桌面解鎖後確認兩類按鈕的 `ODS_HOTLIGHT` 行為；fallback 已使 hover 不依賴此結果。
+- 版型按鈕色值由 `RGB(248, 250, 252)` 改為 `RGB(226, 232, 240)`；修改前後每色版差距為 `22/18/12`。本回合未取得可用的放大並排截圖，因此肉眼對比仍交由使用者在真實桌面確認。
+- 導覽按鈕一般／hover 為 `RGB(255, 255, 255)`／`RGB(242, 245, 248)`；`New Group` 同值，維持既有白底圓角 `RoundRect` 與邊框；tab scroll 一般／hover 為 `RGB(255, 255, 255)`／`RGB(236, 240, 244)`。disabled 狀態保留既有配色且不套用 hover。
+- Tab scroll 使用 `AppState::tab_scroll_hover_indices` 分別儲存左／右按鈕，`tab_scroll_button_at_point` 直接重用 `tab_scroll_button_rects` 及現有 offset/max 狀態。既有 `tab_strip_proc` 的 `WM_MOUSEMOVE` 先更新 tab／`+` 與 scroll hover，再以一次條件式 `InvalidateRect` 重繪，最後照原路徑呼叫 `update_tab_drag`；`WM_MOUSELEAVE` 一次清除兩種 hover，程式碼檢查確認沒有覆蓋拖曳邏輯。
+- Agent checks：指定 CMake configure 成功；`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 為 5/5 PASS；票據指定的 `rg` 檢查通過；`git diff --check` 通過。沒有 linker lock，也沒有啟動或關閉既有 PaneDock.exe。
+- 視覺驗證限制：未取得 layout、導覽、`New Group` 或 tab scroll 的有效 PaneDock 截圖；沒有做額外滑鼠／截圖序列。上述控制項需使用者在解鎖後確認，尤其是 layout 修改前後的 3× 對比、兩顆 scroll button 的獨立 hover，以及 disabled 不變。

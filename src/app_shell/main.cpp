@@ -392,6 +392,7 @@ struct AppState {
     HFONT chrome_font{nullptr};
     std::array<HWND, kLayoutButtonIds.size()> layout_buttons{};
     std::optional<std::size_t> layout_hover_index;
+    HWND owner_draw_hovered_button{nullptr};
     HWND layout_tooltip{nullptr};
     HWND empty_message{nullptr};
     struct TabVisual final {
@@ -409,6 +410,9 @@ struct AppState {
     std::array<int, kExplorerCount> tab_scroll_max_offsets{};
     // A tab index is stored here; pane.tabs.size() represents the add button.
     std::array<std::optional<std::size_t>, kExplorerCount> tab_hover_indices{};
+    // 0/1 identifies the left/right scroll button when it is hovered.
+    std::array<std::optional<std::size_t>, kExplorerCount>
+        tab_scroll_hover_indices{};
     // PD-040: one clipping container child window per pane, sitting between
     // the main window and each ExplorerHost's IExplorerBrowser view. Only
     // this container's HWND gets SetWindowRgn'd for full-corner rounding —
@@ -657,7 +661,7 @@ void draw_layout_button(const DRAWITEMSTRUCT& item,
     const COLORREF background = disabled
                                     ? RGB(245, 247, 249)
                                     : checked   ? RGB(37, 99, 235)
-                                    : hovered   ? RGB(242, 245, 248)
+                                    : hovered   ? RGB(226, 232, 240)
                                                 : RGB(248, 250, 252);
     const COLORREF glyph = disabled
                                ? RGB(148, 163, 184)
@@ -800,9 +804,14 @@ void draw_navigation_fallback_glyph(const DRAWITEMSTRUCT& item,
 }
 
 void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
-                                 std::size_t glyph_kind) noexcept {
+                                 std::size_t glyph_kind,
+                                 bool tracked_hovered) noexcept {
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
-    HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));
+    const bool hovered = !disabled &&
+                         ((item.itemState & ODS_HOTLIGHT) != 0 ||
+                          tracked_hovered);
+    HBRUSH background = CreateSolidBrush(
+        hovered ? RGB(242, 245, 248) : RGB(255, 255, 255));
     if (background != nullptr) {
         FillRect(item.hDC, &item.rcItem, background);
         DeleteObject(background);
@@ -826,11 +835,16 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
 }
 
 void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
-                                const wchar_t* label) noexcept {
+                                const wchar_t* label,
+                                bool tracked_hovered) noexcept {
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
+    const bool hovered = !disabled &&
+                         ((item.itemState & ODS_HOTLIGHT) != 0 ||
+                          tracked_hovered);
     const COLORREF border = disabled ? RGB(232, 235, 239) : RGB(223, 229, 236);
     const COLORREF text_color = disabled ? RGB(180, 188, 199) : RGB(82, 96, 117);
-    HBRUSH fill = CreateSolidBrush(RGB(255, 255, 255));
+    HBRUSH fill = CreateSolidBrush(
+        hovered ? RGB(242, 245, 248) : RGB(255, 255, 255));
     HPEN pen = CreatePen(PS_SOLID, 1, border);
     if (fill != nullptr && pen != nullptr) {
         const HGDIOBJ old_brush = SelectObject(item.hDC, fill);
@@ -1273,6 +1287,7 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
 void refresh_tab_strip(AppState& state, std::size_t pane_index) {
     if (pane_index >= state.tab_strips.size()) return;
     state.tab_hover_indices[pane_index].reset();
+    state.tab_scroll_hover_indices[pane_index].reset();
     state.tab_visuals[pane_index].clear();
     if (!has_active_group(state) ||
         pane_index >= active_group(state).panes.size()) {
@@ -2543,6 +2558,18 @@ std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
     return std::nullopt;
 }
 
+std::optional<std::size_t> tab_scroll_button_at_point(
+    const AppState& state, std::size_t pane_index, POINT point) noexcept {
+    if (pane_index >= state.tab_scroll_button_rects.size())
+        return std::nullopt;
+    const auto& buttons = state.tab_scroll_button_rects[pane_index];
+    const int offset = state.tab_scroll_offsets[pane_index];
+    const int maximum = state.tab_scroll_max_offsets[pane_index];
+    if (offset > 0 && PtInRect(&buttons[0], point)) return 0;
+    if (offset < maximum && PtInRect(&buttons[1], point)) return 1;
+    return std::nullopt;
+}
+
 int tab_scroll_step(const AppState& state, std::size_t pane_index,
                     bool forward) noexcept {
     const RECT viewport = tab_viewport_rect(state, pane_index);
@@ -2643,7 +2670,8 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
 }
 
 void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
-                            bool forward, bool disabled) noexcept {
+                            bool forward, bool disabled,
+                            bool hovered) noexcept {
     if (rect.right <= rect.left || rect.bottom <= rect.top) return;
     const int width = static_cast<int>(rect.right - rect.left);
     const int height = static_cast<int>(rect.bottom - rect.top);
@@ -2662,7 +2690,9 @@ void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
         (forward ? rect.left : rect.right - visual_width) + visual_offset_x;
     const RECT visual{visual_left, visual_top, visual_left + visual_width,
                       visual_top + visual_height};
-    HBRUSH background = CreateSolidBrush(RGB(255, 255, 255));
+    const COLORREF background_color =
+        !disabled && hovered ? RGB(236, 240, 244) : RGB(255, 255, 255);
+    HBRUSH background = CreateSolidBrush(background_color);
     HPEN border = CreatePen(PS_SOLID, scaled_value(window, 1),
                             RGB(226, 232, 240));
     if (background != nullptr && border != nullptr) {
@@ -2802,11 +2832,13 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
     if (scroll_buttons[0].right > scroll_buttons[0].left) {
         draw_tab_scroll_button(
             window, dc, scroll_buttons[0], false,
-            state.tab_scroll_offsets[pane_index] <= 0);
+            state.tab_scroll_offsets[pane_index] <= 0,
+            state.tab_scroll_hover_indices[pane_index] == 0);
         draw_tab_scroll_button(
             window, dc, scroll_buttons[1], true,
             state.tab_scroll_offsets[pane_index] >=
-                state.tab_scroll_max_offsets[pane_index]);
+                state.tab_scroll_max_offsets[pane_index],
+            state.tab_scroll_hover_indices[pane_index] == 1);
     }
     RECT add = state.tab_add_rects[pane_index];
     RECT hover = add;
@@ -2921,18 +2953,29 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                 PtInRect(&state->tab_add_rects[pane_index], point)) {
                 hover = active_group(*state).panes[pane_index].tabs.size();
             }
-            if (state->tab_hover_indices[pane_index] != hover) {
+            const bool tab_hover_changed =
+                state->tab_hover_indices[pane_index] != hover;
+            if (tab_hover_changed)
                 state->tab_hover_indices[pane_index] = hover;
+            const auto scroll_hover = tab_scroll_button_at_point(
+                *state, pane_index, point);
+            const bool scroll_hover_changed =
+                state->tab_scroll_hover_indices[pane_index] != scroll_hover;
+            if (scroll_hover_changed)
+                state->tab_scroll_hover_indices[pane_index] = scroll_hover;
+            if (tab_hover_changed || scroll_hover_changed)
                 InvalidateRect(window, nullptr, FALSE);
-            }
             update_tab_drag(*state, window, wparam, lparam);
             return 0;
         }
         if (message == WM_MOUSELEAVE) {
-            if (state->tab_hover_indices[pane_index].has_value()) {
-                state->tab_hover_indices[pane_index].reset();
+            const bool hover_changed =
+                state->tab_hover_indices[pane_index].has_value() ||
+                state->tab_scroll_hover_indices[pane_index].has_value();
+            state->tab_hover_indices[pane_index].reset();
+            state->tab_scroll_hover_indices[pane_index].reset();
+            if (hover_changed)
                 InvalidateRect(window, nullptr, FALSE);
-            }
             return 0;
         }
         if (message == WM_LBUTTONUP) {
@@ -2945,6 +2988,36 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
         }
         if (message == WM_NCDESTROY)
             RemoveWindowSubclass(window, tab_strip_proc, pane_index);
+    }
+    return DefSubclassProc(window, message, wparam, lparam);
+}
+
+LRESULT CALLBACK owner_draw_button_proc(HWND window, UINT message,
+                                        WPARAM wparam, LPARAM lparam,
+                                        UINT_PTR button_id,
+                                        DWORD_PTR reference_data) {
+    auto* state = reinterpret_cast<AppState*>(reference_data);
+    if (state != nullptr) {
+        if (message == WM_MOUSEMOVE) {
+            TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
+            TrackMouseEvent(&tracking);
+            if (state->owner_draw_hovered_button != window) {
+                const HWND previous = state->owner_draw_hovered_button;
+                state->owner_draw_hovered_button = window;
+                if (previous != nullptr)
+                    InvalidateRect(previous, nullptr, FALSE);
+                InvalidateRect(window, nullptr, FALSE);
+            }
+        } else if (message == WM_MOUSELEAVE) {
+            if (state->owner_draw_hovered_button == window) {
+                state->owner_draw_hovered_button = nullptr;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+        } else if (message == WM_NCDESTROY) {
+            if (state->owner_draw_hovered_button == window)
+                state->owner_draw_hovered_button = nullptr;
+            RemoveWindowSubclass(window, owner_draw_button_proc, button_id);
+        }
     }
     return DefSubclassProc(window, message, wparam, lparam);
 }
@@ -3164,6 +3237,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     reinterpret_cast<HMENU>(kButtonIds[index]),
                     GetModuleHandleW(nullptr), nullptr);
                 if (state->sidebar_buttons[index] == nullptr) return -1;
+                if (!SetWindowSubclass(
+                        state->sidebar_buttons[index], owner_draw_button_proc,
+                        static_cast<UINT_PTR>(kButtonIds[index]),
+                        reinterpret_cast<DWORD_PTR>(state)))
+                    return -1;
             }
             for (std::size_t index = 0; index < state->layout_buttons.size();
                  ++index) {
@@ -3251,6 +3329,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         window, reinterpret_cast<HMENU>(ids[button]),
                         GetModuleHandleW(nullptr), nullptr);
                     if (*destinations[button] == nullptr) return -1;
+                    if (!SetWindowSubclass(
+                            *destinations[button], owner_draw_button_proc,
+                            static_cast<UINT_PTR>(ids[button]),
+                            reinterpret_cast<DWORD_PTR>(state)))
+                        return -1;
                 }
                 state->address_bars[index] = CreateWindowExW(
                     0, L"EDIT", nullptr,
@@ -3360,35 +3443,45 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     item->CtlID >= kBackButtonIdBase &&
                     item->CtlID <
                         kBackButtonIdBase + static_cast<int>(kExplorerCount)) {
-                    draw_navigation_icon_button(*item, 0);
+                    draw_navigation_icon_button(
+                        *item, 0,
+                        state->owner_draw_hovered_button == item->hwndItem);
                     return TRUE;
                 }
                 if (item != nullptr && item->CtlType == ODT_BUTTON &&
                     item->CtlID >= kForwardButtonIdBase &&
                     item->CtlID < kForwardButtonIdBase +
                                       static_cast<int>(kExplorerCount)) {
-                    draw_navigation_icon_button(*item, 1);
+                    draw_navigation_icon_button(
+                        *item, 1,
+                        state->owner_draw_hovered_button == item->hwndItem);
                     return TRUE;
                 }
                 if (item != nullptr && item->CtlType == ODT_BUTTON &&
                     item->CtlID >= kUpButtonIdBase &&
                     item->CtlID <
                         kUpButtonIdBase + static_cast<int>(kExplorerCount)) {
-                    draw_navigation_icon_button(*item, 2);
+                    draw_navigation_icon_button(
+                        *item, 2,
+                        state->owner_draw_hovered_button == item->hwndItem);
                     return TRUE;
                 }
                 if (item != nullptr && item->CtlType == ODT_BUTTON &&
                     item->CtlID >= kRefreshButtonIdBase &&
                     item->CtlID < kRefreshButtonIdBase +
                                       static_cast<int>(kExplorerCount)) {
-                    draw_navigation_icon_button(*item, 3);
+                    draw_navigation_icon_button(
+                        *item, 3,
+                        state->owner_draw_hovered_button == item->hwndItem);
                     return TRUE;
                 }
                 if (item != nullptr && item->CtlType == ODT_BUTTON &&
                     item->CtlID >= kViewModeButtonIdBase &&
                     item->CtlID < kViewModeButtonIdBase +
                                       static_cast<int>(kExplorerCount)) {
-                    draw_navigation_icon_button(*item, 4);
+                    draw_navigation_icon_button(
+                        *item, 4,
+                        state->owner_draw_hovered_button == item->hwndItem);
                     return TRUE;
                 }
                 if (item != nullptr && item->CtlType == ODT_BUTTON) {
@@ -3399,7 +3492,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         const auto label_index = static_cast<std::size_t>(
                             found - kButtonIds.begin());
                         draw_sidebar_action_button(*item,
-                                                   kButtonLabels[label_index]);
+                                                   kButtonLabels[label_index],
+                                                   state->owner_draw_hovered_button ==
+                                                       item->hwndItem);
                         return TRUE;
                     }
                 }
