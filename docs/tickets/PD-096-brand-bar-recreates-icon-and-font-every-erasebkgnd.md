@@ -61,4 +61,46 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作完成後由實作者填寫）
+### 實作
+
+- `src/app_shell/main.cpp` 的 `brand_icon()` 與 `brand_font()` 改為函式區域
+  static cache。`draw_brand_bar()` 每次重繪只取用既有 handle，不再每次
+  `LoadImageW`/`DestroyIcon` 或 `CreateFontIndirectW`/`DeleteObject`。
+- 新增 `release_brand_resources()`，沿用既有
+  `release_navigation_icon_font()` 的生命週期模式：`WM_DPICHANGED` 先釋放，
+  下一次繪製以新 DPI lazy 重建；`WM_DESTROY` 最終釋放 icon/font。
+  原有 icon 尺寸、brand 字型推導、繪製參數均未變更。
+- 沒有新增自動測試：這是 `app_shell` 的 Win32/GDI 生命週期行為，專案的
+  自動測試 seam 僅限 `core`；以程式碼路徑檢查、Release build/ctest 與真實
+  桌面上的視覺/GDI 觀察取代 fake 或新的測試抽象。
+
+### Agent Checks
+
+以下命令均成功：
+
+```text
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+git diff --check
+```
+
+- Configure：成功。
+- Release build：成功，完成 `PaneDock.exe` link。
+- CTest：`5/5` 通過（`panedock_diagnostic_flag`、`panedock_tab_overflow`、
+  `panedock_core_model`、`panedock_core_layout`、`panedock_core_session`）。
+- `git diff --check`：成功。
+
+### Acceptance Criteria 驗證狀態
+
+1. **程式碼已驗證，實際重繪與資源數量觀察留給使用者**：icon/font accessor
+   只在 cache 為空時建立資源，繪製路徑不再銷毀；未在真實桌面連續拖曳分隔線或
+   以工作管理員量測 GDI 數量。
+2. **DPI 失效路徑已驗證，跨螢幕視覺結果留給使用者**：`WM_DPICHANGED`
+   釋放 brand cache，後續以新 `GetDpiForWindow()` 重建；未在本次 session
+   實際跨不同 DPI 螢幕確認視覺結果。
+3. **釋放路徑已驗證，實際 GDI 數量留給使用者**：`WM_DESTROY` 呼叫
+   `release_brand_resources()`，且 icon 用 `DestroyIcon`、font 用
+   `DeleteObject` 並清為 null；未在真實桌面觀察關閉前後 GDI 計數。
+4. **已驗證**：configure、`cmake --build build`、`ctest --test-dir build
+   --output-on-failure` 均成功。

@@ -1557,17 +1557,45 @@ void release_ui_font(AppState& state) noexcept {
     }
 }
 
-HFONT brand_font(HWND window) noexcept {
-    HFONT base = ui_font(window);
-    if (base == nullptr) return nullptr;
-    LOGFONTW logfont{};
-    if (GetObjectW(base, sizeof(logfont), &logfont) == 0) {
-        DeleteObject(base);
-        return nullptr;
+HICON& brand_icon(HWND window) noexcept {
+    static HICON icon = nullptr;
+    if (icon == nullptr && window != nullptr) {
+        const int icon_size = scaled_value(window, 28);
+        icon = static_cast<HICON>(LoadImageW(
+            GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP_ICON),
+            IMAGE_ICON, icon_size, icon_size, LR_DEFAULTCOLOR));
     }
-    DeleteObject(base);
-    logfont.lfWeight = FW_BOLD;
-    return CreateFontIndirectW(&logfont);
+    return icon;
+}
+
+HFONT& brand_font(HWND window) noexcept {
+    static HFONT font = nullptr;
+    if (font == nullptr && window != nullptr) {
+        HFONT base = ui_font(window);
+        if (base == nullptr) return font;
+        LOGFONTW logfont{};
+        if (GetObjectW(base, sizeof(logfont), &logfont) == 0) {
+            DeleteObject(base);
+            return font;
+        }
+        DeleteObject(base);
+        logfont.lfWeight = FW_BOLD;
+        font = CreateFontIndirectW(&logfont);
+    }
+    return font;
+}
+
+void release_brand_resources() noexcept {
+    HICON& icon = brand_icon(nullptr);
+    if (icon != nullptr) {
+        DestroyIcon(icon);
+        icon = nullptr;
+    }
+    HFONT& font = brand_font(nullptr);
+    if (font != nullptr) {
+        DeleteObject(font);
+        font = nullptr;
+    }
 }
 
 void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
@@ -1583,13 +1611,10 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
                     rect.left + icon_margin + icon_size,
                     rect.top + ((rect.bottom - rect.top) - icon_size) / 2 +
                         icon_size};
-    const HICON app_icon = static_cast<HICON>(LoadImageW(
-        GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
-        icon_size, icon_size, LR_DEFAULTCOLOR));
+    const HICON app_icon = brand_icon(window);
     if (app_icon != nullptr) {
         DrawIconEx(dc, icon.left, icon.top, app_icon, icon_size, icon_size, 0,
                    nullptr, DI_NORMAL);
-        DestroyIcon(app_icon);
     }
 
     RECT title{icon.right + scaled_value(window, kSpaceBase), rect.top,
@@ -1600,7 +1625,6 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
     SetTextColor(dc, RGB(30, 41, 59));
     DrawTextW(dc, L"PaneDock", -1, &title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     if (old_font != nullptr) SelectObject(dc, old_font);
-    if (font != nullptr) DeleteObject(font);
 }
 
 // Shared by draw_pane_card's background/border RoundRects and the PD-040
@@ -3813,6 +3837,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_DPICHANGED: {
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);
             release_navigation_icon_font();
+            release_brand_resources();
             SetWindowPos(window, nullptr, suggested->left, suggested->top,
                          suggested->right - suggested->left,
                          suggested->bottom - suggested->top,
@@ -3930,6 +3955,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 }
             }
             release_navigation_icon_font();
+            release_brand_resources();
             release_address_bar_background_brush();
             PostQuitMessage(0);
             return 0;
