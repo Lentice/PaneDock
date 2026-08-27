@@ -76,4 +76,42 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作完成後由實作者填寫）
+### 實作內容
+
+- `src/app_shell/main.cpp` 的 `AppState` 新增 `session_dirty` 與主視窗 HWND。
+  `handle_navigation_complete` 現在只標記 dirty 並以 `SetTimer` 排程保存，不再
+  直接呼叫 `write_session`。
+- 防抖計時器使用 `kSessionSaveTimerId = 0xD050` 與
+  `kSessionSaveDelayMilliseconds = 500`。每次導航完成都重設同一個 timer，
+  `WM_TIMER` 收到後先 `KillTimer`，再對 dirty 狀態呼叫既有 `save_now`，因此是
+  因變更啟動、到期即停的一次性 timer，不是常駐輪詢。500ms 取幾百毫秒等級，
+  可合併快速連續導覽與多 pane 完成事件，同時不讓一般操作長時間沒有保存。
+- `save_now` 只有寫入成功才清除 dirty 並取消 timer；寫入失敗會保留 dirty。
+  若 `SetTimer` 失敗，會記錄診斷訊息並退回同步 `save_now`，避免失去保存機會。
+- `WM_CLOSE`、`WM_QUERYENDSESSION` 仍同步呼叫 clean-shutdown save；`WM_DESTROY`
+  若仍有 dirty 狀態也會同步補寫一次。這三條路徑都可在 PD-086 的
+  `suppress_location_capture` guard 仍有效時強制寫出現有 model，且關閉前先取消
+  debounce timer。
+- `src/core/session.cpp` 未修改；PD-078 的 `write_session` atomic replace、temp/
+  backup durability hook 與 `FlushFileBuffers` 路徑完整保留。可選的寫入後讀回解析
+  優化未納入本票。
+
+### Agent Checks
+
+- `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`：PASS。
+- `cmake --build build`：PASS，LLVM-MinGW Clang/Ninja Release build。
+- `ctest --test-dir build --output-on-failure`：PASS，5/5 tests passed；包含
+  `panedock_core_session` 的 PD-078 crash-safe session 測試。
+- `git diff --check`：PASS。
+- 聚焦 source self-check：PASS；確認導航完成區段沒有 `save_now`，只排程
+  `schedule_session_save`，並確認 timer 先 `KillTimer`、三個關閉時機都走強制同步
+  save。
+
+### Acceptance Criteria
+
+| # | 結果 | 證據 |
+|---|---|---|
+| 1 | 未驗證，需真實桌面 | source self-check 確認導航完成不再直接寫入並會重設 500ms debounce；連續點擊五個資料夾及實際 `write_session` 計數尚未在 UI 執行，留給使用者驗證。 |
+| 2 | 未驗證，需真實桌面 | 最新 PD-086 狀態下 Group 切換仍由 guard 保護，完成後保留單一路徑保存；四 pane 同步/非同步完成的實際磁碟寫入次數尚未在實機觀察，留給使用者驗證。 |
+| 3 | 未驗證，需真實桌面 | source 已確認 timer pending 時 `WM_CLOSE`/`WM_QUERYENDSESSION` 及 dirty 的 `WM_DESTROY` 會同步保存；關閉後重開並比較 session 檔案的端到端驗證尚未執行。 |
+| 4 | PASS | 指定 configure/build/ctest 全數通過，CTest 5/5 passed。 |

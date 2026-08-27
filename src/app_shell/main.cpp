@@ -52,6 +52,9 @@ constexpr ULONGLONG kSingleInstanceWindowRetryTimeoutMs = 5000;
 constexpr UINT kActivateExistingInstanceMessage = WM_APP + 50;
 // PD-090: run drag-hover callbacks after the WM_TIMER handler returns.
 constexpr UINT kDragHoverMessage = WM_APP + 51;
+// PD-091: coalesce navigation completions without keeping a polling timer.
+constexpr UINT kSessionSaveDelayMilliseconds = 500;
+constexpr UINT_PTR kSessionSaveTimerId = 0xD050;
 constexpr std::size_t kExplorerCount = 4;
 constexpr int kLayoutBarHeight = 44;
 constexpr int kLayoutButtonHeight = 30;
@@ -384,6 +387,8 @@ struct AppState {
     panedock::core::ApplicationState application;
     panedock::core::SessionDocument session_document;
     std::filesystem::path session_directory;
+    HWND main_window{nullptr};
+    bool session_dirty{};
     std::optional<Splitter> splitter_drag;
     struct TabDrag final {
         HWND strip{nullptr};
@@ -1802,8 +1807,18 @@ void paint_client_background(HWND window, HDC dc,
     }
 }
 
-void save_now(AppState& state, bool clean_shutdown = false) noexcept {
-    if (state.suppress_location_capture) return;
+void cancel_session_save_timer(const AppState& state) noexcept {
+    if (state.main_window != nullptr)
+        KillTimer(state.main_window, kSessionSaveTimerId);
+}
+
+bool save_now(AppState& state, bool clean_shutdown = false,
+              bool force_during_transition = false) noexcept {
+    // Shutdown must still persist dirty model state if Shell re-entry leaves
+    // the Group-switch capture guard active.
+    if (state.suppress_location_capture && !force_during_transition)
+        return false;
+    state.session_dirty = true;
     capture_locations(state);
     state.session_document.application = state.application;
     state.session_document.clean_shutdown = clean_shutdown;
@@ -1811,6 +1826,20 @@ void save_now(AppState& state, bool clean_shutdown = false) noexcept {
                                        state.session_document,
                                        flush_session_file)) {
         OutputDebugStringW(L"PaneDock: session persistence failed\n");
+        return false;
+    }
+    state.session_dirty = false;
+    cancel_session_save_timer(state);
+    return true;
+}
+
+void schedule_session_save(AppState& state) noexcept {
+    state.session_dirty = true;
+    if (state.main_window == nullptr) return;
+    if (SetTimer(state.main_window, kSessionSaveTimerId,
+                 kSessionSaveDelayMilliseconds, nullptr) == 0) {
+        OutputDebugStringW(L"PaneDock: session save timer failed\n");
+        (void)save_now(state);
     }
 }
 
@@ -1831,7 +1860,7 @@ void handle_navigation_complete(AppState& state, std::size_t pane_index,
     }
     apply_pane_view_mode(state, pane_index);
     refresh_tab_strip(state, pane_index);
-    save_now(state);
+    schedule_session_save(state);
 }
 
 void handle_navigation_failed(AppState& state, std::size_t pane_index) {
@@ -3221,6 +3250,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
     if (message == WM_NCCREATE) {
         const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
         state = static_cast<AppState*>(create->lpCreateParams);
+        state->main_window = window;
         SetWindowLongPtrW(window, GWLP_USERDATA,
                           reinterpret_cast<LONG_PTR>(state));
     }
@@ -3787,6 +3817,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_TIMER: {
             if (state == nullptr) break;
             const UINT_PTR timer = static_cast<UINT_PTR>(wparam);
+            if (timer == kSessionSaveTimerId) {
+                KillTimer(window, kSessionSaveTimerId);
+                if (state->session_dirty) (void)save_now(*state);
+                return 0;
+            }
             if (timer == kDragHoverSidebarTimerId &&
                 state->sidebar_drag_target != nullptr) {
                 state->sidebar_drag_target->timer_expired();
@@ -3837,15 +3872,23 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_CLOSE:
             if (state != nullptr) {
                 revoke_drag_hover_targets(*state);
+                cancel_session_save_timer(*state);
                 capture_window_placement(window, *state);
-                save_now(*state, true);
+                (void)save_now(*state, true, true);
                 destroy_explorers(*state);
                 assert(panedock::explorer_host::live_view_count() == 0);
             }
             DestroyWindow(window);
             return 0;
         case WM_DESTROY:
-            if (state != nullptr) revoke_drag_hover_targets(*state);
+            if (state != nullptr) {
+                revoke_drag_hover_targets(*state);
+                cancel_session_save_timer(*state);
+                if (state->session_dirty) {
+                    capture_window_placement(window, *state);
+                    (void)save_now(*state, true, true);
+                }
+            }
             release_navigation_icon_font();
             release_address_bar_background_brush();
             PostQuitMessage(0);
@@ -3859,8 +3902,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             break;
         case WM_QUERYENDSESSION:
             if (state != nullptr) {
+                cancel_session_save_timer(*state);
                 capture_window_placement(window, *state);
-                save_now(*state, true);
+                (void)save_now(*state, true, true);
             }
             return TRUE;
         case WM_ENDSESSION:
