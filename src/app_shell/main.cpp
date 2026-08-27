@@ -2639,8 +2639,8 @@ void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
     // The two hit-test rects are adjacent. Inset them toward their shared edge
     // so the compact visual buttons stay together in the middle, nudged
     // slightly toward the add button and down per user pixel feedback.
-    const int visual_offset_x = scaled_value(window, 4);
-    const int visual_offset_y = scaled_value(window, 2);
+    const int visual_offset_x = scaled_value(window, 6);
+    const int visual_offset_y = scaled_value(window, 1);
     const int visual_top =
         rect.top + (height - visual_height) / 2 + visual_offset_y;
     const int visual_left =

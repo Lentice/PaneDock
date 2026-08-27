@@ -128,3 +128,7 @@ git diff --check
 ### 2026-08-27 — 使用者實機微調:再往右移 2px(累計 4px)
 
 使用者實機比對後再給出一次回饋:「tab nav buttons 再往右移 2px」。`visual_offset_x` 由 `2` 累加為 `4`(96 DPI 基準),其餘邏輯不變。`cmake --build build`、`ctest --test-dir build --output-on-failure`(5/5)已重新確認通過。
+
+### 2026-08-27 — 使用者實機微調:再往右移 2px、往上移 1px(累計 offset_x=6、offset_y=1)
+
+使用者實機比對後給出組合回饋:「再往右移 2px 往上移 1px」。`visual_offset_x` 由 `4` 累加為 `6`;`visual_offset_y`(原本代表「往下移」)由 `2` 減為 `1`,等效於再往上移 1px。`cmake --build build`、`ctest --test-dir build --output-on-failure`(5/5)已重新確認通過。
