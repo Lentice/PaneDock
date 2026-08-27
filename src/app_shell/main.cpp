@@ -76,8 +76,9 @@ constexpr int kTabVerticalPadding = 3;
 constexpr int kTabCornerRadius = 6;
 // Kept as layout reserve only; closing remains middle-click (PD-062 scope).
 constexpr int kTabCloseButtonSpace = 16;
-constexpr int kTabPlusSize = 12;
-constexpr int kTabPlusLineWidth = 2;
+// PD-081: use a bold UI-font glyph so the add button keeps PD-062's larger,
+// heavier visual weight without relying on two independently capped strokes.
+constexpr int kTabPlusFontSize = 18;
 // PD-076: keep tab active colors aligned with sidebar.cpp without introducing
 // a cross-module palette; use a stronger neutral hover fill for tab contrast.
 constexpr COLORREF kTabActiveBackground = RGB(234, 241, 255);
@@ -2791,26 +2792,24 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
         }
     }
     if (add.right > add.left && add.bottom > add.top) {
-        const int add_size = std::min(static_cast<int>(add.right - add.left),
-                                      static_cast<int>(add.bottom - add.top));
-        const int plus_size = std::min(
-            scaled_value(window, kTabPlusSize),
-            std::max(1, add_size - 2 * vertical_padding));
-        const int half = plus_size / 2;
-        const int center_x = (add.left + add.right) / 2;
-        const int center_y = (add.top + add.bottom) / 2;
-        HPEN plus_pen = CreatePen(PS_SOLID,
-                                  scaled_value(window, kTabPlusLineWidth),
-                                  RGB(31, 41, 55));
-        if (plus_pen != nullptr) {
-            const HGDIOBJ old_pen = SelectObject(dc, plus_pen);
-            MoveToEx(dc, center_x - half, center_y, nullptr);
-            LineTo(dc, center_x + half, center_y);
-            MoveToEx(dc, center_x, center_y - half, nullptr);
-            LineTo(dc, center_x, center_y + half);
-            SelectObject(dc, old_pen);
-            DeleteObject(plus_pen);
+        HFONT plus_font = nullptr;
+        if (state.chrome_font != nullptr) {
+            LOGFONTW logfont{};
+            if (GetObjectW(state.chrome_font, sizeof(logfont), &logfont) ==
+                sizeof(logfont)) {
+                logfont.lfHeight = -scaled_value(window, kTabPlusFontSize);
+                logfont.lfWeight = FW_BOLD;
+                plus_font = CreateFontIndirectW(&logfont);
+            }
         }
+        const HGDIOBJ old_plus_font =
+            plus_font != nullptr ? SelectObject(dc, plus_font) : nullptr;
+        SetTextColor(dc, RGB(31, 41, 55));
+        RECT plus_rect = add;
+        DrawTextW(dc, L"+", 1, &plus_rect,
+                  DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
+        if (old_plus_font != nullptr) SelectObject(dc, old_plus_font);
+        if (plus_font != nullptr) DeleteObject(plus_font);
     }
     if (pane_index == active_pane_index(active_group(state))) {
         const int indicator_height = std::min(
