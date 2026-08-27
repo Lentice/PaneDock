@@ -2806,6 +2806,7 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
             plus_font != nullptr ? SelectObject(dc, plus_font) : nullptr;
         SetTextColor(dc, RGB(31, 41, 55));
         RECT plus_rect = add;
+        OffsetRect(&plus_rect, 0, -scaled_value(window, 1));
         DrawTextW(dc, L"+", 1, &plus_rect,
                   DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
         if (old_plus_font != nullptr) SelectObject(dc, old_plus_font);
