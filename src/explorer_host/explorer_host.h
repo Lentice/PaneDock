@@ -40,8 +40,9 @@ public:
     HRESULT navigate(std::wstring_view location);
     HRESULT navigate_up() noexcept;
     HRESULT refresh();
-    HRESULT set_view_mode(FOLDERVIEWMODE mode) noexcept;
-    HRESULT get_view_mode(FOLDERVIEWMODE& mode) const noexcept;
+    HRESULT set_view_mode(FOLDERVIEWMODE mode, int image_size = -1) noexcept;
+    HRESULT get_view_mode(FOLDERVIEWMODE& mode,
+                          int* image_size = nullptr) const noexcept;
     void set_navigation_callback(
         std::function<void(std::wstring_view)> callback);
     void set_navigation_failed_callback(std::function<void()> callback);

@@ -147,3 +147,47 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接（2026-08-27）
+
+- `IFolderView2` API 查證：目前工具鏈標頭 `E:\Dev\LLVM-MinGW\include\shobjidl.h` 的宣告是 `SetViewModeAndIconSize(FOLDERVIEWMODE uViewMode, int iImageSize)` 與 `GetViewModeAndIconSize(FOLDERVIEWMODE *puViewMode, int *piImageSize)`；本專案以 `ComPtr<IFolderView2>` 直接呼叫，沒有加入 include、依賴或 `core` 的 COM/HWND 型別。Windows SDK 與官方契約：[SetViewModeAndIconSize](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifolderview2-setviewmodeandiconsize)（`-1` 使用該 view 的預設圖示尺寸）、[GetViewModeAndIconSize](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifolderview2-getviewmodeandiconsize)（回傳目前 mode 與像素尺寸）。
+- 四級圖示選項現在都使用 `FVM_ICON`，尺寸為 Windows File Explorer 的 96-DPI 四級值：`Extra large icons=256`、`Large icons=96`、`Medium icons=48`、`Small icons=16`；這些是傳給 `SetViewModeAndIconSize` 的 image pixels，不再把 `FVM_SMALLICON` 當成獨立的現代小圖示模式。`panedock_explorer_host_lifetime_check.exe` 在真實 Windows Shell view 的輸出為：`requested=256 actual=256 mode=1`、`96→96 mode=1`、`48→48 mode=1`、`16→16 mode=2`；16px 時 Shell 回報相容列舉 `FVM_SMALLICON`，但尺寸仍確實為 16。相同 self-check 亦確認 `List`/`Details`/`Tiles`/`Content` 分別回報 `FVM_LIST`/`FVM_DETAILS`/`FVM_TILE`/`FVM_CONTENT`。
+- 選單資料已擴為 8 項且順序/英文文字為 `Extra large icons`、`Large icons`、`Medium icons`、`Small icons`、`List`、`Details`、`Tiles`、`Content`。popup ID 由每 pane 8 個擴為 `360–391`（`kViewModeMenuIdBase=360`、`kViewModeMenuIdCount=32`），已 grep 全部 ID 常數；`kLayoutButtonIdBase=400` 未衝突。
+- 持久化沿用既有 `core::TabState::view_mode` 字串欄位，採加法式格式：圖示模式為 `FVM_ICON:<image_size>`，非圖示模式為 `FVM_LIST`/`FVM_DETAILS`/`FVM_TILE`/`FVM_CONTENT`。舊值映射為 `FVM_ICON→FVM_ICON:96`、`FVM_SMALLICON→FVM_ICON:16`、其餘既有兩值照原模式；因此舊版 session 可讀，且沒有破壞既有 schema 或 unknown-field preservation。core session self-check 已覆蓋 `FVM_ICON:48` round-trip 與舊 `FVM_SMALLICON` 字串可讀。
+- `capture_pane_view_mode` 改讀 `GetViewModeAndIconSize`，將 Shell 回報的 mode/size 正規化後保存；套用與 radio check 都比較 mode+尺寸，`Tiles`/`Content` 走同一條 Shell view 路徑。Column header 沒有新增自訂繪製；PaneDock 承載原生 Shell view，預期僅 Details 由 Shell 顯示欄位標題。
+
+#### Agent checks
+
+```text
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+PASS — configure/generate completed; build rules invoke E:\Dev\LLVM-MinGW\bin\clang++.exe and Ninja.
+
+cmake --build build
+PASS — PaneDock.exe and all test targets linked with LLVM-MinGW.
+
+ctest --test-dir build --output-on-failure
+PASS — 4/4 tests passed.
+
+rg -n "kViewModeOptions|SetViewModeAndIconSize|GetViewModeAndIconSize|FVM_TILE|FVM_CONTENT|view_mode_name|parse_view_mode" src\app_shell\main.cpp src\explorer_host\explorer_host.h src\explorer_host\explorer_host.cpp
+PASS — all required symbols and mappings found.
+
+git diff --check
+PASS — no whitespace errors before this handoff append; rerun after append before commit.
+```
+
+#### Acceptance evidence
+
+| # | 結果 | 證據 |
+|---|---|---|
+| 1 | 未驗證 | 需要單次點擊 View 按鈕後截取獨立 `#32768` popup；Computer Use native pipe 初始化、重試與 reset 均失敗，沒有送出點擊，也沒有用 `CopyFromScreen` 或其他 UI automation 替代。 |
+| 2 | 未驗證 | 沒有取得 popup 截圖；程式碼以目前 tab 的 mode+image size 對 8 項執行 `MF_CHECKED`/`CheckMenuRadioItem`。 |
+| 3 | 未驗證 | 逐一選取四級圖示並做畫面比對屬多步驟 UI；未自動執行。Shell API self-check 已實測 256/96/48/16 全部 round-trip，但這不是畫面 acceptance 的替代證據。 |
+| 4 | 未驗證 | `ExplorerHost` self-check 已實測四個 FOLDERVIEWMODE setter/getter 回報正確；未做 Tiles/Content 畫面截圖。 |
+| 5 | 未驗證 | 需要切換 Group 或重啟並觀察還原，屬多步驟互動；core 字串 round-trip 與程式碼路徑已檢查，但沒有真實桌面還原證據。 |
+| 6 | 未驗證 | 需要逐一切換並截圖 8 種模式的 column header；依協作政策未做連續 UI 操作，亦沒有把原生 Shell 行為推定為實機 PASS。 |
+| 7 | PASS | `rg`/原始碼核對證明 popup IDs 為 `360–391`，與 `kLayoutButtonIdBase=400` 及其他既有 ID 區段不衝突。 |
+| 8 | PASS | LLVM-MinGW/Ninja build 成功；CTest 顯示 4/4 通過；額外 `panedock_explorer_host_lifetime_check.exe` 成功。 |
+| 9 | PASS | `git diff --check` 在 handoff 寫入前通過；會在 commit 前對最終 diff 再跑一次。 |
+| 10 | 未驗證 | 使用者額外要求的 `C:\Windows` Ctrl+A responsiveness 與 idle 0% CPU/無 disk I/O 需要互動/長時間量測；依政策未執行，沒有宣稱 PASS。 |
+
+因 acceptance 1–6、10 沒有政策允許的真實畫面/量測證據，`docs/tickets.md` 的 PD-079 狀態維持 `ready`。需要人類在解鎖桌面後手動確認 popup、四級尺寸、Tiles/Content、Group/restart 還原、各模式 column header，以及 `C:\Windows` Ctrl+A responsiveness；idle NFR 則需依 `docs/testing.md` 的量測流程執行。

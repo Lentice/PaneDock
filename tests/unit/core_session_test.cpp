@@ -27,7 +27,7 @@ public:
 
 TabState tab(std::string id) {
     return {std::move(id), {L"::{測試}", L"known", L"C:\\fallback"},
-            "details", "System.ItemNameDisplay", false};
+            "FVM_ICON:48", "System.ItemNameDisplay", false, {}, 0};
 }
 
 ApplicationState sample() {
@@ -61,6 +61,21 @@ void test_round_trip_and_plain_json() {
     EXPECT(json.find("PIDL") == std::string::npos);
     EXPECT(json.find("blob") == std::string::npos);
     EXPECT(json.find("工作") != std::string::npos);
+    EXPECT(json.find("\"view_mode\":\"FVM_ICON:48\"") != std::string::npos);
+
+    std::string legacy = json;
+    const std::string current_view_mode = "\"view_mode\":\"FVM_ICON:48\"";
+    const std::size_t view_mode_position = legacy.find(current_view_mode);
+    EXPECT(view_mode_position != std::string::npos);
+    if (view_mode_position != std::string::npos) {
+        legacy.replace(view_mode_position, current_view_mode.size(),
+                       "\"view_mode\":\"FVM_SMALLICON\"");
+        const auto legacy_document = deserialize_session(legacy);
+        EXPECT(legacy_document.has_value());
+        if (legacy_document.has_value())
+            EXPECT(legacy_document->application.groups.front().panes.front()
+                       .tabs.front().view_mode == "FVM_SMALLICON");
+    }
 
     const auto clean = deserialize_session(serialize_session(
         SessionDocument{sample(), {}, true}));

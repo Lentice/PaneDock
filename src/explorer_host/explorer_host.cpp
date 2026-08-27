@@ -388,23 +388,26 @@ HRESULT ExplorerHost::refresh() {
     return navigate(location_);
 }
 
-HRESULT ExplorerHost::set_view_mode(FOLDERVIEWMODE mode) noexcept {
+HRESULT ExplorerHost::set_view_mode(FOLDERVIEWMODE mode,
+                                     int image_size) noexcept {
     if (browser_ == nullptr) return E_UNEXPECTED;
     Microsoft::WRL::ComPtr<IFolderView2> folder_view;
     const HRESULT hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
     if (FAILED(hr)) return hr;
-    return folder_view->SetCurrentViewMode(mode);
+    return folder_view->SetViewModeAndIconSize(mode, image_size);
 }
 
-HRESULT ExplorerHost::get_view_mode(FOLDERVIEWMODE& mode) const noexcept {
+HRESULT ExplorerHost::get_view_mode(FOLDERVIEWMODE& mode,
+                                    int* image_size) const noexcept {
     mode = FVM_AUTO;
+    if (image_size != nullptr) *image_size = -1;
     if (browser_ == nullptr) return E_UNEXPECTED;
     Microsoft::WRL::ComPtr<IFolderView2> folder_view;
     HRESULT hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
     if (FAILED(hr)) return hr;
-    UINT value{};
-    hr = folder_view->GetCurrentViewMode(&value);
-    if (SUCCEEDED(hr)) mode = static_cast<FOLDERVIEWMODE>(value);
+    int value{};
+    hr = folder_view->GetViewModeAndIconSize(&mode, &value);
+    if (SUCCEEDED(hr) && image_size != nullptr) *image_size = value;
     return hr;
 }
 

@@ -85,10 +85,12 @@ constexpr int kUpButtonIdBase = 320;
 constexpr int kAddressBarIdBase = 330;
 constexpr int kRefreshButtonIdBase = 340;
 constexpr int kViewModeButtonIdBase = 350;
-// View-mode popup commands: four IDs per pane, 360-375, kept separate from
+// View-mode popup commands: eight IDs per pane, 360-391, kept separate from
 // the navigation buttons and layout commands above.
 constexpr int kViewModeMenuIdBase = 360;
-constexpr int kViewModeMenuIdCount = static_cast<int>(kExplorerCount * 4);
+constexpr std::size_t kViewModeOptionCount = 8;
+constexpr int kViewModeMenuIdCount =
+    static_cast<int>(kExplorerCount * kViewModeOptionCount);
 constexpr int kLayoutButtonIdBase = 400;
 constexpr int kGroupListId = 100;
 constexpr int kNewGroupId = 101;
@@ -114,15 +116,32 @@ constexpr std::array<panedock::core::LayoutTemplate, 5> kLayoutTemplates{
     panedock::core::LayoutTemplate::top_bottom,
     panedock::core::LayoutTemplate::three_pane,
     panedock::core::LayoutTemplate::four_pane_grid};
+struct ViewModeSelection final {
+    FOLDERVIEWMODE mode;
+    int image_size;
+};
 struct ViewModeOption final {
     FOLDERVIEWMODE mode;
+    int image_size;
     const wchar_t* label;
 };
-constexpr std::array<ViewModeOption, 4> kViewModeOptions{{
-    {FVM_ICON, L"Large icons"},
-    {FVM_SMALLICON, L"Small icons"},
-    {FVM_LIST, L"List"},
-    {FVM_DETAILS, L"Details"},
+// These are the four 96-DPI image sizes used by Windows File Explorer's
+// Extra large/Large/Medium/Small icon commands. They are image pixels passed
+// to IFolderView2, not FOLDERVIEWMODE values; see the PD-079 handoff for the
+// Windows Explorer/API verification.
+constexpr int kExtraLargeIconSize = 256;
+constexpr int kLargeIconSize = 96;
+constexpr int kMediumIconSize = 48;
+constexpr int kSmallIconSize = 16;
+constexpr std::array<ViewModeOption, kViewModeOptionCount> kViewModeOptions{{
+    {FVM_ICON, kExtraLargeIconSize, L"Extra large icons"},
+    {FVM_ICON, kLargeIconSize, L"Large icons"},
+    {FVM_ICON, kMediumIconSize, L"Medium icons"},
+    {FVM_ICON, kSmallIconSize, L"Small icons"},
+    {FVM_LIST, -1, L"List"},
+    {FVM_DETAILS, -1, L"Details"},
+    {FVM_TILE, -1, L"Tiles"},
+    {FVM_CONTENT, -1, L"Content"},
 }};
 const std::array<std::wstring, kExplorerCount> kDefaultLocations{
     L"C:\\", L"C:\\Windows", L"C:\\Users", L"C:\\Program Files"};
@@ -984,21 +1003,39 @@ void refresh_navigation_chrome(AppState& state, std::size_t pane_index) {
     SetWindowTextW(state.address_bars[pane_index], text);
 }
 
-std::string view_mode_name(FOLDERVIEWMODE mode) {
+std::string view_mode_name(FOLDERVIEWMODE mode, int image_size = -1) {
     switch (mode) {
-        case FVM_ICON: return "FVM_ICON";
-        case FVM_SMALLICON: return "FVM_SMALLICON";
+        case FVM_ICON:
+            return image_size > 0 ? "FVM_ICON:" + std::to_string(image_size)
+                                  : "FVM_ICON";
+        case FVM_SMALLICON:
+            return image_size > 0 ? "FVM_ICON:" + std::to_string(image_size)
+                                  : "FVM_ICON:16";
         case FVM_LIST: return "FVM_LIST";
         case FVM_DETAILS: return "FVM_DETAILS";
+        case FVM_TILE: return "FVM_TILE";
+        case FVM_CONTENT: return "FVM_CONTENT";
         default: return {};
     }
 }
 
-std::optional<FOLDERVIEWMODE> parse_view_mode(std::string_view name) {
-    if (name == "FVM_ICON") return FVM_ICON;
-    if (name == "FVM_SMALLICON") return FVM_SMALLICON;
-    if (name == "FVM_LIST") return FVM_LIST;
-    if (name == "FVM_DETAILS") return FVM_DETAILS;
+std::optional<ViewModeSelection> parse_view_mode(std::string_view name) {
+    if (name == "FVM_ICON") return ViewModeSelection{FVM_ICON, kLargeIconSize};
+    if (name == "FVM_SMALLICON") return ViewModeSelection{FVM_ICON, kSmallIconSize};
+    if (name == "FVM_LIST") return ViewModeSelection{FVM_LIST, -1};
+    if (name == "FVM_DETAILS") return ViewModeSelection{FVM_DETAILS, -1};
+    if (name == "FVM_TILE") return ViewModeSelection{FVM_TILE, -1};
+    if (name == "FVM_CONTENT") return ViewModeSelection{FVM_CONTENT, -1};
+
+    constexpr std::string_view prefix = "FVM_ICON:";
+    if (name.starts_with(prefix)) {
+        int image_size{};
+        const auto first = name.data() + prefix.size();
+        const auto last = name.data() + name.size();
+        const auto parsed = std::from_chars(first, last, image_size);
+        if (parsed.ec == std::errc{} && parsed.ptr == last && image_size > 0)
+            return ViewModeSelection{FVM_ICON, image_size};
+    }
     return std::nullopt;
 }
 
@@ -1006,17 +1043,23 @@ void capture_pane_view_mode(AppState& state, std::size_t pane_index) {
     if (!has_active_group(state) || pane_index >= active_group(state).panes.size() ||
         !state.realized[pane_index]) return;
     FOLDERVIEWMODE mode{};
-    if (SUCCEEDED(state.explorers[pane_index].get_view_mode(mode)))
-        active_tab(active_group(state).panes[pane_index]).view_mode =
-            view_mode_name(mode);
+    int image_size = -1;
+    if (SUCCEEDED(state.explorers[pane_index].get_view_mode(mode, &image_size))) {
+        const std::string name = view_mode_name(mode, image_size);
+        if (!name.empty())
+            active_tab(active_group(state).panes[pane_index]).view_mode = name;
+    }
 }
 
 void apply_pane_view_mode(AppState& state, std::size_t pane_index) {
     if (!has_active_group(state) || pane_index >= active_group(state).panes.size() ||
         !state.realized[pane_index]) return;
     auto& tab = active_tab(active_group(state).panes[pane_index]);
-    if (const auto mode = parse_view_mode(tab.view_mode); mode.has_value())
-        (void)state.explorers[pane_index].set_view_mode(*mode);
+    if (const auto selection = parse_view_mode(tab.view_mode);
+        selection.has_value()) {
+        (void)state.explorers[pane_index].set_view_mode(
+            selection->mode, selection->image_size);
+    }
     capture_pane_view_mode(state, pane_index);
 }
 
@@ -2084,12 +2127,13 @@ void refresh_pane(AppState& state, std::size_t pane_index) {
 }
 
 void set_pane_view_mode(AppState& state, std::size_t pane_index,
-                        FOLDERVIEWMODE mode) {
+                        const ViewModeOption& option) {
     if (!has_active_group(state) || pane_index >= active_group(state).panes.size())
         return;
-    if (SUCCEEDED(state.explorers[pane_index].set_view_mode(mode))) {
+    if (SUCCEEDED(state.explorers[pane_index].set_view_mode(
+            option.mode, option.image_size))) {
         active_tab(active_group(state).panes[pane_index]).view_mode =
-            view_mode_name(mode);
+            view_mode_name(option.mode, option.image_size);
         save_now(state);
     }
 }
@@ -2113,7 +2157,9 @@ void show_view_mode_menu(HWND window, AppState& state,
     int checked_id = 0;
     for (std::size_t index = 0; index < kViewModeOptions.size(); ++index) {
         const bool checked = current.has_value() &&
-                             *current == kViewModeOptions[index].mode;
+                             current->mode == kViewModeOptions[index].mode &&
+                             current->image_size ==
+                                 kViewModeOptions[index].image_size;
         const int id = menu_id_base + static_cast<int>(index);
         AppendMenuW(menu, MF_STRING | (checked ? MF_CHECKED : 0),
                     static_cast<UINT_PTR>(id), kViewModeOptions[index].label);
@@ -3154,7 +3200,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     const std::size_t mode_index = static_cast<std::size_t>(
                         offset % static_cast<int>(kViewModeOptions.size()));
                     set_pane_view_mode(*state, pane_index,
-                                       kViewModeOptions[mode_index].mode);
+                                       kViewModeOptions[mode_index]);
                     return 0;
                 }
                 if (id >= kBackButtonIdBase &&
