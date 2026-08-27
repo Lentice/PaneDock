@@ -303,6 +303,7 @@ HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
     parent_ = parent;
     rect_ = rect;
     location_ = location;
+    item_counts_cache_.reset();
 
     HRESULT hr = CoCreateInstance(CLSID_ExplorerBrowser, nullptr,
                                   CLSCTX_INPROC_SERVER,
@@ -453,6 +454,10 @@ void ExplorerHost::set_selection_changed_callback(
 HRESULT ExplorerHost::item_counts(ItemCounts& counts) const noexcept {
     counts = {};
     if (current_view_ == nullptr) return E_UNEXPECTED;
+    if (item_counts_cache_.has_value()) {
+        counts = *item_counts_cache_;
+        return S_OK;
+    }
 
     Microsoft::WRL::ComPtr<IFolderView2> folder_view;
     HRESULT hr = current_view_->QueryInterface(
@@ -465,9 +470,13 @@ HRESULT ExplorerHost::item_counts(ItemCounts& counts) const noexcept {
     if (counts.selected < 0) return E_UNEXPECTED;
     if (counts.selected == 0) {
         counts.selected_bytes_valid = true;
+        item_counts_cache_ = counts;
         return S_OK;
     }
-    if (counts.selected > kSelectionSizeItemLimit) return S_OK;
+    if (counts.selected > kSelectionSizeItemLimit) {
+        item_counts_cache_ = counts;
+        return S_OK;
+    }
 
     Microsoft::WRL::ComPtr<IShellItemArray> items;
     hr = folder_view->Items(SVGIO_SELECTION, IID_PPV_ARGS(&items));
@@ -475,7 +484,10 @@ HRESULT ExplorerHost::item_counts(ItemCounts& counts) const noexcept {
     DWORD item_count = 0;
     hr = items->GetCount(&item_count);
     if (FAILED(hr)) return hr;
-    if (item_count > static_cast<UINT>(kSelectionSizeItemLimit)) return S_OK;
+    if (item_count > static_cast<UINT>(kSelectionSizeItemLimit)) {
+        item_counts_cache_ = counts;
+        return S_OK;
+    }
 
     counts.selected_bytes_valid = true;
     for (UINT index = 0; index < item_count; ++index) {
@@ -488,10 +500,12 @@ HRESULT ExplorerHost::item_counts(ItemCounts& counts) const noexcept {
             counts.selected_bytes +=
                 static_cast<unsigned long long>(size);
     }
+    item_counts_cache_ = counts;
     return S_OK;
 }
 
 void ExplorerHost::selection_changed() noexcept {
+    item_counts_cache_.reset();
     if (selection_changed_callback_) {
         try {
             selection_changed_callback_();
@@ -585,6 +599,7 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
                      RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     }
 
+    item_counts_cache_.reset();
     current_view_.Reset();
     previous_view_callback_.Reset();
     view_callback_.Reset();
@@ -740,6 +755,7 @@ void ExplorerHost::destroy() noexcept {
         retry_button_ = nullptr;
     }
     error_visible_ = false;
+    item_counts_cache_.reset();
     log_hresult(L"IExplorerBrowser::Destroy", browser_->Destroy());
     live_view_.reset();
 

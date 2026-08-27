@@ -76,4 +76,49 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作完成後由實作者填寫）
+### 實作
+
+- `src/app_shell/main.cpp` 的 `apply_layout` 新增內容重算旗標。分隔線
+  `WM_MOUSEMOVE` 只做 pane/chrome 的幾何排版與 `SetWindowPos`；不做全窗
+  `InvalidateRect`、tab 文字量測、status bar/item count 或 live-view stdout
+  輸出。`WM_LBUTTONUP` 傳入完整模式，最後一次仍會重算所有內容。
+- `ExplorerHost::item_counts` 現在快取成功結果；`selection_changed()` 與
+  `navigation_complete()` 會先失效快取，因此既有選取變更 callback 與導覽完成
+  callback 仍即時刷新 status bar，layout 重跑只讀快取，不重複查詢 Shell property。
+  `kSelectionSizeItemLimit` 維持 1000。
+- `write_live_view_count` 沿用既有 `--diagnostic` 狀態；一般模式不再寫 stdout。
+- 沒有新增 COM fake 測試：`explorer_host` 依賴真實 `IExplorerBrowser`，不屬於
+  專案的 `core` 自動測試 seam；另執行既有 ExplorerHost runtime self-check。
+
+### Agent Checks
+
+以下命令均成功：
+
+```text
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+.\build\panedock_explorer_host_lifetime_check.exe
+git diff --check
+```
+
+- Configure：成功。
+- Release build：成功，完成 `PaneDock.exe` link。
+- CTest：`5/5` 通過（`panedock_diagnostic_flag`、`panedock_tab_overflow`、
+  `panedock_core_model`、`panedock_core_layout`、`panedock_core_session`）。
+- `panedock_explorer_host_lifetime_check`：成功，Initialize、導覽、view mode
+  與 Destroy／live-view 清理檢查通過。
+- `git diff --check`：成功。
+
+### Acceptance Criteria 驗證狀態
+
+1. **程式碼已驗證，實際拖曳留給使用者**：`WM_MOUSEMOVE` 走幾何模式，
+   `WM_LBUTTONUP` 才走完整模式；未以 computer-use 連續拖曳或量測每次事件。
+2. **程式碼與建置已驗證，視覺結果留給使用者**：放開滑鼠的完整 layout 仍會
+   更新所有 pane 的 geometry、tab 與 status bar；未在本次 session 操作真實 UI
+   進行視覺 regression 確認。
+3. **程式碼路徑已驗證，實機選取操作留給使用者**：Shell selection callback
+   會先清除 counts cache 再呼叫既有 `refresh_status_bar`；navigation complete
+   也維持既有 `selection_changed()` 路徑。未在真實桌面執行大量選取操作。
+4. **已驗證**：configure、`cmake --build build`、`ctest --test-dir build
+   --output-on-failure` 均成功。

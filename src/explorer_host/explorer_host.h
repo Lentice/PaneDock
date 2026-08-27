@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -86,6 +87,7 @@ private:
     std::function<void()> navigation_failed_callback_;
     std::function<void()> selection_changed_callback_;
     Microsoft::WRL::ComPtr<IShellView> current_view_;
+    mutable std::optional<ItemCounts> item_counts_cache_;
     Microsoft::WRL::ComPtr<IShellFolderViewCB> previous_view_callback_;
     Microsoft::WRL::ComPtr<IShellFolderViewCB> view_callback_;
 };

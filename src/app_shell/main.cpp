@@ -353,7 +353,8 @@ Microsoft::WRL::ComPtr<DragHoverTarget> make_drag_hover_target(
     return target;
 }
 
-void write_live_view_count() noexcept {
+void write_live_view_count(bool diagnostic_mode) noexcept {
+    if (!diagnostic_mode) return;
     const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
     if (output == nullptr || output == INVALID_HANDLE_VALUE) return;
 
@@ -394,6 +395,7 @@ struct AppState {
     panedock::core::SessionDocument session_document;
     std::filesystem::path session_directory;
     HWND main_window{nullptr};
+    bool diagnostic_mode{};
     bool session_dirty{};
     std::optional<Splitter> splitter_drag;
     struct TabDrag final {
@@ -1882,14 +1884,17 @@ void destroy_explorers(AppState& state) noexcept {
         explorer.destroy();
     }
     state.realized.fill(false);
-    write_live_view_count();
+    write_live_view_count(state.diagnostic_mode);
 }
 
 HRESULT apply_layout(HWND window, AppState& state,
-                     bool realize_deferred_panes = false) {
-    layout_sidebar(window, state);
-    layout_header(window, state);
-    InvalidateRect(window, nullptr, TRUE);
+                     bool realize_deferred_panes = false,
+                     bool recompute_content = true) {
+    if (recompute_content) {
+        layout_sidebar(window, state);
+        layout_header(window, state);
+        InvalidateRect(window, nullptr, TRUE);
+    }
     if (!has_active_group(state)) {
         state.laid_out_pane_rects.fill(std::nullopt);
         for (std::size_t index = 0; index < state.explorers.size(); ++index) {
@@ -1905,7 +1910,7 @@ HRESULT apply_layout(HWND window, AppState& state,
             ShowWindow(state.status_bars[index], SW_HIDE);
         }
         ShowWindow(state.empty_message, SW_SHOW);
-        write_live_view_count();
+        if (recompute_content) write_live_view_count(state.diagnostic_mode);
         return S_OK;
     }
     ShowWindow(state.empty_message, SW_HIDE);
@@ -1938,7 +1943,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                          actual_strip_height,
                          SWP_NOZORDER | SWP_NOACTIVATE);
             ShowWindow(state.tab_strips[index], SW_SHOW);
-            apply_tab_item_size(state, index);
+            if (recompute_content) apply_tab_item_size(state, index);
 
             const NavigationGeometry geometry =
                 navigation_geometry(window, pane_rect);
@@ -2041,7 +2046,7 @@ HRESULT apply_layout(HWND window, AppState& state,
             } else {
                 state.explorers[index].set_rect(local_rect);
             }
-            refresh_status_bar(state, index);
+            if (recompute_content) refresh_status_bar(state, index);
             state.laid_out_pane_rects[index] = pane_rect;
         } else {
             state.laid_out_pane_rects[index].reset();
@@ -2065,7 +2070,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                          RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
         }
     }
-    write_live_view_count();
+    if (recompute_content) write_live_view_count(state.diagnostic_mode);
     return first_failure.has_value() ? first_failure->result : S_OK;
 }
 
@@ -2521,7 +2526,8 @@ void set_layout(HWND window, AppState& state,
     save_now(state);
 }
 
-void update_splitter_drag(HWND window, AppState& state, POINT point) {
+void update_splitter_drag(HWND window, AppState& state, POINT point,
+                          bool recompute_content = false) {
     if (!state.splitter_drag.has_value()) return;
     auto& group = active_group(state);
     const Splitter& drag = *state.splitter_drag;
@@ -2538,7 +2544,7 @@ void update_splitter_drag(HWND window, AppState& state, POINT point) {
     group.divider_ratios[drag.ratio_index] = std::clamp(
         static_cast<double>(position) / static_cast<double>(available),
         0.0, 1.0);
-    if (FAILED(apply_layout(window, state)))
+    if (FAILED(apply_layout(window, state, false, recompute_content)))
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
 }
 
@@ -3837,7 +3843,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_LBUTTONUP:
             if (state != nullptr && state->splitter_drag.has_value()) {
                 update_splitter_drag(window, *state,
-                                     point_from_lparam(lparam));
+                                     point_from_lparam(lparam), true);
                 state->splitter_drag.reset();
                 save_now(*state);
                 ReleaseCapture();
@@ -4078,6 +4084,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     }
 
     AppState state;
+    state.diagnostic_mode = diagnostic_mode;
     const auto directory = session_directory();
     if (!directory.has_value()) {
         OutputDebugStringW(L"PaneDock: LocalAppData resolution failed\n");
