@@ -146,6 +146,7 @@
 | PD-105 | 雙擊 pane 分隔線,重設回置中(平分兩側) | 7 | `done` | 無 | [PD-105](tickets/PD-105-double-click-splitter-resets-to-center.md) |
 | PD-107 | Tab 條捲動按鈕視覺位置偏移超出自己的熱區,波及「+」新增按鈕邊界 | 7 | `ready` | PD-080, PD-085 | [PD-107](tickets/PD-107-tab-nav-and-add-button-hit-test-visual-mismatch.md) |
 | PD-108 | 拖曳分隔線時,矩形沒有變動的 pane 仍被重新 `SetWindowPos`/重繪 | 7 | `ready` | PD-095, PD-077 | [PD-108](tickets/PD-108-skip-unchanged-pane-relayout-during-splitter-drag.md) |
+| PD-109 | 一般模式啟動後主視窗未出現(HIGH,阻塞其他票驗收) | 7 | `ready` | PD-093, PD-106 | [PD-109](tickets/PD-109-normal-mode-launch-shows-no-main-window.md) |
 
 ## Dependency lanes
 
@@ -523,3 +524,7 @@ Source:PD-102 截圖驗證流程中,對 Release diagnostic build(PID 37164)送�
 ### 2026-08-28 — 使用者要求拖曳分隔線時跳過矩形未變動的 pane,開 PD-108
 
 使用者原文:「resize the panes (drag the splitter) should not re-render all items(e.g. all pane nav buttons). some items do not change the position and size, re-render may not be required.」根因調查確認:`apply_layout`(`main.cpp:1949`)逐 pane 迴圈已經有現成的 `pane_geometry_changed` 旗標(比對 `state.laid_out_pane_rects[index]` 與本次算出的矩形),但目前只用在最後一步的 `RedrawWindow`(PD-077 既有修法,`:2126-2130`),旗標算出來之後、用到它之前的整段(`:2000-2107`)——tab strip、五個導覽按鈕、address bar、status bar、explorer container(含 region 重算)、Shell view `set_rect`——完全無條件對每個可見 pane 執行,沒有檢查這個旗標。以三分割/四宮格版型為例,拖曳其中一條分隔線理論上只有緊鄰的 pane 矩形會變,但目前所有可見 pane 都會被重新 `SetWindowPos`,即使新舊座標完全相同,Windows 仍會送出 `WM_WINDOWPOSCHANGING`/`WM_WINDOWPOSCHANGED`。這是 PD-095(幾何 vs 內容重算分類)、PD-097(幾何重排呼叫頻率節流)之外,同一個效能問題底下第三層、目前完全沒人處理的部分,兩票都不涵蓋「幾何重排這一次呼叫裡,矩形沒變的 pane 該不該被跳過」。修正方向:把既有、已驗證正確的 `pane_geometry_changed` 旗標的作用範圍擴大到涵蓋這些 `SetWindowPos` 呼叫,不新增第二套判斷邏輯。開票為 [PD-108](tickets/PD-108-skip-unchanged-pane-relayout-during-splitter-drag.md),依賴 PD-095(拖曳分隔線幾何/內容分類的既有基礎)、PD-077(`pane_geometry_changed` 旗標的既有來源與用法先例)。
+
+### 2026-08-28 — 使用者回報一般模式啟動後主視窗未出現,開 PD-109
+
+Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `AskUserQuestion` 確認為「PaneDock.exe 本身開啟後空白/沒畫面」。同時驅動 `codexpd` 執行 PD-098 驗收的背景 fork 也獨立重現:一般模式(非 `--diagnostic`)啟動 `build\PaneDock.exe` 兩次,各以 `FindWindowW`/`EnumChildWindows` 輪詢 13×400ms 均未找到主視窗;當時只有單一 PaneDock.exe process(排除單一實例 mutex 轉導既有視窗的可能),且不帶 `/F` 的 `taskkill` 回報成功但 process 不結束。經檢查,`codexpd` 工作樹當時唯一未 commit 的 `main.cpp` 差異是 PD-098 的 glyph 常數與 fallback 繪製切換,純繪製程式碼,可排除為本症狀成因;本機 `session.json` 雖累積 55 個測試用 Group,但目前 active Group 四個 pane 的路徑全為本機路徑,沒有明顯會阻塞的網路/離線路徑證據。`codexpd` 一度懷疑與剛驗收的 PD-106(graceful close 殘留程序修正)有關而主動停手不深入,但覆核 PD-106 交接區的完整實測證據(修正後連續 3+1 輪 graceful close 均在 5 秒內完成,無殘留)顯示該票本身修法紮實,不能不經查證就當作本次成因。開票為 [PD-109](tickets/PD-109-normal-mode-launch-shows-no-main-window.md),依賴 PD-093(啟動延後 realize 規則的既有落地)、PD-106(可直接沿用的階段計時 probe 方法論先例),要求實作 agent 先重新確認當下環境與 session 內容再動手,不得沿用本票記錄的舊快照當作啟動當下事實。
