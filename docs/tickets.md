@@ -144,7 +144,7 @@
 | PD-104 | 側邊欄寬度可拖曳調整,並跨啟動持久化;預設寬度隨 PD-103 徽章移除而縮小 | 7 | `done` | PD-097, PD-103 | [PD-104](tickets/PD-104-resizable-persisted-sidebar-width.md) |
 | PD-106 | Graceful close 後 Shell teardown 殘留程序 | 7 | `done` | PD-007, PD-032, PD-068 | [PD-106](tickets/PD-106-graceful-shutdown-shell-teardown.md) |
 | PD-105 | 雙擊 pane 分隔線,重設回置中(平分兩側) | 7 | `done` | 無 | [PD-105](tickets/PD-105-double-click-splitter-resets-to-center.md) |
-| PD-107 | Tab 條捲動按鈕視覺位置偏移超出自己的熱區,波及「+」新增按鈕邊界 | 7 | `ready` | PD-080, PD-085 | [PD-107](tickets/PD-107-tab-nav-and-add-button-hit-test-visual-mismatch.md) |
+| PD-107 | Tab 條捲動按鈕視覺位置偏移超出自己的熱區,波及「+」新增按鈕邊界 | 7 | `done` | PD-080, PD-085 | [PD-107](tickets/PD-107-tab-nav-and-add-button-hit-test-visual-mismatch.md) |
 | PD-108 | 拖曳分隔線時,矩形沒有變動的 pane 仍被重新 `SetWindowPos`/重繪 | 7 | `ready` | PD-095, PD-077 | [PD-108](tickets/PD-108-skip-unchanged-pane-relayout-during-splitter-drag.md) |
 | PD-109 | 一般模式啟動後主視窗未出現(HIGH,阻塞其他票驗收) | 7 | `done` | PD-093, PD-106 | [PD-109](tickets/PD-109-normal-mode-launch-shows-no-main-window.md) |
 | PD-110 | Pane tab 允許跨 pane 拖曳搬移,延續 PD-035 決策 1 的「若未來需要另開新票」 | 7 | `ready` | PD-035, PD-050, PD-074 | [PD-110](tickets/PD-110-cross-pane-tab-drag.md) |

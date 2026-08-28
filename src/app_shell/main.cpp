@@ -83,12 +83,14 @@ constexpr UINT kTabStripSelectionMessage = WM_APP + 49;
 constexpr int kTabMinWidth = 72;
 constexpr int kTabMaxWidth = 200;
 constexpr int kTabAddButtonWidth = 36;
-// PD-073: reserved only while the tab content overflows its viewport.
+// PD-073: reserved only while the tab content overflows its viewport. PD-107
+// derives the final interactive/drawn rectangles from the visual geometry.
 constexpr int kTabScrollButtonWidth = 20;
-// PD-080: keep the larger PD-073 rect as the hit-test target, but paint a
-// compact button inside it so the visual control is smaller than the tab row.
+// PD-080: compact button dimensions and the user-confirmed pixel offsets.
 constexpr int kTabScrollButtonVisualWidth = 18;
 constexpr int kTabScrollButtonVisualHeight = 16;
+constexpr int kTabScrollButtonVisualOffsetX = 6;
+constexpr int kTabScrollButtonVisualOffsetY = 1;
 constexpr int kTabScrollButtonCornerRadius = 4;
 constexpr int kTabScrollButtonGlyphHalf = 5;
 // PD-062: independent 96-DPI tab visual metrics. Gap is split across the
@@ -447,6 +449,7 @@ struct AppState {
     std::array<std::vector<TabVisual>, kExplorerCount> tab_visuals{};
     std::array<std::optional<RECT>, kExplorerCount> tab_placeholder_rects{};
     std::array<RECT, kExplorerCount> tab_add_rects{};
+    std::array<RECT, kExplorerCount> tab_viewport_rects{};
     // PD-073: UI-only scroll state; never persisted with the session.
     std::array<std::array<RECT, 2>, kExplorerCount>
         tab_scroll_button_rects{};
@@ -1299,15 +1302,35 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
         content_width, available, scaled_value(strip, kTabScrollButtonWidth));
     state.tab_add_rects[pane_index] = {
         available, 0, client.right, client.bottom};
+    state.tab_viewport_rects[pane_index] = {
+        0, 0, viewport.width, client.bottom};
     state.tab_scroll_button_rects[pane_index] = {};
     if (viewport.overflow && viewport.scroll_button_width > 0) {
         const int button_left = viewport.width;
+        const int button_middle = button_left + viewport.scroll_button_width;
+        const int visual_width =
+            scaled_value(strip, kTabScrollButtonVisualWidth);
+        const int visual_height =
+            scaled_value(strip, kTabScrollButtonVisualHeight);
+        const int visual_offset_x =
+            scaled_value(strip, kTabScrollButtonVisualOffsetX);
+        const int visual_offset_y =
+            scaled_value(strip, kTabScrollButtonVisualOffsetY);
+        const auto back_visual = panedock::app_shell::tab_scroll_button_visual(
+            button_left, 0, button_middle, client.bottom, visual_width,
+            visual_height, visual_offset_x, visual_offset_y, false);
+        const auto forward_visual =
+            panedock::app_shell::tab_scroll_button_visual(
+                button_middle, 0, available, client.bottom, visual_width,
+                visual_height, visual_offset_x, visual_offset_y, true);
+        const auto hit_rects = panedock::app_shell::tab_scroll_button_hit_rects(
+            back_visual, forward_visual, available);
         state.tab_scroll_button_rects[pane_index][0] = {
-            button_left, 0, button_left + viewport.scroll_button_width,
-            client.bottom};
+            hit_rects[0].left, hit_rects[0].top, hit_rects[0].right,
+            hit_rects[0].bottom};
         state.tab_scroll_button_rects[pane_index][1] = {
-            button_left + viewport.scroll_button_width, 0, available,
-            client.bottom};
+            hit_rects[1].left, hit_rects[1].top, hit_rects[1].right,
+            hit_rects[1].bottom};
     }
     std::vector<std::size_t> order(visuals.size());
     std::iota(order.begin(), order.end(), 0);
@@ -2715,10 +2738,7 @@ void close_tab_at_point(HWND window, AppState& state, POINT point) {
 }
 
 RECT tab_viewport_rect(const AppState& state, std::size_t pane_index) noexcept {
-    const RECT add = state.tab_add_rects[pane_index];
-    const RECT back = state.tab_scroll_button_rects[pane_index][0];
-    const int right = back.right > back.left ? back.left : add.left;
-    return {0, 0, right, add.bottom};
+    return state.tab_viewport_rects[pane_index];
 }
 
 std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
@@ -2856,12 +2876,9 @@ void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
                             bool forward, bool disabled,
                             bool hovered) noexcept {
     if (rect.right <= rect.left || rect.bottom <= rect.top) return;
-    const auto visual = panedock::app_shell::tab_scroll_button_visual(
+    const panedock::app_shell::TabScrollButtonVisual visual{
         static_cast<int>(rect.left), static_cast<int>(rect.top),
-        static_cast<int>(rect.right), static_cast<int>(rect.bottom),
-        scaled_value(window, kTabScrollButtonVisualWidth),
-        scaled_value(window, kTabScrollButtonVisualHeight),
-        scaled_value(window, 6), scaled_value(window, 1), forward);
+        static_cast<int>(rect.right), static_cast<int>(rect.bottom)};
     const COLORREF background_color =
         !disabled && hovered ? RGB(236, 240, 244) : RGB(255, 255, 255);
     HBRUSH background = CreateSolidBrush(background_color);
@@ -3094,14 +3111,10 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
         if (message == WM_LBUTTONDOWN && has_active_group(*state) &&
             pane_index < active_group(*state).panes.size()) {
             const POINT point = point_from_lparam(lparam);
-            const auto& scroll_buttons =
-                state->tab_scroll_button_rects[pane_index];
-            if (PtInRect(&scroll_buttons[0], point)) {
-                scroll_tab_strip(*state, pane_index, false);
-                return 0;
-            }
-            if (PtInRect(&scroll_buttons[1], point)) {
-                scroll_tab_strip(*state, pane_index, true);
+            const auto scroll = tab_scroll_button_at_point(
+                *state, pane_index, point);
+            if (scroll.has_value()) {
+                scroll_tab_strip(*state, pane_index, *scroll == 1);
                 return 0;
             }
             const auto item = tab_item_at_point(*state, window, point);

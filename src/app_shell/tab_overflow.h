@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 
 namespace panedock::app_shell {
 
@@ -49,13 +50,33 @@ constexpr TabScrollButtonVisual tab_scroll_button_visual(
     const int height = rect_bottom - rect_top;
     const int clamped_width = std::min(visual_width, width);
     const int clamped_height = std::min(visual_height, height);
-    // The two hit-test rects are adjacent. Inset them toward their shared edge
-    // so the compact visual buttons stay together in the middle, nudged
-    // slightly toward the add button and down per user pixel feedback.
     const int top = rect_top + (height - clamped_height) / 2 + visual_offset_y;
     const int left =
         (forward ? rect_left : rect_right - clamped_width) + visual_offset_x;
     return {left, top, left + clamped_width, top + clamped_height};
+}
+
+// Keep the painted and hit-tested button rectangles disjoint. There is no
+// extra hit-test buffer: the visual rectangle is the hit-test rectangle.
+// If the forward visual extends into the add slot, shift both visuals left
+// until the complete pair fits. An overlap is split at its midpoint.
+constexpr std::array<TabScrollButtonVisual, 2> tab_scroll_button_hit_rects(
+    TabScrollButtonVisual back, TabScrollButtonVisual forward,
+    int add_left) noexcept {
+    const int forward_overflow = std::max(0, forward.right - add_left);
+    back.left -= forward_overflow;
+    back.right -= forward_overflow;
+    forward.left -= forward_overflow;
+    forward.right -= forward_overflow;
+
+    const int overlap_left = std::max(back.left, forward.left);
+    const int overlap_right = std::min(back.right, forward.right);
+    if (overlap_left < overlap_right) {
+        const int split = overlap_left + (overlap_right - overlap_left) / 2;
+        back.right = split;
+        forward.left = split;
+    }
+    return {back, forward};
 }
 
 constexpr int tab_scroll_button_corner_radius(int requested_radius,

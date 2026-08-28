@@ -147,3 +147,16 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-28 — 實作完成，待使用者實機驗證
+
+- `apply_tab_item_size` 現在以 `tab_scroll_button_visual` 計算 back/forward 的視覺矩形，並把碰撞處理後的結果直接存入 `state.tab_scroll_button_rects`；`draw_tab_scroll_button` 與 `tab_scroll_button_at_point` 都使用這份最終矩形，因此沒有第二套偏移座標系統。`WM_LBUTTONDOWN` 也改為經由 `tab_scroll_button_at_point`，與 `WM_MOUSEMOVE` 共用同一個命中判斷。
+- 未增加額外 hit-test buffer；熱區就是最終視覺矩形。碰撞規則是先計算 `max(0, forward_visual.right - add_left)`，將兩顆完整按鈕一起向左移該數值，保留完整按鈕尺寸並讓 forward 不越過「+」slot；若輸入矩形仍有重疊，最後以重疊區中線分割。96 DPI 的目前數值為 4px buffer/位移(`18 + 6 - 20`)，150% 預期為 6px(`27 + 9 - 30`)。這比裁掉 forward 的右側更能維持兩顆按鈕同尺寸。
+- `tab_viewport_rects` 保留原本 tab 內容 viewport；`tab_add_rects`、「+」按鈕自身的 `add`/`hover` 繪製與熱區未修改。DPI 的 `scaled_value` 呼叫維持原樣。
+- 回歸檢查新增了 18px/18px、無重疊、forward 不越過 add 邊界的 constexpr 幾何案例；修正前該檢查先以 static assertion 失敗，修正後通過。
+- Agent checks：`cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`、`cmake --build build`、`ctest --test-dir build --output-on-failure` 均完成；ctest 5/5 passed；`git diff --check` 通過；rg 檢查確認偏移常數與 `tab_scroll_button_visual` 沒有重複硬編座標。
+- 實機截圖、滑鼠 hover/click 與 96 DPI/非 100% DPI 的實際矩形比對未由 Agent 執行，遵循使用者要求不使用滑鼠或 Computer Use；因此以下項目需由使用者手動驗證：
+  1. 在 96 DPI 與 150% DPI 各啟動 `build\\PaneDock.exe`，讓任一 pane 的 tab 溢出並顯示兩顆 nav button。
+  2. 確認 back/forward 的外框大小一致、兩者不重疊，且 forward 外框不侵入「+」外框；在兩顆按鈕各自視覺矩形內單次 hover/click，確認 hover 與點擊方向一致。
+  3. 在「+」視覺外框內單次 click，確認只新增 tab；使用 `EnumChildWindows`/`GetWindowRect` 找到正確 tab-strip HWND，必要時以 `PrintWindow(hwnd, hdc, 2 /* PW_RENDERFULLCONTENT */)` 留存兩個 DPI 的實際截圖，再比對三個按鈕的視覺邊界與熱區不重疊。
+  4. 驗證完成後，以已確認的 PID 執行 `taskkill /PID <pid>`（不帶 `/F`）關閉測試實例。

@@ -59,5 +59,23 @@ int main() {
                       5, clamped.width(), clamped.height()) == 3);
     static_assert(panedock::app_shell::tab_scroll_button_glyph_half(
                       5, 2, 2) == 2);
+
+    constexpr auto hit_rects =
+        panedock::app_shell::tab_scroll_button_hit_rects(
+            panedock::app_shell::TabScrollButtonVisual{108, 5, 126, 21},
+            panedock::app_shell::TabScrollButtonVisual{126, 5, 144, 21},
+            140);
+    static_assert(hit_rects[0].left == 104 && hit_rects[0].right == 122);
+    static_assert(hit_rects[1].left == 122 && hit_rects[1].right == 140);
+    static_assert(hit_rects[0].width() == 18 && hit_rects[1].width() == 18);
+    static_assert(hit_rects[0].right <= hit_rects[1].left);
+
+    constexpr auto overlapped =
+        panedock::app_shell::tab_scroll_button_hit_rects(
+            panedock::app_shell::TabScrollButtonVisual{10, 0, 30, 10},
+            panedock::app_shell::TabScrollButtonVisual{25, 0, 45, 10},
+            50);
+    static_assert(overlapped[0].right == 27 && overlapped[1].left == 27);
+    static_assert(overlapped[0].right <= overlapped[1].left);
     return 0;
 }
