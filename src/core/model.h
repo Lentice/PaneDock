@@ -116,5 +116,10 @@ bool close_tab(PaneState& pane, const std::string& tab_id,
 bool set_active_tab(PaneState& pane, const std::string& tab_id) noexcept;
 bool set_active_pane(GroupState& group, const std::string& pane_id) noexcept;
 bool add_pinned_location(ApplicationState& application, ShellLocation location);
+bool remove_pinned_location(ApplicationState& application,
+                            std::size_t index) noexcept;
+bool reorder_pinned_location(ApplicationState& application,
+                             std::size_t source_index,
+                             std::size_t target_index) noexcept;
 
 }  // namespace panedock::core

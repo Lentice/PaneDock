@@ -44,6 +44,8 @@
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PaneDockMainWindow";
+constexpr wchar_t kPinnedLocationsWindowClassName[] =
+    L"PaneDockPinnedLocationsWindow";
 constexpr wchar_t kSingleInstanceMutexName[] =
     L"PaneDock-SingleInstanceMutex";
 constexpr DWORD kSingleInstanceWindowRetryIntervalMs = 50;
@@ -159,6 +161,14 @@ constexpr int kPinnedMenuManageOffset = kPinnedMenuAddOffset + 1;
 constexpr int kPinnedMenuSlotsPerPane = kPinnedMenuManageOffset + 1;
 constexpr int kPinnedMenuIdCount =
     static_cast<int>(kExplorerCount) * kPinnedMenuSlotsPerPane;
+constexpr int kPinnedLocationsListId = 1;
+constexpr int kPinnedLocationsRemoveId = 2;
+constexpr int kPinnedLocationsMoveUpId = 3;
+constexpr int kPinnedLocationsMoveDownId = 4;
+constexpr int kPinnedLocationsCloseId = 5;
+constexpr std::size_t kPinnedLocationsButtonCount = 4;
+constexpr int kPinnedLocationsWindowWidth = 440;
+constexpr int kPinnedLocationsWindowHeight = 320;
 constexpr std::array<std::wstring_view, 2> kPinnedFixedParsingNames{
     L"::{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}",
     L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"};
@@ -507,6 +517,10 @@ struct AppState {
     std::array<HWND, kExplorerCount> refresh_buttons{};
     std::array<HWND, kExplorerCount> view_mode_buttons{};
     std::array<HWND, kExplorerCount> pinned_buttons{};
+    HWND pinned_locations_window{nullptr};
+    HWND pinned_locations_list{nullptr};
+    std::array<HWND, kPinnedLocationsButtonCount>
+        pinned_locations_buttons{};
     std::array<std::wstring, kPinnedFixedParsingNames.size()>
         pinned_fixed_labels{};
     std::array<bool, kExplorerCount> suppress_history_record{};
@@ -1728,6 +1742,9 @@ void apply_ui_font(AppState& state) noexcept {
         set_ui_font(state.address_bars[index], font);
         set_ui_font(state.status_bars[index], font);
     }
+    set_ui_font(state.pinned_locations_list, font);
+    for (HWND button : state.pinned_locations_buttons)
+        set_ui_font(button, font);
 }
 
 void refresh_ui_font(HWND window, AppState& state) noexcept {
@@ -2060,6 +2077,244 @@ void schedule_session_save(AppState& state) noexcept {
         OutputDebugStringW(L"PaneDock: session save timer failed\n");
         (void)save_now(state);
     }
+}
+
+void refresh_pinned_locations_manager_buttons(AppState& state) noexcept {
+    if (state.pinned_locations_list == nullptr) return;
+    const LRESULT selected = SendMessageW(
+        state.pinned_locations_list, LB_GETCURSEL, 0, 0);
+    const std::size_t index = selected >= 0
+                                  ? static_cast<std::size_t>(selected)
+                                  : state.application.pinned_locations.size();
+    const bool has_selection = index < state.application.pinned_locations.size();
+    EnableWindow(state.pinned_locations_buttons[0], has_selection);
+    EnableWindow(state.pinned_locations_buttons[1], has_selection && index > 0);
+    EnableWindow(state.pinned_locations_buttons[2],
+                 has_selection && index + 1 <
+                                      state.application.pinned_locations.size());
+    EnableWindow(state.pinned_locations_buttons[3], TRUE);
+}
+
+void refresh_pinned_locations_manager(
+    AppState& state,
+    std::optional<std::size_t> selected_index = std::nullopt) {
+    if (state.pinned_locations_list == nullptr) return;
+    if (!selected_index.has_value()) {
+        const LRESULT selected = SendMessageW(
+            state.pinned_locations_list, LB_GETCURSEL, 0, 0);
+        if (selected >= 0)
+            selected_index = static_cast<std::size_t>(selected);
+    }
+
+    SendMessageW(state.pinned_locations_list, LB_RESETCONTENT, 0, 0);
+    for (const auto& pinned : state.application.pinned_locations) {
+        const std::wstring label =
+            display_text_for_parsing_name(pinned.parsing_name);
+        SendMessageW(state.pinned_locations_list, LB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(label.c_str()));
+    }
+    if (selected_index.has_value() &&
+        *selected_index < state.application.pinned_locations.size()) {
+        SendMessageW(state.pinned_locations_list, LB_SETCURSEL,
+                     static_cast<WPARAM>(*selected_index), 0);
+    }
+    refresh_pinned_locations_manager_buttons(state);
+}
+
+void layout_pinned_locations_manager(HWND window, AppState& state) noexcept {
+    if (window == nullptr || state.pinned_locations_list == nullptr) return;
+    const RECT client = client_rect(window);
+    const int width = std::max(0, static_cast<int>(client.right - client.left));
+    const int height = std::max(0, static_cast<int>(client.bottom - client.top));
+    const int margin = scaled_value(window, kSpaceBase);
+    const int gap = scaled_value(window, kSpaceSnug);
+    const int button_height = scaled_value(window, 28);
+    const int button_y = std::max(margin, height - margin - button_height);
+    const int list_bottom = std::max(margin, button_y - gap);
+    const int list_width = std::max(0, width - 2 * margin);
+    SetWindowPos(state.pinned_locations_list, nullptr, margin, margin,
+                 list_width, std::max(0, list_bottom - margin),
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+
+    const int button_count = static_cast<int>(kPinnedLocationsButtonCount);
+    const int available = std::max(
+        0, width - 2 * margin - (button_count - 1) * gap);
+    const int button_width = std::max(1, available / button_count);
+    int x = margin;
+    for (HWND button : state.pinned_locations_buttons) {
+        SetWindowPos(button, nullptr, x, button_y, button_width,
+                     button_height, SWP_NOZORDER | SWP_NOACTIVATE);
+        x += button_width + gap;
+    }
+}
+
+LRESULT CALLBACK pinned_locations_window_proc(HWND window, UINT message,
+                                               WPARAM wparam, LPARAM lparam) {
+    auto* state = reinterpret_cast<AppState*>(
+        GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
+        state = static_cast<AppState*>(create->lpCreateParams);
+        if (state == nullptr) return FALSE;
+        state->pinned_locations_window = window;
+        SetWindowLongPtrW(window, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(state));
+    }
+
+    switch (message) {
+        case WM_CREATE: {
+            if (state == nullptr) return -1;
+            state->pinned_locations_list = CreateWindowExW(
+                WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+                    LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
+                0, 0, 0, 0, window,
+                reinterpret_cast<HMENU>(kPinnedLocationsListId),
+                GetModuleHandleW(nullptr), nullptr);
+            if (state->pinned_locations_list == nullptr) return -1;
+
+            constexpr std::array<const wchar_t*, kPinnedLocationsButtonCount>
+                labels{L"Remove", L"Move Up", L"Move Down", L"Close"};
+            constexpr std::array<int, kPinnedLocationsButtonCount> ids{
+                kPinnedLocationsRemoveId, kPinnedLocationsMoveUpId,
+                kPinnedLocationsMoveDownId, kPinnedLocationsCloseId};
+            for (std::size_t index = 0; index < labels.size(); ++index) {
+                state->pinned_locations_buttons[index] = CreateWindowExW(
+                    0, L"BUTTON", labels[index],
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0,
+                    0, 0, window, reinterpret_cast<HMENU>(ids[index]),
+                    GetModuleHandleW(nullptr), nullptr);
+                if (state->pinned_locations_buttons[index] == nullptr)
+                    return -1;
+            }
+            apply_ui_font(*state);
+            layout_pinned_locations_manager(window, *state);
+            refresh_pinned_locations_manager(*state);
+            return 0;
+        }
+        case WM_SIZE:
+            if (state != nullptr)
+                layout_pinned_locations_manager(window, *state);
+            return 0;
+        case WM_DPICHANGED: {
+            const auto* suggested = reinterpret_cast<const RECT*>(lparam);
+            if (suggested != nullptr) {
+                SetWindowPos(window, nullptr, suggested->left, suggested->top,
+                             suggested->right - suggested->left,
+                             suggested->bottom - suggested->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            if (state != nullptr) {
+                apply_ui_font(*state);
+                layout_pinned_locations_manager(window, *state);
+            }
+            return 0;
+        }
+        case WM_COMMAND:
+            if (state == nullptr) break;
+            if (LOWORD(wparam) == kPinnedLocationsListId &&
+                HIWORD(wparam) == LBN_SELCHANGE) {
+                refresh_pinned_locations_manager_buttons(*state);
+                return 0;
+            }
+            if (HIWORD(wparam) != BN_CLICKED) break;
+            if (LOWORD(wparam) == kPinnedLocationsCloseId) {
+                DestroyWindow(window);
+                return 0;
+            }
+
+            {
+                const LRESULT selected = SendMessageW(
+                    state->pinned_locations_list, LB_GETCURSEL, 0, 0);
+                if (selected == LB_ERR || selected < 0) return 0;
+                const std::size_t index = static_cast<std::size_t>(selected);
+                bool changed = false;
+                std::optional<std::size_t> next_selection;
+                if (LOWORD(wparam) == kPinnedLocationsRemoveId) {
+                    changed = panedock::core::remove_pinned_location(
+                        state->application, index);
+                    if (changed && !state->application.pinned_locations.empty())
+                        next_selection = std::min(
+                            index,
+                            state->application.pinned_locations.size() - 1);
+                } else if (LOWORD(wparam) == kPinnedLocationsMoveUpId &&
+                           index > 0) {
+                    changed = panedock::core::reorder_pinned_location(
+                        state->application, index, index - 1);
+                    if (changed) next_selection = index - 1;
+                } else if (LOWORD(wparam) == kPinnedLocationsMoveDownId &&
+                           index + 1 < state->application.pinned_locations.size()) {
+                    changed = panedock::core::reorder_pinned_location(
+                        state->application, index, index + 1);
+                    if (changed) next_selection = index + 1;
+                }
+                if (changed) {
+                    save_now(*state);
+                    refresh_pinned_locations_manager(*state, next_selection);
+                }
+            }
+            return 0;
+        case WM_CLOSE:
+            DestroyWindow(window);
+            return 0;
+        case WM_NCDESTROY:
+            if (state != nullptr && state->pinned_locations_window == window) {
+                state->pinned_locations_window = nullptr;
+                state->pinned_locations_list = nullptr;
+                state->pinned_locations_buttons.fill(nullptr);
+                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+            }
+            break;
+        default:
+            break;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+void destroy_pinned_locations_manager(AppState& state) noexcept {
+    if (state.pinned_locations_window != nullptr)
+        DestroyWindow(state.pinned_locations_window);
+}
+
+void show_pinned_locations_manager(HWND owner, AppState& state) {
+    if (state.pinned_locations_window != nullptr) {
+        refresh_pinned_locations_manager(state);
+        ShowWindow(state.pinned_locations_window, SW_SHOWNORMAL);
+        SetForegroundWindow(state.pinned_locations_window);
+        SetFocus(state.pinned_locations_list);
+        return;
+    }
+
+    const UINT owner_dpi = owner == nullptr ? 96 : GetDpiForWindow(owner);
+    const UINT dpi = owner_dpi == 0 ? 96 : owner_dpi;
+    const int width = MulDiv(kPinnedLocationsWindowWidth,
+                             static_cast<int>(dpi), 96);
+    const int height = MulDiv(kPinnedLocationsWindowHeight,
+                              static_cast<int>(dpi), 96);
+    HWND manager = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT,
+        kPinnedLocationsWindowClassName, L"Manage Pinned Locations",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU, 0, 0, width, height, owner,
+        nullptr, GetModuleHandleW(nullptr), &state);
+    if (manager == nullptr) return;
+
+    RECT owner_rect{};
+    int x = 0;
+    int y = 0;
+    if (owner != nullptr && GetWindowRect(owner, &owner_rect)) {
+        x = owner_rect.left +
+            std::max(0, (static_cast<int>(owner_rect.right - owner_rect.left) -
+                         width) / 2);
+        y = owner_rect.top +
+            std::max(0, (static_cast<int>(owner_rect.bottom - owner_rect.top) -
+                         height) / 2);
+    }
+    SetWindowPos(manager, HWND_TOP, x, y, width, height,
+                 SWP_NOACTIVATE);
+    ShowWindow(manager, SW_SHOWNORMAL);
+    UpdateWindow(manager);
+    SetForegroundWindow(manager);
+    SetFocus(state.pinned_locations_list);
 }
 
 void handle_navigation_complete(AppState& state, std::size_t pane_index,
@@ -2704,7 +2959,10 @@ void add_current_folder(AppState& state, std::size_t pane_index) {
     if (panedock::core::add_pinned_location(
             state.application,
             active_tab(active_group(state).panes[pane_index]).location))
+    {
         save_now(state);
+        refresh_pinned_locations_manager(state);
+    }
 }
 
 void show_pinned_locations_menu(HWND window, AppState& state,
@@ -4245,6 +4503,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         add_current_folder(*state, pane_index);
                         return 0;
                     }
+                    if (item == kPinnedMenuManageOffset) {
+                        show_pinned_locations_manager(window, *state);
+                        return 0;
+                    }
                     return 0;
                 }
                 if (id >= kBackButtonIdBase &&
@@ -4531,6 +4793,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state != nullptr) {
                 state->startup_realize_pending = false;
                 ++state->startup_realize_generation;
+                destroy_pinned_locations_manager(*state);
                 revoke_drag_hover_targets(*state);
                 cancel_session_save_timer(*state);
                 capture_window_placement(window, *state);
@@ -4545,6 +4808,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state != nullptr) {
                 state->startup_realize_pending = false;
                 ++state->startup_realize_generation;
+                destroy_pinned_locations_manager(*state);
                 revoke_drag_hover_targets(*state);
                 cancel_session_save_timer(*state);
                 if (state->session_dirty) {
@@ -4575,6 +4839,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 if (state != nullptr) {
                     state->startup_realize_pending = false;
                     ++state->startup_realize_generation;
+                    destroy_pinned_locations_manager(*state);
                     destroy_explorers(*state);
                 }
             }
@@ -4585,6 +4850,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
 }
 
 bool register_window_class(HINSTANCE instance) noexcept {
+    WNDCLASSEXW manager_class{};
+    manager_class.cbSize = sizeof(manager_class);
+    manager_class.hInstance = instance;
+    manager_class.lpfnWndProc = pinned_locations_window_proc;
+    manager_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    manager_class.hbrBackground =
+        reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    manager_class.lpszClassName = kPinnedLocationsWindowClassName;
+    if (RegisterClassExW(&manager_class) == 0) return false;
+
     WNDCLASSEXW window_class{};
     window_class.cbSize = sizeof(window_class);
     window_class.style = CS_DBLCLKS;
@@ -4853,6 +5128,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     }
     exit_code = result < 0 ? 1 : static_cast<int>(message.wParam);
 
+    destroy_pinned_locations_manager(state);
     destroy_explorers(state);
     assert(panedock::explorer_host::live_view_count() == 0);
     OleUninitialize();

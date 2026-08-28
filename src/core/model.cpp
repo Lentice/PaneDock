@@ -349,4 +349,31 @@ bool add_pinned_location(ApplicationState& application, ShellLocation location) 
     return true;
 }
 
+bool remove_pinned_location(ApplicationState& application,
+                            std::size_t index) noexcept {
+    if (index >= application.pinned_locations.size()) return false;
+    application.pinned_locations.erase(
+        application.pinned_locations.begin() +
+        static_cast<std::ptrdiff_t>(index));
+    return true;
+}
+
+bool reorder_pinned_location(ApplicationState& application,
+                             std::size_t source_index,
+                             std::size_t target_index) noexcept {
+    if (source_index >= application.pinned_locations.size() ||
+        target_index >= application.pinned_locations.size()) {
+        return false;
+    }
+    ShellLocation moved = std::move(application.pinned_locations[source_index]);
+    application.pinned_locations.erase(
+        application.pinned_locations.begin() +
+        static_cast<std::ptrdiff_t>(source_index));
+    application.pinned_locations.insert(
+        application.pinned_locations.begin() +
+            static_cast<std::ptrdiff_t>(target_index),
+        std::move(moved));
+    return true;
+}
+
 }  // namespace panedock::core

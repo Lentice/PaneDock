@@ -91,3 +91,19 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接（2026-08-28）
+
+- 管理視窗使用 `CreateWindowExW` 建立的單例 owned window：`WS_POPUP | WS_CAPTION | WS_SYSMENU`，搭配 `WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT`；它是 modeless，不呼叫 `EnableWindow(parent, FALSE)`。理由是管理視窗只承載清單操作，不需要額外的 modal message loop，保留既有主視窗的 Shell re-entrancy 與訊息處理路徑；同一時間再次開啟只會 refresh 並把既有視窗帶到前景。未新增 `.rc` 或 `DIALOGEX` 資源。
+- `core` 最終簽章為：`bool remove_pinned_location(ApplicationState& application, std::size_t index) noexcept;` 與 `bool reorder_pinned_location(ApplicationState& application, std::size_t source_index, std::size_t target_index) noexcept;`。兩者都以 `pinned_locations` 的 vector index 操作，索引越界回傳 `false`；排序保留既有 `reorder_tab` 的 move/erase/insert 風格。
+- Remove／Move Up／Move Down 成功後先更新 `ApplicationState::pinned_locations`，呼叫 `save_now`，再 refresh 管理視窗的 LISTBOX 並保留適當的選取列；`Add Current Folder` 若管理視窗仍開啟，也會在 `save_now` 後 refresh。Pinned Locations 選單沒有常駐快取，每次重新開啟都從共享 application model 重建，因此關閉管理視窗後任一 pane 的選單自然取得最新順序與內容。
+
+#### 使用者手動驗證（本 agent 未執行）
+
+本次依驗證限制未啟動或操作 PaneDock UI，請人工作以下檢查：
+
+1. 執行 `build\\PaneDock.exe`，從任一 pane 開啟 Pinned Locations → `Manage Pinned Locations...`；確認視窗為獨立 owned window，清單只列自訂位置，不列 Desktop／This PC，並有 `Remove`、`Move Up`、`Move Down`、`Close` 四個按鈕。
+2. 選取一筆位置按 `Remove`，確認它立即從清單消失；重新從任一 pane 開選單，確認該項目也消失。
+3. 建立至少三筆 pinned locations，分別選中間項目按 `Move Up`、`Move Down`，確認清單即時換位；關閉視窗後從另一個 pane 開選單，確認順序一致。
+4. 清空清單後確認 `Remove`／`Move Up`／`Move Down` 停用或按下無效果且程式不當機；重新加入一筆後確認按鈕狀態恢復。
+5. 關閉程式並重新啟動，確認移除與排序結果原樣還原；驗證結束後以不帶 `/F` 的 `taskkill /PID <pid>` 優雅關閉，不使用 `Stop-Process -Force`。
