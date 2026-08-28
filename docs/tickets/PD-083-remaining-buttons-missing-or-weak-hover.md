@@ -135,3 +135,11 @@ git diff --check
 - Tab scroll 使用 `AppState::tab_scroll_hover_indices` 分別儲存左／右按鈕，`tab_scroll_button_at_point` 直接重用 `tab_scroll_button_rects` 及現有 offset/max 狀態。既有 `tab_strip_proc` 的 `WM_MOUSEMOVE` 先更新 tab／`+` 與 scroll hover，再以一次條件式 `InvalidateRect` 重繪，最後照原路徑呼叫 `update_tab_drag`；`WM_MOUSELEAVE` 一次清除兩種 hover，程式碼檢查確認沒有覆蓋拖曳邏輯。
 - Agent checks：指定 CMake configure 成功；`cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 為 5/5 PASS；票據指定的 `rg` 檢查通過；`git diff --check` 通過。沒有 linker lock，也沒有啟動或關閉既有 PaneDock.exe。
 - 視覺驗證限制：未取得 layout、導覽、`New Group` 或 tab scroll 的有效 PaneDock 截圖；沒有做額外滑鼠／截圖序列。上述控制項需使用者在解鎖後確認，尤其是 layout 修改前後的 3× 對比、兩顆 scroll button 的獨立 hover，以及 disabled 不變。
+
+### 2026-08-28 — 修正:layout 按鈕在相鄰按鈕間移動時 hover 殘留未清除
+
+- **使用者實機回報**:layout 按鈕的 hover 樣式在滑鼠移出時可能沒有清除。
+- **根因**:`layout_button_proc`(`main.cpp` 約 3122-3146 行)的 `WM_MOUSEMOVE` 分支只在 `layout_hover_index` 改變時 `InvalidateRect(window, ...)`——只重繪「新的」被 hover 按鈕,沒有重繪「舊的」被 hover 按鈕。5 個 layout 按鈕是彼此獨立、緊鄰排列的 `HWND`(PD-046 的分段控制),當滑鼠直接從按鈕 A 移到相鄰按鈕 B 時:B 的 `WM_MOUSEMOVE` 先把 `layout_hover_index` 改成 B 並只 invalidate B;A 隨後收到的 `WM_MOUSELEAVE` 檢查 `layout_hover_index == button_index(A)` 已經是 false(現在是 B),因此不會重繪 A——A 殘留舊的 hover 高亮,直到下一次任何原因觸發 A 重繪為止。
+- 對照組 `owner_draw_button_proc`(導覽按鈕/`New Group` 用)的 `WM_MOUSEMOVE` 分支本來就有先取出 `previous`、同時 invalidate 「新舊兩個」按鈕的寫法(3101-3107 行)——`layout_button_proc` 少做了同一件事,這是純粹的實作遺漏,不是設計差異。
+- **修正**:`layout_button_proc` 的 `WM_MOUSEMOVE` 分支在切換 hover index 前,先取出舊的 `layout_hover_index`,若存在就額外 `InvalidateRect(state->layout_buttons[previous], ...)`,寫法與 `owner_draw_button_proc` 一致。
+- **驗證**:`taskkill /PID <pid>`(不帶 `/F`)關閉既有執行中的 `PaneDock.exe` 後,重新 `cmake --build build`(成功)與 `ctest --test-dir build --output-on-failure`(5/5 PASS)。未做連續滑鼠移動的實機截圖驗證(單一多步驟滑鼠操作留給使用者),邏輯修正已對照 `owner_draw_button_proc` 的既有正確寫法。

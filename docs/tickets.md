@@ -120,7 +120,7 @@
 | PD-080 | Tab 溢出捲動按鈕尺寸過大,和 tab 一樣高,改為緊湊小按鈕 | 7 | `done` | PD-073 | [PD-080](tickets/PD-080-tab-scroll-buttons-oversized.md) |
 | PD-081 | Tab「+」按鈕手繪十字有缺角,改回字型字符繪製(覆寫 PD-062 決策 5) | 7 | `done` | PD-062 | [PD-081](tickets/PD-081-tab-add-button-glyph-notch.md) |
 | PD-082 | 非「詳細資料」檢視模式仍顯示 column header | 7 | `done` | PD-079 | [PD-082](tickets/PD-082-view-mode-header-leaks-into-non-details-modes.md) |
-| PD-083 | 導覽按鈕/New Group 按鈕/tab 捲動按鈕完全沒有 hover;版型按鈕 hover 對比度不足 | 7 | `ready` | PD-058, PD-047 | [PD-083](tickets/PD-083-remaining-buttons-missing-or-weak-hover.md) |
+| PD-083 | 導覽按鈕/New Group 按鈕/tab 捲動按鈕完全沒有 hover;版型按鈕 hover 對比度不足 | 7 | `done` | PD-058, PD-047 | [PD-083](tickets/PD-083-remaining-buttons-missing-or-weak-hover.md) |
 | PD-084 | 限制單一 App 實例;第二次啟動改為喚醒既有視窗 | 7 | `done` | 無 | [PD-084](tickets/PD-084-single-instance-activate-existing-window.md) |
 | PD-085 | 把 tab 捲動按鈕的幾何計算抽成純函式(可單元測試) | 7 | `done` | 無 | [PD-085](tickets/PD-085-tab-scroll-button-geometry-to-pure-module.md) |
 | PD-086 | 切換 Group 時,同步完成的導覽把舊 Group 的路徑寫進新 Group 的儲存分頁(資料遺失) | 7 | `done` | 無 | [PD-086](tickets/PD-086-group-switch-overwrites-incoming-folders-with-outgoing-live-state.md) |

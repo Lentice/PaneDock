@@ -3128,6 +3128,12 @@ LRESULT CALLBACK layout_button_proc(HWND window, UINT message, WPARAM wparam,
             TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
             TrackMouseEvent(&tracking);
             if (state->layout_hover_index != button_index) {
+                if (state->layout_hover_index.has_value()) {
+                    const std::size_t previous = *state->layout_hover_index;
+                    if (previous < state->layout_buttons.size())
+                        InvalidateRect(state->layout_buttons[previous], nullptr,
+                                       FALSE);
+                }
                 state->layout_hover_index = button_index;
                 InvalidateRect(window, nullptr, FALSE);
             }
