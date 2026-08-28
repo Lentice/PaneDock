@@ -162,6 +162,12 @@ constexpr int kPinnedMenuIdCount =
 constexpr std::array<std::wstring_view, 2> kPinnedFixedParsingNames{
     L"::{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}",
     L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"};
+// PD-113: fixed commands for the tab context menu, after all existing
+// control and popup command ranges.
+constexpr int kCloseTabId = 780;
+constexpr int kCloseOtherTabsId = 781;
+constexpr int kCloseAllTabsId = 782;
+constexpr int kCloseTabsToRightId = 783;
 constexpr int kGroupListId = 100;
 constexpr int kNewGroupId = 101;
 constexpr int kDuplicateGroupId = 102;
@@ -479,6 +485,8 @@ struct AppState {
         tab_scroll_button_rects{};
     std::array<int, kExplorerCount> tab_scroll_offsets{};
     std::array<int, kExplorerCount> tab_scroll_max_offsets{};
+    std::optional<std::size_t> tab_context_menu_pane;
+    std::string tab_context_menu_tab_id;
     // A tab index is stored here; pane.tabs.size() represents the add button.
     std::array<std::optional<std::size_t>, kExplorerCount> tab_hover_indices{};
     // 0/1 identifies the left/right scroll button when it is hovered.
@@ -4046,6 +4054,55 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_CONTEXTMENU: {
             if (state == nullptr) break;
             const HWND target = reinterpret_cast<HWND>(wparam);
+            const auto pane_index = tab_strip_index(*state, target);
+            if (pane_index.has_value()) {
+                if (lparam == -1) return 0;
+                if (!has_active_group(*state) ||
+                    *pane_index >= active_group(*state).panes.size())
+                    return 0;
+
+                POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+                POINT client = point;
+                MapWindowPoints(window, target, &client, 1);
+                const auto item = tab_item_at_point(*state, target, client);
+                const auto& tabs = active_group(*state).panes[*pane_index].tabs;
+                if (!item.has_value() || *item >= tabs.size()) return 0;
+
+                state->tab_context_menu_pane = *pane_index;
+                state->tab_context_menu_tab_id = tabs[*item].id;
+                HMENU menu = CreatePopupMenu();
+                if (menu == nullptr) {
+                    state->tab_context_menu_pane.reset();
+                    state->tab_context_menu_tab_id.clear();
+                    return 0;
+                }
+                AppendMenuW(menu, MF_STRING,
+                            static_cast<UINT_PTR>(kCloseTabId), L"Close Tab");
+                AppendMenuW(
+                    menu, MF_STRING | (tabs.size() == 1 ? MF_GRAYED : 0),
+                    static_cast<UINT_PTR>(kCloseOtherTabsId),
+                    L"Close Other Tabs");
+                AppendMenuW(menu, MF_STRING,
+                            static_cast<UINT_PTR>(kCloseAllTabsId),
+                            L"Close All Tabs");
+                AppendMenuW(
+                    menu,
+                    MF_STRING | (*item + 1 >= tabs.size() ? MF_GRAYED : 0),
+                    static_cast<UINT_PTR>(kCloseTabsToRightId),
+                    L"Close Tabs to the Right");
+                SetForegroundWindow(window);
+                const int command = TrackPopupMenu(
+                    menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0,
+                    window, nullptr);
+                DestroyMenu(menu);
+                if (command != 0) {
+                    SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+                } else {
+                    state->tab_context_menu_pane.reset();
+                    state->tab_context_menu_tab_id.clear();
+                }
+                return 0;
+            }
             if (target != state->sidebar.window()) break;
 
             POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
@@ -4105,6 +4162,45 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             if (HIWORD(wparam) == BN_CLICKED) {
                 const int id = LOWORD(wparam);
+                if (id == kCloseTabId || id == kCloseOtherTabsId ||
+                    id == kCloseAllTabsId || id == kCloseTabsToRightId) {
+                    const auto pane_index = state->tab_context_menu_pane;
+                    const std::string tab_id =
+                        state->tab_context_menu_tab_id;
+                    state->tab_context_menu_pane.reset();
+                    state->tab_context_menu_tab_id.clear();
+                    if (!pane_index.has_value() || !has_active_group(*state) ||
+                        *pane_index >= active_group(*state).panes.size())
+                        return 0;
+                    if (id == kCloseTabId) {
+                        close_tab_in_pane(window, *state, *pane_index, tab_id);
+                        return 0;
+                    }
+
+                    const auto& tabs =
+                        active_group(*state).panes[*pane_index].tabs;
+                    std::vector<std::string> tab_ids;
+                    if (id == kCloseOtherTabsId) {
+                        for (const auto& tab : tabs)
+                            if (tab.id != tab_id) tab_ids.push_back(tab.id);
+                    } else if (id == kCloseAllTabsId) {
+                        for (const auto& tab : tabs) tab_ids.push_back(tab.id);
+                    } else {
+                        const auto target_tab = std::find_if(
+                            tabs.begin(), tabs.end(), [&](const auto& tab) {
+                                return tab.id == tab_id;
+                            });
+                        if (target_tab != tabs.end()) {
+                            for (auto tab = target_tab + 1; tab != tabs.end();
+                                 ++tab)
+                                tab_ids.push_back(tab->id);
+                        }
+                    }
+                    for (const auto& id_to_close : tab_ids)
+                        close_tab_in_pane(window, *state, *pane_index,
+                                          id_to_close);
+                    return 0;
+                }
                 if (id >= kViewModeMenuIdBase &&
                     id < kViewModeMenuIdBase + kViewModeMenuIdCount) {
                     const int offset = id - kViewModeMenuIdBase;

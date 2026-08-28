@@ -110,3 +110,50 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接（2026-08-28）
+
+- `AppState` 新增兩個互動期間暫存欄位：`std::optional<std::size_t> tab_context_menu_pane;` 與 `std::string tab_context_menu_tab_id;`。右鍵命中時寫入，選單取消或 command 取出後清除；批次操作只使用命中 pane 的 tab ID 快照。
+- 新增固定 command IDs：`kCloseTabId = 780`、`kCloseOtherTabsId = 781`、`kCloseAllTabsId = 782`、`kCloseTabsToRightId = 783`。選在既有 500–771 的 pinned popup range 之後，未與控制項或既有 popup range 重疊。
+- 施工當下 `rg -n "constexpr int k.*Id" src\\app_shell\\main.cpp` 盤點結果：
+
+  ```text
+  80:kTabStripIdBase = 200
+  134:kBackButtonIdBase = 300
+  135:kForwardButtonIdBase = 310
+  136:kUpButtonIdBase = 320
+  137:kAddressBarIdBase = 330
+  138:kRefreshButtonIdBase = 340
+  139:kViewModeButtonIdBase = 350
+  141:kPinnedButtonIdBase = 392
+  144:kViewModeMenuIdBase = 360
+  146:kViewModeMenuIdCount = ...
+  148:kLayoutButtonIdBase = 400
+  151:kPinnedMenuIdBase = 500
+  160:kPinnedMenuIdCount = ...
+  167:kCloseTabId = 780
+  168:kCloseOtherTabsId = 781
+  169:kCloseAllTabsId = 782
+  170:kCloseTabsToRightId = 783
+  171:kGroupListId = 100
+  172:kNewGroupId = 101
+  173:kDuplicateGroupId = 102
+  174:kRenameGroupId = 103
+  175:kDeleteGroupId = 104
+  176:kMoveUpId = 105
+  177:kMoveDownId = 106
+  ```
+
+- `WM_CONTEXTMENU` 先以既有 `tab_strip_index`/`tab_item_at_point` 判斷命中的 tab；viewport 外的空白、scroll 按鈕與 `+` 不彈選單。四項目依序為 `Close Tab`、`Close Other Tabs`、`Close All Tabs`、`Close Tabs to the Right`；單 tab 時停用 Others，命中最後 tab 時停用 To the Right。`WM_COMMAND` 對 batch 先複製 `std::vector<std::string>` tab ID，再逐一呼叫既有 `close_tab_in_pane`，未修改 `core::close_tab` 或既有 Ctrl+W/中鍵 caller。
+- 未新增 UI unit test：`app_shell`/Shell popup 路徑不屬於專案唯一的 `core` 自動測試 seam，且本次明確禁止桌面/UI automation；既有 `tests/unit/core_model_test.cpp::test_tab_and_pane_mutations` 已涵蓋 `close_tab` 的兩 tab 關閉與最後 tab 重置 default location。Close Tabs to the Right 的最後 tab 邊界與 Close All 的單 tab 行為已完成程式碼路徑核對，以下真人手動步驟是 UI 行為的替代驗證。
+- Agent checks：`cmake --build build` PASS；`ctest --test-dir build --output-on-failure` PASS（5/5）；`git diff --check` PASS（追加本段後需再執行一次確認）。
+
+#### 使用者手動驗證（本 agent 未執行）
+
+本次遵守 strict verification policy，未啟動 PaneDock、未使用 Computer Use、滑鼠/鍵盤模擬、`SetCursorPos`、`mouse_event`、互動後截圖或其他桌面操作。請真人稍後在 Release build 執行：
+
+1. 執行 `build\\PaneDock.exe`，在同一 pane 建立至少三個 tab，分別右鍵第一個、中間及最後一個 tab；確認選單四項文字與順序正確。
+2. 在只有一個 tab 時確認 `Close Other Tabs` 灰階；右鍵最後一個 tab 時確認 `Close Tabs to the Right` 灰階；右鍵 tab 條空白區、scroll 按鈕與 `+` 按鈕確認不彈選單。
+3. 右鍵非 active tab 執行 `Close Tab`，確認只移除命中 tab 且 active tab 不變；分別執行 `Close Other Tabs`、`Close Tabs to the Right`，確認保留正確 tab 集合與順序。
+4. 執行 `Close All Tabs`，確認 pane 仍保留一個 tab；對只剩一個 tab 再執行 `Close Tab` 或 `Close All Tabs`，確認 location 重置為預設值而不是空 pane。
+5. 完成四個動作後正常關閉並重新啟動，確認 session document 保留關閉結果；測試結束以不帶 `/F` 的 `taskkill /PID <pid>` 優雅關閉，勿使用 `Stop-Process -Force`。
