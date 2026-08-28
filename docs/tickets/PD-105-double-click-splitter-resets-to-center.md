@@ -126,3 +126,8 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+- 實作位置：`src/app_shell/main.cpp:3922`，新 `WM_LBUTTONDBLCLK` case 緊接既有 `WM_LBUTTONUP` splitter block、位於 `WM_TIMER` 前；主視窗類別於 `register_window_class` 加入 `CS_DBLCLKS`（目前約 `:4050`）。命中沿用 `splitter_at_point`，只將命中的 `divider_ratios[ratio_index]` 設為 `0.5`，呼叫 `apply_layout(window, *state)` 與 `save_now(*state)`；未命中保留 `break`。
+- 單次實機驗證：Release `build/PaneDock.exe` 啟動 PID `11188`，四宮格先將垂直分隔線由中央拖至約 `x=900`，再在該位置雙擊一次；雙擊後畫面觀察到分隔線回到中央。以 native `PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT)`（flag `2`）擷取並檢視成功，輸出：`C:\Users\lenticetsai\AppData\Local\Temp\panedock-pd105-printwindow.bmp`。截圖後立即執行不帶 `/F` 的 `taskkill /PID 11188`；sandbox 初次回報 Access denied，隨即在 elevated context 重送成功，程序已退出。
+- 已驗證：`cmake --build build` 通過；`ctest --test-dir build --output-on-failure` 的 5/5 測試通過；`git diff --check` 通過。
+- 未驗證、留給使用者：跨重啟持久化；`three_pane` 與 `four_pane_grid` 的兩條分隔線各自獨立重設（本次只測四宮格垂直分隔線）；分隔線外雙擊不被吞掉；側邊欄、tab 條、版面配置按鈕等子控制項的雙擊回歸。請使用者依 Acceptance Criteria 2–5 手動補測。

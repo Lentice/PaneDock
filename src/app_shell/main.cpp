@@ -3919,6 +3919,19 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 return 0;
             }
             break;
+        case WM_LBUTTONDBLCLK:
+            if (state != nullptr && has_active_group(*state)) {
+                const auto splitter = splitter_at_point(
+                    window, active_group(*state), point_from_lparam(lparam));
+                if (splitter.has_value()) {
+                    active_group(*state).divider_ratios[splitter->ratio_index] =
+                        0.5;
+                    apply_layout(window, *state);
+                    save_now(*state);
+                    return 0;
+                }
+            }
+            break;
         case WM_TIMER: {
             if (state == nullptr) break;
             const UINT_PTR timer = static_cast<UINT_PTR>(wparam);
@@ -4034,6 +4047,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
 bool register_window_class(HINSTANCE instance) noexcept {
     WNDCLASSEXW window_class{};
     window_class.cbSize = sizeof(window_class);
+    window_class.style = CS_DBLCLKS;
     window_class.hInstance = instance;
     window_class.lpfnWndProc = window_proc;
     window_class.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
