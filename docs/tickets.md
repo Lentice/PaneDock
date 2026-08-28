@@ -148,6 +148,7 @@
 | PD-108 | 拖曳分隔線時,矩形沒有變動的 pane 仍被重新 `SetWindowPos`/重繪 | 7 | `ready` | PD-095, PD-077 | [PD-108](tickets/PD-108-skip-unchanged-pane-relayout-during-splitter-drag.md) |
 | PD-109 | 一般模式啟動後主視窗未出現(HIGH,阻塞其他票驗收) | 7 | `done` | PD-093, PD-106 | [PD-109](tickets/PD-109-normal-mode-launch-shows-no-main-window.md) |
 | PD-110 | Pane tab 允許跨 pane 拖曳搬移,延續 PD-035 決策 1 的「若未來需要另開新票」 | 7 | `ready` | PD-035, PD-050, PD-074 | [PD-110](tickets/PD-110-cross-pane-tab-drag.md) |
+| PD-113 | Pane tab 右鍵選單:Close Tab / Close Other Tabs / Close All Tabs / Close Tabs to the Right | 7 | `ready` | 無 | [PD-113](tickets/PD-113-tab-close-context-menu.md) |
 
 ## Dependency lanes
 
