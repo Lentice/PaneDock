@@ -112,3 +112,11 @@ rg -n "TabDrag|update_tab_drag|finish_tab_drag|apply_tab_item_size|move_tab" src
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-28 — 實作交接
+
+- `src/core/model.h` / `model.cpp` 新增 `move_tab`:一般搬移會依目標 index 插入,來源 active tab 依既有 `close_tab` 規則重選;搬走最後一個 tab 時來源保留原 tab identity、重設成預設 location 並清除不再相符的 history;搬入 tab 會成為目標 pane active tab。
+- `tests/unit/core_model_test.cpp::test_move_tab` 覆蓋三項情境:一般搬移後來源 active 改為下一個 tab、搬入項目完整 location 保留且成為目標 active、搬走最後一個 tab 後來源仍有一個預設 location tab。
+- `src/app_shell/main.cpp` 延伸既有 mouse-capture 拖曳:以螢幕座標 hit-test 所有可見 pane tab strip;目標 pane 顯示沿用 PD-074 樣式與來源文字的淡化 placeholder;放開後只搬 `TabState`,先 capture 兩側目前 location,再對 active tab 已改變的來源與目標既有 `ExplorerHost` navigate,未新增 COM lifetime、OLE drop target、timer、thread 或浮動視窗。
+- 自動驗證:`cmake --build build` 成功(僅既有 missing-field-initializers warnings);`ctest --test-dir build --output-on-failure` 5/5 passed;`git diff --check` 通過。依使用者明確限制,本輪未啟動或操作實機視窗,也未使用 `SetCursorPos`、`mouse_event`、Computer Use 或互動後 `PrintWindow`。
+- 使用者手動驗證:在 three-pane / four-pane 版型各將一般 tab 與來源唯一 tab 拖至另一個 pane tab strip 的開頭、中間、尾端,確認目標 placeholder 文字、插入位置、目標 active 與兩側 Shell location;再確認拖回來源 strip 的同 pane 重排、放到 Explorer/sidebar/視窗外不搬移、Esc/原位放開復原。另以 PD-066 方法手動量測游標靜止 10 秒 CPU delta 為 0,並保留拖曳放開前後截圖與真實 HWND 幾何。

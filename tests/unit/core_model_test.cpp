@@ -197,6 +197,28 @@ void test_reorder_tab() {
     EXPECT(first == unchanged);
 }
 
+void test_move_tab() {
+    PaneState source = pane("source", {tab("one", L"one"),
+                                        tab("two", L"two")});
+    source.active_tab_id = "one";
+    PaneState target = pane("target", {tab("three", L"three")});
+
+    EXPECT(move_tab(source, target, "one", 0, kDefault));
+    EXPECT(source.tabs.size() == 1);
+    EXPECT(source.active_tab_id == "two");
+    EXPECT(target.tabs.front().id == "one");
+    EXPECT(target.tabs.front().location.parsing_name == L"one");
+    EXPECT(target.active_tab_id == "one");
+
+    EXPECT(move_tab(source, target, "two", target.tabs.size(), kDefault));
+    EXPECT(source.tabs.size() == 1);
+    EXPECT(source.tabs.front().id == "two");
+    EXPECT(source.tabs.front().location == kDefault);
+    EXPECT(target.tabs.back().id == "two");
+    EXPECT(target.tabs.back().location.parsing_name == L"two");
+    EXPECT(target.active_tab_id == "two");
+}
+
 void test_layout_migration_both_directions() {
     GroupState value = group("group", LayoutTemplate::four_pane_grid);
     EXPECT(add_tab(value.panes[1], tab("tab-2b")));
@@ -253,6 +275,7 @@ int main() {
     test_group_mutations();
     test_tab_and_pane_mutations();
     test_reorder_tab();
+    test_move_tab();
     test_layout_migration_both_directions();
     test_failed_mutations_leave_valid_state();
     return panedock::test::summary("core_model");

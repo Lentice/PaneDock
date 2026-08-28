@@ -425,6 +425,7 @@ struct AppState {
         std::string tab_id;
         POINT start{};
         bool dragging{};
+        std::optional<std::size_t> target_pane_index;
         std::optional<std::size_t> target_index;
     };
     std::optional<TabDrag> tab_drag;
@@ -1311,12 +1312,43 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
         SelectObject(dc, previous);
         ReleaseDC(strip, dc);
     }
-    const int total = std::accumulate(widths.begin(), widths.end(), 0);
+    const bool foreign_placeholder =
+        state.tab_drag.has_value() && state.tab_drag->dragging &&
+        state.tab_drag->target_pane_index == pane_index &&
+        state.tab_drag->pane_index != pane_index &&
+        state.tab_drag->target_index.has_value();
+    int placeholder_width = min_width;
+    if (foreign_placeholder &&
+        state.tab_drag->pane_index < state.tab_visuals.size() &&
+        state.tab_drag->source_index <
+            state.tab_visuals[state.tab_drag->pane_index].size()) {
+        const auto& source = state.tab_visuals[state.tab_drag->pane_index]
+                                             [state.tab_drag->source_index];
+        SIZE size{};
+        HDC measure = GetDC(strip);
+        const HGDIOBJ old = measure == nullptr ? nullptr
+                                               : SelectObject(measure, font);
+        if (measure != nullptr) {
+            GetTextExtentPoint32W(measure, source.text.c_str(),
+                                  static_cast<int>(source.text.size()), &size);
+            SelectObject(measure, old);
+            ReleaseDC(strip, measure);
+        }
+        placeholder_width = std::clamp(
+            static_cast<int>(size.cx) + text_reserve, min_width, max_width);
+    }
+    const int total = std::accumulate(widths.begin(), widths.end(),
+                                      foreign_placeholder ? placeholder_width : 0);
     if (total > available && total > 0) {
         for (int& width : widths)
             width = std::max(min_width, MulDiv(width, available, total));
+        if (foreign_placeholder)
+            placeholder_width = std::max(
+                min_width, MulDiv(placeholder_width, available, total));
     }
-    const int content_width = std::accumulate(widths.begin(), widths.end(), 0);
+    const int content_width = std::accumulate(
+        widths.begin(), widths.end(),
+        foreign_placeholder ? placeholder_width : 0);
     const auto viewport = panedock::app_shell::tab_strip_viewport(
         content_width, available, scaled_value(strip, kTabScrollButtonWidth));
     const int add_horizontal_inset =
@@ -1368,6 +1400,10 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
         const std::size_t source = state.tab_drag->source_index;
         order.erase(order.begin() + source);
         order.insert(order.begin() + *state.tab_drag->target_index, source);
+    } else if (foreign_placeholder) {
+        order.insert(order.begin() + static_cast<std::ptrdiff_t>(std::min(
+                         *state.tab_drag->target_index, order.size())),
+                     visuals.size());
     }
 
     std::optional<std::size_t> active_index;
@@ -1386,6 +1422,10 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
     int content_x = 0;
     if (active_index.has_value()) {
         for (const std::size_t index : order) {
+            if (index == visuals.size()) {
+                content_x += placeholder_width;
+                continue;
+            }
             if (index == *active_index) {
                 active_left = content_x;
                 active_right = content_x + widths[index];
@@ -1405,11 +1445,15 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
         state, pane_index, requested_offset, content_width, viewport.width);
     int x = 0;
     for (const std::size_t index : order) {
-        const int width = widths[index];
+        const int width = index == visuals.size() ? placeholder_width
+                                                   : widths[index];
         const RECT rect{x - scroll_offset, 0, x + width - scroll_offset,
                         client.bottom};
-        if (state.tab_drag.has_value() && state.tab_drag->dragging &&
+        if (index == visuals.size()) {
+            placeholder = rect;
+        } else if (state.tab_drag.has_value() && state.tab_drag->dragging &&
             state.tab_drag->pane_index == pane_index &&
+            !state.tab_drag->target_pane_index.has_value() &&
             state.tab_drag->target_index.has_value() &&
             index == state.tab_drag->source_index) {
             visuals[index].rect = {};
@@ -2790,7 +2834,9 @@ std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
     }
     const RECT viewport = tab_viewport_rect(state, *pane_index);
     if (!PtInRect(&viewport, point)) return std::nullopt;
-    if (state.tab_drag.has_value() && state.tab_drag->strip == strip &&
+    if (state.tab_drag.has_value() &&
+        state.tab_drag->target_pane_index.value_or(
+            state.tab_drag->pane_index) == *pane_index &&
         state.tab_drag->target_index.has_value() &&
         state.tab_placeholder_rects[*pane_index].has_value() &&
         PtInRect(&*state.tab_placeholder_rects[*pane_index], point))
@@ -2854,9 +2900,12 @@ void scroll_tab_strip(AppState& state, std::size_t pane_index, bool forward) {
 void cancel_tab_drag(AppState& state, HWND strip) noexcept {
     if (!state.tab_drag.has_value() || state.tab_drag->strip != strip)
         return;
+    const std::size_t source = state.tab_drag->pane_index;
+    const auto target = state.tab_drag->target_pane_index;
     state.tab_drag.reset();
-    if (const auto pane = tab_strip_index(state, strip); pane.has_value())
-        apply_tab_item_size(state, *pane);
+    apply_tab_item_size(state, source);
+    if (target.has_value() && *target != source)
+        apply_tab_item_size(state, *target);
     if (GetCapture() == strip) ReleaseCapture();
 }
 
@@ -2866,18 +2915,44 @@ void finish_tab_drag(AppState& state, HWND strip) {
     AppState::TabDrag drag = std::move(*state.tab_drag);
     state.tab_drag.reset();
     apply_tab_item_size(state, drag.pane_index);
+    if (drag.target_pane_index.has_value())
+        apply_tab_item_size(state, *drag.target_pane_index);
     if (GetCapture() == strip) ReleaseCapture();
     if (!drag.dragging || !drag.target_index.has_value() ||
-        *drag.target_index == drag.source_index || !has_active_group(state))
+        !has_active_group(state))
         return;
     auto& group = active_group(state);
     if (drag.pane_index >= group.panes.size()) return;
-    auto& pane = group.panes[drag.pane_index];
-    if (panedock::core::reorder_tab(pane, drag.tab_id,
-                                    *drag.target_index)) {
+    const std::size_t target_pane =
+        drag.target_pane_index.value_or(drag.pane_index);
+    if (target_pane >= group.panes.size()) return;
+    if (target_pane == drag.pane_index) {
+        if (*drag.target_index == drag.source_index) return;
+        if (!panedock::core::reorder_tab(group.panes[drag.pane_index],
+                                         drag.tab_id, *drag.target_index))
+            return;
         refresh_tab_strip(state, drag.pane_index);
         save_now(state);
+        return;
     }
+
+    capture_pane_location(state, drag.pane_index);
+    capture_pane_location(state, target_pane);
+    auto& source = group.panes[drag.pane_index];
+    auto& target = group.panes[target_pane];
+    const bool source_active = source.active_tab_id == drag.tab_id;
+    if (!panedock::core::move_tab(
+            source, target, drag.tab_id, *drag.target_index,
+            location(kDefaultLocations[drag.pane_index]))) return;
+    if (source_active && state.realized[drag.pane_index])
+        state.explorers[drag.pane_index].navigate(
+            active_tab(source).location.parsing_name);
+    if (state.realized[target_pane])
+        state.explorers[target_pane].navigate(
+            active_tab(target).location.parsing_name);
+    refresh_tab_strip(state, drag.pane_index);
+    refresh_tab_strip(state, target_pane);
+    save_now(state);
 }
 
 void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
@@ -2888,12 +2963,6 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
         return;
     }
     const POINT point = point_from_lparam(lparam);
-    RECT client{};
-    GetClientRect(strip, &client);
-    if (!PtInRect(&client, point)) {
-        cancel_tab_drag(state, strip);
-        return;
-    }
     if (!state.tab_drag->dragging) {
         const int threshold = std::max(
             1, std::max(GetSystemMetrics(SM_CXDRAG),
@@ -2906,10 +2975,43 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
         }
     }
     if (!state.tab_drag->dragging) return;
-    const auto target = tab_item_at_point(state, strip, point);
-    if (target == state.tab_drag->target_index) return;
+
+    POINT screen = point;
+    ClientToScreen(strip, &screen);
+    std::optional<std::size_t> target_pane;
+    std::optional<std::size_t> target;
+    const std::size_t pane_count = has_active_group(state)
+                                       ? active_group(state).panes.size()
+                                       : 0;
+    for (std::size_t index = 0; index < pane_count; ++index) {
+        const HWND candidate = state.tab_strips[index];
+        if (!IsWindowVisible(candidate)) continue;
+        POINT client_point = screen;
+        ScreenToClient(candidate, &client_point);
+        RECT client{};
+        GetClientRect(candidate, &client);
+        if (!PtInRect(&client, client_point)) continue;
+        target_pane = index == state.tab_drag->pane_index
+                          ? std::nullopt
+                          : std::optional<std::size_t>{index};
+        target = tab_item_at_point(state, candidate, client_point);
+        if (!target.has_value() && index != state.tab_drag->pane_index &&
+            PtInRect(&state.tab_viewport_rects[index], client_point)) {
+            target = active_group(state).panes[index].tabs.size();
+        }
+        break;
+    }
+    if (target_pane == state.tab_drag->target_pane_index &&
+        target == state.tab_drag->target_index) return;
+    const auto previous_target = state.tab_drag->target_pane_index;
+    state.tab_drag->target_pane_index = target_pane;
     state.tab_drag->target_index = target;
     apply_tab_item_size(state, state.tab_drag->pane_index);
+    if (previous_target.has_value() &&
+        previous_target != state.tab_drag->target_pane_index)
+        apply_tab_item_size(state, *previous_target);
+    if (state.tab_drag->target_pane_index.has_value())
+        apply_tab_item_size(state, *state.tab_drag->target_pane_index);
 }
 
 void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
@@ -3040,20 +3142,31 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
         }
         if (fill != nullptr) DeleteObject(fill);
         if (border != nullptr) DeleteObject(border);
+        const std::size_t target_pane =
+            state.tab_drag.has_value()
+                ? state.tab_drag->target_pane_index.value_or(
+                      state.tab_drag->pane_index)
+                : pane_index;
         if (state.tab_drag.has_value() && state.tab_drag->dragging &&
-            state.tab_drag->pane_index == pane_index &&
-            state.tab_drag->source_index < visuals.size()) {
-            RECT text_rect = rect;
-            text_rect.left = std::min(text_rect.right,
-                                      text_rect.left + text_padding);
-            text_rect.right = std::max(text_rect.left,
-                                       text_rect.right - text_padding);
-            SetTextColor(dc, panedock::sidebar::kPlaceholderContent);
-            DrawTextW(dc,
-                      visuals[state.tab_drag->source_index].text.c_str(), -1,
-                      &text_rect,
-                      DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS |
-                          DT_NOPREFIX);
+            target_pane == pane_index &&
+            state.tab_drag->pane_index < active_group(state).panes.size()) {
+            const auto& source_pane =
+                active_group(state).panes[state.tab_drag->pane_index];
+            const auto source_tab = std::find_if(
+                source_pane.tabs.begin(), source_pane.tabs.end(),
+                [&](const auto& tab) { return tab.id == state.tab_drag->tab_id; });
+            if (source_tab != source_pane.tabs.end()) {
+                RECT text_rect = rect;
+                text_rect.left = std::min(text_rect.right,
+                                          text_rect.left + text_padding);
+                text_rect.right = std::max(text_rect.left,
+                                           text_rect.right - text_padding);
+                SetTextColor(dc, panedock::sidebar::kPlaceholderContent);
+                const std::wstring text = tab_display_text(*source_tab);
+                DrawTextW(dc, text.c_str(), -1, &text_rect,
+                          DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS |
+                              DT_NOPREFIX);
+            }
         }
     }
     if (saved_dc != 0) RestoreDC(dc, saved_dc);
@@ -3162,7 +3275,7 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                     cancel_tab_drag(*state, state->tab_drag->strip);
                 state->tab_drag = AppState::TabDrag{
                     window, pane_index, *item, tabs[*item].id, point, false,
-                    std::nullopt};
+                    std::nullopt, std::nullopt};
                 SetCapture(window);
                 SendMessageW(GetParent(window), kTabStripSelectionMessage,
                              static_cast<WPARAM>(pane_index),

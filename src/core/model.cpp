@@ -271,6 +271,36 @@ bool reorder_tab(PaneState& pane, const std::string& tab_id,
     return true;
 }
 
+bool move_tab(PaneState& source, PaneState& target,
+              const std::string& tab_id, std::size_t target_index,
+              const ShellLocation& default_location) {
+    const auto tab = find_id(source.tabs, tab_id);
+    if (&source == &target || tab == source.tabs.end() ||
+        find_id(target.tabs, tab_id) != target.tabs.end()) {
+        return false;
+    }
+
+    TabState moved = *tab;
+    if (source.tabs.size() == 1) {
+        tab->location = default_location;
+        tab->history.clear();
+        tab->history_index = 0;
+    } else {
+        const bool was_active = source.active_tab_id == tab_id;
+        const auto next = source.tabs.erase(tab);
+        if (was_active) {
+            source.active_tab_id =
+                (next == source.tabs.end() ? source.tabs.back() : *next).id;
+        }
+    }
+    target_index = std::min(target_index, target.tabs.size());
+    target.tabs.insert(target.tabs.begin() +
+                           static_cast<std::ptrdiff_t>(target_index),
+                       std::move(moved));
+    target.active_tab_id = tab_id;
+    return true;
+}
+
 bool close_tab(PaneState& pane, const std::string& tab_id,
                const ShellLocation& default_location) {
     const auto tab = find_id(pane.tabs, tab_id);
