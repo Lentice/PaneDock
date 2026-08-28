@@ -137,6 +137,7 @@
 | PD-097 | 拖曳分隔線時,幾何重排本身仍在每個 `WM_MOUSEMOVE` 都執行,需節流 | 7 | `ready` | PD-095 | [PD-097](tickets/PD-097-splitter-drag-geometry-throttling.md) |
 | PD-098 | 檢視模式按鈕圖示由 4 方格(GridView)改為清單樣式(List)圖示 | 7 | `ready` | PD-075 | [PD-098](tickets/PD-098-view-mode-icon-grid-to-list-glyph.md) |
 | PD-099 | 新增第 6 種版型:上方兩格併排、下方一格全寬(2 up / 1 down) | 7 | `ready` | PD-005, PD-016, PD-046 | [PD-099](tickets/PD-099-add-two-over-one-layout-template.md) |
+| PD-100 | 虛擬資料夾(如 This PC)的位址列/分頁標題顯示原始 parsing code,應改為友善顯示名稱 | 7 | `ready` | 無 | [PD-100](tickets/PD-100-virtual-folder-display-name-instead-of-parsing-code.md) |
 
 ## Dependency lanes
 
@@ -478,3 +479,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 ### 2026-08-28 — 使用者要求新增第 6 種版型(2 up / 1 down),覆寫 FR-003「僅五種版型」,開 PD-099
 
 使用者原文:「Add new layout, 3 panes (2 at up half, 1 at bottom half)」附參考截圖。這與既有 `LayoutTemplate::three_pane`(左一右二疊放)是不同幾何,是座標軸轉置的新形狀,既有 5 種版型都無法表達。明確覆寫 `docs/design-spec.md` FR-003「支援且僅支援五種版型」,新證據為使用者本次直接提出的具體需求;同時明確聲明**不是**重開「已否決的方向」表的「任意遞迴 pane 分割」——本票只是比照既有 5 種版型的固定模式(`LayoutTemplate` enum + 各 `switch` 多一個 `case`)多加一個具名固定形狀,不是開放任意分割機制,詳細論證見 ticket 文件。開票為 [PD-099](tickets/PD-099-add-two-over-one-layout-template.md),依賴 PD-005(矩形計算)、PD-016(版型/分隔線基礎設施)、PD-046(版型按鈕列)。
+
+### 2026-08-28 — 使用者回報虛擬資料夾(This PC)位址列/分頁標題顯示原始 GUID,開 PD-100
+
+使用者原文:「for pane address and tab name, do not display code. display proper name instead.」附截圖,顯示導覽到 This PC 後位址列與分頁標題皆顯示 `::{20D04FE0-3AEA-1069-A2D8-08002B30309D}`。根因:全專案唯一的 `GetDisplayName` 呼叫點(`explorer_host.cpp`)只解析 `SIGDN_DESKTOPABSOLUTEPARSING`(識別用途的 parsing name),一般路徑恰好可讀因而掩蓋問題,虛擬/CLSID 資料夾則直接暴露原始代碼;沒有任何地方解析過 `SIGDN_NORMALDISPLAY` 友善顯示名稱。修法為只在偵測到「非檔案系統項目」時,額外用 `SHCreateItemFromParsingName` + `SIGDN_NORMALDISPLAY` 解析純顯示用途的友善名稱,一般路徑既有顯示行為不變;不持久化此名稱、不進 `core`,與 `AGENTS.md`「Display names are never identifiers」相容。開票為 [PD-100](tickets/PD-100-virtual-folder-display-name-instead-of-parsing-code.md),無依賴。
