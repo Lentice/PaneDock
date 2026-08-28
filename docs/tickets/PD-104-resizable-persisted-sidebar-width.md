@@ -193,3 +193,15 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-28 — 實作交接
+
+- 共用寬度 helper 為 `int current_sidebar_width(HWND window, const AppState& state) noexcept`; `pane_area`、`layout_sidebar`、`layout_header`、`paint_client_background` 及其 pane-layout 呼叫鏈都透過它取得目前側邊欄寬度。`core::kDefaultSidebarWidth` 為 194，`sidebar.h` 的 `kSidebarWidth` alias 到同一個來源。
+- 側邊欄拖曳使用獨立的 `AppState::SidebarDrag { int start_x; int start_width; }`，由 `std::optional<SidebarDrag> sidebar_drag` 與既有 `splitter_drag` 並列；`start_width` 是 96-DPI logical width。
+- 可拖曳寬度限制為 160–420 logical px。160 保留 Group row 的圖示、左右 inset 與約 132px 的文字空間，避免名稱一開始就過度截斷；420 在目前約 1000px 的預設 client 寬度仍保留約 580px 給檔案 pane，避免側邊欄侵蝕主要內容。
+- 節流沿用 PD-097 的單一 `kSplitterDragTimerId = 0xD051` 與 200ms interval；將位置與 armed 狀態泛化為 `latest_geometry_drag_point`、`geometry_drag_timer_armed`，`WM_TIMER` 增加側邊欄拖曳分派分支，與 splitter 共用 timer、release/capture cleanup，沒有新增第二個 timer。放開時仍立即套用最後位置並 `save_now(*state)`。
+- `session.cpp` encode 寫入 root-level `sidebar_width`；decode 先檢查欄位是否存在，存在才呼叫 `integer(*value, "sidebar_width")`，缺少時使用 `std::optional<int>{kDefaultSidebarWidth}`。因此 malformed 的既存欄位仍會失敗，但舊 JSON 缺欄位不會失敗；未 bump schema version。
+- 實際舊版檔案測試：啟動前 `%LOCALAPPDATA%\PaneDock\session.json` 沒有 `sidebar_width`；Release build 能正常啟動，截圖確認預設側邊欄約 194px。正常關閉後 session 已由程式以新增欄位寫回；測試沒有建立暫時 Group/tab。
+- 截圖驗證：預設寬度截圖成功且應用程式保持運作；嘗試一次邊界拖曳+放開時，computer-use 視窗捕獲/前景限制回報 `failed to activate captured window` 及 `user input was detected in this window`，重取截圖仍顯示應用程式未崩潰，但未能可靠注入實際拖曳，因此不宣稱已完成拖曳後寬度變更驗證。測試 instance 已用不帶 `/F` 的 `taskkill /PID` 關閉。
+- `cmake --build build` 通過；`ctest --test-dir build --output-on-failure` 通過（5/5）；`git diff --check` 通過。
+- 刻意留給使用者驗證：關閉後重新啟動確認拖曳寬度跨啟動還原，以及連續拖曳時的跟手感、節流效果與 CPU 使用量；這些不在本次單次動作截圖驗證範圍內。

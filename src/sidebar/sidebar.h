@@ -13,11 +13,13 @@
 #include <string>
 #include <vector>
 
+#include "core/model.h"
+
 struct IDropTarget;
 
 namespace panedock::sidebar {
 
-inline constexpr int kSidebarWidth = 226;
+inline constexpr int kSidebarWidth = panedock::core::kDefaultSidebarWidth;
 inline constexpr int kGroupRowHeight = 52;
 inline constexpr COLORREF kPlaceholderContent = RGB(148, 163, 184);
 inline constexpr UINT kRenameCommitMessage = WM_APP + 1;

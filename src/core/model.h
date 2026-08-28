@@ -6,6 +6,8 @@
 
 namespace panedock::core {
 
+inline constexpr int kDefaultSidebarWidth = 194;
+
 struct ShellLocation final {
     std::wstring parsing_name;
     std::wstring known_folder_identity;
@@ -68,6 +70,7 @@ struct ApplicationState final {
     std::vector<GroupState> groups;
     std::string active_group_id;  // Empty exactly when groups is empty.
     WindowPlacement window_placement;
+    int sidebar_width{kDefaultSidebarWidth};
 
     bool operator==(const ApplicationState&) const = default;
 };

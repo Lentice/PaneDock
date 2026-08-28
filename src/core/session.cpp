@@ -404,6 +404,7 @@ Json encode(const ApplicationState& application, Json root,
     placement["height"] = Json{static_cast<double>(application.window_placement.height)};
     placement["maximized"] = Json{application.window_placement.maximized};
     result["window_placement"] = Json{std::move(placement)};
+    result["sidebar_width"] = Json{static_cast<double>(application.sidebar_width)};
     return Json{std::move(result)};
 }
 
@@ -419,10 +420,16 @@ std::optional<ApplicationState> decode(const Json& root) {
     const auto* groups = groups_json ? array(*groups_json) : nullptr;
     const Json* placement_json = field(*value, "window_placement");
     const auto* placement = placement_json ? object(*placement_json) : nullptr;
-    if (!active_group || !groups || !placement) return std::nullopt;
+    const Json* sidebar_width_json = field(*value, "sidebar_width");
+    const auto sidebar_width =
+        sidebar_width_json ? integer(*value, "sidebar_width")
+                           : std::optional<int>{kDefaultSidebarWidth};
+    if (!active_group || !groups || !placement || !sidebar_width)
+        return std::nullopt;
     ApplicationState application;
     application.schema_version = kSessionSchemaVersion;
     application.active_group_id = *active_group;
+    application.sidebar_width = *sidebar_width;
     const auto x = integer(*placement, "x"), y = integer(*placement, "y"),
                width = integer(*placement, "width"), height = integer(*placement, "height");
     const auto* maximized = as<bool>(*placement, "maximized");

@@ -116,6 +116,31 @@ void test_round_trip_and_plain_json() {
     EXPECT(empty->clean_shutdown);
 }
 
+void test_optional_sidebar_width() {
+    ApplicationState original = sample();
+    original.sidebar_width = 320;
+    const std::string json = serialize_session({original, {}});
+    const auto restored = deserialize_session(json);
+    EXPECT(restored.has_value());
+    if (restored.has_value())
+        EXPECT(restored->application.sidebar_width == 320);
+
+    std::string legacy = json;
+    const auto start = legacy.find("\"sidebar_width\":320");
+    const auto end = start == std::string::npos ? std::string::npos
+                                                : legacy.find(',', start);
+    EXPECT(start != std::string::npos);
+    EXPECT(end != std::string::npos);
+    if (start != std::string::npos && end != std::string::npos) {
+        legacy.erase(start, end - start + 1);
+        const auto legacy_document = deserialize_session(legacy);
+        EXPECT(legacy_document.has_value());
+        if (legacy_document.has_value())
+            EXPECT(legacy_document->application.sidebar_width ==
+                   kDefaultSidebarWidth);
+    }
+}
+
 void test_corrupt_and_invalid_documents() {
     std::string json = serialize_session({sample(), {}});
     EXPECT(!deserialize_session(json.substr(0, json.size() / 2)));
@@ -273,6 +298,7 @@ void test_durability_hook_order_and_failure() {
 
 int main() {
     test_round_trip_and_plain_json();
+    test_optional_sidebar_width();
     test_corrupt_and_invalid_documents();
     test_unknown_fields_survive_write_back();
     test_clean_shutdown_type_mismatch_defaults_true();

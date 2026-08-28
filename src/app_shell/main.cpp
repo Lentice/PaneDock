@@ -61,6 +61,8 @@ constexpr UINT_PTR kSessionSaveTimerId = 0xD050;
 // WM_MOUSEMOVE while retaining visible progress during a sustained drag.
 constexpr UINT kSplitterDragThrottleIntervalMilliseconds = 200;
 constexpr UINT_PTR kSplitterDragTimerId = 0xD051;
+constexpr int kSidebarMinimumWidth = 160;
+constexpr int kSidebarMaximumWidth = 420;
 constexpr std::size_t kExplorerCount = 4;
 constexpr int kLayoutBarHeight = 44;
 constexpr int kLayoutButtonHeight = 30;
@@ -401,9 +403,14 @@ struct AppState {
     HWND main_window{nullptr};
     bool diagnostic_mode{};
     bool session_dirty{};
+    struct SidebarDrag final {
+        int start_x{};
+        int start_width{};
+    };
     std::optional<Splitter> splitter_drag;
-    std::optional<POINT> latest_splitter_drag_point;
-    bool splitter_drag_timer_armed{};
+    std::optional<SidebarDrag> sidebar_drag;
+    std::optional<POINT> latest_geometry_drag_point;
+    bool geometry_drag_timer_armed{};
     struct TabDrag final {
         HWND strip{nullptr};
         std::size_t pane_index{};
@@ -620,6 +627,12 @@ RECT client_rect(HWND window) noexcept {
 int scaled_value(HWND window, int value) noexcept {
     return std::max(1, MulDiv(value, static_cast<int>(GetDpiForWindow(window)),
                               96));
+}
+
+int current_sidebar_width(HWND window, const AppState& state) noexcept {
+    const RECT client = client_rect(window);
+    return std::min(static_cast<int>(client.right - client.left),
+                    scaled_value(window, state.application.sidebar_width));
 }
 
 // PD-031: the navigation row's geometry (tab-strip height, back/forward/up
@@ -981,12 +994,10 @@ void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi) noexcept {
     if (old_font != nullptr) SelectObject(item.hDC, old_font);
 }
 
-RECT pane_area(HWND window) noexcept {
+RECT pane_area(HWND window, const AppState& state) noexcept {
     RECT area = client_rect(window);
     area.left = std::min(area.right,
-                         area.left + scaled_value(
-                                         window,
-                                         panedock::sidebar::kSidebarWidth));
+                         area.left + current_sidebar_width(window, state));
     area.top = std::min(area.bottom,
                         area.top + scaled_value(window, kLayoutBarHeight));
     return area;
@@ -1002,8 +1013,21 @@ LayoutMetrics layout_metrics(HWND window) noexcept {
             scaled(kPaneDividerThickness)};
 }
 
-RECT pane_content_area(HWND window) noexcept {
-    RECT area = pane_area(window);
+bool sidebar_boundary_at_point(HWND window, const AppState& state,
+                               POINT point) noexcept {
+    const RECT client = client_rect(window);
+    const int boundary = client.left + current_sidebar_width(window, state);
+    const int thickness = layout_metrics(window).divider_thickness;
+    const int left = std::max(static_cast<int>(client.left),
+                              boundary - thickness / 2);
+    const int right = std::min(static_cast<int>(client.right),
+                               boundary + thickness - thickness / 2);
+    const RECT hit{left, client.top, right, client.bottom};
+    return hit.right > hit.left && PtInRect(&hit, point);
+}
+
+RECT pane_content_area(HWND window, const AppState& state) noexcept {
+    RECT area = pane_area(window, state);
     const LayoutMetrics metrics = layout_metrics(window);
     const int padding = scaled_value(window, kSpaceRoomy);
     const int width = area.right - area.left;
@@ -1020,8 +1044,9 @@ RECT pane_content_area(HWND window) noexcept {
 }
 
 std::vector<panedock::core::PaneRect> layout_rects(
-    HWND window, const panedock::core::GroupState& group) {
-    const RECT client = pane_content_area(window);
+    HWND window, const AppState& state,
+    const panedock::core::GroupState& group) {
+    const RECT client = pane_content_area(window, state);
     const LayoutMetrics metrics = layout_metrics(window);
     auto rects = panedock::core::compute_layout_rects(
         client.right - client.left, client.bottom - client.top,
@@ -1036,8 +1061,9 @@ std::vector<panedock::core::PaneRect> layout_rects(
 }
 
 std::vector<Splitter> splitters(HWND window,
+                                const AppState& state,
                                 const panedock::core::GroupState& group) {
-    const auto rects = layout_rects(window, group);
+    const auto rects = layout_rects(window, state, group);
     const int thickness = layout_metrics(window).divider_thickness;
     switch (group.layout_template) {
         case panedock::core::LayoutTemplate::single:
@@ -1075,8 +1101,9 @@ std::vector<Splitter> splitters(HWND window,
 }
 
 std::optional<Splitter> splitter_at_point(
-    HWND window, const panedock::core::GroupState& group, POINT point) {
-    for (const Splitter& splitter : splitters(window, group)) {
+    HWND window, const AppState& state,
+    const panedock::core::GroupState& group, POINT point) {
+    for (const Splitter& splitter : splitters(window, state, group)) {
         if (PtInRect(&splitter.rect, point)) return splitter;
     }
     return std::nullopt;
@@ -1425,9 +1452,7 @@ void refresh_sidebar(AppState& state) {
 
 void layout_sidebar(HWND window, AppState& state) noexcept {
     const RECT client = client_rect(window);
-    const int width = std::min(static_cast<int>(client.right - client.left),
-                               scaled_value(window,
-                                            panedock::sidebar::kSidebarWidth));
+    const int width = current_sidebar_width(window, state);
     const int margin = scaled_value(window, kSpaceSnug);
     const int gap = scaled_value(window, kSpaceTight);
     const int brand_height = scaled_value(window, kBrandBarHeight);
@@ -1452,7 +1477,7 @@ void layout_sidebar(HWND window, AppState& state) noexcept {
                      SWP_NOZORDER | SWP_NOACTIVATE);
         y += button_height + gap;
     }
-    const RECT panes = pane_area(window);
+    const RECT panes = pane_area(window, state);
     SetWindowPos(state.empty_message, nullptr, panes.left, panes.top,
                  panes.right - panes.left, panes.bottom - panes.top,
                  SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1460,9 +1485,7 @@ void layout_sidebar(HWND window, AppState& state) noexcept {
 
 void layout_header(HWND window, AppState& state) noexcept {
     const RECT client = client_rect(window);
-    const int sidebar_width = std::min(
-        static_cast<int>(client.right - client.left),
-        scaled_value(window, panedock::sidebar::kSidebarWidth));
+    const int sidebar_width = current_sidebar_width(window, state);
     const int margin = scaled_value(window, kSpaceBase);
     const int segment_gap = scaled_value(window, 1);
     const int header_height = std::min(
@@ -1813,9 +1836,7 @@ void paint_client_background(HWND window, HDC dc,
         DeleteObject(canvas);
     }
 
-    const int sidebar_width = std::min(
-        static_cast<int>(client.right - client.left),
-        scaled_value(window, panedock::sidebar::kSidebarWidth));
+    const int sidebar_width = current_sidebar_width(window, state);
     RECT sidebar{client.left, client.top, client.left + sidebar_width,
                  client.bottom};
     HBRUSH sidebar_brush = CreateSolidBrush(RGB(251, 252, 254));
@@ -1859,7 +1880,7 @@ void paint_client_background(HWND window, HDC dc,
 
     if (has_active_group(state)) {
         const auto& group = active_group(state);
-        const auto rects = layout_rects(window, group);
+        const auto rects = layout_rects(window, state, group);
         const UINT dpi = GetDpiForWindow(window);
         const std::size_t visible =
             std::min(group.panes.size(), rects.size());
@@ -1974,7 +1995,7 @@ HRESULT apply_layout(HWND window, AppState& state,
     }
     ShowWindow(state.empty_message, SW_HIDE);
     auto& group = active_group(state);
-    const auto rects = layout_rects(window, group);
+    const auto rects = layout_rects(window, state, group);
     const std::size_t active = active_pane_index(group);
     const UINT dpi = GetDpiForWindow(window);
     const int container_radius = pane_card_radius(dpi);
@@ -2585,6 +2606,24 @@ void set_layout(HWND window, AppState& state,
     save_now(state);
 }
 
+void update_sidebar_drag(HWND window, AppState& state, POINT point,
+                         bool recompute_content = false) {
+    if (!state.sidebar_drag.has_value()) return;
+    const int dpi = std::max(1, static_cast<int>(GetDpiForWindow(window)));
+    const int delta = MulDiv(
+        point.x - state.sidebar_drag->start_x, 96, dpi);
+    state.application.sidebar_width = std::clamp(
+        state.sidebar_drag->start_width + delta, kSidebarMinimumWidth,
+        kSidebarMaximumWidth);
+    if (!recompute_content) {
+        layout_sidebar(window, state);
+        layout_header(window, state);
+        InvalidateRect(window, nullptr, TRUE);
+    }
+    if (FAILED(apply_layout(window, state, false, recompute_content)))
+        OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
+}
+
 void update_splitter_drag(HWND window, AppState& state, POINT point,
                           bool recompute_content = false) {
     if (!state.splitter_drag.has_value()) return;
@@ -2592,7 +2631,7 @@ void update_splitter_drag(HWND window, AppState& state, POINT point,
     const Splitter& drag = *state.splitter_drag;
     if (drag.ratio_index >= group.divider_ratios.size()) return;
 
-    const RECT client = pane_content_area(window);
+    const RECT client = pane_content_area(window, state);
     const int size = drag.vertical ? client.right - client.left
                                    : client.bottom - client.top;
     const int divider = layout_metrics(window).divider_thickness;
@@ -2610,7 +2649,7 @@ void update_splitter_drag(HWND window, AppState& state, POINT point,
 std::size_t pane_at_point(HWND window, const AppState& state,
                           POINT point) noexcept {
     if (!has_active_group(state)) return kExplorerCount;
-    const auto rects = layout_rects(window, active_group(state));
+    const auto rects = layout_rects(window, state, active_group(state));
     for (std::size_t index = 0; index < rects.size(); ++index) {
         const RECT rect = to_win32_rect(rects[index]);
         if (PtInRect(&rect, point)) return index;
@@ -3898,44 +3937,71 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         }
         case WM_LBUTTONDOWN:
-            if (state != nullptr && has_active_group(*state)) {
+            if (state != nullptr) {
                 const POINT point = point_from_lparam(lparam);
-                state->splitter_drag = splitter_at_point(
-                    window, active_group(*state), point);
-                if (state->splitter_drag.has_value()) {
+                if (sidebar_boundary_at_point(window, *state, point)) {
+                    state->sidebar_drag = AppState::SidebarDrag{
+                        point.x,
+                        std::clamp(state->application.sidebar_width,
+                                   kSidebarMinimumWidth,
+                                   kSidebarMaximumWidth)};
                     KillTimer(window, kSplitterDragTimerId);
-                    state->latest_splitter_drag_point.reset();
-                    state->splitter_drag_timer_armed = false;
+                    state->latest_geometry_drag_point.reset();
+                    state->geometry_drag_timer_armed = false;
                     SetCapture(window);
                     return 0;
+                }
+                if (has_active_group(*state)) {
+                    state->splitter_drag = splitter_at_point(
+                        window, *state, active_group(*state), point);
+                    if (state->splitter_drag.has_value()) {
+                        KillTimer(window, kSplitterDragTimerId);
+                        state->latest_geometry_drag_point.reset();
+                        state->geometry_drag_timer_armed = false;
+                        SetCapture(window);
+                        return 0;
+                    }
                 }
             }
             break;
         case WM_MOUSEMOVE:
-            if (state != nullptr && state->splitter_drag.has_value() &&
+            if (state != nullptr &&
+                (state->sidebar_drag.has_value() ||
+                 state->splitter_drag.has_value()) &&
                 (wparam & MK_LBUTTON) != 0) {
-                state->latest_splitter_drag_point = point_from_lparam(lparam);
-                if (!state->splitter_drag_timer_armed) {
+                state->latest_geometry_drag_point = point_from_lparam(lparam);
+                if (!state->geometry_drag_timer_armed) {
                     if (SetTimer(window, kSplitterDragTimerId,
                                  kSplitterDragThrottleIntervalMilliseconds,
                                  nullptr) != 0) {
-                        state->splitter_drag_timer_armed = true;
+                        state->geometry_drag_timer_armed = true;
                     } else {
                         OutputDebugStringW(
-                            L"PaneDock: splitter drag timer failed\n");
+                            L"PaneDock: geometry drag timer failed\n");
                     }
                 }
                 return 0;
             }
             break;
         case WM_LBUTTONUP:
+            if (state != nullptr && state->sidebar_drag.has_value()) {
+                KillTimer(window, kSplitterDragTimerId);
+                state->geometry_drag_timer_armed = false;
+                update_sidebar_drag(window, *state,
+                                    point_from_lparam(lparam), true);
+                state->sidebar_drag.reset();
+                state->latest_geometry_drag_point.reset();
+                save_now(*state);
+                ReleaseCapture();
+                return 0;
+            }
             if (state != nullptr && state->splitter_drag.has_value()) {
                 KillTimer(window, kSplitterDragTimerId);
-                state->splitter_drag_timer_armed = false;
+                state->geometry_drag_timer_armed = false;
                 update_splitter_drag(window, *state,
                                      point_from_lparam(lparam), true);
                 state->splitter_drag.reset();
-                state->latest_splitter_drag_point.reset();
+                state->latest_geometry_drag_point.reset();
                 save_now(*state);
                 ReleaseCapture();
                 return 0;
@@ -3944,8 +4010,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_CAPTURECHANGED:
             if (state != nullptr) {
                 KillTimer(window, kSplitterDragTimerId);
-                state->splitter_drag_timer_armed = false;
-                state->latest_splitter_drag_point.reset();
+                state->geometry_drag_timer_armed = false;
+                state->latest_geometry_drag_point.reset();
+                state->sidebar_drag.reset();
                 state->splitter_drag.reset();
                 return 0;
             }
@@ -3953,7 +4020,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_LBUTTONDBLCLK:
             if (state != nullptr && has_active_group(*state)) {
                 const auto splitter = splitter_at_point(
-                    window, active_group(*state), point_from_lparam(lparam));
+                    window, *state, active_group(*state),
+                    point_from_lparam(lparam));
                 if (splitter.has_value()) {
                     active_group(*state).divider_ratios[splitter->ratio_index] =
                         0.5;
@@ -3973,21 +4041,28 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             if (timer == kSplitterDragTimerId) {
                 KillTimer(window, kSplitterDragTimerId);
-                state->splitter_drag_timer_armed = false;
-                if (state->splitter_drag.has_value() &&
-                    state->latest_splitter_drag_point.has_value()) {
-                    update_splitter_drag(
-                        window, *state, *state->latest_splitter_drag_point,
-                        false);
+                state->geometry_drag_timer_armed = false;
+                if (state->latest_geometry_drag_point.has_value()) {
+                    if (state->sidebar_drag.has_value()) {
+                        update_sidebar_drag(
+                            window, *state, *state->latest_geometry_drag_point,
+                            false);
+                    }
                     if (state->splitter_drag.has_value()) {
+                        update_splitter_drag(
+                            window, *state, *state->latest_geometry_drag_point,
+                            false);
+                    }
+                    if (state->sidebar_drag.has_value() ||
+                        state->splitter_drag.has_value()) {
                         if (SetTimer(
                                 window, kSplitterDragTimerId,
                                 kSplitterDragThrottleIntervalMilliseconds,
                                 nullptr) != 0) {
-                            state->splitter_drag_timer_armed = true;
+                            state->geometry_drag_timer_armed = true;
                         } else {
                             OutputDebugStringW(
-                                L"PaneDock: splitter drag timer failed\n");
+                                L"PaneDock: geometry drag timer failed\n");
                         }
                     }
                 }
@@ -4009,17 +4084,24 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             break;
         }
         case WM_SETCURSOR:
-            if (state != nullptr && has_active_group(*state) &&
-                LOWORD(lparam) == HTCLIENT) {
+            if (state != nullptr && LOWORD(lparam) == HTCLIENT) {
                 POINT point{};
                 GetCursorPos(&point);
                 ScreenToClient(window, &point);
-                const auto splitter =
-                    splitter_at_point(window, active_group(*state), point);
-                if (splitter.has_value()) {
-                    SetCursor(LoadCursorW(
-                        nullptr, splitter->vertical ? IDC_SIZEWE : IDC_SIZENS));
+                if (state->sidebar_drag.has_value() ||
+                    sidebar_boundary_at_point(window, *state, point)) {
+                    SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
                     return TRUE;
+                }
+                if (has_active_group(*state)) {
+                    const auto splitter = splitter_at_point(
+                        window, *state, active_group(*state), point);
+                    if (splitter.has_value()) {
+                        SetCursor(LoadCursorW(
+                            nullptr,
+                            splitter->vertical ? IDC_SIZEWE : IDC_SIZENS));
+                        return TRUE;
+                    }
                 }
             }
             break;
