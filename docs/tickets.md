@@ -140,6 +140,7 @@
 | PD-100 | 虛擬資料夾(如 This PC)的位址列/分頁標題顯示原始 parsing code,應改為友善顯示名稱 | 7 | `ready` | 無 | [PD-100](tickets/PD-100-virtual-folder-display-name-instead-of-parsing-code.md) |
 | PD-101 | 新增 Tab 鍵在可見 pane 間循環切換 active pane | 7 | `ready` | PD-016 | [PD-101](tickets/PD-101-tab-key-cycle-active-pane.md) |
 | PD-102 | Tab「+」新增按鈕加上圓角外框,並修正「+」字符置中 | 7 | `ready` | PD-081 | [PD-102](tickets/PD-102-tab-add-button-rounded-border-and-centering.md) |
+| PD-103 | 移除 Group 列表項右側的 tab 數量圓形徽章(與副標題重複) | 7 | `ready` | PD-028 | [PD-103](tickets/PD-103-remove-sidebar-group-tab-count-badge.md) |
 
 ## Dependency lanes
 
@@ -493,3 +494,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 ### 2026-08-28 — 使用者要求「+」新增按鈕加圓角外框並修正置中,開 PD-102
 
 使用者原文:「for pane add button, centered the '+' in the button. make button 外框圓角」。調查確認「+」按鈕目前完全沒有外框(hover 時只有方形 `FillRect`,非 hover 時無背景),而同檔案裡的 `draw_tab_scroll_button`/tab 本身都已經是「永遠可見的圓角外框 + hover 隨填色改變」視覺語言,本票直接沿用該既有寫法與色值。字符置中部分:PD-081 加入的 `-1px` 垂直位移從未被實際截圖驗證過(PD-081 交接區已記載該次驗證因抓錯 HWND 失敗),本票要求先截圖確認現況,再決定保留/調整/移除該位移量。開票為 [PD-102](tickets/PD-102-tab-add-button-rounded-border-and-centering.md),依賴 PD-081(「+」字符字型渲染基礎)。
+
+### 2026-08-28 — 使用者要求移除 Group 列表右側 tab 數量徽章,覆寫 PD-028,開 PD-103
+
+使用者原文:「for group items remove the circle at right (tabs count). It should duplcate as subtitle of the group」附截圖。調查確認 PD-028 當初依照 `docs/panedock-ui-prototype.html` 設計稿,**刻意**讓副標題與右側圓形徽章顯示同一個 tab 數字(徽章數字明確引用副標題第二個數字)。使用者實機看到後判斷這是不必要的重複,要求拿掉徽章、只留副標題。明確覆寫 PD-028「副標題+徽章雙重顯示」的部分,新證據為使用者本次直接提出的具體回饋;PD-028 其餘決策(品牌列、副標題本身、footer 按鈕)不受影響。開票為 [PD-103](tickets/PD-103-remove-sidebar-group-tab-count-badge.md),依賴 PD-028(副標題/徽章的既有實作基礎)。
