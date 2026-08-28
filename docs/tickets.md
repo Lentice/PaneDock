@@ -145,6 +145,7 @@
 | PD-106 | Graceful close 後 Shell teardown 殘留程序 | 7 | `done` | PD-007, PD-032, PD-068 | [PD-106](tickets/PD-106-graceful-shutdown-shell-teardown.md) |
 | PD-105 | 雙擊 pane 分隔線,重設回置中(平分兩側) | 7 | `done` | 無 | [PD-105](tickets/PD-105-double-click-splitter-resets-to-center.md) |
 | PD-107 | Tab 條捲動按鈕視覺位置偏移超出自己的熱區,波及「+」新增按鈕邊界 | 7 | `ready` | PD-080, PD-085 | [PD-107](tickets/PD-107-tab-nav-and-add-button-hit-test-visual-mismatch.md) |
+| PD-108 | 拖曳分隔線時,矩形沒有變動的 pane 仍被重新 `SetWindowPos`/重繪 | 7 | `ready` | PD-095, PD-077 | [PD-108](tickets/PD-108-skip-unchanged-pane-relayout-during-splitter-drag.md) |
 
 ## Dependency lanes
 
@@ -518,3 +519,7 @@ Source:PD-102 截圖驗證流程中,對 Release diagnostic build(PID 37164)送�
 ### 2026-08-28 — 使用者回報 tab 條捲動按鈕與「+」按鈕顯示位置與觸發位置不同,開 PD-107
 
 使用者原文:「pane tabs' nav buttons and add button 在UI上顯示的位置與onhover/click觸發的位置不同。」根因調查確認:`kTabScrollButtonWidth`(`main.cpp:85-87`)的既有註解明訂外層矩形是唯一權威熱區、內層視覺矩形只是畫在裡面的裝飾,兩者理論上同心。但 PD-080 完成後一連串「使用者實機微調位置」的像素修正 commit(`68dd9ad` 起,最終定案於 `visual_offset_x=6`/`visual_offset_y=1`)只移動了 `draw_tab_scroll_button` 畫出來的視覺矩形,從未同步移動 `apply_tab_item_size` 存進 `state.tab_scroll_button_rects` 的權威熱區——實際代入目前數值,back 按鈕的視覺矩形超出自己熱區右界 6px(畫進 forward 的熱區),forward 按鈕的視覺矩形超出自己熱區右界 4px(畫進「+」新增按鈕的熱區),導致點在視覺重疊處觸發的是相鄰按鈕的功能,不是眼睛看到的圖示。這與 `docs/tickets.md` 既有三方架構稽核記錄點名的「chrome 繪製函式把純幾何計算與 HDC 繪製揉在一起,PD-073/080/081 這類像素微調 commit 正是這個缺陷的直接證據」屬同一類缺陷,這次是首次真正造成畫面/熱區重疊而非單純理論疑慮。修正方向明確要求保留使用者已確認的視覺位置(不得悄悄撤銷像素微調),只需讓熱區改為重用 PD-085 抽出的 `tab_scroll_button_visual` 純幾何函式(帶入與繪製相同的 offset)作為唯一權威來源,消除兩份獨立座標系統。開票為 [PD-107](tickets/PD-107-tab-nav-and-add-button-hit-test-visual-mismatch.md),依賴 PD-080(既有熱區/視覺分離設計)、PD-085(可重用的純幾何函式)。
+
+### 2026-08-28 — 使用者要求拖曳分隔線時跳過矩形未變動的 pane,開 PD-108
+
+使用者原文:「resize the panes (drag the splitter) should not re-render all items(e.g. all pane nav buttons). some items do not change the position and size, re-render may not be required.」根因調查確認:`apply_layout`(`main.cpp:1949`)逐 pane 迴圈已經有現成的 `pane_geometry_changed` 旗標(比對 `state.laid_out_pane_rects[index]` 與本次算出的矩形),但目前只用在最後一步的 `RedrawWindow`(PD-077 既有修法,`:2126-2130`),旗標算出來之後、用到它之前的整段(`:2000-2107`)——tab strip、五個導覽按鈕、address bar、status bar、explorer container(含 region 重算)、Shell view `set_rect`——完全無條件對每個可見 pane 執行,沒有檢查這個旗標。以三分割/四宮格版型為例,拖曳其中一條分隔線理論上只有緊鄰的 pane 矩形會變,但目前所有可見 pane 都會被重新 `SetWindowPos`,即使新舊座標完全相同,Windows 仍會送出 `WM_WINDOWPOSCHANGING`/`WM_WINDOWPOSCHANGED`。這是 PD-095(幾何 vs 內容重算分類)、PD-097(幾何重排呼叫頻率節流)之外,同一個效能問題底下第三層、目前完全沒人處理的部分,兩票都不涵蓋「幾何重排這一次呼叫裡,矩形沒變的 pane 該不該被跳過」。修正方向:把既有、已驗證正確的 `pane_geometry_changed` 旗標的作用範圍擴大到涵蓋這些 `SetWindowPos` 呼叫,不新增第二套判斷邏輯。開票為 [PD-108](tickets/PD-108-skip-unchanged-pane-relayout-during-splitter-drag.md),依賴 PD-095(拖曳分隔線幾何/內容分類的既有基礎)、PD-077(`pane_geometry_changed` 旗標的既有來源與用法先例)。
