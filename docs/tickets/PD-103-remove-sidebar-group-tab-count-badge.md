@@ -93,3 +93,9 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+- `text_area.right` 最終改為 `pill.right - MulDiv(6, dpi_, 96)`（實作上以 `-=` 形式套用），與左側既有的 6px 內縮對稱；徽章移除後文字區使用原本保留給徽章的寬度，同時維持 pill 邊界留白。
+- 截圖比對：修改前以既有 `docs/tickets/PD-067-before-sidebar-3x.png`（可見每列右側灰底圓形 `4` 徽章）作基準；修改後以單次啟動的 `PrintWindow(hwnd, hdc, 2)` 擷取，再以 4x `InterpolationMode.NearestNeighbor` 放大（暫存檔 `panedock-pd103-sidebar-4x-588.png`）。放大圖中 Group 3、Group 4、Group 2（`4 panes · 32 tabs`）等每列均保留正確副標題，右側不再有圓形徽章，文字區延伸至 pill 右側內縮處。主視窗幾何由 `GetWindowRect` 查得 `1936x1048`，Group 列表由 `GetDlgItem(hwnd, 100)` 取得，未以截圖估算座標。
+- `kBadgeBackground`、`kBadgeText` 已一併移除；`rg -n "kBadgeBackground|kBadgeText|Ellipse|badge" src/sidebar/sidebar.cpp` 無任何結果，確認沒有其他使用者。
+- 建置與測試：既有 `build/` 已配置，`cmake --build build` 最終成功，`ctest --test-dir build --output-on-failure` 為 5/5 PASS，`git diff --check` 通過。首次連結因舊測試行程鎖住 `PaneDock.exe`，以不帶 `/F` 的 `taskkill /PID` 關閉後重跑成功。
+- 未驗證：未逐一對選取、hover、placeholder 三種狀態各自做互動截圖；本票 Agent Check 限定單次啟動＋單次截圖，且這些狀態的繪製分支未修改，故僅完成程式碼範圍核對。

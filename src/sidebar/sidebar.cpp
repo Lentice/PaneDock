@@ -14,8 +14,6 @@ constexpr COLORREF kSidebarActiveBackground = RGB(234, 241, 255);
 constexpr COLORREF kSidebarHoverBackground = RGB(242, 245, 248);
 constexpr COLORREF kSidebarText = RGB(75, 85, 101);
 constexpr COLORREF kSidebarActiveText = RGB(23, 75, 180);
-constexpr COLORREF kBadgeBackground = RGB(228, 231, 236);
-constexpr COLORREF kBadgeText = RGB(71, 85, 105);
 constexpr COLORREF kPlaceholderBackground = RGB(238, 242, 246);
 constexpr COLORREF kPlaceholderBorder = RGB(203, 213, 225);
 
@@ -185,16 +183,10 @@ bool Sidebar::draw_item(
     const std::size_t group_index =
         placeholder ? *placeholder_source : item->itemID;
     const auto& group = groups_[group_index];
-    const int badge_size = MulDiv(22, static_cast<int>(dpi_), 96);
-    const int badge_margin = MulDiv(6, static_cast<int>(dpi_), 96);
-    RECT badge{pill.right - badge_size - badge_margin,
-               pill.top + ((pill.bottom - pill.top) - badge_size) / 2,
-               pill.right - badge_margin, 0};
-    badge.bottom = badge.top + badge_size;
 
     RECT text_area = pill;
     text_area.left += MulDiv(6, static_cast<int>(dpi_), 96);
-    text_area.right = badge.left - MulDiv(4, static_cast<int>(dpi_), 96);
+    text_area.right -= MulDiv(6, static_cast<int>(dpi_), 96);
 
     const int line_height = (text_area.bottom - text_area.top) / 2;
     RECT name_rect{text_area.left, text_area.top, text_area.right,
@@ -238,21 +230,6 @@ bool Sidebar::draw_item(
         format_subtitle(group.pane_count, group.tab_count);
     DrawTextW(item->hDC, subtitle.c_str(), -1, &subtitle_rect,
               DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-
-    HBRUSH badge_brush = CreateSolidBrush(kBadgeBackground);
-    if (badge_brush != nullptr) {
-        const HGDIOBJ old_brush = SelectObject(item->hDC, badge_brush);
-        const HGDIOBJ old_pen =
-            SelectObject(item->hDC, GetStockObject(NULL_PEN));
-        Ellipse(item->hDC, badge.left, badge.top, badge.right, badge.bottom);
-        SelectObject(item->hDC, old_brush);
-        SelectObject(item->hDC, old_pen);
-        DeleteObject(badge_brush);
-    }
-    SetTextColor(item->hDC, placeholder ? kPlaceholderContent : kBadgeText);
-    const std::wstring badge_text = std::to_wstring(group.tab_count);
-    DrawTextW(item->hDC, badge_text.c_str(), -1, &badge,
-              DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
     if (old_font != nullptr) SelectObject(item->hDC, old_font);
     if (name_font != nullptr) DeleteObject(name_font);
