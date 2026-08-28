@@ -136,6 +136,7 @@
 | PD-096 | `draw_brand_bar` 每次 `WM_ERASEBKGND` 都重新載入圖示、建立/刪除字型 | 7 | `done` | 無 | [PD-096](tickets/PD-096-brand-bar-recreates-icon-and-font-every-erasebkgnd.md) |
 | PD-097 | 拖曳分隔線時,幾何重排本身仍在每個 `WM_MOUSEMOVE` 都執行,需節流 | 7 | `ready` | PD-095 | [PD-097](tickets/PD-097-splitter-drag-geometry-throttling.md) |
 | PD-098 | 檢視模式按鈕圖示由 4 方格(GridView)改為清單樣式(List)圖示 | 7 | `ready` | PD-075 | [PD-098](tickets/PD-098-view-mode-icon-grid-to-list-glyph.md) |
+| PD-099 | 新增第 6 種版型:上方兩格併排、下方一格全寬(2 up / 1 down) | 7 | `ready` | PD-005, PD-016, PD-046 | [PD-099](tickets/PD-099-add-two-over-one-layout-template.md) |
 
 ## Dependency lanes
 
@@ -473,3 +474,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 ### 2026-08-28 — 使用者要求檢視模式按鈕圖示改為清單樣式,開 PD-098
 
 使用者原文:「change view size icon from [4 方格圖] to [清單圖]. should follow nav buttons styles.」附兩張參考截圖。目前檢視模式按鈕用 `Segoe MDL2 Assets` 的 GridView 字符(`U+E80A`),使用者要求換成清單樣式(三條橫線+項目符號),並要求沿用其餘四個導覽按鈕(上一頁/下一頁/上層/重新整理)既有的繪製機制與視覺規格,不另立新邏輯。開票為 [PD-098](tickets/PD-098-view-mode-icon-grid-to-list-glyph.md),依賴 PD-075(圖示統一到 `Segoe MDL2 Assets` 字型字符的既有決策)。
+
+### 2026-08-28 — 使用者要求新增第 6 種版型(2 up / 1 down),覆寫 FR-003「僅五種版型」,開 PD-099
+
+使用者原文:「Add new layout, 3 panes (2 at up half, 1 at bottom half)」附參考截圖。這與既有 `LayoutTemplate::three_pane`(左一右二疊放)是不同幾何,是座標軸轉置的新形狀,既有 5 種版型都無法表達。明確覆寫 `docs/design-spec.md` FR-003「支援且僅支援五種版型」,新證據為使用者本次直接提出的具體需求;同時明確聲明**不是**重開「已否決的方向」表的「任意遞迴 pane 分割」——本票只是比照既有 5 種版型的固定模式(`LayoutTemplate` enum + 各 `switch` 多一個 `case`)多加一個具名固定形狀,不是開放任意分割機制,詳細論證見 ticket 文件。開票為 [PD-099](tickets/PD-099-add-two-over-one-layout-template.md),依賴 PD-005(矩形計算)、PD-016(版型/分隔線基礎設施)、PD-046(版型按鈕列)。
