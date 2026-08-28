@@ -147,6 +147,7 @@
 | PD-107 | Tab 條捲動按鈕視覺位置偏移超出自己的熱區,波及「+」新增按鈕邊界 | 7 | `ready` | PD-080, PD-085 | [PD-107](tickets/PD-107-tab-nav-and-add-button-hit-test-visual-mismatch.md) |
 | PD-108 | 拖曳分隔線時,矩形沒有變動的 pane 仍被重新 `SetWindowPos`/重繪 | 7 | `ready` | PD-095, PD-077 | [PD-108](tickets/PD-108-skip-unchanged-pane-relayout-during-splitter-drag.md) |
 | PD-109 | 一般模式啟動後主視窗未出現(HIGH,阻塞其他票驗收) | 7 | `done` | PD-093, PD-106 | [PD-109](tickets/PD-109-normal-mode-launch-shows-no-main-window.md) |
+| PD-110 | Pane tab 允許跨 pane 拖曳搬移,延續 PD-035 決策 1 的「若未來需要另開新票」 | 7 | `ready` | PD-035, PD-050, PD-074 | [PD-110](tickets/PD-110-cross-pane-tab-drag.md) |
 
 ## Dependency lanes
 
@@ -528,3 +529,7 @@ Source:PD-102 截圖驗證流程中,對 Release diagnostic build(PID 37164)送�
 ### 2026-08-28 — 使用者回報一般模式啟動後主視窗未出現,開 PD-109
 
 Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `AskUserQuestion` 確認為「PaneDock.exe 本身開啟後空白/沒畫面」。同時驅動 `codexpd` 執行 PD-098 驗收的背景 fork 也獨立重現:一般模式(非 `--diagnostic`)啟動 `build\PaneDock.exe` 兩次,各以 `FindWindowW`/`EnumChildWindows` 輪詢 13×400ms 均未找到主視窗;當時只有單一 PaneDock.exe process(排除單一實例 mutex 轉導既有視窗的可能),且不帶 `/F` 的 `taskkill` 回報成功但 process 不結束。經檢查,`codexpd` 工作樹當時唯一未 commit 的 `main.cpp` 差異是 PD-098 的 glyph 常數與 fallback 繪製切換,純繪製程式碼,可排除為本症狀成因;本機 `session.json` 雖累積 55 個測試用 Group,但目前 active Group 四個 pane 的路徑全為本機路徑,沒有明顯會阻塞的網路/離線路徑證據。`codexpd` 一度懷疑與剛驗收的 PD-106(graceful close 殘留程序修正)有關而主動停手不深入,但覆核 PD-106 交接區的完整實測證據(修正後連續 3+1 輪 graceful close 均在 5 秒內完成,無殘留)顯示該票本身修法紮實,不能不經查證就當作本次成因。開票為 [PD-109](tickets/PD-109-normal-mode-launch-shows-no-main-window.md),依賴 PD-093(啟動延後 realize 規則的既有落地)、PD-106(可直接沿用的階段計時 probe 方法論先例),要求實作 agent 先重新確認當下環境與 session 內容再動手,不得沿用本票記錄的舊快照當作啟動當下事實。
+
+### 2026-08-28 — 使用者要求 tab 允許跨 pane 拖曳搬移,延續 PD-035 決策 1,開 PD-110
+
+使用者原文:「pane tab 允許被 drag & drop across different panes」,經 `/grill-with-docs` 一輪問答確認。PD-035(2026-08-25)當初把 tab 拖拉排序範圍明確限定在「同一個 pane 內」,並在票面留話「若未來需要,另開新票」——本票即是那張後續票,不是重開已否決的方向。調查確認關鍵架構事實:live `IExplorerBrowser` 綁在 pane 插槽而非 tab(`switch_active_tab` 只對既有 browser 呼叫 `navigate()`,從不 destroy/recreate),所以跨 pane 搬移不需要新增或搬移任何 COM/Shell view 生命週期,只要搬 `TabState` 資料再各自 navigate 即可;tab id 在整個 Group 內保證唯一,不會跨 pane 撞 id。使用者接著追加要求:拖曳時要在游標處顯示被拖曳 tab 的圖案。追查發現這正是 PD-066 決策 2 與 PD-074 決策 1 已經明確否決的「跟隨游標的浮動縮圖」(需要 layered window 或即時 blit,不符合本專案純 GDI 路線),因此沒有直接照做,而是提出替代方案並經使用者確認採用:延伸 PD-074 既有的「placeholder 空槽內淡化畫出被拖曳項目」機制,讓它能畫在**目標 pane** 的 tab strip 裡(而非只能畫在來源 pane),不新增任何視窗、不 override PD-066/074 的既有決定。搬移語意採兩個新決策:(1) 搬走 pane 僅剩的最後一個 tab 時,比照 `close_tab` 既有精神,來源保留 1 個 tab 並重置成預設路徑,不允許 pane 變空;(2) 被丟到目標 pane 的 tab 在目標裡自動變成 active tab(比照瀏覽器拖曳分頁到新視窗的慣例)。開票為 [PD-110](tickets/PD-110-cross-pane-tab-drag.md),依賴 PD-035(同 pane 拖曳排序的既有基礎與明確留下的範圍缺口)、PD-050(目前 tab strip 拖曳事件重接的實作)、PD-074(要延伸的淡化 placeholder 機制)。
