@@ -146,7 +146,7 @@
 | PD-105 | 雙擊 pane 分隔線,重設回置中(平分兩側) | 7 | `done` | 無 | [PD-105](tickets/PD-105-double-click-splitter-resets-to-center.md) |
 | PD-107 | Tab 條捲動按鈕視覺位置偏移超出自己的熱區,波及「+」新增按鈕邊界 | 7 | `ready` | PD-080, PD-085 | [PD-107](tickets/PD-107-tab-nav-and-add-button-hit-test-visual-mismatch.md) |
 | PD-108 | 拖曳分隔線時,矩形沒有變動的 pane 仍被重新 `SetWindowPos`/重繪 | 7 | `ready` | PD-095, PD-077 | [PD-108](tickets/PD-108-skip-unchanged-pane-relayout-during-splitter-drag.md) |
-| PD-109 | 一般模式啟動後主視窗未出現(HIGH,阻塞其他票驗收) | 7 | `ready` | PD-093, PD-106 | [PD-109](tickets/PD-109-normal-mode-launch-shows-no-main-window.md) |
+| PD-109 | 一般模式啟動後主視窗未出現(HIGH,阻塞其他票驗收) | 7 | `done` | PD-093, PD-106 | [PD-109](tickets/PD-109-normal-mode-launch-shows-no-main-window.md) |
 
 ## Dependency lanes
 
