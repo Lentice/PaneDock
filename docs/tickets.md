@@ -142,6 +142,7 @@
 | PD-102 | Tab「+」新增按鈕加上圓角外框,並修正「+」字符置中 | 7 | `ready` | PD-081 | [PD-102](tickets/PD-102-tab-add-button-rounded-border-and-centering.md) |
 | PD-103 | 移除 Group 列表項右側的 tab 數量圓形徽章(與副標題重複) | 7 | `done` | PD-028 | [PD-103](tickets/PD-103-remove-sidebar-group-tab-count-badge.md) |
 | PD-104 | 側邊欄寬度可拖曳調整,並跨啟動持久化;預設寬度隨 PD-103 徽章移除而縮小 | 7 | `ready` | PD-097, PD-103 | [PD-104](tickets/PD-104-resizable-persisted-sidebar-width.md) |
+| PD-105 | 雙擊 pane 分隔線,重設回置中(平分兩側) | 7 | `ready` | 無 | [PD-105](tickets/PD-105-double-click-splitter-resets-to-center.md) |
 
 ## Dependency lanes
 
@@ -503,3 +504,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 ### 2026-08-28 — 使用者要求側邊欄寬度可拖曳並跨啟動持久化,開 PD-104
 
 使用者原文:「make left group area resizable. should keep the width and restore when next time AP executed. Shrink default group area since the circle number is remove in another ticket. Consider apply the throttling when resize.」。這正是候選表已預告的「側邊欄寬度的全域設定持久化」項目(觸發條件「使用者回報每次啟動都要重拖再開」現已成立)。調查確認側邊欄寬度目前是編譯期常數(`kSidebarWidth = 226`),四處重複計算、完全無法拖曳;`ApplicationState::window_placement` 是現成的「全域、跨啟動持久化 UI 設定」先例,`sidebar_width` 比照其層級加入,但序列化須為**選填欄位**(不比照 `window_placement` 現有的必要欄位寫法),避免破壞既有使用者的 `session.json`。新預設寬度 194 = 226 − PD-103 釋放的 32px(徽章 22 + 邊界 6 + 間隙 4),可回推不是憑感覺訂的數字。拖曳節流依賴 PD-097 落地後的既有節流機制,不另建第二套 timer。開票為 [PD-104](tickets/PD-104-resizable-persisted-sidebar-width.md),依賴 PD-097(節流機制)、PD-103(新預設寬度的計算基礎)。
+
+### 2026-08-28 — 使用者要求雙擊分隔線重設回置中,開 PD-105
+
+使用者原文:「for panes 分隔線,在上面按兩下會讓分隔線回到中央(平分兩邊)。這樣使用者可以方便的回到平分的狀態,不用自己量測判斷增加困擾。」。調查確認根因是主視窗類別從未設定 `CS_DBLCLKS`(`main.cpp:3996-4006`),系統因此從不合成 `WM_LBUTTONDBLCLK`,雙擊目前只是兩次獨立單擊、皆被既有拖曳邏輯當成無移動的點放處理。置中目標值不需要另外定義,`core::default_divider_ratios`(`model.cpp:54-56`)本來就是每條分隔線 `0.5` 的既有預設值,新建 Group 時也是套用同一個值。修法為加上 `CS_DBLCLKS` 並新增 `WM_LBUTTONDBLCLK` case,命中分隔線時把該條 `divider_ratios[ratio_index]` 設回 `0.5`,重排與存檔比照既有 `WM_LBUTTONUP` 的既有寫法。開票為 [PD-105](tickets/PD-105-double-click-splitter-resets-to-center.md),無依賴。
