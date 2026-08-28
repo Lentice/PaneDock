@@ -106,3 +106,34 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+- 實作完成：新增 `kSplitterDragTimerId = 0xD051` 與
+  `kSplitterDragThrottleIntervalMilliseconds = 200`。選 200 ms 是為了把幾何
+  `apply_layout` 上限降到約每秒 5 次，明顯低於一般滑鼠事件頻率，同時在持續
+  拖曳中每個節流視窗仍會前進，不會變成防抖後才更新。
+- `WM_MOUSEMOVE` 只寫入 `latest_splitter_drag_point`，並在
+  `splitter_drag_timer_armed == false` 時啟動 timer；`WM_TIMER` 先取消當前
+  one-shot timer，以最新座標呼叫 `update_splitter_drag(..., false)`，仍在拖曳
+  時再掛回下一個 200 ms timer。timer id 與既有
+  `kSessionSaveTimerId`、`kDragHoverSidebarTimerId`、
+  `kDragHoverTabTimerIdBase` 並列於同一個 `WM_TIMER` 分派。
+- `WM_LBUTTONUP` 先取消節流 timer，再以放開當下座標執行既有完整
+  `update_splitter_drag(..., true)`、`save_now`，並清除拖曳狀態；
+  `WM_CAPTURECHANGED` 同樣清除 timer、armed flag、最新座標與拖曳狀態。
+  靜態程式碼路徑確認兩種結束情境都不會留下節流 timer。
+- Agent 已完成 Release build、CTest、`git diff --check`，並啟動程式做單次
+  splitter 拖曳後放開的截圖檢查；CPU/持續拖曳跟手感與 capture 被搶走的實機
+  情境未由 Agent 量測，需使用者手動驗證：
+  1. 啟動 `build\PaneDock.exe`，在四 pane 版型按住分隔線連續拖曳至少 5 秒，
+     確認分隔線約每 200 ms 持續前進而非停住；放開後確認所有 pane 的分隔線
+     精確落在放開座標。
+  2. 拖曳期間開啟工作管理員「詳細資料」，記錄 `PaneDock.exe` 的 CPU；停止
+     操作並靜置至少 60 秒，確認 idle 平均 CPU 低於 0.1%、磁碟 I/O 為零，再
+     重新連續拖曳 5 秒比較 CPU 峰值與原本逐事件重排的體感。
+  3. 按住分隔線拖曳後按 `Alt+Tab` 讓 capture 遺失，切回 PaneDock，確認
+     分隔線不再自行移動且靜置時沒有持續 CPU 活動；再做一次正常拖曳確認
+     可重新開始。
+- UI 補充：Agent 的單次拖曳注入先後遇到「failed to activate captured window」
+  與「user input was detected」；重擷取截圖確認程式仍在執行且分隔線畫面有
+  變更，但無法可靠判定 release 座標，因此「最終位置精確對應」仍標記為
+  `未驗證,需真實桌面`，不將該次操作當作通過證據。

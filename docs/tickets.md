@@ -134,7 +134,7 @@
 | PD-094 | ~~啟動時讀完 session 立刻做一次完全冗餘的同步寫回~~(前提有誤,已撤回,見 ticket 文件與計畫決策紀錄) | 7 | `deferred` | 無 | [PD-094](tickets/PD-094-redundant-session-save-before-main-window-created.md) |
 | PD-095 | 拖曳分隔線/縮放視窗時,每個 mousemove 都跑完整 `apply_layout`,含最多 1000 項 Shell property 重掃 | 7 | `done` | 無 | [PD-095](tickets/PD-095-splitter-drag-full-relayout-and-item-count-rescan-per-mousemove.md) |
 | PD-096 | `draw_brand_bar` 每次 `WM_ERASEBKGND` 都重新載入圖示、建立/刪除字型 | 7 | `done` | 無 | [PD-096](tickets/PD-096-brand-bar-recreates-icon-and-font-every-erasebkgnd.md) |
-| PD-097 | 拖曳分隔線時,幾何重排本身仍在每個 `WM_MOUSEMOVE` 都執行,需節流 | 7 | `ready` | PD-095 | [PD-097](tickets/PD-097-splitter-drag-geometry-throttling.md) |
+| PD-097 | 拖曳分隔線時,幾何重排本身仍在每個 `WM_MOUSEMOVE` 都執行,需節流 | 7 | `done` | PD-095 | [PD-097](tickets/PD-097-splitter-drag-geometry-throttling.md) |
 | PD-098 | 檢視模式按鈕圖示由 4 方格(GridView)改為清單樣式(List)圖示 | 7 | `ready` | PD-075 | [PD-098](tickets/PD-098-view-mode-icon-grid-to-list-glyph.md) |
 | PD-099 | 新增第 6 種版型:上方兩格併排、下方一格全寬(2 up / 1 down) | 7 | `ready` | PD-005, PD-016, PD-046 | [PD-099](tickets/PD-099-add-two-over-one-layout-template.md) |
 | PD-100 | 虛擬資料夾(如 This PC)的位址列/分頁標題顯示原始 parsing code,應改為友善顯示名稱 | 7 | `done` | 無 | [PD-100](tickets/PD-100-virtual-folder-display-name-instead-of-parsing-code.md) |

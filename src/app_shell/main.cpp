@@ -57,6 +57,10 @@ constexpr UINT kDeferredRealizeMessage = WM_APP + 52;
 // PD-091: coalesce navigation completions without keeping a polling timer.
 constexpr UINT kSessionSaveDelayMilliseconds = 500;
 constexpr UINT_PTR kSessionSaveTimerId = 0xD050;
+// PD-097: keep splitter geometry updates periodic without matching every
+// WM_MOUSEMOVE while retaining visible progress during a sustained drag.
+constexpr UINT kSplitterDragThrottleIntervalMilliseconds = 200;
+constexpr UINT_PTR kSplitterDragTimerId = 0xD051;
 constexpr std::size_t kExplorerCount = 4;
 constexpr int kLayoutBarHeight = 44;
 constexpr int kLayoutButtonHeight = 30;
@@ -398,6 +402,8 @@ struct AppState {
     bool diagnostic_mode{};
     bool session_dirty{};
     std::optional<Splitter> splitter_drag;
+    std::optional<POINT> latest_splitter_drag_point;
+    bool splitter_drag_timer_armed{};
     struct TabDrag final {
         HWND strip{nullptr};
         std::size_t pane_index{};
@@ -3893,9 +3899,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         }
         case WM_LBUTTONDOWN:
             if (state != nullptr && has_active_group(*state)) {
+                const POINT point = point_from_lparam(lparam);
                 state->splitter_drag = splitter_at_point(
-                    window, active_group(*state), point_from_lparam(lparam));
+                    window, active_group(*state), point);
                 if (state->splitter_drag.has_value()) {
+                    KillTimer(window, kSplitterDragTimerId);
+                    state->latest_splitter_drag_point.reset();
+                    state->splitter_drag_timer_armed = false;
                     SetCapture(window);
                     return 0;
                 }
@@ -3904,18 +3914,39 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_MOUSEMOVE:
             if (state != nullptr && state->splitter_drag.has_value() &&
                 (wparam & MK_LBUTTON) != 0) {
-                update_splitter_drag(window, *state,
-                                     point_from_lparam(lparam));
+                state->latest_splitter_drag_point = point_from_lparam(lparam);
+                if (!state->splitter_drag_timer_armed) {
+                    if (SetTimer(window, kSplitterDragTimerId,
+                                 kSplitterDragThrottleIntervalMilliseconds,
+                                 nullptr) != 0) {
+                        state->splitter_drag_timer_armed = true;
+                    } else {
+                        OutputDebugStringW(
+                            L"PaneDock: splitter drag timer failed\n");
+                    }
+                }
                 return 0;
             }
             break;
         case WM_LBUTTONUP:
             if (state != nullptr && state->splitter_drag.has_value()) {
+                KillTimer(window, kSplitterDragTimerId);
+                state->splitter_drag_timer_armed = false;
                 update_splitter_drag(window, *state,
                                      point_from_lparam(lparam), true);
                 state->splitter_drag.reset();
+                state->latest_splitter_drag_point.reset();
                 save_now(*state);
                 ReleaseCapture();
+                return 0;
+            }
+            break;
+        case WM_CAPTURECHANGED:
+            if (state != nullptr) {
+                KillTimer(window, kSplitterDragTimerId);
+                state->splitter_drag_timer_armed = false;
+                state->latest_splitter_drag_point.reset();
+                state->splitter_drag.reset();
                 return 0;
             }
             break;
@@ -3938,6 +3969,28 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (timer == kSessionSaveTimerId) {
                 KillTimer(window, kSessionSaveTimerId);
                 if (state->session_dirty) (void)save_now(*state);
+                return 0;
+            }
+            if (timer == kSplitterDragTimerId) {
+                KillTimer(window, kSplitterDragTimerId);
+                state->splitter_drag_timer_armed = false;
+                if (state->splitter_drag.has_value() &&
+                    state->latest_splitter_drag_point.has_value()) {
+                    update_splitter_drag(
+                        window, *state, *state->latest_splitter_drag_point,
+                        false);
+                    if (state->splitter_drag.has_value()) {
+                        if (SetTimer(
+                                window, kSplitterDragTimerId,
+                                kSplitterDragThrottleIntervalMilliseconds,
+                                nullptr) != 0) {
+                            state->splitter_drag_timer_armed = true;
+                        } else {
+                            OutputDebugStringW(
+                                L"PaneDock: splitter drag timer failed\n");
+                        }
+                    }
+                }
                 return 0;
             }
             if (timer == kDragHoverSidebarTimerId &&
