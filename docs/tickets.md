@@ -138,7 +138,7 @@
 | PD-098 | 檢視模式按鈕圖示由 4 方格(GridView)改為清單樣式(List)圖示 | 7 | `ready` | PD-075 | [PD-098](tickets/PD-098-view-mode-icon-grid-to-list-glyph.md) |
 | PD-099 | 新增第 6 種版型:上方兩格併排、下方一格全寬(2 up / 1 down) | 7 | `ready` | PD-005, PD-016, PD-046 | [PD-099](tickets/PD-099-add-two-over-one-layout-template.md) |
 | PD-100 | 虛擬資料夾(如 This PC)的位址列/分頁標題顯示原始 parsing code,應改為友善顯示名稱 | 7 | `done` | 無 | [PD-100](tickets/PD-100-virtual-folder-display-name-instead-of-parsing-code.md) |
-| PD-101 | 新增 Tab 鍵在可見 pane 間循環切換 active pane | 7 | `ready` | PD-016 | [PD-101](tickets/PD-101-tab-key-cycle-active-pane.md) |
+| PD-101 | 新增 Tab 鍵在可見 pane 間循環切換 active pane | 7 | `done` | PD-016 | [PD-101](tickets/PD-101-tab-key-cycle-active-pane.md) |
 | PD-102 | Tab「+」新增按鈕加上圓角外框,並修正「+」字符置中 | 7 | `done` | PD-081 | [PD-102](tickets/PD-102-tab-add-button-rounded-border-and-centering.md) |
 | PD-103 | 移除 Group 列表項右側的 tab 數量圓形徽章(與副標題重複) | 7 | `done` | PD-028 | [PD-103](tickets/PD-103-remove-sidebar-group-tab-count-badge.md) |
 | PD-104 | 側邊欄寬度可拖曳調整,並跨啟動持久化;預設寬度隨 PD-103 徽章移除而縮小 | 7 | `ready` | PD-097, PD-103 | [PD-104](tickets/PD-104-resizable-persisted-sidebar-width.md) |

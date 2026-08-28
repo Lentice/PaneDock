@@ -111,3 +111,15 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+- 新判斷式插在既有 Backspace 分支之後、既有 F6 分支之前；Ctrl+Tab 分支仍在更前方，因此純 Tab 與分頁切換不重疊。直接複製既有 F6 的 `count`／`next`／`set_active_pane` 邏輯，條件為 `key_down && !control && !alt && VK_TAB && !address_bar_has_focus(state)`。
+- `translate_accelerator` 實測結果：＿＿（待完成單次按鍵＋截圖驗證後補記）。
+- Address bar focus 實測結果：＿＿（待完成單次按鍵＋截圖驗證後補記）。
+- 未驗證：4 pane／2 pane 連續多次按 Tab 的完整循環、Shift+Tab 反向循環，以及 Ctrl+Tab／Ctrl+Shift+Tab 的完整回歸序列留給使用者手動驗證；Agent 僅執行票券要求的單次按鍵＋截圖檢查。
+
+- 補充實機結果：Release PID 16488 以一次純 Tab 做檢查後，`PrintWindow(hwnd, hdc, 2 /* PW_RENDERFULLCONTENT */)` 成功；截圖為 `C:\Users\lenticetsai\AppData\Local\Temp\panedock-pd101-printwindow-20260828.png`。截圖後立即以不帶 `/F` 的 `taskkill /PID 16488` 關閉，回報成功。
+- `translate_accelerator` 實測補充：在「詳細資料」檢視中，Shell view 會消費 Tab，將焦點移到 column header，而不是切換 active pane；這符合 PD-016「Shell view 攔截時記錄、不強行覆蓋」政策。未修改 `translate_accelerator` 的呼叫順序或行為。
+- Address bar focus 實測補充：未測試；本次只執行票券要求的單次 Shell view Tab＋截圖，未增加第二個互動步驟。
+- 未驗證補充：4 pane／2 pane 的連續 Tab 循環、Shift+Tab 反向循環、Ctrl+Tab／Ctrl+Shift+Tab 回歸，以及 address bar focus 下的 Tab 行為，留給使用者手動驗證。
+- Agent checks：`cmake --build build` 通過；`ctest --test-dir build --output-on-failure` 為 5/5 PASS；`git diff --check` 通過。
+- 交接區更正：上方以「＿＿」標示的兩筆是先行暫記，以下「補充」條目已提供最終實測結果，請以下方補充內容為準。

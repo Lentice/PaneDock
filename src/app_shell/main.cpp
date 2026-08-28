@@ -4274,6 +4274,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 navigate_up(state, active);
                 continue;
             }
+            if (key_down && !control && !alt && message.wParam == VK_TAB &&
+                !address_bar_has_focus(state)) {
+                const std::size_t count = active_group(state).panes.size();
+                const std::size_t next = shift ? (active + count - 1) % count
+                                               : (active + 1) % count;
+                set_active_pane(window, state, next);
+                continue;
+            }
             if (message.message == WM_KEYDOWN && message.wParam == VK_F6) {
                 const std::size_t count = active_group(state).panes.size();
                 const std::size_t next = shift ? (active + count - 1) % count
