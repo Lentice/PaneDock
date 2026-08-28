@@ -141,6 +141,7 @@
 | PD-101 | 新增 Tab 鍵在可見 pane 間循環切換 active pane | 7 | `ready` | PD-016 | [PD-101](tickets/PD-101-tab-key-cycle-active-pane.md) |
 | PD-102 | Tab「+」新增按鈕加上圓角外框,並修正「+」字符置中 | 7 | `ready` | PD-081 | [PD-102](tickets/PD-102-tab-add-button-rounded-border-and-centering.md) |
 | PD-103 | 移除 Group 列表項右側的 tab 數量圓形徽章(與副標題重複) | 7 | `ready` | PD-028 | [PD-103](tickets/PD-103-remove-sidebar-group-tab-count-badge.md) |
+| PD-104 | 側邊欄寬度可拖曳調整,並跨啟動持久化;預設寬度隨 PD-103 徽章移除而縮小 | 7 | `ready` | PD-097, PD-103 | [PD-104](tickets/PD-104-resizable-persisted-sidebar-width.md) |
 
 ## Dependency lanes
 
@@ -498,3 +499,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 ### 2026-08-28 — 使用者要求移除 Group 列表右側 tab 數量徽章,覆寫 PD-028,開 PD-103
 
 使用者原文:「for group items remove the circle at right (tabs count). It should duplcate as subtitle of the group」附截圖。調查確認 PD-028 當初依照 `docs/panedock-ui-prototype.html` 設計稿,**刻意**讓副標題與右側圓形徽章顯示同一個 tab 數字(徽章數字明確引用副標題第二個數字)。使用者實機看到後判斷這是不必要的重複,要求拿掉徽章、只留副標題。明確覆寫 PD-028「副標題+徽章雙重顯示」的部分,新證據為使用者本次直接提出的具體回饋;PD-028 其餘決策(品牌列、副標題本身、footer 按鈕)不受影響。開票為 [PD-103](tickets/PD-103-remove-sidebar-group-tab-count-badge.md),依賴 PD-028(副標題/徽章的既有實作基礎)。
+
+### 2026-08-28 — 使用者要求側邊欄寬度可拖曳並跨啟動持久化,開 PD-104
+
+使用者原文:「make left group area resizable. should keep the width and restore when next time AP executed. Shrink default group area since the circle number is remove in another ticket. Consider apply the throttling when resize.」。這正是候選表已預告的「側邊欄寬度的全域設定持久化」項目(觸發條件「使用者回報每次啟動都要重拖再開」現已成立)。調查確認側邊欄寬度目前是編譯期常數(`kSidebarWidth = 226`),四處重複計算、完全無法拖曳;`ApplicationState::window_placement` 是現成的「全域、跨啟動持久化 UI 設定」先例,`sidebar_width` 比照其層級加入,但序列化須為**選填欄位**(不比照 `window_placement` 現有的必要欄位寫法),避免破壞既有使用者的 `session.json`。新預設寬度 194 = 226 − PD-103 釋放的 32px(徽章 22 + 邊界 6 + 間隙 4),可回推不是憑感覺訂的數字。拖曳節流依賴 PD-097 落地後的既有節流機制,不另建第二套 timer。開票為 [PD-104](tickets/PD-104-resizable-persisted-sidebar-width.md),依賴 PD-097(節流機制)、PD-103(新預設寬度的計算基礎)。
