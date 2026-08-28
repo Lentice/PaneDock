@@ -505,6 +505,34 @@ panedock::core::ShellLocation location(std::wstring parsing_name) {
     return {std::move(parsing_name), {}, {}};
 }
 
+std::wstring display_text_for_parsing_name(
+    std::wstring_view parsing_name) {
+    if (!parsing_name.starts_with(L"::")) return std::wstring(parsing_name);
+
+    const std::wstring parsing_text(parsing_name);
+    Microsoft::WRL::ComPtr<IShellItem> item;
+    if (FAILED(SHCreateItemFromParsingName(
+            parsing_text.c_str(), nullptr, IID_PPV_ARGS(&item)))) {
+        return parsing_text;
+    }
+
+    PWSTR display_name = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_NORMALDISPLAY, &display_name)) ||
+        display_name == nullptr) {
+        return parsing_text;
+    }
+
+    std::wstring result;
+    try {
+        result.assign(display_name);
+    } catch (...) {
+        CoTaskMemFree(display_name);
+        return parsing_text;
+    }
+    CoTaskMemFree(display_name);
+    return result;
+}
+
 panedock::core::ApplicationState default_application_state() {
     panedock::core::GroupState group;
     group.id = "default";
@@ -1071,13 +1099,14 @@ void refresh_navigation_buttons(AppState& state, std::size_t pane_index) {
 void refresh_navigation_chrome(AppState& state, std::size_t pane_index) {
     if (pane_index >= kExplorerCount) return;
     refresh_navigation_buttons(state, pane_index);
-    const wchar_t* text = L"";
+    std::wstring text;
     if (has_active_group(state) &&
         pane_index < active_group(state).panes.size()) {
-        text = active_tab(active_group(state).panes[pane_index])
-                   .location.parsing_name.c_str();
+        text = display_text_for_parsing_name(
+            active_tab(active_group(state).panes[pane_index])
+                .location.parsing_name);
     }
-    SetWindowTextW(state.address_bars[pane_index], text);
+    SetWindowTextW(state.address_bars[pane_index], text.c_str());
 }
 
 std::string view_mode_name(FOLDERVIEWMODE mode, int image_size = -1) {
@@ -1178,7 +1207,7 @@ std::wstring tab_display_text(const panedock::core::TabState& tab) {
     const auto& parsing_name = tab.location.parsing_name;
     const std::size_t separator = parsing_name.find_last_of(L"\\/");
     if (separator == std::wstring::npos || separator + 1 == parsing_name.size())
-        return parsing_name;
+        return display_text_for_parsing_name(parsing_name);
     return parsing_name.substr(separator + 1);
 }
 

@@ -124,3 +124,11 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接（2026-08-28）
+
+- 「是否為虛擬項目」採 `parsing_name` 以 `::` 開頭的既有 Shell 慣例判斷。這能直接涵蓋 This PC 等 CLSID/非檔案系統 parsing name，不必為每次顯示再做 `SFGAO_FILESYSTEM` 查詢；一般路徑（包含 `C:\`）不會進入此分支。
+- 友善名稱解析函式放在 `src/app_shell/main.cpp`，因為位址列與 tab 標題都是 app-shell 顯示層，且 `SHCreateItemFromParsingName`/`IShellItem::GetDisplayName` 屬 Shell COM；這樣不會把 COM 帶進 `src/core`，也能在重建 tab visuals 時替 inactive tab 解析名稱。
+- 實機截圖：Release `PaneDock.exe` PID 41492，主視窗 `0x3F18DC`；以 `GetDlgItem`/`EnumChildWindows` 定位第一 pane 的 tab strip（ID 200，`242,83-1069,114`）與 address bar（ID 330，`409,120-1063,136`），`PrintWindow(hwnd, hdc, 2)` 成功。以 4x `InterpolationMode.NearestNeighbor` 放大後，active tab 與位址列皆顯示系統語系的「本機」，未再顯示 `::{20D04FE0-3AEA-1069-A2D8-08002B30309D}`。完整截圖：`C:\Users\lenticetsai\AppData\Local\Temp\panedock-pd100-printwindow-20260828-112120.png`；chrome 放大圖：`C:\Users\lenticetsai\AppData\Local\Temp\panedock-pd100-chrome-4x-nearestneighbor-20260828-112120.png`。
+- 一般檔案系統路徑無退步：修改後非 `::` parsing name 直接回傳原字串，tab 的分隔符取葉節點邏輯未改；同一張實機截圖中其餘 pane 仍分別顯示 `C:\Windows`/`Windows`、`C:\Users`/`Users`、`C:\Program Files`/`Program ...`，與修改前既有行為一致。未對 drive root 做友善命名升級。
+- 未驗證：未另外建立 inactive virtual tab，也未故意導覽無效 parsing name 觸發 fallback；前者會改動使用者 session，後者需額外多步驟互動。本次以 `refresh_tab_strip` 對所有持久化 tab 呼叫同一解析函式的程式碼路徑，以及失敗時回傳原字串的分支完成核對。
