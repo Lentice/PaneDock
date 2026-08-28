@@ -1,0 +1,100 @@
+# PD-102 — Tab「+」新增按鈕加上圓角外框,並修正「+」字符置中
+
+Phase 7 · app_shell · Depends on: PD-081
+
+- Source: 使用者需求(2026-08-28)。
+- Origin: 使用者原文:「for pane add button, centered the '+' in the button. make button 外框圓角」
+- Priority: LOW——純視覺樣式調整,不影響功能。
+
+## 已確認的現況(有程式碼證據,不是猜測)
+
+`paint_tab_strip`(`main.cpp:2940-2972`)目前繪製「+」新增按鈕的方式:
+
+1. **完全沒有外框**——只有 hover 時用 `FillRect` 填一個方形背景(`:2944-2951`,`RGB(236, 240, 244)`,方角,不是 `RoundRect`);非 hover 時整顆按鈕沒有任何背景/外框,視覺上只是浮在 tab 條背景色上的一個「+」字符。
+2. **「+」字符的置中從未被實際驗證過**——`DrawTextW` 使用 `DT_CENTER | DT_VCENTER`(`:2968-2969`),但繪製矩形 `plus_rect` 是先複製 `add`(`:2940`,即 `state.tab_add_rects[pane_index]`),再整體垂直位移 `-1px`(`:2966-2967`,PD-081 加入,commit 訊息「Nudge tab add glyph up 1px」)。根據 `docs/tickets/PD-081-tab-add-button-glyph-notch.md` 自己的交接區記載,那次修改後的實際渲染結果**從未被截圖確認**(唯一一次驗證嘗試因 `GetDlgItem` 找不到 tab strip HWND而失敗)。換句話說,現在這顆按鈕的置中效果,從 PD-081 至今沒有人實際看過。
+
+同一個檔案裡已經有兩個成熟、可直接沿用的圓角外框繪製先例:
+
+- `draw_tab_scroll_button`(`:2780-2826`)——tab 條左右捲動按鈕,**永遠可見**的 `RoundRect` 外框(`RGB(226, 232, 240)`,`scaled_value(window, 1)` 寬),搭配 hover/normal 兩種填色(`RGB(236, 240, 244)` / `RGB(255, 255, 255)`)。
+- Tab 本身的繪製(`:2865-2883`)——`radius = scaled_value(window, kTabCornerRadius)`(`kTabCornerRadius = 6`,`:94`)、`border_width = scaled_value(window, 1)`(`:2844`,`paint_tab_strip` 一開始就算好,兩處都直接沿用同一個區域變數,不用另外算)。
+
+## 已確認的產品決策
+
+1. **外框永遠可見,不是只在 hover 時才出現。** 理由:本檔案裡已有的同類元件(tab 本身、`draw_tab_scroll_button`)全部都是「外框永遠可見、填色隨 hover 改變」的視覺語言,「+」按鈕若外框只在 hover 才出現,會是這一排按鈕裡唯一不一致的例外,且使用者原文「make button 外框圓角」描述的是按鈕本身的固定樣式,不是限定 hover 態。
+2. **外框繪製直接沿用 `draw_tab_scroll_button` 的既有寫法與色值**(`RoundRect` + `CreatePen(PS_SOLID, border_width, RGB(226, 232, 240))`),`radius`/`border_width` 沿用 `paint_tab_strip` 已經算好的區域變數(`:2843-2844`),不重新計算、不新增函式簽章。
+3. **外框/填色的矩形範圍採用現有的 `hover`(即 `add` 內縮 `add_inset` 之後的矩形,`:2941-2943`)而非整個 `add` 熱區矩形**——`add` 是完整點擊熱區(比照 tab 高度),`hover` 才是視覺上「這顆按鈕看起來多大」的既有內縮矩形。沿用既有的 `hover` 矩形當作外框/填色的視覺邊界,而不是另外設計一個新尺寸,是最小改動;點擊熱區(`add`)完全不變,不影響任何既有的 hit-test 邏輯(`:3036`、`:3050`)。
+4. **正常態(非 hover)也要填色,不能維持「無背景、只有外框」**——理由同第 1 點,`draw_tab_scroll_button` 正常態填 `RGB(255, 255, 255)`(白色),本票沿用同一組色值(正常態白色、hover 態 `RGB(236, 240, 244)`,與現有 hover 色值相同,不改變 hover 的既有觀感)。
+5. **「+」字符置中問題,先用本專案既有的 `PrintWindow` 截圖驗證方法實際確認目前效果,再決定是否保留/移除/調整 PD-081 加入的 `-1px` 垂直位移。** 不得未經視覺驗證就假設現狀是對的或錯的——這正是使用者回報的問題本身。若截圖顯示置中後仍有偏移,調整 `OffsetRect` 的位移量或直接移除;若截圖顯示已經置中(`-1px` nudge 恰好抵銷字型 baseline 的視覺偏移),保留不動並在交接區記錄佐證截圖。
+
+## Binding constraints — quoted, do not go looking for them
+
+`AGENTS.md`:
+> Prefer the smallest working change. Reuse existing code before adding helpers or abstractions.
+
+外框繪製沿用 `draw_tab_scroll_button` 的既有 `RoundRect`/`CreatePen` 寫法與 `paint_tab_strip` 已算好的 `radius`/`border_width` 變數,不新增繪製函式或參數。
+
+`docs/tickets/PD-081-tab-add-button-glyph-notch.md`(本票沿用其字型字符渲染方式,不覆寫):
+> 由手繪改為 `DrawTextW` 字型字符渲染,解決十字交叉處的渲染缺口。
+
+本票只調整外框與置中位移量,不改變 PD-081 已確立的「用字型字符畫『+』」這個渲染方式本身。
+
+## Files to read and trace first
+
+- `src/app_shell/main.cpp:2940-2972`——「+」按鈕目前的填色與文字繪製邏輯,本票主要修改處。
+- `src/app_shell/main.cpp:2780-2826`(`draw_tab_scroll_button`)——外框繪製直接沿用的既有寫法。
+- `src/app_shell/main.cpp:2843-2844`——`paint_tab_strip` 已算好的 `radius`/`border_width` 區域變數,外框繪製直接引用,不重算。
+- `src/app_shell/main.cpp:2966-2967`——PD-081 加入的 `-1px` 垂直位移,置中驗證與可能調整處。
+- `docs/tickets/PD-081-tab-add-button-glyph-notch.md`——交接區記載的「從未截圖驗證」限制,直接沿用其對「+」字符渲染的既有結論(字型字符本身沒問題,只是位置/外框未驗證)。
+
+## Scope
+
+1. 「+」按鈕的填色矩形(現有 `hover` 變數)加上永遠可見的圓角外框,沿用 `draw_tab_scroll_button` 的色值與寫法。
+2. 正常態(非 hover)也填色(白色),不再是無背景。
+3. Hover 態的填色從方形 `FillRect` 改為與外框一致的 `RoundRect`(圓角),色值不變(`RGB(236, 240, 244)`)。
+4. 「+」字符的垂直位移量,經截圖驗證後保留、調整或移除。
+
+## Non-goals
+
+- 不改變「+」按鈕的點擊熱區(`add`/`state.tab_add_rects`)大小或位置。
+- 不改變「+」按鈕觸發的行為(新增分頁)。
+- 不改變字型字符本身的渲染方式(PD-081 已確立,不重寫成手繪)。
+- 不改變 tab 本身、tab 捲動按鈕的既有樣式(本票只動「+」按鈕)。
+- 不新增 disabled 狀態(「+」按鈕目前沒有 disabled 態,本票不新增)。
+
+## Acceptance Criteria
+
+1. 「+」按鈕在正常態與 hover 態都能看到圓角外框,兩態外框樣式一致(色值/粗細不變,只有填色隨 hover 改變)。
+2. 外框的圓角視覺風格與 tab 本身、tab 捲動按鈕放大截圖並排比對一致(同一套視覺語言,不是自創樣式)。
+3. 「+」字符在放大截圖中確認置中於按鈕可視範圍內(水平與垂直皆置中,不偏移)。
+4. 「+」按鈕的點擊行為(新增分頁)與熱區範圍與修改前完全相同。
+5. `cmake --build build`、`ctest --test-dir build --output-on-failure` 全數通過。
+6. `git diff --check` 通過。
+
+## Agent Checks
+
+```powershell
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+```powershell
+rg -n "tab_add_rects|plus_rect|draw_tab_scroll_button|kTabCornerRadius" src\app_shell\main.cpp
+git diff --check
+```
+
+**截圖驗證方法(本環境已驗證可用,請直接沿用):** `PrintWindow(hwnd, hdc, 2 /* PW_RENDERFULLCONTENT */)`,放大用 `InterpolationMode.NearestNeighbor`,單次啟動 + 單次截圖即可完成驗證,不需要連續互動。**務必先找到正確的 tab strip 子視窗 HWND 再截圖**——PD-081 上一次驗證失敗正是因為 `GetDlgItem(main, 200)` 找錯視窗,本票必須避免重蹈覆轍(可用 `EnumChildWindows` 列舉並比對視窗類別名稱/位置來定位正確的 tab strip HWND)。
+
+**測試後用不帶 `/F` 的 `taskkill /PID <pid>` 優雅關閉,不要 `Stop-Process -Force`。**
+
+## Handoff requirements
+
+- 外框/填色最終採用的色值與矩形範圍(確認沿用 `hover` 變數或有調整,並說明理由)。
+- 「+」字符置中的實際截圖驗證結果,以及垂直位移量的最終決定(保留 `-1px`/調整/移除)與依據。
+- 放大截圖比對結果(新外框 vs. tab 本身/tab 捲動按鈕的視覺一致性)。
+- 本次是否成功定位到正確的 tab strip HWND 並完成截圖(若沿用 PD-081 失敗的方法,記錄改用的定位方式)。
+- 未驗證項目與原因(若有)。
+
+## 交接區
+
+<!-- 實作 agent 填寫,append-only -->

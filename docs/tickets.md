@@ -139,6 +139,7 @@
 | PD-099 | 新增第 6 種版型:上方兩格併排、下方一格全寬(2 up / 1 down) | 7 | `ready` | PD-005, PD-016, PD-046 | [PD-099](tickets/PD-099-add-two-over-one-layout-template.md) |
 | PD-100 | 虛擬資料夾(如 This PC)的位址列/分頁標題顯示原始 parsing code,應改為友善顯示名稱 | 7 | `ready` | 無 | [PD-100](tickets/PD-100-virtual-folder-display-name-instead-of-parsing-code.md) |
 | PD-101 | 新增 Tab 鍵在可見 pane 間循環切換 active pane | 7 | `ready` | PD-016 | [PD-101](tickets/PD-101-tab-key-cycle-active-pane.md) |
+| PD-102 | Tab「+」新增按鈕加上圓角外框,並修正「+」字符置中 | 7 | `ready` | PD-081 | [PD-102](tickets/PD-102-tab-add-button-rounded-border-and-centering.md) |
 
 ## Dependency lanes
 
@@ -488,3 +489,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 ### 2026-08-28 — 使用者要求 Tab 鍵循環切換 active pane,開 PD-101
 
 使用者原文:「press TAB to switch active pane (between visiable panes). 4 panes: 1-> 2-> 3-> 4-> 1, 2 panes: 1-> 2 -> 1」。調查確認此循環邏輯已存在於既有 F6/Shift+F6 綁定(`main.cpp:4239-4245`,PD-016),行為與使用者描述完全一致,本票純粹是新增一個額外的純 Tab 鍵綁定觸發同一段既有邏輯,不重寫切換演算法。需避開 Ctrl+Tab(既有分頁切換)與 address bar 有焦點時的文字編輯情境,兩者皆有既有守門寫法可直接複用。開票為 [PD-101](tickets/PD-101-tab-key-cycle-active-pane.md),依賴 PD-016(F6 pane 循環切換基礎設施)。
+
+### 2026-08-28 — 使用者要求「+」新增按鈕加圓角外框並修正置中,開 PD-102
+
+使用者原文:「for pane add button, centered the '+' in the button. make button 外框圓角」。調查確認「+」按鈕目前完全沒有外框(hover 時只有方形 `FillRect`,非 hover 時無背景),而同檔案裡的 `draw_tab_scroll_button`/tab 本身都已經是「永遠可見的圓角外框 + hover 隨填色改變」視覺語言,本票直接沿用該既有寫法與色值。字符置中部分:PD-081 加入的 `-1px` 垂直位移從未被實際截圖驗證過(PD-081 交接區已記載該次驗證因抓錯 HWND 失敗),本票要求先截圖確認現況,再決定保留/調整/移除該位移量。開票為 [PD-102](tickets/PD-102-tab-add-button-rounded-border-and-centering.md),依賴 PD-081(「+」字符字型渲染基礎)。
