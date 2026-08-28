@@ -2942,12 +2942,21 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
     const int add_inset = scaled_value(window, 5);
     InflateRect(&hover, -add_inset, -add_inset);
     if (state.tab_hover_indices[pane_index].has_value() &&
-        *state.tab_hover_indices[pane_index] == pane.tabs.size()) {
-        HBRUSH fill = CreateSolidBrush(RGB(236, 240, 244));
-        if (fill != nullptr) {
-            FillRect(dc, &hover, fill);
-            DeleteObject(fill);
+        *state.tab_hover_indices[pane_index] == pane.tabs.size() &&
+        hover.right > hover.left && hover.bottom > hover.top) {
+        HBRUSH background = CreateSolidBrush(RGB(236, 240, 244));
+        HPEN border = CreatePen(PS_SOLID, border_width,
+                                RGB(226, 232, 240));
+        if (background != nullptr && border != nullptr) {
+            const HGDIOBJ old_brush = SelectObject(dc, background);
+            const HGDIOBJ old_pen = SelectObject(dc, border);
+            RoundRect(dc, hover.left, hover.top, hover.right, hover.bottom,
+                      radius, radius);
+            SelectObject(dc, old_pen);
+            SelectObject(dc, old_brush);
         }
+        if (background != nullptr) DeleteObject(background);
+        if (border != nullptr) DeleteObject(border);
     }
     if (add.right > add.left && add.bottom > add.top) {
         HFONT plus_font = nullptr;
@@ -2964,7 +2973,7 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
             plus_font != nullptr ? SelectObject(dc, plus_font) : nullptr;
         SetTextColor(dc, RGB(31, 41, 55));
         RECT plus_rect = add;
-        OffsetRect(&plus_rect, 0, -scaled_value(window, 1));
+        OffsetRect(&plus_rect, 0, -scaled_value(window, 2));
         DrawTextW(dc, L"+", 1, &plus_rect,
                   DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
         if (old_plus_font != nullptr) SelectObject(dc, old_plus_font);

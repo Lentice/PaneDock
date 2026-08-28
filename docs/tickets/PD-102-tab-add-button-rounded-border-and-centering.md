@@ -99,3 +99,11 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-28 實作交接
+
+- hover 外框/填色使用既有 `hover` 矩形：由 `add` 以 `scaled_value(window, 5)` 內縮；`add` 熱區本身沒有改動。hover 填色為 `RGB(236, 240, 244)`，外框為 `RGB(226, 232, 240)`，並沿用 `paint_tab_strip` 已算好的 `radius` 與 `border_width`，以 `RoundRect` 繪製。非 hover 分支完全不繪製背景或外框。
+- 實際以 Release diagnostic 啟動後，用 `EnumChildWindows` 找到 `Static`、Id 200 的 tab strip，矩形為 `[242,83,1069,114]`；以主視窗 `PrintWindow(hwnd, hdc, 2)` 取得畫面，再依該子視窗矩形精確裁切並以 4x `InterpolationMode.NearestNeighbor` 放大。現有 `-1px` 版本的放大結果顯示「+」筆畫中心仍比 add 可視矩形低約 1px；改為 `-2px` 後，筆畫中心落在矩形中心約半像素內，因此最終保留字型 `DrawTextW`，將位移調整為 `-scaled_value(window, 2)`。最終截圖輸出於 `C:\Users\lenticetsai\AppData\Local\Temp\panedock-pd102-final-hover-strip-4x.png`。
+- 放大畫面確認 tab 本身與 tab 捲動按鈕使用相同的圓角/細框視覺語言；最終 PrintWindow 畫面為非 hover 狀態，因此 add 按鈕沒有常態外框，符合更正後設計。使用者另提供的 hover 截圖可看到 hover 填色與外框；本次程式碼也維持與既有 scroll button 相同的色值與 `RoundRect` 路徑。
+- 已成功用 `EnumChildWindows` 依 class/位置定位正確 tab strip，沒有使用 PD-081 失敗的 `GetDlgItem` 查找方式；主視窗 `PrintWindow` 成功，子視窗直接 `PrintWindow` 不作為依據。測試只讀取既有 session，沒有建立 throwaway group/tab，因此不需還原 session backup。
+- 未以滑鼠點擊新增分頁，以免改動使用者 session；`WM_LBUTTONDOWN` 的 `add` hit-test 區域未修改。未另外覆蓋 150% DPI 或一般模式互動流程；本票的實機截圖確認與 Release build/CTest 已完成。
