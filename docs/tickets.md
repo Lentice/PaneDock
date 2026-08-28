@@ -144,6 +144,7 @@
 | PD-104 | 側邊欄寬度可拖曳調整,並跨啟動持久化;預設寬度隨 PD-103 徽章移除而縮小 | 7 | `ready` | PD-097, PD-103 | [PD-104](tickets/PD-104-resizable-persisted-sidebar-width.md) |
 | PD-106 | Graceful close 後 Shell teardown 殘留程序 | 7 | `done` | PD-007, PD-032, PD-068 | [PD-106](tickets/PD-106-graceful-shutdown-shell-teardown.md) |
 | PD-105 | 雙擊 pane 分隔線,重設回置中(平分兩側) | 7 | `done` | 無 | [PD-105](tickets/PD-105-double-click-splitter-resets-to-center.md) |
+| PD-107 | Tab 條捲動按鈕視覺位置偏移超出自己的熱區,波及「+」新增按鈕邊界 | 7 | `ready` | PD-080, PD-085 | [PD-107](tickets/PD-107-tab-nav-and-add-button-hit-test-visual-mismatch.md) |
 
 ## Dependency lanes
 
@@ -513,3 +514,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 ### 2026-08-28 — PD-102 實機驗證期間發現 graceful close 後程序殘留,開 PD-106
 
 Source:PD-102 截圖驗證流程中,對 Release diagnostic build(PID 37164)送出不帶 `/F` 的 `taskkill /PID` 後,主視窗(`EnumWindows` 確認)立即消失,但程序本身仍存活(`MainWindowHandle=0`),需要再送一次同樣訊號才真正結束。獨立的 OpenCode 唯讀稽核(同日,另一個背景任務)以程式碼追蹤加實測時間,得出相同根因結論。已確認現況:`WM_CLOSE`(`main.cpp:3951-3963`)同步呼叫 `destroy_explorers` → 每個 `ExplorerHost::destroy()`(`explorer_host.cpp:708-767`)同步呼叫 `IExplorerBrowser::Destroy()`(`:759`)——這是 `docs/design-spec.md §9.4` 規定的既有必要順序(不得跳過或改用背景執行緒,§9.4「順序不可調換」),不是遺漏 `Destroy` 的 bug;可觀察到的問題是這個同步 teardown(或其與主視窗銷毀的重入順序)在特定情境下阻塞了關閉路徑,精確阻塞點需要實作 agent 用階段計時或 debugger evidence 釘死,不能用猜測改順序解決。優先度 HIGH——不修正的話退出時可能鎖住執行檔、阻礙下次啟動/建置。開票為 [PD-106](tickets/PD-106-graceful-shutdown-shell-teardown.md),依賴 PD-007(單一 explorer host 與關閉序列)、PD-032(`WM_ENDSESSION` 乾淨關閉)、PD-068(`SetCallback` teardown 崩潰先例)。
+
+### 2026-08-28 — 使用者回報 tab 條捲動按鈕與「+」按鈕顯示位置與觸發位置不同,開 PD-107
+
+使用者原文:「pane tabs' nav buttons and add button 在UI上顯示的位置與onhover/click觸發的位置不同。」根因調查確認:`kTabScrollButtonWidth`(`main.cpp:85-87`)的既有註解明訂外層矩形是唯一權威熱區、內層視覺矩形只是畫在裡面的裝飾,兩者理論上同心。但 PD-080 完成後一連串「使用者實機微調位置」的像素修正 commit(`68dd9ad` 起,最終定案於 `visual_offset_x=6`/`visual_offset_y=1`)只移動了 `draw_tab_scroll_button` 畫出來的視覺矩形,從未同步移動 `apply_tab_item_size` 存進 `state.tab_scroll_button_rects` 的權威熱區——實際代入目前數值,back 按鈕的視覺矩形超出自己熱區右界 6px(畫進 forward 的熱區),forward 按鈕的視覺矩形超出自己熱區右界 4px(畫進「+」新增按鈕的熱區),導致點在視覺重疊處觸發的是相鄰按鈕的功能,不是眼睛看到的圖示。這與 `docs/tickets.md` 既有三方架構稽核記錄點名的「chrome 繪製函式把純幾何計算與 HDC 繪製揉在一起,PD-073/080/081 這類像素微調 commit 正是這個缺陷的直接證據」屬同一類缺陷,這次是首次真正造成畫面/熱區重疊而非單純理論疑慮。修正方向明確要求保留使用者已確認的視覺位置(不得悄悄撤銷像素微調),只需讓熱區改為重用 PD-085 抽出的 `tab_scroll_button_visual` 純幾何函式(帶入與繪製相同的 offset)作為唯一權威來源,消除兩份獨立座標系統。開票為 [PD-107](tickets/PD-107-tab-nav-and-add-button-hit-test-visual-mismatch.md),依賴 PD-080(既有熱區/視覺分離設計)、PD-085(可重用的純幾何函式)。
