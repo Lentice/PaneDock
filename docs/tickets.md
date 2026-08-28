@@ -106,7 +106,7 @@
 | PD-066 | 拖曳排序改用撐開空位的 placeholder;修復 tab 插入指示線死碼 | 7 | `done` | PD-055, PD-050, PD-036 | [PD-066](tickets/PD-066-drag-reorder-placeholder-gap.md) |
 | PD-067 | Group 清單捲軸視覺存在感過低(捲動功能實測已正常) | 7 | `superseded` | PD-028, PD-061 | [PD-067](tickets/PD-067-group-list-scrollbar-visibility.md) |
 | PD-068 | 關閉程式時在 `SHELL32.dll` 當機:`SetCallback` 的 out 參數傳 `nullptr` | 7 | `done` | PD-051 | [PD-068](tickets/PD-068-shell-folder-view-setcallback-null-out-param.md) |
-| PD-069 | pane footer 補左右內距;chrome 間距統一為 4px 級距 | 7 | `ready` | PD-060, PD-062, PD-064 | [PD-069](tickets/PD-069-chrome-spacing-scale.md) |
+| PD-069 | pane footer 補左右內距;chrome 間距統一為 4px 級距 | 7 | `done` | PD-060, PD-062, PD-064 | [PD-069](tickets/PD-069-chrome-spacing-scale.md) |
 | PD-070 | 診斷模式擋下第三方 extension 時跳出載入器模態對話框,無法無人值守執行 | 7 | `done` | PD-024 | [PD-070](tickets/PD-070-diagnostic-mode-loader-error-dialogs.md) |
 | PD-071 | 移除 Ctrl+Shift+L 熱鍵:註冊失敗會讓程式完全無法啟動 | 7 | `done` | PD-009 | [PD-071](tickets/PD-071-remove-layout-hotkey.md) |
 | PD-072 | chrome 字型改用固定 Latin 字面＋系統字型連結,取代語系相依的 `DEFAULT_GUI_FONT`／`lfMessageFont`(覆寫 PD-061 的 face 來源) | 7 | `done` | PD-061 | [PD-072](tickets/PD-072-replace-stock-gui-font.md) |
@@ -119,10 +119,10 @@
 | PD-079 | 檢視模式選單擴充為 8 項,對齊真實檔案總管;僅「詳細資料」顯示欄位標題(覆寫 PD-059 決策 3) | 7 | `done` | PD-059 | [PD-079](tickets/PD-079-view-mode-menu-eight-items-and-column-header.md) |
 | PD-080 | Tab 溢出捲動按鈕尺寸過大,和 tab 一樣高,改為緊湊小按鈕 | 7 | `done` | PD-073 | [PD-080](tickets/PD-080-tab-scroll-buttons-oversized.md) |
 | PD-081 | Tab「+」按鈕手繪十字有缺角,改回字型字符繪製(覆寫 PD-062 決策 5) | 7 | `done` | PD-062 | [PD-081](tickets/PD-081-tab-add-button-glyph-notch.md) |
-| PD-082 | 非「詳細資料」檢視模式仍顯示 column header | 7 | `ready` | PD-079 | [PD-082](tickets/PD-082-view-mode-header-leaks-into-non-details-modes.md) |
+| PD-082 | 非「詳細資料」檢視模式仍顯示 column header | 7 | `done` | PD-079 | [PD-082](tickets/PD-082-view-mode-header-leaks-into-non-details-modes.md) |
 | PD-083 | 導覽按鈕/New Group 按鈕/tab 捲動按鈕完全沒有 hover;版型按鈕 hover 對比度不足 | 7 | `ready` | PD-058, PD-047 | [PD-083](tickets/PD-083-remaining-buttons-missing-or-weak-hover.md) |
-| PD-084 | 限制單一 App 實例;第二次啟動改為喚醒既有視窗 | 7 | `ready` | 無 | [PD-084](tickets/PD-084-single-instance-activate-existing-window.md) |
-| PD-085 | 把 tab 捲動按鈕的幾何計算抽成純函式(可單元測試) | 7 | `ready` | 無 | [PD-085](tickets/PD-085-tab-scroll-button-geometry-to-pure-module.md) |
+| PD-084 | 限制單一 App 實例;第二次啟動改為喚醒既有視窗 | 7 | `done` | 無 | [PD-084](tickets/PD-084-single-instance-activate-existing-window.md) |
+| PD-085 | 把 tab 捲動按鈕的幾何計算抽成純函式(可單元測試) | 7 | `done` | 無 | [PD-085](tickets/PD-085-tab-scroll-button-geometry-to-pure-module.md) |
 | PD-086 | 切換 Group 時,同步完成的導覽把舊 Group 的路徑寫進新 Group 的儲存分頁(資料遺失) | 7 | `done` | 無 | [PD-086](tickets/PD-086-group-switch-overwrites-incoming-folders-with-outgoing-live-state.md) |
 | PD-087 | 版型縮小時被隱藏的 pane 沒有 destroy `IExplorerBrowser`,放大回去顯示過期資料夾 | 7 | `done` | 無 | [PD-087](tickets/PD-087-layout-shrink-leaks-hidden-explorerhost.md) |
 | PD-088 | `Site`/`ViewCallback` 持有的 `ExplorerHost*` 在 destroy 後未清空,延遲回呼可能觸碰已銷毀物件 | 7 | `done` | 無 | [PD-088](tickets/PD-088-explorerhost-callback-use-after-destroy.md) |
