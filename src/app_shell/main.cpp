@@ -83,12 +83,14 @@ constexpr UINT kTabStripSelectionMessage = WM_APP + 49;
 constexpr int kTabMinWidth = 72;
 constexpr int kTabMaxWidth = 200;
 constexpr int kTabAddButtonWidth = 36;
+constexpr int kTabAddButtonHorizontalInset = 5;
+constexpr int kTabAddButtonVerticalInset = 3;
 // PD-073: reserved only while the tab content overflows its viewport. PD-107
 // derives the final interactive/drawn rectangles from the visual geometry.
 constexpr int kTabScrollButtonWidth = 20;
 // PD-080: compact button dimensions and the user-confirmed pixel offsets.
 constexpr int kTabScrollButtonVisualWidth = 18;
-constexpr int kTabScrollButtonVisualHeight = 16;
+constexpr int kTabScrollButtonVisualHeight = 20;
 constexpr int kTabScrollButtonVisualOffsetX = 6;
 constexpr int kTabScrollButtonVisualOffsetY = 1;
 constexpr int kTabScrollButtonCornerRadius = 4;
@@ -1300,8 +1302,15 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
     const int content_width = std::accumulate(widths.begin(), widths.end(), 0);
     const auto viewport = panedock::app_shell::tab_strip_viewport(
         content_width, available, scaled_value(strip, kTabScrollButtonWidth));
+    const int add_horizontal_inset =
+        scaled_value(strip, kTabAddButtonHorizontalInset);
+    const int add_vertical_inset =
+        scaled_value(strip, kTabAddButtonVerticalInset);
+    // PD-107: this is the final add-button visual and hit-test rectangle.
     state.tab_add_rects[pane_index] = {
-        available, 0, client.right, client.bottom};
+        available + add_horizontal_inset, add_vertical_inset,
+        client.right - add_horizontal_inset,
+        client.bottom - add_vertical_inset};
     state.tab_viewport_rects[pane_index] = {
         0, 0, viewport.width, client.bottom};
     state.tab_scroll_button_rects[pane_index] = {};
@@ -3029,21 +3038,18 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
                 state.tab_scroll_max_offsets[pane_index],
             state.tab_scroll_hover_indices[pane_index] == 1);
     }
-    RECT add = state.tab_add_rects[pane_index];
-    RECT hover = add;
-    const int add_inset = scaled_value(window, 5);
-    InflateRect(&hover, -add_inset, -add_inset);
+    const RECT add = state.tab_add_rects[pane_index];
     if (state.tab_hover_indices[pane_index].has_value() &&
         *state.tab_hover_indices[pane_index] == pane.tabs.size() &&
-        hover.right > hover.left && hover.bottom > hover.top) {
+        add.right > add.left && add.bottom > add.top) {
         HBRUSH background = CreateSolidBrush(RGB(236, 240, 244));
         HPEN border = CreatePen(PS_SOLID, border_width,
                                 RGB(226, 232, 240));
         if (background != nullptr && border != nullptr) {
             const HGDIOBJ old_brush = SelectObject(dc, background);
             const HGDIOBJ old_pen = SelectObject(dc, border);
-            RoundRect(dc, hover.left, hover.top, hover.right, hover.bottom,
-                      radius, radius);
+            RoundRect(dc, add.left, add.top, add.right, add.bottom, radius,
+                      radius);
             SelectObject(dc, old_pen);
             SelectObject(dc, old_brush);
         }

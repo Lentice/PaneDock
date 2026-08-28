@@ -160,3 +160,15 @@ git diff --check
   2. 確認 back/forward 的外框大小一致、兩者不重疊，且 forward 外框不侵入「+」外框；在兩顆按鈕各自視覺矩形內單次 hover/click，確認 hover 與點擊方向一致。
   3. 在「+」視覺外框內單次 click，確認只新增 tab；使用 `EnumChildWindows`/`GetWindowRect` 找到正確 tab-strip HWND，必要時以 `PrintWindow(hwnd, hdc, 2 /* PW_RENDERFULLCONTENT */)` 留存兩個 DPI 的實際截圖，再比對三個按鈕的視覺邊界與熱區不重疊。
   4. 驗證完成後，以已確認的 PID 執行 `taskkill /PID <pid>`（不帶 `/F`）關閉測試實例。
+
+### 2026-08-28 — 使用者追加按鈕高度調整，待手動驗證
+
+- 依使用者追加要求，back/forward 的視覺與 hit-test 矩形高度由 16 增至 20 logical px；`tab_scroll_button_visual`、碰撞位移與 `state.tab_scroll_button_rects` 的共用路徑不變，因此繪製與 hover/click 仍讀同一份最終矩形。寬度 18、水平偏移 6、垂直偏移 1 維持不變。
+- 「+」按鈕的左右內縮維持 5 logical px，垂直內縮由 5 減為 3，使其 visual/hit rect 高度由 21 增至 25 logical px。`state.tab_add_rects` 現在直接保存這個最終矩形，hover RoundRect、`+` 字符、hover 判斷與 click 判斷全部使用同一份矩形；這是對本票原先「+」自身 hotzone 維持現狀」非目標的明確追加覆寫。`+` 字型渲染與 `-2px` baseline 位移未改。
+- 追加回歸案例確認 20px scroll visual 經碰撞處理後仍維持兩顆 20px 高、互不重疊且 forward 不越過 add 邊界。`cmake --build build`、`ctest --test-dir build --output-on-failure` 通過，ctest 5/5 passed。
+- Agent 仍未使用滑鼠、Computer Use 或截圖自動化；以下為新的使用者手動驗證項目：
+  1. 在 96 DPI 與至少一組非 100% DPI（建議 150%）啟動 `build\\PaneDock.exe`，讓任一 pane 的 tabs 溢出。
+  2. 目視確認 back/forward 的外框高度都比前一版增加且彼此一致；分別在每顆按鈕視覺矩形的上緣、中段、下緣各做一次 hover/click，確認 hover 範圍與方向命中完全一致，且不會跨到相鄰 nav 或「+」。
+  3. 對「+」按鈕的上緣與下緣各做一次 hover，確認 hover 背景完整覆蓋按鈕 visual rect；在 visual rect 內單次 click，確認只新增 tab，且不會觸發 forward。
+  4. 若要留存證據，請以 `EnumChildWindows`/`GetWindowRect` 找到正確 tab-strip HWND，再由使用者自行擷取 96 DPI 與非 100% DPI 畫面；檢查三個 visual/hit rect 高度同步、彼此不重疊，避免使用猜測座標。完成後以已確認 PID 執行 `taskkill /PID <pid>`（不帶 `/F`）。
+- 未驗證項目：上述兩種 DPI 的實機尺寸、hover/click 方向、新增 tab 行為與實際畫面比對均待使用者執行；Agent 依明確要求不操作滑鼠、不使用 Computer Use、不執行 `PrintWindow`。

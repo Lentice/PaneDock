@@ -70,6 +70,20 @@ int main() {
     static_assert(hit_rects[0].width() == 18 && hit_rects[1].width() == 18);
     static_assert(hit_rects[0].right <= hit_rects[1].left);
 
+    constexpr auto taller_back =
+        panedock::app_shell::tab_scroll_button_visual(
+            100, 0, 120, 31, 18, 20, 6, 1, false);
+    constexpr auto taller_forward =
+        panedock::app_shell::tab_scroll_button_visual(
+            120, 0, 140, 31, 18, 20, 6, 1, true);
+    constexpr auto taller_hit_rects =
+        panedock::app_shell::tab_scroll_button_hit_rects(
+            taller_back, taller_forward, 140);
+    static_assert(taller_hit_rects[0].height() == 20 &&
+                  taller_hit_rects[1].height() == 20);
+    static_assert(taller_hit_rects[0].right == taller_hit_rects[1].left &&
+                  taller_hit_rects[1].right == 140);
+
     constexpr auto overlapped =
         panedock::app_shell::tab_scroll_button_hit_rects(
             panedock::app_shell::TabScrollButtonVisual{10, 0, 30, 10},
