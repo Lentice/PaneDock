@@ -141,6 +141,22 @@ void test_optional_sidebar_width() {
     }
 }
 
+void test_two_over_one_round_trip() {
+    ApplicationState original = sample();
+    auto& group = original.groups.front();
+    group.layout_template = LayoutTemplate::two_over_one;
+    group.divider_ratios = {0.25, 0.75};
+    group.panes.push_back({"pane-3", {tab("tab-4")}, "tab-4"});
+    EXPECT(is_valid(original));
+
+    const std::string json = serialize_session({original, {}, false});
+    EXPECT(json.find("\"layout_template\":\"two_over_one\"") !=
+           std::string::npos);
+    const auto restored = deserialize_session(json);
+    EXPECT(restored.has_value());
+    if (restored.has_value()) EXPECT(restored->application == original);
+}
+
 void test_corrupt_and_invalid_documents() {
     std::string json = serialize_session({sample(), {}});
     EXPECT(!deserialize_session(json.substr(0, json.size() / 2)));
@@ -299,6 +315,7 @@ void test_durability_hook_order_and_failure() {
 int main() {
     test_round_trip_and_plain_json();
     test_optional_sidebar_width();
+    test_two_over_one_round_trip();
     test_corrupt_and_invalid_documents();
     test_unknown_fields_survive_write_back();
     test_clean_shutdown_type_mismatch_defaults_true();

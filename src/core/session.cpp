@@ -322,6 +322,7 @@ std::optional<LayoutTemplate> layout(std::string_view value) {
     if (value == "left_right") return LayoutTemplate::left_right;
     if (value == "top_bottom") return LayoutTemplate::top_bottom;
     if (value == "three_pane") return LayoutTemplate::three_pane;
+    if (value == "two_over_one") return LayoutTemplate::two_over_one;
     if (value == "four_pane_grid") return LayoutTemplate::four_pane_grid;
     return std::nullopt;
 }
@@ -332,6 +333,7 @@ std::string layout(LayoutTemplate value) {
         case LayoutTemplate::left_right: return "left_right";
         case LayoutTemplate::top_bottom: return "top_bottom";
         case LayoutTemplate::three_pane: return "three_pane";
+        case LayoutTemplate::two_over_one: return "two_over_one";
         case LayoutTemplate::four_pane_grid: return "four_pane_grid";
     }
     return {};

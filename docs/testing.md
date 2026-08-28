@@ -19,7 +19,7 @@ A good test here exercises externally observable behavior through a public bound
 `core` is testable that way because it is pure computation over data:
 
 - **Model invariants** — pane count agreeing with the layout template, exactly one active pane, exactly one active tab per pane, referential integrity after a delete or reorder.
-- **Layout rectangle computation** — each of the five templates, split ratios applied, behavior at degenerate window sizes (FR-004a).
+- **Layout rectangle computation** — each of the six templates, split ratios applied, behavior at degenerate window sizes (FR-004a).
 - **Session serialization** — round-trip fidelity, schema migration from an older version, graceful handling of a truncated or corrupt document.
 - **Group mutations** — create, rename, duplicate, delete, reorder, asserted through resulting model state.
 
@@ -150,12 +150,12 @@ Environment labels:
 | AC-005 unreachable restored path stays responsive | E4 | Save a Group containing a mapped network path, disconnect the drive, restart into that Group, and interact with another pane while the unavailable pane resolves. Expected: UI remains responsive, the unavailable tab shows its recoverable error, and its saved identity remains intact. | Drive letter/path, observed error text, responsiveness result, and any measured operator timing. |
 | AC-006 idle resources meet NFR-001 | E1 | With no debugger attached, run `.\tests\release\release_evidence.ps1 -CollectMeasurements` interactively. Follow every prompt, including the 10-minute idle window and three soak runs. Expected: evidence `## Result` is PASS, idle CPU is below 0.1% average, and idle disk I/O is zero. | `docs/release-evidence.md` result/exit code, CPU/disk values, debugger state, and environment. Do not substitute visual observation. |
 | FR-001 Group mutations | E1 | Use the sidebar to create, rename, duplicate, delete, move up, and move down Groups; switch among them after each mutation. Expected: names/order/active Group and persisted state remain correct. | Each mutation's observed result and final Group order. |
-| FR-003 five layout templates | E1 | Exercise Single, Left / Right, Top / Bottom, Three Panes, and Four Panes layouts; resize the window and return to each template. Expected: correct pane count/placement and no view destruction or crash. | Template-by-template pane count, visible arrangement, and machine/build. |
-| FR-005 tabs in every layout | E1 | In each of the five layouts, add, switch, and close multiple tabs in each visible pane; activate an inactive tab and navigate it. Expected: tab state persists, active tab is correct, and only the visible active tab owns a live view. | Per-layout tab operations, active tab/location, and any realization issue. |
+| FR-003 six layout templates | E1 | Exercise Single, Left / Right, Top / Bottom, Three Panes, Two over One, and Four Panes layouts; resize the window and return to each template. Expected: correct pane count/placement and no view destruction or crash. | Template-by-template pane count, visible arrangement, and machine/build. |
+| FR-005 tabs in every layout | E1 | In each of the six layouts, add, switch, and close multiple tabs in each visible pane; activate an inactive tab and navigate it. Expected: tab state persists, active tab is correct, and only the visible active tab owns a live view. | Per-layout tab operations, active tab/location, and any realization issue. |
 | FR-007 Shell file operations | E1 | Execute every item in the existing Shell file operations protocol A1–A7 and clipboard protocol B8–B10 (copy/move/delete/rename, conflict choices, cancel, clipboard round-trips, and re-entry during an operation). Expected: Explorer-equivalent progress/conflict behavior and no crash. | Each A/B item individually; include files/volumes and native dialog observations. |
 | FR-009 network, USB, OneDrive namespace coverage | E4 | Perform the D16 OneDrive placeholder copy and D17 mapped-network/USB copy and delete from the existing protocol. Expected: native namespace semantics remain intact; record any placeholder hydration behavior. | OneDrive state, mapped drive/USB letters, operation results, and exact hydration behavior. |
 | FR-013 corrupt session recovery | E1 | Follow the Crash recovery acceptance protocol above: force-stop recovery, corrupt-primary backup recovery, save-after-recovery backup protection, and both-files-corrupt default recovery. Expected: each exact warning appears, state is usable, and backup is never replaced by garbage. | Each recovery case, warning text/appearance, restored state, and session file contents. |
-| NFR-004 mixed-DPI scaling | E3 | Move the window across both monitors and exercise all five layouts, sidebar, tabs, navigation bars, splitters, and dialogs at each DPI. Expected: no clipping, overlap, wrong hit target, or unscaled logical constant. | Monitor DPI values, Windows build, per-layout visual result, and any defect reproduction. |
+| NFR-004 mixed-DPI scaling | E3 | Move the window across both monitors and exercise all six layouts, sidebar, tabs, navigation bars, splitters, and dialogs at each DPI. Expected: no clipping, overlap, wrong hit target, or unscaled logical constant. | Monitor DPI values, Windows build, per-layout visual result, and any defect reproduction. |
 | NFR-006 diagnostic-mode comparison | E2 | On the same file and same Shell view, run normal `.\build\PaneDock.exe` and then `.\build\PaneDock.exe --diagnostic`; right-click the same file in both runs. Expected: native menu remains, while third-party extension entries disappear or are reduced only in diagnostic mode. | Extension list, both menu item lists, title/mode, and any navigation regression. |
 
 The release gate is closed only when the interactive AC-006 measurement run
@@ -173,7 +173,7 @@ headless smoke test, or source-code inspection as a PASS for any row above.
 - [ ] AC-005 UI responsive with an unreachable path in restored state
 - [ ] AC-006 idle resources meet NFR-001
 - [ ] FR-001 Group create / rename / duplicate / delete / reorder
-- [ ] FR-003 all five layout templates
+- [ ] FR-003 all six layout templates
 - [ ] FR-005 tab add / close / switch in every layout
 - [ ] FR-007 copy / move / delete / rename via `IFileOperation`
 - [ ] FR-009 network drive, USB volume, OneDrive placeholder reachable

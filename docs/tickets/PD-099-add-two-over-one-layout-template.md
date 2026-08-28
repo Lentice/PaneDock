@@ -142,3 +142,20 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接（2026-08-28）
+
+- 最終識別：`LayoutTemplate::two_over_one`；session JSON 字串為 `two_over_one`。enum 值附加在既有 `four_pane_grid` 之後，保留既有 enum 數值與 header 五個既有按鈕的順序/ID。
+- `compute_layout_rects` 的比例順序為 `ratios[0]` 上下分割、`ratios[1]` 上排左右分割；回傳 index 為 `[0]` 上排左、`[1]` 上排右、`[2]` 下排全寬。`app_shell::apply_layout` 以相同 index 直接套用 `group.panes[index]`，無額外重排；`splitters` 對應 `ratio_index 0` 全寬水平線、`ratio_index 1` 上排垂直線。
+- Header 已新增第 6 顆 `Two over One` 按鈕、tooltip 與轉置版 glyph；按鈕寬度計算沿用 `kLayoutButtonIds.size()` 的六顆動態計算，靜態檢查沒有固定 5 筆的索引越界。窄視窗、高 DPI 的實際裁切/溢出結果未驗證，留給使用者手動確認。
+- 測試新增：`core_model_test` 驗證 3 panes / 2 ratios；`core_layout_test` 驗證一般比例、極端比例與最小退化尺寸；`core_session_test` 驗證 `two_over_one` 字串與完整狀態 round-trip。
+- Agent checks：`cmake --build build` PASS；`ctest --test-dir build --output-on-failure` PASS（5/5）。本回合未啟動實機視窗，未使用滑鼠、Computer Use、`SetCursorPos`、`mouse_event` 或互動後截圖。
+
+### 使用者手動驗證
+
+請在 Release build 直接執行以下步驟：
+
+1. 點選 header 第 6 顆 `Two over One`，確認上排為左/右兩個 pane、下排為一個全寬 pane，且 glyph 與版型一致。
+2. 分別拖曳上排垂直分隔線與上下水平分隔線，確認兩條比例可獨立調整；切換 Group 並重新啟動，確認兩條比例都能持久化還原。
+3. 從五種既有版型切換到 `Two over One`，再切回各既有版型，確認 tab 資料不遺失且新增/併入規則正確。
+4. 將視窗縮到最小尺寸，確認三個 pane 都沒有零尺寸或負尺寸；再於窄視窗與不同 DPI 螢幕檢查第 6 顆按鈕沒有裁切、溢出或錯誤 hit target。

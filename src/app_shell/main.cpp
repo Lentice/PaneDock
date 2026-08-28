@@ -157,17 +157,20 @@ constexpr int kMoveDownId = 106;
 constexpr std::array<int, 1> kButtonIds{kNewGroupId};
 constexpr std::array<const wchar_t*, 1> kButtonLabels{L"+ New Group"};
 constexpr int kBrandBarHeight = 52;
-constexpr std::array<int, 5> kLayoutButtonIds{
+constexpr std::array<int, 6> kLayoutButtonIds{
     kLayoutButtonIdBase, kLayoutButtonIdBase + 1, kLayoutButtonIdBase + 2,
-    kLayoutButtonIdBase + 3, kLayoutButtonIdBase + 4};
-constexpr std::array<const wchar_t*, 5> kLayoutButtonLabels{
-    L"Single", L"Left / Right", L"Top / Bottom", L"Three", L"Four"};
-constexpr std::array<panedock::core::LayoutTemplate, 5> kLayoutTemplates{
+    kLayoutButtonIdBase + 3, kLayoutButtonIdBase + 4,
+    kLayoutButtonIdBase + 5};
+constexpr std::array<const wchar_t*, 6> kLayoutButtonLabels{
+    L"Single", L"Left / Right", L"Top / Bottom", L"Three", L"Four",
+    L"Two over One"};
+constexpr std::array<panedock::core::LayoutTemplate, 6> kLayoutTemplates{
     panedock::core::LayoutTemplate::single,
     panedock::core::LayoutTemplate::left_right,
     panedock::core::LayoutTemplate::top_bottom,
     panedock::core::LayoutTemplate::three_pane,
-    panedock::core::LayoutTemplate::four_pane_grid};
+    panedock::core::LayoutTemplate::four_pane_grid,
+    panedock::core::LayoutTemplate::two_over_one};
 struct ViewModeSelection final {
     FOLDERVIEWMODE mode;
     int image_size;
@@ -731,6 +734,12 @@ void draw_layout_glyph(HDC dc, RECT rect, std::size_t index,
             MoveToEx(dc, glyph.left, mid_y, nullptr);
             LineTo(dc, glyph.right, mid_y);
             break;
+        case 5:
+            MoveToEx(dc, glyph.left, mid_y, nullptr);
+            LineTo(dc, glyph.right, mid_y);
+            MoveToEx(dc, mid_x, glyph.top, nullptr);
+            LineTo(dc, mid_x, mid_y);
+            break;
         default:
             break;
     }
@@ -1102,6 +1111,14 @@ std::vector<Splitter> splitters(HWND window,
                       rects[1].x + rects[1].width,
                       rects[0].y + rects[0].height + thickness},
                      1, false}};
+        case panedock::core::LayoutTemplate::two_over_one:
+            return {{{rects[2].x, rects[2].y - thickness,
+                      rects[2].x + rects[2].width, rects[2].y},
+                     0, false},
+                    {{rects[0].x + rects[0].width, rects[0].y,
+                      rects[0].x + rects[0].width + thickness,
+                      rects[0].y + rects[0].height},
+                     1, true}};
     }
     return {};
 }
@@ -3488,9 +3505,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 CW_USEDEFAULT, CW_USEDEFAULT, window, nullptr,
                 GetModuleHandleW(nullptr), nullptr);
             if (state->layout_tooltip != nullptr) {
-                constexpr std::array<const wchar_t*, 5> kLayoutTooltips{
+                constexpr std::array<const wchar_t*, 6> kLayoutTooltips{
                     L"Single pane", L"Two panes side by side",
-                    L"Two panes stacked", L"Three panes", L"Four panes"};
+                    L"Two panes stacked", L"Three panes",
+                    L"Four panes", L"Two panes over one"};
                 for (std::size_t index = 0;
                      index < state->layout_buttons.size(); ++index) {
                     TOOLINFOW info{};

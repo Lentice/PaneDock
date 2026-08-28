@@ -30,6 +30,8 @@ void test_all_layouts_have_concrete_coordinates() {
          {{0, 0, 1000, 199}, {0, 203, 1000, 597}}},
         {LayoutTemplate::three_pane, {0.25, 0.75},
          {{0, 0, 249, 800}, {253, 0, 747, 597}, {253, 601, 747, 199}}},
+        {LayoutTemplate::two_over_one, {0.25, 0.75},
+         {{0, 0, 747, 199}, {751, 0, 249, 199}, {0, 203, 1000, 597}}},
         {LayoutTemplate::four_pane_grid, {0.25, 0.75},
          {{0, 0, 249, 597}, {253, 0, 747, 597},
           {0, 601, 249, 199}, {253, 601, 747, 199}}},
@@ -60,6 +62,12 @@ void test_extreme_ratios_are_clamped() {
     EXPECT(one == std::vector<PaneRect>({
                       {0, 0, 996, 796}, {1000, 0, 120, 796},
                       {0, 800, 996, 80}, {1000, 800, 120, 80}}));
+
+    const auto two_over_one = compute_layout_rects(
+        1000, 800, LayoutTemplate::two_over_one, {0.0, 0.0});
+    EXPECT(two_over_one == std::vector<PaneRect>({
+                              {0, 0, 120, 80}, {124, 0, 876, 80},
+                              {0, 84, 1000, 716}}));
 }
 
 void test_zero_and_negative_client_area() {
@@ -74,6 +82,11 @@ void test_client_area_smaller_than_minimums() {
     EXPECT(rects == std::vector<PaneRect>({
                         {0, 0, 120, 80}, {124, 0, 120, 80},
                         {0, 84, 120, 80}, {124, 84, 120, 80}}));
+
+    EXPECT(compute_layout_rects(
+               100, 100, LayoutTemplate::two_over_one, {0.5, 0.5}) ==
+           std::vector<PaneRect>({
+               {0, 0, 120, 80}, {124, 0, 120, 80}, {0, 84, 120, 80}}));
 }
 
 void test_mismatched_ratio_count_uses_defaults() {

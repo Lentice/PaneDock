@@ -22,6 +22,7 @@ enum class LayoutTemplate {
     top_bottom,
     three_pane,
     four_pane_grid,
+    two_over_one,
 };
 
 struct TabState final {
