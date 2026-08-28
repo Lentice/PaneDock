@@ -142,7 +142,7 @@
 | PD-102 | Tab「+」新增按鈕加上圓角外框,並修正「+」字符置中 | 7 | `done` | PD-081 | [PD-102](tickets/PD-102-tab-add-button-rounded-border-and-centering.md) |
 | PD-103 | 移除 Group 列表項右側的 tab 數量圓形徽章(與副標題重複) | 7 | `done` | PD-028 | [PD-103](tickets/PD-103-remove-sidebar-group-tab-count-badge.md) |
 | PD-104 | 側邊欄寬度可拖曳調整,並跨啟動持久化;預設寬度隨 PD-103 徽章移除而縮小 | 7 | `ready` | PD-097, PD-103 | [PD-104](tickets/PD-104-resizable-persisted-sidebar-width.md) |
-| PD-106 | Graceful close 後 Shell teardown 殘留程序 | 7 | `ready` | PD-007, PD-032, PD-068 | [PD-106](tickets/PD-106-graceful-shutdown-shell-teardown.md) |
+| PD-106 | Graceful close 後 Shell teardown 殘留程序 | 7 | `done` | PD-007, PD-032, PD-068 | [PD-106](tickets/PD-106-graceful-shutdown-shell-teardown.md) |
 | PD-105 | 雙擊 pane 分隔線,重設回置中(平分兩側) | 7 | `ready` | 無 | [PD-105](tickets/PD-105-double-click-splitter-resets-to-center.md) |
 
 ## Dependency lanes

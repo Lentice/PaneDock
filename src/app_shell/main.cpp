@@ -3986,6 +3986,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 assert(panedock::explorer_host::live_view_count() == 0);
             }
             DestroyWindow(window);
+            PostQuitMessage(0);
             return 0;
         case WM_DESTROY:
             if (state != nullptr) {
@@ -4001,7 +4002,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             release_navigation_icon_font();
             release_brand_resources();
             release_address_bar_background_brush();
-            PostQuitMessage(0);
             return 0;
         case WM_NCDESTROY:
             if (state != nullptr) {
