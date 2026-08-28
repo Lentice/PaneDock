@@ -55,3 +55,9 @@ _Avoid_: config, settings file, save file, state file
 **best-effort state**:
 State that PaneDock attempts to restore but does not guarantee: selected items, scroll position, column widths. Distinguished from **required state** — layout, locations, tabs, view mode, sort — which must restore exactly or the restore is a defect.
 _Avoid_: optional state, nice-to-have state
+
+## Navigation terms
+
+**Pinned Location**:
+A Shell location the user has attached to the address bar's quick-jump menu for one-click navigation from any tab. App-wide: shared across all Groups and panes, not part of any Group's state. Distinct from a Group (Group restores a whole arrangement; a Pinned Location is a single destination) and from the two built-in fixed entries (Desktop, My Computer), which are always present, always first, and are not Pinned Locations themselves — Pinned Locations are the user-added entries below the separator. A Pinned Location has no known-folder identity when it points to a UNC network path (e.g. `\\vianextfs06\Timesheet_SW`) or an ordinary local folder — the fallback path carries the identity in that case, same as any other Shell location; it becomes an **unresolvable location** if the server or share is unreachable, following the same recoverable-error handling as any other tab.
+_Avoid_: favourite (reserved as avoided term for Group elsewhere in this glossary; reusing it here for a different concept would blur the two), bookmark, quick access (collides with the Windows Explorer feature of the same name)

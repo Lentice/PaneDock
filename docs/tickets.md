@@ -149,6 +149,7 @@
 | PD-109 | 一般模式啟動後主視窗未出現(HIGH,阻塞其他票驗收) | 7 | `done` | PD-093, PD-106 | [PD-109](tickets/PD-109-normal-mode-launch-shows-no-main-window.md) |
 | PD-110 | Pane tab 允許跨 pane 拖曳搬移,延續 PD-035 決策 1 的「若未來需要另開新票」 | 7 | `done` | PD-035, PD-050, PD-074 | [PD-110](tickets/PD-110-cross-pane-tab-drag.md) |
 | PD-111 | 每個 tab 的導覽列新增 Pinned Locations 下拉選單(Desktop / My Computer + 自訂路徑) | 7 | `done` | 無 | [PD-111](tickets/PD-111-pinned-locations-menu.md) |
+| PD-112 | Pinned Locations 管理對話框(移除／排序) | 7 | `ready` | PD-111 | [PD-112](tickets/PD-112-pinned-locations-manage-dialog.md) |
 | PD-113 | Pane tab 右鍵選單:Close Tab / Close Other Tabs / Close All Tabs / Close Tabs to the Right | 7 | `ready` | 無 | [PD-113](tickets/PD-113-tab-close-context-menu.md) |
 
 ## Dependency lanes
@@ -213,6 +214,10 @@ Phase 7 — 拖放互動,對照使用者 2026-08-25 grilling session 提出的�
   註:PD-034 用 `IDropTarget`/OLE 拖放偵測檔案懸停;PD-035/036 用滑鼠事件偵測清單/tab 項目本身的拖曳,
       刻意不用 OLE 拖放,兩種機制分開設計以避免同一個側邊欄 `LISTBOX` 上互相干擾——PD-036 的文件
       要求實作前需讀過 PD-034 與 PD-035 兩張票。三張票彼此技術獨立,可任意順序或並行實作。
+
+Phase 7 — Pinned Locations,對照使用者 2026-08-28 grilling session
+  PD-111(Pinned Locations 選單:App 全域清單、Desktop/My Computer 固定項目、Add Current Folder)
+       └─ PD-112(Manage 對話框:Remove / Move Up / Move Down)
 
 PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `IShellFolder` fallback in `docs/design-spec.md` §9.1, and the tickets below it must be rewritten rather than adjusted.
 
