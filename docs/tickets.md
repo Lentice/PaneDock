@@ -134,6 +134,7 @@
 | PD-094 | ~~啟動時讀完 session 立刻做一次完全冗餘的同步寫回~~(前提有誤,已撤回,見 ticket 文件與計畫決策紀錄) | 7 | `deferred` | 無 | [PD-094](tickets/PD-094-redundant-session-save-before-main-window-created.md) |
 | PD-095 | 拖曳分隔線/縮放視窗時,每個 mousemove 都跑完整 `apply_layout`,含最多 1000 項 Shell property 重掃 | 7 | `done` | 無 | [PD-095](tickets/PD-095-splitter-drag-full-relayout-and-item-count-rescan-per-mousemove.md) |
 | PD-096 | `draw_brand_bar` 每次 `WM_ERASEBKGND` 都重新載入圖示、建立/刪除字型 | 7 | `done` | 無 | [PD-096](tickets/PD-096-brand-bar-recreates-icon-and-font-every-erasebkgnd.md) |
+| PD-097 | 拖曳分隔線時,幾何重排本身仍在每個 `WM_MOUSEMOVE` 都執行,需節流 | 7 | `ready` | PD-095 | [PD-097](tickets/PD-097-splitter-drag-geometry-throttling.md) |
 
 ## Dependency lanes
 
@@ -463,3 +464,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 ### 2026-08-27 — 使用者實機截圖回報 column header 在非詳細資料模式仍顯示,開 PD-082
 
 使用者附截圖(大圖示檢視,folder 為 7-7zip/Adobe/AMD/Application):畫面上方仍有一列「名稱、修改日期、類型、大小」欄位標題。這正是 PD-079 決策 5「Column header 只在『詳細資料』顯示」所依賴、但**從未實機驗證**的假設(該票驗收項 6 明確記為「未驗證」)。PD-079 文件依規則不編輯,開新票 PD-082 追根因與修正,並列出兩個尚待查證的假設(全新 tab 從未套用過 view mode、或從詳細資料切走時 header 沒有跟著隱藏),交給實作 agent 用單次點擊+截圖分別驗證再動手。
+
+### 2026-08-28 — 使用者要求分隔線拖曳加節流以降低 CPU,開 PD-097
+
+使用者原文:「resize pane size via pane separator should apply throttling, to prevent the render storm. long refresh interval is acceptable to lower cpu usage.」PD-095(2026-08-27)已把 `update_splitter_drag` 的逐幀呼叫從「幾何+內容」拆成「只做幾何」,但幾何重排本身仍是無節流的逐幀工作(每個 `WM_MOUSEMOVE` 都對每個可見 pane 呼叫 `SetWindowPos`)。使用者本次要求的是在幾何重排這一層再加節流,並明確表態接受較長刷新間隔換取更低 CPU。決策方向:沿用既有的 `kSessionSaveTimerId`(PD-091)的事件觸發 timer 模式,但性質是節流(throttle,固定間隔持續套用最新位置)而非防抖(debounce,安靜下來才套用一次)——兩者混淆會導致拖曳期間畫面凍結直到放開滑鼠,已在票內明確寫清楚差異以避免實作誤用防抖模式。開票為 [PD-097](tickets/PD-097-splitter-drag-geometry-throttling.md),依賴 PD-095。
