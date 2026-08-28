@@ -2051,10 +2051,12 @@ HRESULT apply_layout(HWND window, AppState& state,
             const int actual_strip_height =
                 std::min(strip_height, static_cast<int>(pane_rect.bottom -
                                                         pane_rect.top));
-            SetWindowPos(state.tab_strips[index], nullptr, pane_rect.left,
-                         pane_rect.top, pane_rect.right - pane_rect.left,
-                         actual_strip_height,
-                         SWP_NOZORDER | SWP_NOACTIVATE);
+            if (pane_geometry_changed) {
+                SetWindowPos(state.tab_strips[index], nullptr, pane_rect.left,
+                             pane_rect.top, pane_rect.right - pane_rect.left,
+                             actual_strip_height,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            }
             ShowWindow(state.tab_strips[index], SW_SHOW);
             if (recompute_content) apply_tab_item_size(state, index);
 
@@ -2073,10 +2075,12 @@ HRESULT apply_layout(HWND window, AppState& state,
             const int button_height = navigation_height - button_offset_y;
             int x = pane_rect.left + button_offset_x;
             for (HWND button : buttons) {
-                SetWindowPos(button, nullptr, x,
-                             navigation_top + button_offset_y,
-                             geometry.button_width, button_height,
-                             SWP_NOZORDER | SWP_NOACTIVATE);
+                if (pane_geometry_changed) {
+                    SetWindowPos(button, nullptr, x,
+                                 navigation_top + button_offset_y,
+                                 geometry.button_width, button_height,
+                                 SWP_NOZORDER | SWP_NOACTIVATE);
+                }
                 ShowWindow(button, SW_SHOW);
                 x += geometry.button_width;
             }
@@ -2088,11 +2092,13 @@ HRESULT apply_layout(HWND window, AppState& state,
             const RECT address_rect = inset_rect(
                 geometry.address_background,
                 scaled_value(window, kAddressBarInset));
-            SetWindowPos(state.address_bars[index], nullptr, address_rect.left,
-                         address_rect.top,
-                         address_rect.right - address_rect.left,
-                         address_rect.bottom - address_rect.top,
-                         SWP_NOZORDER | SWP_NOACTIVATE);
+            if (pane_geometry_changed) {
+                SetWindowPos(state.address_bars[index], nullptr,
+                             address_rect.left, address_rect.top,
+                             address_rect.right - address_rect.left,
+                             address_rect.bottom - address_rect.top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            }
             ShowWindow(state.address_bars[index], SW_SHOW);
 
             RECT rect = pane_rect;
@@ -2102,10 +2108,13 @@ HRESULT apply_layout(HWND window, AppState& state,
                 std::max(0, static_cast<int>(rect.bottom - rect.top)));
             const RECT status_rect{rect.left, rect.bottom - status_height,
                                    rect.right, rect.bottom};
-            SetWindowPos(state.status_bars[index], nullptr, status_rect.left,
-                         status_rect.top, status_rect.right - status_rect.left,
-                         status_rect.bottom - status_rect.top,
-                         SWP_NOZORDER | SWP_NOACTIVATE);
+            if (pane_geometry_changed) {
+                SetWindowPos(state.status_bars[index], nullptr, status_rect.left,
+                             status_rect.top,
+                             status_rect.right - status_rect.left,
+                             status_rect.bottom - status_rect.top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            }
             ShowWindow(state.status_bars[index], SW_SHOW);
             rect.bottom -= status_height;
             // PD-040: the container is the real parent HWND passed to
@@ -2118,13 +2127,18 @@ HRESULT apply_layout(HWND window, AppState& state,
             // apply_pane_container_region.
             const int container_width = rect.right - rect.left;
             const int container_height = rect.bottom - rect.top;
-            SetWindowPos(state.explorer_containers[index], nullptr, rect.left,
-                         rect.top, container_width, container_height,
-                         SWP_NOZORDER | SWP_NOACTIVATE);
+            if (pane_geometry_changed) {
+                SetWindowPos(state.explorer_containers[index], nullptr,
+                             rect.left, rect.top, container_width,
+                             container_height,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            }
             ShowWindow(state.explorer_containers[index], SW_SHOW);
-            apply_pane_container_region(state.explorer_containers[index],
-                                        container_width, container_height,
-                                        container_radius);
+            if (pane_geometry_changed) {
+                apply_pane_container_region(state.explorer_containers[index],
+                                            container_width, container_height,
+                                            container_radius);
+            }
             const RECT local_rect{0, 0, container_width, container_height};
             if (!state.realized[index] &&
                 (realize_deferred_panes || !state.startup_realize_pending ||
@@ -2156,7 +2170,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                 } catch (...) {
                     return E_OUTOFMEMORY;
                 }
-            } else {
+            } else if (pane_geometry_changed) {
                 state.explorers[index].set_rect(local_rect);
             }
             if (recompute_content) refresh_status_bar(state, index);

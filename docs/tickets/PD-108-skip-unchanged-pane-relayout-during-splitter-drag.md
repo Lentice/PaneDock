@@ -119,3 +119,28 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 實作交接（2026-08-28）
+
+- `src/app_shell/main.cpp` 的 `apply_layout` 沿用既有
+  `pane_geometry_changed`。只有矩形真的變動時，才對 tab strip、五個導覽
+  按鈕、address bar、status bar、explorer container 執行 `SetWindowPos`，並
+  重算 container region；已 realize 的 Shell view 也只在該旗標為真時呼叫
+  `ExplorerHost::set_rect`。這同時避免其 error window 的重定位。
+- `ShowWindow(SW_SHOW)`、`apply_tab_item_size`、`refresh_status_bar`、首次
+  `initialize`、`laid_out_pane_rects` 寫回與不可見 pane 的 reset 均維持原有
+  路徑；沒有新增 instrumentation 或改動 PD-095/PD-097 的內容 gate 與節流。
+- `cmake --build build`：成功；`ctest --test-dir build --output-on-failure`：
+  成功，5/5 通過。`git diff --check`：成功。
+- 未執行任何滑鼠、Computer Use 或實機 UI 互動驗證，故以下項目交由使用者
+  手動確認：
+  1. 啟動 `build\\PaneDock.exe`，切到 Three Panes 或 Four Panes，拖曳其中一條
+     分隔線；確認未受該分隔線影響的 pane，其 tab strip、導覽按鈕、address
+     bar、status bar 與 Shell view 沒有不必要的跳動或重定位，而相鄰 pane
+     仍會跟隨拖曳。
+  2. 放開分隔線後，確認所有 pane 的最終幾何與 Shell view 位置正確；再做
+     視窗縮放、版型切換與 Group 切換，確認所有 pane chrome 與內容位置沒有
+     regression。
+  3. 若需直接驗證呼叫次數，可在 debugger 或暫時診斷點觀察
+     `SetWindowPos`/`ExplorerHost::set_rect`：矩形未變的 pane 不應在該次
+     `apply_layout` 產生定位呼叫；驗證後不要保留 instrumentation。
