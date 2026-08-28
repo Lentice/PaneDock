@@ -118,7 +118,7 @@ constexpr int kNavigationButtonOffsetX = 0;
 constexpr int kNavigationButtonOffsetY = 2;
 constexpr int kNavigationGlyphSize = 16;
 constexpr std::array<wchar_t, 5> kNavigationGlyphs{
-    L'\uE72B', L'\uE72A', L'\uE74A', L'\uE72C', L'\uE80A'};
+    L'\uE72B', L'\uE72A', L'\uE74A', L'\uE72C', L'\uE71D'};
 // PD-031: rounded light-gray pill drawn behind the address bar EDIT to fake
 // a rounded input box (see docs/tickets/PD-031-*.md decision 2). Radius is
 // smaller than the design mock's 6px .location radius because the fixed
@@ -868,13 +868,14 @@ void draw_navigation_fallback_glyph(const DRAWITEMSTRUCT& item,
                 MoveToEx(item.hDC, cx + half / 2, cy - half, nullptr);
                 LineTo(item.hDC, cx + half / 4, cy - half / 2);
                 break;
-            case 4:  // fallback view: four small squares
-                for (int row = -1; row <= 1; row += 2)
-                    for (int column = -1; column <= 1; column += 2)
-                        Rectangle(item.hDC, cx + column * half / 2 - 1,
-                                  cy + row * half / 2 - 1,
-                                  cx + column * half / 2 + 2,
-                                  cy + row * half / 2 + 2);
+            case 4:  // fallback view: three rows with square bullets
+                for (int row = -1; row <= 1; ++row) {
+                    const int y = cy + row * half / 2;
+                    Rectangle(item.hDC, cx - half, y - 1, cx - half + 3,
+                              y + 2);
+                    MoveToEx(item.hDC, cx - half / 2, y, nullptr);
+                    LineTo(item.hDC, cx + half, y);
+                }
                 break;
             default:
                 break;

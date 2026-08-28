@@ -91,3 +91,25 @@ git diff --check
 ## 交接區
 
 <!-- 實作 agent 填寫,append-only -->
+
+### 2026-08-28 實作與驗證阻塞
+
+- `src/app_shell/main.cpp` 的 `kNavigationGlyphs[4]` 已改為 `U+E71D`；依 ticket 指定的候選與描述，這是目前選用的 List 字符。fallback `case 4` 已改為三列、每列左側方形項目符號加右側橫線，沿用既有 `color`、`pen_width`、`half` 與共用繪製路徑。
+- `cmake --build build` 成功；`ctest --test-dir build --output-on-failure` 為 5/5 通過；程式碼修改後 `git diff --check` 通過。
+- 依要求只啟動一次 `build\\PaneDock.exe` 並呼叫 `PrintWindow(hwnd, hdc, 2)`；API 回傳成功，但在主視窗完成初始化前取得 `50x50` 的黑色畫面，不能作為 glyph 視覺比對證據，也沒有足夠結果判定是否要替換 `U+E71D`。這次 bitmap、graphics 與 HDC 已釋放。
+- 隨後依要求執行不帶 `/F` 的 `taskkill /PID 41500`；非提升權限第一次回報 Access denied，提升權限重送（含一次 `/T`）雖回報已送出 termination signal，程序仍存活且主視窗已消失，推定卡在 Shell/COM 關閉清理。未使用 `taskkill /F` 或 `Stop-Process -Force`。
+- 因無法取得有效的單次完整 UI 截圖，實際渲染結果與使用者目標圖示的驗證仍待後續可正常關閉/重啟 PaneDock 的環境完成；本次不宣稱 Acceptance 3 已通過，也不把 tracker 狀態改成 `done`。
+
+### 2026-08-28 後續就緒輪詢重試與 PD-106 差異
+
+- 依後續要求加入外部驗證輪詢：每 400 ms、最多 13 次（約 5 秒），以 `FindWindowW("PaneDockMainWindow")`、`IsWindowVisible`、`GetClientRect` 與 `EnumChildWindows` 確認主視窗、client 尺寸、四個 View 按鈕（control ID 350–353）及穩定的子視窗集合後才允許呼叫 `PrintWindow`。兩次重試都未達就緒條件，因此沒有把任何重試結果當作截圖驗收。
+- 精確重現 1：PID `41500`，`build\\PaneDock.exe`，CMake `Release`，未使用 `--diagnostic`。第一次啟動約 400 ms 取得的 HWND 矩形為 `50x50`，`PrintWindow(hwnd, hdc, 2)` 回傳 `True` 但輸出為全黑啟動畫面；釋放 HDC/graphics/bitmap 後送出不帶 `/F` 的 `taskkill /PID 41500`，先回報 Access denied，提升權限重送仍只送出 termination signal，主視窗消失但 PID 持續存在。此 PID 之後依使用者授權以一次 `/F` 僅作清理，未作為 shutdown 驗收證據。
+- 精確重現 2：PID `35748`，同一 `Release` `build\\PaneDock.exe`、一般模式、未使用 `--diagnostic`。輪詢 `13 x 400 ms` 後 `PaneDockMainWindow`、可見主視窗與四個 View button 子視窗均不存在（`childCount=0`、`viewButtons=0`），故未呼叫 `PrintWindow`；釋放探針資源後提升權限送出不帶 `/F` 的 `taskkill /PID 35748`，回報已送出 termination signal，但等待 3 秒及其後 15 秒 PID 仍存活、`MainWindowHandle=0`、`Responding=True`、主視窗不存在。這與 PD-106 已標記 done 的既有 graceful-shutdown 結果不一致，僅旗標記錄供人工另行審查，本票不診斷或修改關閉路徑。
+- 目前有效的 List glyph 視覺截圖仍未取得；因此 `U+E71D` 尚未能以實機畫面與 ticket 目標比對，Acceptance 3 未完成。PD-098 tracker 維持 `ready`，本次不提交 commit。
+
+### 2026-08-28 完成驗證
+
+- 以 Release `build\\PaneDock.exe` 一般模式啟動，PID `19476`；輪詢每 250 ms、最長 30 秒，交叉確認 `Process.MainWindowHandle`、`FindWindowW`、依 PID 的 `EnumWindows`，並以 `IsWindowVisible`、client geometry、子視窗集合及 4 個 view button（control ID 350–353）判定就緒。HWND 首次建立 `280 ms`，首次可見 `1838 ms`，連續穩定樣本於 `2352 ms` 通過；結果為 `1920x967`、59 個子視窗、4 個 view buttons。
+- 就緒視窗以 `PrintWindow(hwnd, hdc, 2)` 擷取成功（`PrintWindow=True`），再以 6 倍 `NearestNeighbor` 放大四個 view button。實際畫面均為左側項目符號加水平線的 List glyph，與目標清單圖示一致；未出現 2×2 Grid，尺寸/顏色/hover 繪製機制仍與其餘導覽按鈕共用。測試後以 `WM_CLOSE` 正常關閉，process exit code `0`。
+- Fallback `case 4` 經程式碼確認為三列等距的左側方形項目符號加右側橫線，不再繪出四方格；`kNavigationGlyphs[4]` 最終為 `U+E71D`。
+- `cmake --build build` 成功（`ninja: no work to do`）；`ctest --test-dir build --output-on-failure` 為 5/5 通過；`git diff --check` 通過。未驗證項目：無。
