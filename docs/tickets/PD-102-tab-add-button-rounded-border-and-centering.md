@@ -3,7 +3,7 @@
 Phase 7 · app_shell · Depends on: PD-081
 
 - Source: 使用者需求(2026-08-28)。
-- Origin: 使用者原文:「for pane add button, centered the '+' in the button. make button 外框圓角」
+- Origin: 使用者原文:「for pane add button, centered the '+' in the button. make button 外框圓角」;實作前使用者追加更正:「For PD-102 我希望 pane add button 圓框但平常是沒有外框的(框線大小0) 只有 onhover 變色才看的出來」——本票下方決策已依更正版本撰寫,不是原始要求的「永遠可見外框」。
 - Priority: LOW——純視覺樣式調整,不影響功能。
 
 ## 已確認的現況(有程式碼證據,不是猜測)
@@ -20,10 +20,12 @@ Phase 7 · app_shell · Depends on: PD-081
 
 ## 已確認的產品決策
 
-1. **外框永遠可見,不是只在 hover 時才出現。** 理由:本檔案裡已有的同類元件(tab 本身、`draw_tab_scroll_button`)全部都是「外框永遠可見、填色隨 hover 改變」的視覺語言,「+」按鈕若外框只在 hover 才出現,會是這一排按鈕裡唯一不一致的例外,且使用者原文「make button 外框圓角」描述的是按鈕本身的固定樣式,不是限定 hover 態。
-2. **外框繪製直接沿用 `draw_tab_scroll_button` 的既有寫法與色值**(`RoundRect` + `CreatePen(PS_SOLID, border_width, RGB(226, 232, 240))`),`radius`/`border_width` 沿用 `paint_tab_strip` 已經算好的區域變數(`:2843-2844`),不重新計算、不新增函式簽章。
+> **2026-08-28 更正(取代原本的決策 1/4,實作前生效):** 使用者實機看過本票最初依照 `draw_tab_scroll_button` 寫的「外框永遠可見」設計後,明確要求改為**平常(非 hover)完全不畫外框/填色,框線視覺上寬度為 0,只有滑鼠移入(hover)時才透過變色顯示出圓角外框**。使用者原文:「For PD-102 我希望 pane add button 圓框但平常是沒有外框的(框線大小0) 只有 onhover 變色才看的出來」。以下決策 1、4 已依此更正,決策 2、3、5 不受影響。
+
+1. **外框只在 hover 時才可見,非 hover 時完全不畫外框也不填色**——比照本票修改前的既有行為(修改前非 hover 態本來就「無背景/無外框」,只有 hover 時才有方形 `FillRect`),本票只是把「hover 時才顯示」的既有互動語言從方形改成圓角,不是新增一個「永遠可見」的樣式。實作上最小改動的做法是:非 hover 態直接跳過繪製(比照現況,`:2944-2951` 原本就是「hover 才 `FillRect`」的 if 判斷,本票只需把 hover 分支內的繪製從 `FillRect` 換成 `RoundRect` 外框+填色,非 hover 分支維持原樣不畫),不需要用「寬度 0 的筆」這種特例寫法。
+2. **外框繪製沿用 `draw_tab_scroll_button` 的既有寫法與色值**(`RoundRect` + `CreatePen(PS_SOLID, border_width, RGB(226, 232, 240))`),`radius`/`border_width` 沿用 `paint_tab_strip` 已經算好的區域變數(`:2843-2844`),不重新計算、不新增函式簽章。**只在 hover 時執行這段繪製**(見決策 1)。
 3. **外框/填色的矩形範圍採用現有的 `hover`(即 `add` 內縮 `add_inset` 之後的矩形,`:2941-2943`)而非整個 `add` 熱區矩形**——`add` 是完整點擊熱區(比照 tab 高度),`hover` 才是視覺上「這顆按鈕看起來多大」的既有內縮矩形。沿用既有的 `hover` 矩形當作外框/填色的視覺邊界,而不是另外設計一個新尺寸,是最小改動;點擊熱區(`add`)完全不變,不影響任何既有的 hit-test 邏輯(`:3036`、`:3050`)。
-4. **正常態(非 hover)也要填色,不能維持「無背景、只有外框」**——理由同第 1 點,`draw_tab_scroll_button` 正常態填 `RGB(255, 255, 255)`(白色),本票沿用同一組色值(正常態白色、hover 態 `RGB(236, 240, 244)`,與現有 hover 色值相同,不改變 hover 的既有觀感)。
+4. **正常態(非 hover)維持無背景、無外框**(修改前既有行為,本票不改變這一點)——hover 態填色沿用既有色值 `RGB(236, 240, 244)`,只是形狀從方形 `FillRect` 改成與外框一致的 `RoundRect`。**不新增「正常態白色填色」**——`draw_tab_scroll_button` 的「正常態也填色」是它自己的既有樣式,不是本票要跟著套用的規則;本票的「+」按鈕平常維持「看不出按鈕邊界,只有一個字符浮在 tab 條背景上」的既有觀感,只有 hover 才「浮現」圓角外框與填色。
 5. **「+」字符置中問題,先用本專案既有的 `PrintWindow` 截圖驗證方法實際確認目前效果,再決定是否保留/移除/調整 PD-081 加入的 `-1px` 垂直位移。** 不得未經視覺驗證就假設現狀是對的或錯的——這正是使用者回報的問題本身。若截圖顯示置中後仍有偏移,調整 `OffsetRect` 的位移量或直接移除;若截圖顯示已經置中(`-1px` nudge 恰好抵銷字型 baseline 的視覺偏移),保留不動並在交接區記錄佐證截圖。
 
 ## Binding constraints — quoted, do not go looking for them
@@ -48,10 +50,9 @@ Phase 7 · app_shell · Depends on: PD-081
 
 ## Scope
 
-1. 「+」按鈕的填色矩形(現有 `hover` 變數)加上永遠可見的圓角外框,沿用 `draw_tab_scroll_button` 的色值與寫法。
-2. 正常態(非 hover)也填色(白色),不再是無背景。
-3. Hover 態的填色從方形 `FillRect` 改為與外框一致的 `RoundRect`(圓角),色值不變(`RGB(236, 240, 244)`)。
-4. 「+」字符的垂直位移量,經截圖驗證後保留、調整或移除。
+1. Hover 態的填色從方形 `FillRect` 改為圓角 `RoundRect`(填色 + 外框),沿用 `draw_tab_scroll_button` 的色值與寫法(填色 `RGB(236, 240, 244)`、外框 `RGB(226, 232, 240)`)。
+2. 正常態(非 hover)維持修改前的既有行為——不畫任何背景或外框,只有「+」字符本身。
+3. 「+」字符的垂直位移量,經截圖驗證後保留、調整或移除。
 
 ## Non-goals
 
@@ -63,8 +64,8 @@ Phase 7 · app_shell · Depends on: PD-081
 
 ## Acceptance Criteria
 
-1. 「+」按鈕在正常態與 hover 態都能看到圓角外框,兩態外框樣式一致(色值/粗細不變,只有填色隨 hover 改變)。
-2. 外框的圓角視覺風格與 tab 本身、tab 捲動按鈕放大截圖並排比對一致(同一套視覺語言,不是自創樣式)。
+1. 「+」按鈕正常態(非 hover)看不到任何外框或背景,只有「+」字符本身;只有滑鼠移入(hover)時才顯示圓角外框與填色。
+2. Hover 態外框的圓角視覺風格與 tab 本身、tab 捲動按鈕放大截圖並排比對一致(同一套視覺語言,不是自創樣式),但**只在 hover 時出現**這一點與 tab 本身/tab 捲動按鈕(兩者外框永遠可見)不同,這是使用者對「+」按鈕的明確要求,不是不一致的缺陷。
 3. 「+」字符在放大截圖中確認置中於按鈕可視範圍內(水平與垂直皆置中,不偏移)。
 4. 「+」按鈕的點擊行為(新增分頁)與熱區範圍與修改前完全相同。
 5. `cmake --build build`、`ctest --test-dir build --output-on-failure` 全數通過。
