@@ -37,7 +37,10 @@ ApplicationState sample() {
     GroupState group{"group-1", L"工作", LayoutTemplate::left_right, {0.375},
                      {std::move(first), std::move(second)}, "pane-2"};
     return {kSessionSchemaVersion, {std::move(group)}, "group-1",
-            {10, -20, 1280, 720, true}};
+            {10, -20, 1280, 720, true},
+            kDefaultSidebarWidth,
+            {{L"C:\\Users", L"", L"C:\\Users"},
+             {L"\\\\server\\share", L"", L""}}};
 }
 
 void write_text(const std::filesystem::path& path, std::string_view text) {
@@ -90,6 +93,7 @@ void test_round_trip_and_plain_json() {
     EXPECT(json.find("blob") == std::string::npos);
     EXPECT(json.find("工作") != std::string::npos);
     EXPECT(json.find("\"view_mode\":\"FVM_ICON:48\"") != std::string::npos);
+    EXPECT(json.find("\"pinned_locations\"") != std::string::npos);
 
     std::string legacy = json;
     const std::string current_view_mode = "\"view_mode\":\"FVM_ICON:48\"";
@@ -141,6 +145,20 @@ void test_optional_sidebar_width() {
     }
 }
 
+void test_optional_pinned_locations() {
+    std::string json = serialize_session({sample(), {}});
+    const auto start = json.find(",\"pinned_locations\":[");
+    const auto end = json.find("],\"schema_version\"", start);
+    EXPECT(start != std::string::npos);
+    EXPECT(end != std::string::npos);
+    if (start == std::string::npos || end == std::string::npos) return;
+    json.erase(start, end - start + 1);
+    const auto restored = deserialize_session(json);
+    EXPECT(restored.has_value());
+    if (restored.has_value())
+        EXPECT(restored->application.pinned_locations.empty());
+}
+
 void test_two_over_one_round_trip() {
     ApplicationState original = sample();
     auto& group = original.groups.front();
@@ -190,6 +208,21 @@ void test_unknown_fields_survive_write_back() {
     const std::string rewritten = serialize_session(*document);
     EXPECT(rewritten.find("\"future_root\":{\"enabled\":true}") != std::string::npos);
     EXPECT(rewritten.find("\"future_location\":[1,2,3]") != std::string::npos);
+
+    const auto pinned = json.find("\"pinned_locations\":[");
+    EXPECT(pinned != std::string::npos);
+    if (pinned != std::string::npos) {
+        const auto object_start = json.find('{', pinned);
+        json.insert(object_start + 1, "\"future_pinned\":true,");
+        const auto pinned_document = deserialize_session(json);
+        EXPECT(pinned_document.has_value());
+        if (pinned_document.has_value()) {
+            const std::string pinned_rewritten =
+                serialize_session(*pinned_document);
+            EXPECT(pinned_rewritten.find("\"future_pinned\":true") !=
+                   std::string::npos);
+        }
+    }
 }
 
 void test_clean_shutdown_type_mismatch_defaults_true() {
@@ -315,6 +348,7 @@ void test_durability_hook_order_and_failure() {
 int main() {
     test_round_trip_and_plain_json();
     test_optional_sidebar_width();
+    test_optional_pinned_locations();
     test_two_over_one_round_trip();
     test_corrupt_and_invalid_documents();
     test_unknown_fields_survive_write_back();

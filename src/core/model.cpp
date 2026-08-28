@@ -336,4 +336,17 @@ bool set_active_pane(GroupState& group, const std::string& pane_id) noexcept {
     return true;
 }
 
+bool add_pinned_location(ApplicationState& application, ShellLocation location) {
+    if (location.parsing_name.empty() ||
+        std::find_if(application.pinned_locations.begin(),
+                     application.pinned_locations.end(),
+                     [&](const ShellLocation& pinned) {
+                         return pinned.parsing_name == location.parsing_name;
+                     }) != application.pinned_locations.end()) {
+        return false;
+    }
+    application.pinned_locations.push_back(std::move(location));
+    return true;
+}
+
 }  // namespace panedock::core

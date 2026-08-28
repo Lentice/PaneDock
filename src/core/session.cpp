@@ -310,6 +310,29 @@ Json::Object preserved_object(const Json::Array* values, std::string_view id) {
     return {};
 }
 
+Json::Object preserved_location_object(const Json::Array* values,
+                                       std::string_view parsing_name) {
+    if (!values) return {};
+    for (const auto& value : *values) {
+        const auto* candidate = object(value);
+        const auto* candidate_name =
+            candidate ? as<std::string>(*candidate, "parsing_name") : nullptr;
+        if (candidate_name && *candidate_name == parsing_name) return *candidate;
+    }
+    return {};
+}
+
+std::optional<ShellLocation> decode_shell_location(const Json::Object& value) {
+    const auto* parsing = as<std::string>(value, "parsing_name");
+    const auto* known = as<std::string>(value, "known_folder_identity");
+    const auto* fallback = as<std::string>(value, "fallback_path");
+    const auto parsing_wide = parsing ? wide(*parsing) : std::nullopt;
+    const auto known_wide = known ? wide(*known) : std::nullopt;
+    const auto fallback_wide = fallback ? wide(*fallback) : std::nullopt;
+    if (!parsing_wide || !known_wide || !fallback_wide) return std::nullopt;
+    return ShellLocation{*parsing_wide, *known_wide, *fallback_wide};
+}
+
 std::optional<int> integer(const Json::Object& value, std::string_view name) {
     const double* number = as<double>(value, name);
     if (!number || std::trunc(*number) != *number ||
@@ -397,6 +420,21 @@ Json encode(const ApplicationState& application, Json root,
         groups.push_back(Json{std::move(encoded)});
     }
     result["groups"] = Json{std::move(groups)};
+    Json::Array pinned_locations;
+    const Json::Array* old_pinned_locations = nullptr;
+    if (const Json* old = field(result, "pinned_locations"))
+        old_pinned_locations = array(*old);
+    for (const auto& pinned : application.pinned_locations) {
+        const std::string parsing_name = utf8(pinned.parsing_name);
+        Json::Object encoded = preserved_location_object(
+            old_pinned_locations, parsing_name);
+        encoded["parsing_name"] = Json{parsing_name};
+        encoded["known_folder_identity"] =
+            Json{utf8(pinned.known_folder_identity)};
+        encoded["fallback_path"] = Json{utf8(pinned.fallback_path)};
+        pinned_locations.push_back(Json{std::move(encoded)});
+    }
+    result["pinned_locations"] = Json{std::move(pinned_locations)};
     result["clean_shutdown"] = Json{clean_shutdown};
     Json::Object placement;
     if (const Json* old = field(result, "window_placement"); old && object(*old)) placement = *object(*old);
@@ -426,12 +464,25 @@ std::optional<ApplicationState> decode(const Json& root) {
     const auto sidebar_width =
         sidebar_width_json ? integer(*value, "sidebar_width")
                            : std::optional<int>{kDefaultSidebarWidth};
-    if (!active_group || !groups || !placement || !sidebar_width)
+    const Json* pinned_locations_json = field(*value, "pinned_locations");
+    const auto* pinned_locations =
+        pinned_locations_json ? array(*pinned_locations_json) : nullptr;
+    if (!active_group || !groups || !placement || !sidebar_width ||
+        (pinned_locations_json != nullptr && pinned_locations == nullptr))
         return std::nullopt;
     ApplicationState application;
     application.schema_version = kSessionSchemaVersion;
     application.active_group_id = *active_group;
     application.sidebar_width = *sidebar_width;
+    if (pinned_locations != nullptr) {
+        for (const auto& pinned_json : *pinned_locations) {
+            const auto* pinned_object = object(pinned_json);
+            if (!pinned_object) return std::nullopt;
+            const auto pinned = decode_shell_location(*pinned_object);
+            if (!pinned || !add_pinned_location(application, *pinned))
+                return std::nullopt;
+        }
+    }
     const auto x = integer(*placement, "x"), y = integer(*placement, "y"),
                width = integer(*placement, "width"), height = integer(*placement, "height");
     const auto* maximized = as<bool>(*placement, "maximized");
@@ -476,14 +527,10 @@ std::optional<ApplicationState> decode(const Json& root) {
                 const auto* sort_column = as<std::string>(*tab_object, "sort_column");
                 const auto* ascending = as<bool>(*tab_object, "sort_ascending");
                 if (!tab_id || !location || !view_mode || !sort_column || !ascending) return std::nullopt;
-                const auto* parsing = as<std::string>(*location, "parsing_name");
-                const auto* known = as<std::string>(*location, "known_folder_identity");
-                const auto* fallback = as<std::string>(*location, "fallback_path");
-                const auto parsing_wide = parsing ? wide(*parsing) : std::nullopt;
-                const auto known_wide = known ? wide(*known) : std::nullopt;
-                const auto fallback_wide = fallback ? wide(*fallback) : std::nullopt;
-                if (!parsing_wide || !known_wide || !fallback_wide) return std::nullopt;
-                pane.tabs.push_back({*tab_id, {*parsing_wide, *known_wide, *fallback_wide},
+                const auto decoded_location =
+                    location ? decode_shell_location(*location) : std::nullopt;
+                if (!decoded_location) return std::nullopt;
+                pane.tabs.push_back({*tab_id, *decoded_location,
                                      *view_mode, *sort_column, *ascending});
             }
             group.panes.push_back(std::move(pane));

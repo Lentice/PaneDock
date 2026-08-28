@@ -72,6 +72,7 @@ struct ApplicationState final {
     std::string active_group_id;  // Empty exactly when groups is empty.
     WindowPlacement window_placement;
     int sidebar_width{kDefaultSidebarWidth};
+    std::vector<ShellLocation> pinned_locations;
 
     bool operator==(const ApplicationState&) const = default;
 };
@@ -114,5 +115,6 @@ bool close_tab(PaneState& pane, const std::string& tab_id,
                const ShellLocation& default_location);
 bool set_active_tab(PaneState& pane, const std::string& tab_id) noexcept;
 bool set_active_pane(GroupState& group, const std::string& pane_id) noexcept;
+bool add_pinned_location(ApplicationState& application, ShellLocation location);
 
 }  // namespace panedock::core

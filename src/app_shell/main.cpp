@@ -121,8 +121,8 @@ constexpr int kNavigationButtonWidth = 32;
 constexpr int kNavigationButtonOffsetX = 0;
 constexpr int kNavigationButtonOffsetY = 2;
 constexpr int kNavigationGlyphSize = 16;
-constexpr std::array<wchar_t, 5> kNavigationGlyphs{
-    L'\uE72B', L'\uE72A', L'\uE74A', L'\uE72C', L'\uE71D'};
+constexpr std::array<wchar_t, 6> kNavigationGlyphs{
+    L'\uE72B', L'\uE72A', L'\uE74A', L'\uE72C', L'\uE71D', L'\uE718'};
 // PD-031: rounded light-gray pill drawn behind the address bar EDIT to fake
 // a rounded input box (see docs/tickets/PD-031-*.md decision 2). Radius is
 // smaller than the design mock's 6px .location radius because the fixed
@@ -137,6 +137,8 @@ constexpr int kUpButtonIdBase = 320;
 constexpr int kAddressBarIdBase = 330;
 constexpr int kRefreshButtonIdBase = 340;
 constexpr int kViewModeButtonIdBase = 350;
+// Pinned button IDs use the unused 392-395 range after view-mode popup IDs.
+constexpr int kPinnedButtonIdBase = 392;
 // View-mode popup commands: eight IDs per pane, 360-391, kept separate from
 // the navigation buttons and layout commands above.
 constexpr int kViewModeMenuIdBase = 360;
@@ -144,6 +146,22 @@ constexpr std::size_t kViewModeOptionCount = 8;
 constexpr int kViewModeMenuIdCount =
     static_cast<int>(kExplorerCount * kViewModeOptionCount);
 constexpr int kLayoutButtonIdBase = 400;
+// Pinned popup commands: four pane blocks, each with 64 custom locations and
+// four fixed/action slots. The 500-771 range is separate from all controls.
+constexpr int kPinnedMenuIdBase = 500;
+constexpr int kPinnedMenuMaxLocationCount = 64;
+constexpr int kPinnedMenuDesktopOffset = 0;
+constexpr int kPinnedMenuThisPcOffset = 1;
+constexpr int kPinnedMenuLocationOffset = 2;
+constexpr int kPinnedMenuAddOffset =
+    kPinnedMenuLocationOffset + kPinnedMenuMaxLocationCount;
+constexpr int kPinnedMenuManageOffset = kPinnedMenuAddOffset + 1;
+constexpr int kPinnedMenuSlotsPerPane = kPinnedMenuManageOffset + 1;
+constexpr int kPinnedMenuIdCount =
+    static_cast<int>(kExplorerCount) * kPinnedMenuSlotsPerPane;
+constexpr std::array<std::wstring_view, 2> kPinnedFixedParsingNames{
+    L"::{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}",
+    L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"};
 constexpr int kGroupListId = 100;
 constexpr int kNewGroupId = 101;
 constexpr int kDuplicateGroupId = 102;
@@ -480,6 +498,9 @@ struct AppState {
     std::array<HWND, kExplorerCount> up_buttons{};
     std::array<HWND, kExplorerCount> refresh_buttons{};
     std::array<HWND, kExplorerCount> view_mode_buttons{};
+    std::array<HWND, kExplorerCount> pinned_buttons{};
+    std::array<std::wstring, kPinnedFixedParsingNames.size()>
+        pinned_fixed_labels{};
     std::array<bool, kExplorerCount> suppress_history_record{};
     // BrowseToObject may synchronously re-enter navigation_complete while the
     // remaining panes still display the outgoing Group's folders.
@@ -669,9 +690,9 @@ NavigationGeometry navigation_geometry(HWND window, RECT pane_rect) noexcept {
         std::max(0, static_cast<int>(pane_rect.bottom) - navigation_top));
     const int pane_width = pane_rect.right - pane_rect.left;
     const int button_width = std::min(
-        scaled_value(window, kNavigationButtonWidth), pane_width / 6);
+        scaled_value(window, kNavigationButtonWidth), pane_width / 7);
     const int button_offset_x = scaled_value(window, kNavigationButtonOffsetX);
-    const int address_left = pane_rect.left + button_width * 5 + button_offset_x;
+    const int address_left = pane_rect.left + button_width * 6 + button_offset_x;
     const RECT address_background{address_left, navigation_top,
                                   pane_rect.right,
                                   navigation_top + navigation_height};
@@ -892,6 +913,14 @@ void draw_navigation_fallback_glyph(const DRAWITEMSTRUCT& item,
                     LineTo(item.hDC, cx + half, y);
                 }
                 break;
+            case 5:  // fallback pinned location: pin head, shaft, and point
+                Ellipse(item.hDC, cx - half / 2, cy - half,
+                        cx + half / 2, cy);
+                MoveToEx(item.hDC, cx, cy, nullptr);
+                LineTo(item.hDC, cx, cy + half);
+                MoveToEx(item.hDC, cx - half / 2, cy + half / 3, nullptr);
+                LineTo(item.hDC, cx + half / 2, cy + half / 3);
+                break;
             default:
                 break;
         }
@@ -925,7 +954,7 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
         return;
     }
 
-    // The font-failure path keeps all five controls visible without the
+    // The font-failure path keeps all six controls visible without the
     // platform icon font.
     draw_navigation_fallback_glyph(item, glyph_kind, color, size);
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
@@ -2080,6 +2109,7 @@ HRESULT apply_layout(HWND window, AppState& state,
             ShowWindow(state.up_buttons[index], SW_HIDE);
             ShowWindow(state.refresh_buttons[index], SW_HIDE);
             ShowWindow(state.view_mode_buttons[index], SW_HIDE);
+            ShowWindow(state.pinned_buttons[index], SW_HIDE);
             ShowWindow(state.address_bars[index], SW_HIDE);
             ShowWindow(state.status_bars[index], SW_HIDE);
         }
@@ -2125,10 +2155,10 @@ HRESULT apply_layout(HWND window, AppState& state,
                 navigation_geometry(window, pane_rect);
             const int navigation_top = geometry.navigation_top;
             const int navigation_height = geometry.navigation_height;
-            const std::array<HWND, 5> buttons{
+            const std::array<HWND, 6> buttons{
                 state.back_buttons[index], state.forward_buttons[index],
                 state.up_buttons[index], state.refresh_buttons[index],
-                state.view_mode_buttons[index]};
+                state.view_mode_buttons[index], state.pinned_buttons[index]};
             const int button_offset_x =
                 scaled_value(window, kNavigationButtonOffsetX);
             const int button_offset_y =
@@ -2647,6 +2677,67 @@ void show_view_mode_menu(HWND window, AppState& state,
                                static_cast<int>(kViewModeOptions.size()) - 1,
                            checked_id, MF_BYCOMMAND);
     }
+    SetForegroundWindow(window);
+    const int command = TrackPopupMenu(
+        menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, button_rect.left,
+        button_rect.bottom, 0, window, nullptr);
+    DestroyMenu(menu);
+    if (command != 0)
+        SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+}
+
+void add_current_folder(AppState& state, std::size_t pane_index) {
+    if (!has_active_group(state) ||
+        pane_index >= active_group(state).panes.size() ||
+        state.application.pinned_locations.size() >=
+            static_cast<std::size_t>(kPinnedMenuMaxLocationCount))
+        return;
+    capture_pane_location(state, pane_index);
+    if (panedock::core::add_pinned_location(
+            state.application,
+            active_tab(active_group(state).panes[pane_index]).location))
+        save_now(state);
+}
+
+void show_pinned_locations_menu(HWND window, AppState& state,
+                               std::size_t pane_index) {
+    if (!has_active_group(state) || pane_index >= active_group(state).panes.size())
+        return;
+
+    RECT button_rect{};
+    if (!GetWindowRect(state.pinned_buttons[pane_index], &button_rect)) return;
+
+    const int menu_id_base =
+        kPinnedMenuIdBase +
+        static_cast<int>(pane_index * kPinnedMenuSlotsPerPane);
+    HMENU menu = CreatePopupMenu();
+    if (menu == nullptr) return;
+    AppendMenuW(menu, MF_STRING,
+                static_cast<UINT_PTR>(menu_id_base + kPinnedMenuDesktopOffset),
+                state.pinned_fixed_labels[0].c_str());
+    AppendMenuW(menu, MF_STRING,
+                static_cast<UINT_PTR>(menu_id_base + kPinnedMenuThisPcOffset),
+                state.pinned_fixed_labels[1].c_str());
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    const std::size_t count = std::min(
+        state.application.pinned_locations.size(),
+        static_cast<std::size_t>(kPinnedMenuMaxLocationCount));
+    for (std::size_t index = 0; index < count; ++index) {
+        const std::wstring label = display_text_for_parsing_name(
+            state.application.pinned_locations[index].parsing_name);
+        AppendMenuW(
+            menu, MF_STRING,
+            static_cast<UINT_PTR>(menu_id_base + kPinnedMenuLocationOffset +
+                                  static_cast<int>(index)),
+            label.c_str());
+    }
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING,
+                static_cast<UINT_PTR>(menu_id_base + kPinnedMenuAddOffset),
+                L"Add Current Folder");
+    AppendMenuW(menu, MF_STRING,
+                static_cast<UINT_PTR>(menu_id_base + kPinnedMenuManageOffset),
+                L"Manage Pinned Locations...");
     SetForegroundWindow(window);
     const int command = TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, button_rect.left,
@@ -3663,18 +3754,20 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                        index,
                                        reinterpret_cast<DWORD_PTR>(state)))
                     return -1;
-                const std::array<const wchar_t*, 5> labels{
-                    L"<", L">", L"Up", L"Refresh", L"View"};
-                const std::array<int, 5> ids{
+                const std::array<const wchar_t*, 6> labels{
+                    L"<", L">", L"Up", L"Refresh", L"View", L"Pinned"};
+                const std::array<int, 6> ids{
                     kBackButtonIdBase + static_cast<int>(index),
                     kForwardButtonIdBase + static_cast<int>(index),
                     kUpButtonIdBase + static_cast<int>(index),
                     kRefreshButtonIdBase + static_cast<int>(index),
-                    kViewModeButtonIdBase + static_cast<int>(index)};
-                const std::array<HWND*, 5> destinations{
+                    kViewModeButtonIdBase + static_cast<int>(index),
+                    kPinnedButtonIdBase + static_cast<int>(index)};
+                const std::array<HWND*, 6> destinations{
                     &state->back_buttons[index], &state->forward_buttons[index],
                     &state->up_buttons[index], &state->refresh_buttons[index],
-                    &state->view_mode_buttons[index]};
+                    &state->view_mode_buttons[index],
+                    &state->pinned_buttons[index]};
                 for (std::size_t button = 0; button < labels.size(); ++button) {
                     *destinations[button] = CreateWindowExW(
                         0, L"BUTTON", labels[button],
@@ -3872,6 +3965,15 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         state->owner_draw_hovered_button == item->hwndItem);
                     return TRUE;
                 }
+                if (item != nullptr && item->CtlType == ODT_BUTTON &&
+                    item->CtlID >= kPinnedButtonIdBase &&
+                    item->CtlID < kPinnedButtonIdBase +
+                                      static_cast<int>(kExplorerCount)) {
+                    draw_navigation_icon_button(
+                        *item, 5,
+                        state->owner_draw_hovered_button == item->hwndItem);
+                    return TRUE;
+                }
                 if (item != nullptr && item->CtlType == ODT_BUTTON) {
                     const auto found = std::find(
                         kButtonIds.begin(), kButtonIds.end(),
@@ -4014,6 +4116,41 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                        kViewModeOptions[mode_index]);
                     return 0;
                 }
+                if (id >= kPinnedMenuIdBase &&
+                    id < kPinnedMenuIdBase + kPinnedMenuIdCount) {
+                    const int offset = id - kPinnedMenuIdBase;
+                    const std::size_t pane_index = static_cast<std::size_t>(
+                        offset / kPinnedMenuSlotsPerPane);
+                    const int item = offset % kPinnedMenuSlotsPerPane;
+                    if (!has_active_group(*state) ||
+                        pane_index >= active_group(*state).panes.size())
+                        return 0;
+                    if (item == kPinnedMenuDesktopOffset ||
+                        item == kPinnedMenuThisPcOffset) {
+                        (void)state->explorers[pane_index].navigate(
+                            kPinnedFixedParsingNames[static_cast<std::size_t>(
+                                item)]);
+                        return 0;
+                    }
+                    if (item >= kPinnedMenuLocationOffset &&
+                        item < kPinnedMenuAddOffset) {
+                        const std::size_t location_index = static_cast<std::size_t>(
+                            item - kPinnedMenuLocationOffset);
+                        if (location_index <
+                            state->application.pinned_locations.size()) {
+                            (void)state->explorers[pane_index].navigate(
+                                state->application
+                                    .pinned_locations[location_index]
+                                    .parsing_name);
+                        }
+                        return 0;
+                    }
+                    if (item == kPinnedMenuAddOffset) {
+                        add_current_folder(*state, pane_index);
+                        return 0;
+                    }
+                    return 0;
+                }
                 if (id >= kBackButtonIdBase &&
                     id < kBackButtonIdBase + static_cast<int>(kExplorerCount)) {
                     navigate_tab_history(*state,
@@ -4048,6 +4185,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     show_view_mode_menu(
                         window, *state,
                         static_cast<std::size_t>(id - kViewModeButtonIdBase));
+                    return 0;
+                }
+                if (id >= kPinnedButtonIdBase &&
+                    id < kPinnedButtonIdBase + static_cast<int>(kExplorerCount)) {
+                    show_pinned_locations_menu(
+                        window, *state,
+                        static_cast<std::size_t>(id - kPinnedButtonIdBase));
                     return 0;
                 }
                 if (id >= kLayoutButtonIdBase &&
@@ -4489,6 +4633,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     }
     state.session_document = std::move(loaded.document);
     state.application = state.session_document.application;
+    for (std::size_t index = 0; index < kPinnedFixedParsingNames.size();
+         ++index)
+        state.pinned_fixed_labels[index] = display_text_for_parsing_name(
+            kPinnedFixedParsingNames[index]);
     assert(panedock::core::is_valid(state.application));
     save_now(state);
 

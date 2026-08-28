@@ -86,7 +86,8 @@ void test_invariants_reject_deliberate_breakage() {
         item.history = {ShellLocation{L"other", {}, {}}};
     });
 
-    ApplicationState application{1, {group("same"), group("same")}, "same", {}};
+    ApplicationState application{1, {group("same"), group("same")}, "same",
+                                 {}, kDefaultSidebarWidth, {}};
     EXPECT(!is_valid(application));
 }
 
@@ -249,7 +250,8 @@ void test_layout_migration_both_directions() {
 }
 
 void test_failed_mutations_leave_valid_state() {
-    ApplicationState application{1, {group("one")}, "one", {}};
+    ApplicationState application{1, {group("one")}, "one", {},
+                                 kDefaultSidebarWidth, {}};
     EXPECT(!add_group(application, group("one")));
     EXPECT(!duplicate_group(application, "one", "one", L"Duplicate"));
     EXPECT(!delete_group(application, "absent"));
@@ -266,6 +268,16 @@ void test_failed_mutations_leave_valid_state() {
     EXPECT(is_valid(value));
 }
 
+void test_pinned_location_deduplication() {
+    ApplicationState application;
+    EXPECT(add_pinned_location(application,
+                               {L"\\\\server\\share", L"", L""}));
+    EXPECT(!add_pinned_location(application,
+                                {L"\\\\server\\share", L"different", L"other"}));
+    EXPECT(application.pinned_locations.size() == 1);
+    EXPECT(application.pinned_locations.front().known_folder_identity.empty());
+}
+
 }  // namespace
 
 int main() {
@@ -278,5 +290,6 @@ int main() {
     test_move_tab();
     test_layout_migration_both_directions();
     test_failed_mutations_leave_valid_state();
+    test_pinned_location_deduplication();
     return panedock::test::summary("core_model");
 }
