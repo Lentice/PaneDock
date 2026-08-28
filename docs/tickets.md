@@ -142,6 +142,7 @@
 | PD-102 | Tab「+」新增按鈕加上圓角外框,並修正「+」字符置中 | 7 | `ready` | PD-081 | [PD-102](tickets/PD-102-tab-add-button-rounded-border-and-centering.md) |
 | PD-103 | 移除 Group 列表項右側的 tab 數量圓形徽章(與副標題重複) | 7 | `done` | PD-028 | [PD-103](tickets/PD-103-remove-sidebar-group-tab-count-badge.md) |
 | PD-104 | 側邊欄寬度可拖曳調整,並跨啟動持久化;預設寬度隨 PD-103 徽章移除而縮小 | 7 | `ready` | PD-097, PD-103 | [PD-104](tickets/PD-104-resizable-persisted-sidebar-width.md) |
+| PD-106 | Graceful close 後 Shell teardown 殘留程序 | 7 | `ready` | PD-007, PD-032, PD-068 | [PD-106](tickets/PD-106-graceful-shutdown-shell-teardown.md) |
 | PD-105 | 雙擊 pane 分隔線,重設回置中(平分兩側) | 7 | `ready` | 無 | [PD-105](tickets/PD-105-double-click-splitter-resets-to-center.md) |
 
 ## Dependency lanes
@@ -508,3 +509,7 @@ PD-047/048/053/054 為獨立小票;PD-049→PD-050 有嚴格順序依賴;PD-051/
 ### 2026-08-28 — 使用者要求雙擊分隔線重設回置中,開 PD-105
 
 使用者原文:「for panes 分隔線,在上面按兩下會讓分隔線回到中央(平分兩邊)。這樣使用者可以方便的回到平分的狀態,不用自己量測判斷增加困擾。」。調查確認根因是主視窗類別從未設定 `CS_DBLCLKS`(`main.cpp:3996-4006`),系統因此從不合成 `WM_LBUTTONDBLCLK`,雙擊目前只是兩次獨立單擊、皆被既有拖曳邏輯當成無移動的點放處理。置中目標值不需要另外定義,`core::default_divider_ratios`(`model.cpp:54-56`)本來就是每條分隔線 `0.5` 的既有預設值,新建 Group 時也是套用同一個值。修法為加上 `CS_DBLCLKS` 並新增 `WM_LBUTTONDBLCLK` case,命中分隔線時把該條 `divider_ratios[ratio_index]` 設回 `0.5`,重排與存檔比照既有 `WM_LBUTTONUP` 的既有寫法。開票為 [PD-105](tickets/PD-105-double-click-splitter-resets-to-center.md),無依賴。
+
+### 2026-08-28 — PD-102 實機驗證期間發現 graceful close 後程序殘留,開 PD-106
+
+Source:PD-102 截圖驗證流程中,對 Release diagnostic build(PID 37164)送出不帶 `/F` 的 `taskkill /PID` 後,主視窗(`EnumWindows` 確認)立即消失,但程序本身仍存活(`MainWindowHandle=0`),需要再送一次同樣訊號才真正結束。獨立的 OpenCode 唯讀稽核(同日,另一個背景任務)以程式碼追蹤加實測時間,得出相同根因結論。已確認現況:`WM_CLOSE`(`main.cpp:3951-3963`)同步呼叫 `destroy_explorers` → 每個 `ExplorerHost::destroy()`(`explorer_host.cpp:708-767`)同步呼叫 `IExplorerBrowser::Destroy()`(`:759`)——這是 `docs/design-spec.md §9.4` 規定的既有必要順序(不得跳過或改用背景執行緒,§9.4「順序不可調換」),不是遺漏 `Destroy` 的 bug;可觀察到的問題是這個同步 teardown(或其與主視窗銷毀的重入順序)在特定情境下阻塞了關閉路徑,精確阻塞點需要實作 agent 用階段計時或 debugger evidence 釘死,不能用猜測改順序解決。優先度 HIGH——不修正的話退出時可能鎖住執行檔、阻礙下次啟動/建置。開票為 [PD-106](tickets/PD-106-graceful-shutdown-shell-teardown.md),依賴 PD-007(單一 explorer host 與關閉序列)、PD-032(`WM_ENDSESSION` 乾淨關閉)、PD-068(`SetCallback` teardown 崩潰先例)。
