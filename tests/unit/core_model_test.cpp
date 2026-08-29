@@ -43,6 +43,8 @@ void test_layout_metadata() {
                        {LayoutTemplate::top_bottom, 2, 1},
                        {LayoutTemplate::three_pane, 3, 2},
                        {LayoutTemplate::two_over_one, 3, 2},
+                       {LayoutTemplate::one_over_two, 3, 2},
+                       {LayoutTemplate::two_beside_one, 3, 2},
                        {LayoutTemplate::four_pane_grid, 4, 2}};
     for (const auto& item : cases) {
         EXPECT(pane_count(item.layout) == item.panes);

@@ -36,6 +36,8 @@ std::size_t pane_count(LayoutTemplate layout_template) noexcept {
         case LayoutTemplate::top_bottom: return 2;
         case LayoutTemplate::three_pane: return 3;
         case LayoutTemplate::two_over_one: return 3;
+        case LayoutTemplate::one_over_two: return 3;
+        case LayoutTemplate::two_beside_one: return 3;
         case LayoutTemplate::four_pane_grid: return 4;
     }
     return 0;
@@ -48,6 +50,8 @@ std::size_t divider_ratio_count(LayoutTemplate layout_template) noexcept {
         case LayoutTemplate::top_bottom: return 1;
         case LayoutTemplate::three_pane:
         case LayoutTemplate::two_over_one:
+        case LayoutTemplate::one_over_two:
+        case LayoutTemplate::two_beside_one:
         case LayoutTemplate::four_pane_grid: return 2;
     }
     return 0;

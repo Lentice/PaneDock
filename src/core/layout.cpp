@@ -73,6 +73,28 @@ std::vector<PaneRect> compute_layout_rects(
                     {right_x, 0, right, top},
                     {0, top + divider_thickness, width, bottom}};
         }
+        case LayoutTemplate::one_over_two: {
+            const auto [top, bottom] = split(
+                client_height, ratios[0], minimum_pane_height,
+                divider_thickness);
+            const auto [left, right] = split(
+                client_width, ratios[1], minimum_pane_width, divider_thickness);
+            const int bottom_y = top + divider_thickness;
+            return {{0, 0, width, top},
+                    {0, bottom_y, left, bottom},
+                    {left + divider_thickness, bottom_y, right, bottom}};
+        }
+        case LayoutTemplate::two_beside_one: {
+            const auto [left, right] = split(
+                client_width, ratios[0], minimum_pane_width, divider_thickness);
+            const auto [top, bottom] = split(
+                client_height, ratios[1], minimum_pane_height,
+                divider_thickness);
+            const int bottom_y = top + divider_thickness;
+            return {{0, 0, left, top},
+                    {0, bottom_y, left, bottom},
+                    {left + divider_thickness, 0, right, height}};
+        }
         case LayoutTemplate::four_pane_grid: {
             const auto [left, right] = split(
                 client_width, ratios[0], minimum_pane_width, divider_thickness);

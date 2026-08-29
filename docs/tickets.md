@@ -151,6 +151,7 @@
 | PD-111 | 每個 tab 的導覽列新增 Pinned Locations 下拉選單(Desktop / My Computer + 自訂路徑) | 7 | `done` | 無 | [PD-111](tickets/PD-111-pinned-locations-menu.md) |
 | PD-112 | Pinned Locations 管理對話框(移除／排序) | 7 | `done` | PD-111 | [PD-112](tickets/PD-112-pinned-locations-manage-dialog.md) |
 | PD-113 | Pane tab 右鍵選單:Close Tab / Close Other Tabs / Close All Tabs / Close Tabs to the Right | 7 | `done` | 無 | [PD-113](tickets/PD-113-tab-close-context-menu.md) |
+| PD-114 | 補齊三窗格固定版型:1 up / 2 bottom 與 2 left / 1 right | 7 | `done` | PD-005, PD-016, PD-046, PD-099 | [PD-114](tickets/PD-114-add-missing-three-pane-layout-orientations.md) |
 
 ## Dependency lanes
 

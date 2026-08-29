@@ -175,6 +175,32 @@ void test_two_over_one_round_trip() {
     if (restored.has_value()) EXPECT(restored->application == original);
 }
 
+void test_new_three_pane_layout_round_trips() {
+    struct Case final {
+        LayoutTemplate layout;
+        std::string_view identity;
+    };
+    constexpr Case cases[]{{LayoutTemplate::one_over_two, "one_over_two"},
+                           {LayoutTemplate::two_beside_one,
+                            "two_beside_one"}};
+    for (const auto& item : cases) {
+        ApplicationState original = sample();
+        auto& group = original.groups.front();
+        group.layout_template = item.layout;
+        group.divider_ratios = {0.25, 0.75};
+        group.panes.push_back({"pane-3", {tab("tab-4")}, "tab-4"});
+        EXPECT(is_valid(original));
+
+        const std::string json = serialize_session({original, {}, false});
+        EXPECT(json.find("\"layout_template\":\"" +
+                         std::string(item.identity) + "\"") !=
+               std::string::npos);
+        const auto restored = deserialize_session(json);
+        EXPECT(restored.has_value());
+        if (restored.has_value()) EXPECT(restored->application == original);
+    }
+}
+
 void test_corrupt_and_invalid_documents() {
     std::string json = serialize_session({sample(), {}});
     EXPECT(!deserialize_session(json.substr(0, json.size() / 2)));
@@ -350,6 +376,7 @@ int main() {
     test_optional_sidebar_width();
     test_optional_pinned_locations();
     test_two_over_one_round_trip();
+    test_new_three_pane_layout_round_trips();
     test_corrupt_and_invalid_documents();
     test_unknown_fields_survive_write_back();
     test_clean_shutdown_type_mismatch_defaults_true();

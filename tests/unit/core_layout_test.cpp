@@ -32,6 +32,10 @@ void test_all_layouts_have_concrete_coordinates() {
          {{0, 0, 249, 800}, {253, 0, 747, 597}, {253, 601, 747, 199}}},
         {LayoutTemplate::two_over_one, {0.25, 0.75},
          {{0, 0, 747, 199}, {751, 0, 249, 199}, {0, 203, 1000, 597}}},
+        {LayoutTemplate::one_over_two, {0.25, 0.75},
+         {{0, 0, 1000, 199}, {0, 203, 747, 597}, {751, 203, 249, 597}}},
+        {LayoutTemplate::two_beside_one, {0.25, 0.75},
+         {{0, 0, 249, 597}, {0, 601, 249, 199}, {253, 0, 747, 800}}},
         {LayoutTemplate::four_pane_grid, {0.25, 0.75},
          {{0, 0, 249, 597}, {253, 0, 747, 597},
           {0, 601, 249, 199}, {253, 601, 747, 199}}},
@@ -87,6 +91,14 @@ void test_client_area_smaller_than_minimums() {
                100, 100, LayoutTemplate::two_over_one, {0.5, 0.5}) ==
            std::vector<PaneRect>({
                {0, 0, 120, 80}, {124, 0, 120, 80}, {0, 84, 120, 80}}));
+    EXPECT(compute_layout_rects(
+               100, 100, LayoutTemplate::one_over_two, {0.5, 0.5}) ==
+           std::vector<PaneRect>({
+               {0, 0, 120, 80}, {0, 84, 120, 80}, {124, 84, 120, 80}}));
+    EXPECT(compute_layout_rects(
+               100, 100, LayoutTemplate::two_beside_one, {0.5, 0.5}) ==
+           std::vector<PaneRect>({
+               {0, 0, 120, 80}, {0, 84, 120, 80}, {124, 0, 120, 100}}));
 }
 
 void test_mismatched_ratio_count_uses_defaults() {

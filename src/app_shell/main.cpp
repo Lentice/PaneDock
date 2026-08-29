@@ -191,20 +191,23 @@ constexpr int kMoveDownId = 106;
 constexpr std::array<int, 1> kButtonIds{kNewGroupId};
 constexpr std::array<const wchar_t*, 1> kButtonLabels{L"+ New Group"};
 constexpr int kBrandBarHeight = 52;
-constexpr std::array<int, 6> kLayoutButtonIds{
+constexpr std::array<int, 8> kLayoutButtonIds{
     kLayoutButtonIdBase, kLayoutButtonIdBase + 1, kLayoutButtonIdBase + 2,
     kLayoutButtonIdBase + 3, kLayoutButtonIdBase + 4,
-    kLayoutButtonIdBase + 5};
-constexpr std::array<const wchar_t*, 6> kLayoutButtonLabels{
+    kLayoutButtonIdBase + 5, kLayoutButtonIdBase + 6,
+    kLayoutButtonIdBase + 7};
+constexpr std::array<const wchar_t*, 8> kLayoutButtonLabels{
     L"Single", L"Left / Right", L"Top / Bottom", L"Three", L"Four",
-    L"Two over One"};
-constexpr std::array<panedock::core::LayoutTemplate, 6> kLayoutTemplates{
+    L"Two over One", L"One over Two", L"Two beside One"};
+constexpr std::array<panedock::core::LayoutTemplate, 8> kLayoutTemplates{
     panedock::core::LayoutTemplate::single,
     panedock::core::LayoutTemplate::left_right,
     panedock::core::LayoutTemplate::top_bottom,
     panedock::core::LayoutTemplate::three_pane,
     panedock::core::LayoutTemplate::four_pane_grid,
-    panedock::core::LayoutTemplate::two_over_one};
+    panedock::core::LayoutTemplate::two_over_one,
+    panedock::core::LayoutTemplate::one_over_two,
+    panedock::core::LayoutTemplate::two_beside_one};
 struct ViewModeSelection final {
     FOLDERVIEWMODE mode;
     int image_size;
@@ -784,6 +787,18 @@ void draw_layout_glyph(HDC dc, RECT rect, std::size_t index,
             MoveToEx(dc, mid_x, glyph.top, nullptr);
             LineTo(dc, mid_x, mid_y);
             break;
+        case 6:
+            MoveToEx(dc, glyph.left, mid_y, nullptr);
+            LineTo(dc, glyph.right, mid_y);
+            MoveToEx(dc, mid_x, mid_y, nullptr);
+            LineTo(dc, mid_x, glyph.bottom);
+            break;
+        case 7:
+            MoveToEx(dc, mid_x, glyph.top, nullptr);
+            LineTo(dc, mid_x, glyph.bottom);
+            MoveToEx(dc, glyph.left, mid_y, nullptr);
+            LineTo(dc, mid_x, mid_y);
+            break;
         default:
             break;
     }
@@ -1171,6 +1186,22 @@ std::vector<Splitter> splitters(HWND window,
                       rects[0].x + rects[0].width + thickness,
                       rects[0].y + rects[0].height},
                      1, true}};
+        case panedock::core::LayoutTemplate::one_over_two:
+            return {{{rects[1].x, rects[1].y - thickness,
+                      rects[2].x + rects[2].width, rects[1].y},
+                     0, false},
+                    {{rects[1].x + rects[1].width, rects[1].y,
+                      rects[1].x + rects[1].width + thickness,
+                      rects[1].y + rects[1].height},
+                     1, true}};
+        case panedock::core::LayoutTemplate::two_beside_one:
+            return {{{rects[2].x - thickness, rects[2].y, rects[2].x,
+                      rects[2].y + rects[2].height},
+                     0, true},
+                    {{rects[0].x, rects[0].y + rects[0].height,
+                      rects[0].x + rects[0].width,
+                      rects[0].y + rects[0].height + thickness},
+                     1, false}};
     }
     return {};
 }
