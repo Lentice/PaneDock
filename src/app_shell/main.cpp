@@ -197,17 +197,17 @@ constexpr std::array<int, 8> kLayoutButtonIds{
     kLayoutButtonIdBase + 5, kLayoutButtonIdBase + 6,
     kLayoutButtonIdBase + 7};
 constexpr std::array<const wchar_t*, 8> kLayoutButtonLabels{
-    L"Single", L"Left / Right", L"Top / Bottom", L"Three", L"Four",
-    L"Two over One", L"One over Two", L"Two beside One"};
+    L"Single", L"Left / Right", L"Top / Bottom", L"Three",
+    L"Two beside One", L"One over Two", L"Two over One", L"Four"};
 constexpr std::array<panedock::core::LayoutTemplate, 8> kLayoutTemplates{
     panedock::core::LayoutTemplate::single,
     panedock::core::LayoutTemplate::left_right,
     panedock::core::LayoutTemplate::top_bottom,
     panedock::core::LayoutTemplate::three_pane,
-    panedock::core::LayoutTemplate::four_pane_grid,
-    panedock::core::LayoutTemplate::two_over_one,
+    panedock::core::LayoutTemplate::two_beside_one,
     panedock::core::LayoutTemplate::one_over_two,
-    panedock::core::LayoutTemplate::two_beside_one};
+    panedock::core::LayoutTemplate::two_over_one,
+    panedock::core::LayoutTemplate::four_pane_grid};
 struct ViewModeSelection final {
     FOLDERVIEWMODE mode;
     int image_size;
@@ -779,25 +779,25 @@ void draw_layout_glyph(HDC dc, RECT rect, std::size_t index,
             MoveToEx(dc, mid_x, glyph.top, nullptr);
             LineTo(dc, mid_x, glyph.bottom);
             MoveToEx(dc, glyph.left, mid_y, nullptr);
-            LineTo(dc, glyph.right, mid_y);
-            break;
-        case 5:
-            MoveToEx(dc, glyph.left, mid_y, nullptr);
-            LineTo(dc, glyph.right, mid_y);
-            MoveToEx(dc, mid_x, glyph.top, nullptr);
             LineTo(dc, mid_x, mid_y);
             break;
-        case 6:
+        case 5:
             MoveToEx(dc, glyph.left, mid_y, nullptr);
             LineTo(dc, glyph.right, mid_y);
             MoveToEx(dc, mid_x, mid_y, nullptr);
             LineTo(dc, mid_x, glyph.bottom);
             break;
+        case 6:
+            MoveToEx(dc, glyph.left, mid_y, nullptr);
+            LineTo(dc, glyph.right, mid_y);
+            MoveToEx(dc, mid_x, glyph.top, nullptr);
+            LineTo(dc, mid_x, mid_y);
+            break;
         case 7:
             MoveToEx(dc, mid_x, glyph.top, nullptr);
             LineTo(dc, mid_x, glyph.bottom);
             MoveToEx(dc, glyph.left, mid_y, nullptr);
-            LineTo(dc, mid_x, mid_y);
+            LineTo(dc, glyph.right, mid_y);
             break;
         default:
             break;
@@ -4006,10 +4006,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 CW_USEDEFAULT, CW_USEDEFAULT, window, nullptr,
                 GetModuleHandleW(nullptr), nullptr);
             if (state->layout_tooltip != nullptr) {
-                constexpr std::array<const wchar_t*, 6> kLayoutTooltips{
+                constexpr std::array<const wchar_t*, 8> kLayoutTooltips{
                     L"Single pane", L"Two panes side by side",
                     L"Two panes stacked", L"Three panes",
-                    L"Four panes", L"Two panes over one"};
+                    L"Two panes on the left, one on the right",
+                    L"One pane over two panes", L"Two panes over one pane",
+                    L"Four panes"};
                 for (std::size_t index = 0;
                      index < state->layout_buttons.size(); ++index) {
                     TOOLINFOW info{};
