@@ -90,6 +90,17 @@ Run manually on a real Windows desktop in a Release build. Use the four-pane lay
 16. Copy once inside a OneDrive placeholder folder. Expected: placeholder semantics remain intact without an unexpected forced local download, or record the exact observed hydration behavior.
 17. On both a mapped network drive and a USB volume, perform one copy and one delete. Expected: native Shell behavior completes correctly for each location type.
 
+### E. Cross-Group transfer integration (PD-121 / PD-122)
+
+18. In Group A, select a disposable file and use `Ctrl+C`; switch to Group B, select the intended target pane, and use `Ctrl+V`. Expected: the copy appears in Group B's target folder, the source remains intact, and no file is pasted into Group A.
+19. Repeat item 18 with a folder or multiple selected files, then switch the target pane's active tab before pasting. Expected: every item appears in the target Group and active tab, with native progress and conflict UI when applicable.
+20. From Group A, drag a disposable file over a different Group row and hold for about 800ms. Expected: the target Group becomes active and its saved layout, panes, and active tabs are restored while the drag remains usable.
+21. After the Group switch, move the pointer into the intended target pane content area and release. Expected: same-volume drag uses native move semantics, cross-volume drag uses native copy semantics, and the destination is the pane under the pointer.
+22. Release directly on the Group row or a tab header, move away before 800ms, and cancel once with `Esc`. Expected: no file operation occurs, no Group/tab switch occurs when the threshold is not reached, and no stuck drag state remains.
+23. During a large or slow paste/drag operation, switch Group, switch tab, and drag a splitter. Expected: PaneDock remains responsive, does not deadlock or crash during Shell/OLE re-entry, and the final source/destination state is correct.
+
+For items 18–23, record `PASS`, `FAIL`, or `未驗證,需真實桌面` in PD-121 or PD-122's 交接區. Do not treat source inspection, a headless smoke test, or a skipped interactive step as a PASS.
+
 ## Crash recovery acceptance protocol (Phase 5, FR-013)
 
 Run manually on a real Windows desktop in a Release build. Before changing
@@ -176,6 +187,8 @@ headless smoke test, or source-code inspection as a PASS for any row above.
 - [ ] FR-003 all six layout templates
 - [ ] FR-005 tab add / close / switch in every layout
 - [ ] FR-007 copy / move / delete / rename via `IFileOperation`
+- [ ] PD-121 cross-Group clipboard Copy / Paste
+- [ ] PD-122 cross-Group drag and drop
 - [ ] FR-009 network drive, USB volume, OneDrive placeholder reachable
 - [ ] FR-013 recovery from a corrupt session document
 - [ ] NFR-004 correct scaling across mixed-DPI monitors

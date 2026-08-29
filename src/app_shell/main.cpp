@@ -125,7 +125,7 @@ constexpr int kNavigationButtonOffsetX = 0;
 constexpr int kNavigationButtonOffsetY = 2;
 constexpr int kNavigationGlyphSize = 16;
 constexpr std::array<wchar_t, 6> kNavigationGlyphs{
-    L'\uE72B', L'\uE72A', L'\uE74A', L'\uE72C', L'\uE71D', L'\uE718'};
+    L'\uE72B', L'\uE72A', L'\uE74A', L'\uE72C', L'\uE71D', L'\uE734'};
 // PD-031: rounded light-gray pill drawn behind the address bar EDIT to fake
 // a rounded input box (see docs/tickets/PD-031-*.md decision 2). Radius is
 // smaller than the design mock's 6px .location radius because the fixed
@@ -166,8 +166,12 @@ constexpr int kPinnedLocationsListId = 1;
 constexpr int kPinnedLocationsRemoveId = 2;
 constexpr int kPinnedLocationsMoveUpId = 3;
 constexpr int kPinnedLocationsMoveDownId = 4;
-constexpr int kPinnedLocationsCloseId = 5;
-constexpr std::size_t kPinnedLocationsButtonCount = 4;
+constexpr int kPinnedLocationsApplyId = 5;
+constexpr int kPinnedLocationsOkId = 6;
+constexpr int kPinnedLocationsCancelId = 7;
+constexpr std::size_t kPinnedLocationsButtonCount = 6;
+constexpr UINT_PTR kTabAddTooltipIdBase = 1000;
+constexpr UINT_PTR kTabScrollTooltipIdBase = 1010;
 constexpr int kPinnedLocationsWindowWidth = 440;
 constexpr int kPinnedLocationsWindowHeight = 320;
 constexpr std::array<std::wstring_view, 2> kPinnedFixedParsingNames{
@@ -506,6 +510,7 @@ struct AppState {
     // 0/1 identifies the left/right scroll button when it is hovered.
     std::array<std::optional<std::size_t>, kExplorerCount>
         tab_scroll_hover_indices{};
+    std::array<bool, kExplorerCount> tab_tooltips_registered{};
     // PD-040: one clipping container child window per pane, sitting between
     // the main window and each ExplorerHost's IExplorerBrowser view. Only
     // this container's HWND gets SetWindowRgn'd for full-corner rounding —
@@ -525,6 +530,8 @@ struct AppState {
     HWND pinned_locations_list{nullptr};
     std::array<HWND, kPinnedLocationsButtonCount>
         pinned_locations_buttons{};
+    std::optional<panedock::core::ApplicationState>
+        pinned_locations_draft;
     std::array<std::wstring, kPinnedFixedParsingNames.size()>
         pinned_fixed_labels{};
     std::array<bool, kExplorerCount> suppress_history_record{};
@@ -951,14 +958,24 @@ void draw_navigation_fallback_glyph(const DRAWITEMSTRUCT& item,
                     LineTo(item.hDC, cx + half, y);
                 }
                 break;
-            case 5:  // fallback pinned location: pin head, shaft, and point
-                Ellipse(item.hDC, cx - half / 2, cy - half,
-                        cx + half / 2, cy);
-                MoveToEx(item.hDC, cx, cy, nullptr);
-                LineTo(item.hDC, cx, cy + half);
-                MoveToEx(item.hDC, cx - half / 2, cy + half / 3, nullptr);
-                LineTo(item.hDC, cx + half / 2, cy + half / 3);
+            case 5: {  // fallback pinned location: hollow star
+                const std::array<POINT, 10> star{{
+                    {cx, cy - half},
+                    {cx + half / 3, cy - half / 3},
+                    {cx + half, cy - half / 3},
+                    {cx + half / 3, cy + half / 8},
+                    {cx + half * 3 / 5, cy + half},
+                    {cx, cy + half / 2},
+                    {cx - half * 3 / 5, cy + half},
+                    {cx - half / 3, cy + half / 8},
+                    {cx - half, cy - half / 3},
+                    {cx - half / 3, cy - half / 3}}};
+                MoveToEx(item.hDC, star.front().x, star.front().y, nullptr);
+                for (std::size_t point = 1; point < star.size(); ++point)
+                    LineTo(item.hDC, star[point].x, star[point].y);
+                LineTo(item.hDC, star.front().x, star.front().y);
                 break;
+            }
             default:
                 break;
         }
@@ -1399,6 +1416,41 @@ std::wstring tab_display_text(const panedock::core::TabState& tab) {
     return parsing_name.substr(separator + 1);
 }
 
+void update_tab_strip_tooltips(AppState& state,
+                               std::size_t pane_index) noexcept {
+    if (state.layout_tooltip == nullptr ||
+        pane_index >= state.tab_strips.size())
+        return;
+    const HWND strip = state.tab_strips[pane_index];
+    if (strip == nullptr) return;
+
+    const std::array<RECT, 3> rects{
+        state.tab_add_rects[pane_index],
+        state.tab_scroll_button_rects[pane_index][0],
+        state.tab_scroll_button_rects[pane_index][1]};
+    const std::array<UINT_PTR, 3> ids{
+        kTabAddTooltipIdBase + static_cast<UINT_PTR>(pane_index),
+        kTabScrollTooltipIdBase + static_cast<UINT_PTR>(pane_index * 2),
+        kTabScrollTooltipIdBase + static_cast<UINT_PTR>(pane_index * 2 + 1)};
+    constexpr std::array<const wchar_t*, 3> texts{
+        L"New tab", L"Scroll tabs left", L"Scroll tabs right"};
+    const UINT message = state.tab_tooltips_registered[pane_index]
+                             ? TTM_NEWTOOLRECT
+                             : TTM_ADDTOOLW;
+    for (std::size_t index = 0; index < ids.size(); ++index) {
+        TOOLINFOW info{};
+        info.cbSize = sizeof(info);
+        info.uFlags = TTF_SUBCLASS;
+        info.hwnd = strip;
+        info.uId = ids[index];
+        info.rect = rects[index];
+        info.lpszText = const_cast<wchar_t*>(texts[index]);
+        SendMessageW(state.layout_tooltip, message, 0,
+                     reinterpret_cast<LPARAM>(&info));
+    }
+    state.tab_tooltips_registered[pane_index] = true;
+}
+
 int clamp_tab_scroll_offset(AppState& state, std::size_t pane_index,
                             int requested, int content_width,
                             int viewport_width) noexcept {
@@ -1603,6 +1655,7 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
     }
 #endif
     InvalidateRect(strip, nullptr, FALSE);
+    update_tab_strip_tooltips(state, pane_index);
 }
 
 void refresh_tab_strip(AppState& state, std::size_t pane_index) {
@@ -2159,26 +2212,40 @@ void schedule_session_save(AppState& state) noexcept {
     }
 }
 
+panedock::core::ApplicationState& pinned_locations_manager_application(
+    AppState& state) noexcept {
+    return state.pinned_locations_draft.has_value()
+               ? *state.pinned_locations_draft
+               : state.application;
+}
+
 void refresh_pinned_locations_manager_buttons(AppState& state) noexcept {
     if (state.pinned_locations_list == nullptr) return;
+    const auto& application = pinned_locations_manager_application(state);
     const LRESULT selected = SendMessageW(
         state.pinned_locations_list, LB_GETCURSEL, 0, 0);
     const std::size_t index = selected >= 0
                                   ? static_cast<std::size_t>(selected)
-                                  : state.application.pinned_locations.size();
-    const bool has_selection = index < state.application.pinned_locations.size();
+                                  : application.pinned_locations.size();
+    const bool has_selection = index < application.pinned_locations.size();
     EnableWindow(state.pinned_locations_buttons[0], has_selection);
     EnableWindow(state.pinned_locations_buttons[1], has_selection && index > 0);
     EnableWindow(state.pinned_locations_buttons[2],
                  has_selection && index + 1 <
-                                      state.application.pinned_locations.size());
-    EnableWindow(state.pinned_locations_buttons[3], TRUE);
+                                      application.pinned_locations.size());
+    EnableWindow(state.pinned_locations_buttons[3],
+                 state.pinned_locations_draft.has_value() &&
+                     state.pinned_locations_draft->pinned_locations !=
+                         state.application.pinned_locations);
+    EnableWindow(state.pinned_locations_buttons[4], TRUE);
+    EnableWindow(state.pinned_locations_buttons[5], TRUE);
 }
 
 void refresh_pinned_locations_manager(
     AppState& state,
     std::optional<std::size_t> selected_index = std::nullopt) {
     if (state.pinned_locations_list == nullptr) return;
+    const auto& application = pinned_locations_manager_application(state);
     if (!selected_index.has_value()) {
         const LRESULT selected = SendMessageW(
             state.pinned_locations_list, LB_GETCURSEL, 0, 0);
@@ -2187,14 +2254,14 @@ void refresh_pinned_locations_manager(
     }
 
     SendMessageW(state.pinned_locations_list, LB_RESETCONTENT, 0, 0);
-    for (const auto& pinned : state.application.pinned_locations) {
+    for (const auto& pinned : application.pinned_locations) {
         const std::wstring label =
             display_text_for_parsing_name(pinned.parsing_name);
         SendMessageW(state.pinned_locations_list, LB_ADDSTRING, 0,
                      reinterpret_cast<LPARAM>(label.c_str()));
     }
     if (selected_index.has_value() &&
-        *selected_index < state.application.pinned_locations.size()) {
+        *selected_index < application.pinned_locations.size()) {
         SendMessageW(state.pinned_locations_list, LB_SETCURSEL,
                      static_cast<WPARAM>(*selected_index), 0);
     }
@@ -2254,10 +2321,12 @@ LRESULT CALLBACK pinned_locations_window_proc(HWND window, UINT message,
             if (state->pinned_locations_list == nullptr) return -1;
 
             constexpr std::array<const wchar_t*, kPinnedLocationsButtonCount>
-                labels{L"Remove", L"Move Up", L"Move Down", L"Close"};
+                labels{L"Remove", L"Move Up", L"Move Down", L"Apply",
+                       L"OK", L"Cancel"};
             constexpr std::array<int, kPinnedLocationsButtonCount> ids{
                 kPinnedLocationsRemoveId, kPinnedLocationsMoveUpId,
-                kPinnedLocationsMoveDownId, kPinnedLocationsCloseId};
+                kPinnedLocationsMoveDownId, kPinnedLocationsApplyId,
+                kPinnedLocationsOkId, kPinnedLocationsCancelId};
             for (std::size_t index = 0; index < labels.size(); ++index) {
                 state->pinned_locations_buttons[index] = CreateWindowExW(
                     0, L"BUTTON", labels[index],
@@ -2298,7 +2367,27 @@ LRESULT CALLBACK pinned_locations_window_proc(HWND window, UINT message,
                 return 0;
             }
             if (HIWORD(wparam) != BN_CLICKED) break;
-            if (LOWORD(wparam) == kPinnedLocationsCloseId) {
+            if (LOWORD(wparam) == kPinnedLocationsCancelId) {
+                state->pinned_locations_draft.reset();
+                DestroyWindow(window);
+                return 0;
+            }
+            if (LOWORD(wparam) == kPinnedLocationsApplyId ||
+                LOWORD(wparam) == kPinnedLocationsOkId) {
+                if (state->pinned_locations_draft.has_value()) {
+                    if (state->pinned_locations_draft->pinned_locations !=
+                        state->application.pinned_locations) {
+                        state->application.pinned_locations = std::move(
+                            state->pinned_locations_draft->pinned_locations);
+                        save_now(*state);
+                    }
+                    if (LOWORD(wparam) == kPinnedLocationsApplyId) {
+                        state->pinned_locations_draft = state->application;
+                        refresh_pinned_locations_manager(*state);
+                        return 0;
+                    }
+                    state->pinned_locations_draft.reset();
+                }
                 DestroyWindow(window);
                 return 0;
             }
@@ -2308,30 +2397,30 @@ LRESULT CALLBACK pinned_locations_window_proc(HWND window, UINT message,
                     state->pinned_locations_list, LB_GETCURSEL, 0, 0);
                 if (selected == LB_ERR || selected < 0) return 0;
                 const std::size_t index = static_cast<std::size_t>(selected);
+                auto& application =
+                    pinned_locations_manager_application(*state);
                 bool changed = false;
                 std::optional<std::size_t> next_selection;
                 if (LOWORD(wparam) == kPinnedLocationsRemoveId) {
                     changed = panedock::core::remove_pinned_location(
-                        state->application, index);
-                    if (changed && !state->application.pinned_locations.empty())
+                        application, index);
+                    if (changed && !application.pinned_locations.empty())
                         next_selection = std::min(
                             index,
-                            state->application.pinned_locations.size() - 1);
+                            application.pinned_locations.size() - 1);
                 } else if (LOWORD(wparam) == kPinnedLocationsMoveUpId &&
                            index > 0) {
                     changed = panedock::core::reorder_pinned_location(
-                        state->application, index, index - 1);
+                        application, index, index - 1);
                     if (changed) next_selection = index - 1;
                 } else if (LOWORD(wparam) == kPinnedLocationsMoveDownId &&
-                           index + 1 < state->application.pinned_locations.size()) {
+                           index + 1 < application.pinned_locations.size()) {
                     changed = panedock::core::reorder_pinned_location(
-                        state->application, index, index + 1);
+                        application, index, index + 1);
                     if (changed) next_selection = index + 1;
                 }
-                if (changed) {
-                    save_now(*state);
+                if (changed)
                     refresh_pinned_locations_manager(*state, next_selection);
-                }
             }
             return 0;
         case WM_CLOSE:
@@ -2342,6 +2431,7 @@ LRESULT CALLBACK pinned_locations_window_proc(HWND window, UINT message,
                 state->pinned_locations_window = nullptr;
                 state->pinned_locations_list = nullptr;
                 state->pinned_locations_buttons.fill(nullptr);
+                state->pinned_locations_draft.reset();
                 SetWindowLongPtrW(window, GWLP_USERDATA, 0);
             }
             break;
@@ -2371,12 +2461,16 @@ void show_pinned_locations_manager(HWND owner, AppState& state) {
                              static_cast<int>(dpi), 96);
     const int height = MulDiv(kPinnedLocationsWindowHeight,
                               static_cast<int>(dpi), 96);
+    state.pinned_locations_draft = state.application;
     HWND manager = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT,
         kPinnedLocationsWindowClassName, L"Manage Pinned Locations",
         WS_POPUP | WS_CAPTION | WS_SYSMENU, 0, 0, width, height, owner,
         nullptr, GetModuleHandleW(nullptr), &state);
-    if (manager == nullptr) return;
+    if (manager == nullptr) {
+        state.pinned_locations_draft.reset();
+        return;
+    }
 
     RECT owner_rect{};
     int x = 0;
@@ -2710,7 +2804,10 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
     state.explorers[active_pane_index(group)].focus();
     refresh_sidebar(state);
-    save_now(state);
+    // Group switches can be triggered from the OLE drag-hover message. Keep
+    // the session flush out of that interaction path; shutdown still forces
+    // the dirty state through save_now().
+    schedule_session_save(state);
 }
 
 Microsoft::WRL::ComPtr<DragHoverTarget> make_sidebar_drag_hover_target(
@@ -3036,10 +3133,13 @@ void add_current_folder(AppState& state, std::size_t pane_index) {
             static_cast<std::size_t>(kPinnedMenuMaxLocationCount))
         return;
     capture_pane_location(state, pane_index);
-    if (panedock::core::add_pinned_location(
-            state.application,
-            active_tab(active_group(state).panes[pane_index]).location))
-    {
+    const auto current_location =
+        active_tab(active_group(state).panes[pane_index]).location;
+    if (panedock::core::add_pinned_location(state.application,
+                                            current_location)) {
+        if (state.pinned_locations_draft.has_value())
+            (void)panedock::core::add_pinned_location(
+                *state.pinned_locations_draft, current_location);
         save_now(state);
         refresh_pinned_locations_manager(state);
     }
@@ -4130,6 +4230,23 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                             static_cast<UINT_PTR>(ids[button]),
                             reinterpret_cast<DWORD_PTR>(state)))
                         return -1;
+                }
+                if (state->layout_tooltip != nullptr) {
+                    constexpr std::array<const wchar_t*, 6> tooltips{
+                        L"Back", L"Forward", L"Up", L"Refresh", L"View",
+                        L"Pinned locations"};
+                    for (std::size_t button = 0; button < destinations.size();
+                         ++button) {
+                        TOOLINFOW info{};
+                        info.cbSize = sizeof(info);
+                        info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+                        info.hwnd = window;
+                        info.uId = reinterpret_cast<UINT_PTR>(
+                            *destinations[button]);
+                        info.lpszText = const_cast<wchar_t*>(tooltips[button]);
+                        SendMessageW(state->layout_tooltip, TTM_ADDTOOLW, 0,
+                                     reinterpret_cast<LPARAM>(&info));
+                    }
                 }
                 state->address_bars[index] = CreateWindowExW(
                     0, L"EDIT", nullptr,

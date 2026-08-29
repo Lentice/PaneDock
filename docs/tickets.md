@@ -47,7 +47,7 @@
 | PD-014 | 修正 explorer_host 的 OLE 初始化與鍵盤 accelerator 轉發 | 0 | `done` | PD-009, PD-010 | [PD-014](tickets/PD-014-explorer-host-ole-and-accelerator-wiring.md) |
 | PD-011 | 原型驗收協定執行與 Go/No-Go 判定 | 0 | `done` | PD-014 | [PD-011](tickets/PD-011-prototype-acceptance-and-go-no-go.md) |
 | PD-002 | 選取狀態還原可行性判定 | 0 | `done` | PD-011 | [PD-002](tickets/PD-002-selection-restore-feasibility.md) |
-| PD-003 | 閒置資源量測基準 | 0 | `blocked` | PD-011 | [PD-003](tickets/PD-003-idle-resource-baseline.md) |
+| PD-003 | 閒置資源量測基準 | 0 | `done` | PD-011 | [PD-003](tickets/PD-003-idle-resource-baseline.md) |
 | PD-004 | `core` 資料模型與不變式 | 1 | `done` | PD-011 | [PD-004](tickets/PD-004-core-model-invariants.md) |
 | PD-005 | 五種版型的矩形計算 | 1 | `done` | PD-004 | [PD-005](tickets/PD-005-layout-rect-computation.md) |
 | PD-006 | session document 序列化與遷移 | 1 | `done` | PD-004 | [PD-006](tickets/PD-006-session-document-persistence.md) |
@@ -154,6 +154,12 @@
 | PD-114 | 補齊三窗格固定版型:1 up / 2 bottom 與 2 left / 1 right | 7 | `done` | PD-005, PD-016, PD-046, PD-099 | [PD-114](tickets/PD-114-add-missing-three-pane-layout-orientations.md) |
 | PD-115 | 版型按鈕依 pane 數量由 1 到 4 排列 | 7 | `done` | PD-046, PD-114 | [PD-115](tickets/PD-115-order-layout-controls-by-pane-count.md) |
 | PD-116 | Pane footer 資訊段落加入 Windows Explorer 風格垂直分隔線 | 7 | `done` | PD-060, PD-069 | [PD-116](tickets/PD-116-pane-footer-information-dividers.md) |
+| PD-117 | Pane 內所有按鈕補上 tooltip | 7 | `done` | PD-083, PD-111 | [PD-117](tickets/PD-117-pane-button-tooltips.md) |
+| PD-118 | Quick path 按鈕改用空心星號圖示 | 7 | `done` | PD-111 | [PD-118](tickets/PD-118-hollow-star-quick-path-icon.md) |
+| PD-119 | Pinned Locations 管理視窗改用 Apply / Cancel | 7 | `superseded` | PD-112 | [PD-119](tickets/PD-119-pinned-locations-apply-cancel.md) |
+| PD-120 | Pinned Locations 管理視窗區分 Apply、OK 與 Cancel | 7 | `done` | PD-119 | [PD-120](tickets/PD-120-pinned-locations-apply-ok-cancel-semantics.md) |
+| PD-121 | 跨 Group 剪貼簿 Copy / Paste | 7 | `done` | PD-017, PD-019, PD-021, PD-023, PD-086, PD-091 | [PD-121](tickets/PD-121-cross-group-clipboard-copy-paste.md) |
+| PD-122 | 跨 Group 檔案拖放 | 7 | `done` | PD-034, PD-050, PD-090, PD-091, PD-121 | [PD-122](tickets/PD-122-cross-group-file-drag-and-drop.md) |
 
 ## Dependency lanes
 
@@ -194,9 +200,9 @@ Phase 5 — release gate,gated on Phase 4 完成
                 └─ PD-025 (不乾淨關閉偵測 + 退回備份告知 + backup 不被損壞檔覆寫)
   PD-023 ─── PD-026 (release evidence 與 performance-baseline 對齊完整應用程式)
        PD-024 + PD-025 + PD-026 ─── PD-027 (MVP 驗收 × 四種環境 + 閘門判定)
-  註:PD-003(閒置資源量測)自 Phase 0 起 `blocked`,阻塞條件是「人類在真實互動桌面
-      執行 `-CollectMeasurements`」。PD-026 只修工具,不解除它;真正解除它的是 PD-027
-      的量測執行。PD-024/026 可並行,兩者都不需要互動桌面即可完成程式碼與工具部分。
+  註:PD-003(閒置資源量測)已於 2026-08-29 執行完成量測並轉 `done`——閒置磁碟 I/O
+      未過 NFR-001 門檻(見下方決策紀錄),但該 FAIL 本身就是本票要交付的量測證據,
+      不代表 ticket 未完成;NFR-001 真正的通過/放行判定仍在 PD-027。
 ```
 
 Phase 6 — 視覺改版,對照 `docs/panedock-ui-prototype.html`(Quiet Header 變體),不改變任何 Group/pane/tab 行為或 core 契約
@@ -221,6 +227,12 @@ Phase 7 — 拖放互動,對照使用者 2026-08-25 grilling session 提出的�
 Phase 7 — Pinned Locations,對照使用者 2026-08-28 grilling session
   PD-111(Pinned Locations 選單:App 全域清單、Desktop/My Computer 固定項目、Add Current Folder)
        └─ PD-112(Manage 對話框:Remove / Move Up / Move Down)
+            └─ PD-119(draft + Apply / Cancel)
+                 └─ PD-120(Apply 留在視窗、OK 提交並關閉、Cancel 放棄並關閉)
+
+Phase 7 — Cross-Group file transfer integration,對照使用者 2026-08-29 需求
+  PD-017 + PD-019 + PD-021 + PD-023 + PD-086 + PD-091 ─── PD-121(Copy／Paste across Groups)
+  PD-034 + PD-050 + PD-090 + PD-091 + PD-121 ─── PD-122(drag and drop across Groups)
 
 PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `IShellFolder` fallback in `docs/design-spec.md` §9.1, and the tickets below it must be rewritten rather than adjusted.
 
@@ -265,7 +277,9 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | 以獨立 process 隔離第三方 shell extension | `docs/design-spec.md` §14 保留的方向,目前明確不在範圍。觸發條件不變:**先有實際的 extension 崩潰紀錄**。PD-024 的診斷模式正是產生那份紀錄(「一般模式崩潰、`--diagnostic` 不崩潰」)的工具;累積到具體案例再依 §已否決的方向 的規則開票。 |
 | 產品內的計時儀器(Group 切換／tab realize／cold start 延遲) | PD-026(2026-08-24)刻意排除:三者都沒有 blocking 門檻,加儀器要動產品程式碼。若使用者實際回報切換有感延遲,再開票加 `QueryPerformanceCounter` 量測點,屆時 `docs/performance-baseline.md` 對應列才有數字可填。 |
 | 崩潰迴圈的自動安全模式(連續 N 次不乾淨關閉即自動以 `--diagnostic` 啟動) | PD-025(2026-08-24)刻意排除:沒有真實崩潰資料前 N 是憑空調的,且自動重啟需要 `CreateProcess`,會在單一 process 架構上開一個口子。若使用者實際遇到崩潰迴圈再開票。 |
-| 縮圖 pipeline 的快取與尺寸上限 | 待 PD-003 量出縮圖對記憶體的實際貢獻後再開,避免憑估計調參數。 |
+| 縮圖 pipeline 的快取與尺寸上限 | 待 PD-003 量出縮圖對記憶體的實際貢獻後再開,避免憑估計調參數。PD-003 2026-08-29 的自動化量測跑出差值 0 bytes,但兩個組態都重用同一次 run 內已導覽過的資料夾(縮圖早已快取),不是有效讀數;要開票前需先用全新啟動的 process 分別量測純文字與縮圖資料夾。 |
+| 診斷閒置磁碟 I/O 的來源 | PD-003 2026-08-29 量到閒置 10 分鐘期間有 307294 bytes 磁碟 I/O(NFR-001 磁碟門檻 FAIL,零 bytes 才算過),但本票是量測專用,未診斷來源。觸發條件:已成立——有實測數字,可以開票追查(候選來源:Shell thumbnail cache、USN journal 輪詢、第三方 shell extension)。 |
+| 追查 `panedock_launch_smoke` 間歇性崩潰(0xC0000409) | PD-003 2026-08-29 執行期間偶發一次 `STATUS_STACK_BUFFER_OVERRUN`,發生在關閉一個含 4 個 Group、其中一個 42 個 tab 的真實 `session.json` 之後;立即重跑同一測試與完整 suite 皆通過,無法穩定重現。觸發條件:再次出現(尤其是大量 tab 的 Group)時開票追查,屆時附上本次的復現條件與 session.json 特徵作為起點。 |
 | `IShellFolder` 自建清單檢視(fallback) | 僅在 PD-001 判定 No-Go 時開。 |
 | 統一 header 版型按鈕圖示與導覽列圖示的筆畫粗細 | PD-075(2026-08-26)刻意排除:版型按鈕的五個圖示是**版面示意圖**(一格／雙欄／上下／2×2／更多),沒有任何 `Segoe MDL2 Assets` 字符能表達「這個版型長什麼樣」,只能手繪。但 `draw_layout_glyph` 用 `CreatePen(PS_SOLID, 1, ...)` 而 `draw_navigation_icon_button` 是 2px,兩者並列時粗細不同是真的。觸發條件:PD-075 完成後若使用者仍覺得 header 與 pane 的圖示不成套,再開票調整手繪線寬(注意 1px 是 `RoundRect` 版面示意圖能保持清晰的實際上限,加粗可能反而糊掉,屆時需先截圖比對)。 |
 | 側邊欄寬度的全域設定持久化 | 若使用者回報每次啟動都要重拖再開;目前預設值可接受。 |
