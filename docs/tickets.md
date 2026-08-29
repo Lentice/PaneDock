@@ -153,6 +153,7 @@
 | PD-113 | Pane tab 右鍵選單:Close Tab / Close Other Tabs / Close All Tabs / Close Tabs to the Right | 7 | `done` | 無 | [PD-113](tickets/PD-113-tab-close-context-menu.md) |
 | PD-114 | 補齊三窗格固定版型:1 up / 2 bottom 與 2 left / 1 right | 7 | `done` | PD-005, PD-016, PD-046, PD-099 | [PD-114](tickets/PD-114-add-missing-three-pane-layout-orientations.md) |
 | PD-115 | 版型按鈕依 pane 數量由 1 到 4 排列 | 7 | `done` | PD-046, PD-114 | [PD-115](tickets/PD-115-order-layout-controls-by-pane-count.md) |
+| PD-116 | Pane footer 資訊段落加入 Windows Explorer 風格垂直分隔線 | 7 | `done` | PD-060, PD-069 | [PD-116](tickets/PD-116-pane-footer-information-dividers.md) |
 
 ## Dependency lanes
 

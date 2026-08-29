@@ -23,6 +23,7 @@
 #include <numeric>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <ole2.h>
@@ -1047,32 +1048,80 @@ void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi) noexcept {
     const int height = std::max(0, static_cast<int>(rect.bottom - rect.top));
     const int separator_height = std::min(
         std::max(1, MulDiv(1, static_cast<int>(dpi), 96)), height);
-    if (separator_height > 0) {
+    HBRUSH divider_brush = CreateSolidBrush(RGB(232, 237, 242));
+    if (separator_height > 0 && divider_brush != nullptr) {
         RECT separator = rect;
         separator.bottom = separator.top + separator_height;
-        HBRUSH line = CreateSolidBrush(RGB(232, 237, 242));
-        if (line != nullptr) {
-            FillRect(item.hDC, &separator, line);
-            DeleteObject(line);
-        }
+        FillRect(item.hDC, &separator, divider_brush);
     }
 
     std::array<wchar_t, 256> text{};
     GetWindowTextW(item.hwndItem, text.data(),
                    static_cast<int>(text.size()));
     const int text_inset = MulDiv(kSpaceBase, static_cast<int>(dpi), 96);
-    RECT text_rect = rect;
-    text_rect.top += separator_height;
-    text_rect.left += text_inset;
-    text_rect.right -= text_inset;
+    const int content_top = rect.top + separator_height;
+    const int content_bottom = rect.bottom;
+    const int text_left = rect.left + text_inset;
+    const int text_right = std::max(
+        text_left, static_cast<int>(rect.right) - text_inset);
+    const int text_margin = std::max(
+        0, MulDiv(kSpaceSnug, static_cast<int>(dpi), 96));
+    const int divider_width = std::max(1, MulDiv(1, static_cast<int>(dpi), 96));
+    const int divider_height = std::min(
+        std::max(1, MulDiv(12, static_cast<int>(dpi), 96)),
+        std::max(0, content_bottom - content_top));
     const HFONT font = reinterpret_cast<HFONT>(
         SendMessageW(item.hwndItem, WM_GETFONT, 0, 0));
     const HGDIOBJ old_font =
         font != nullptr ? SelectObject(item.hDC, font) : nullptr;
     SetBkMode(item.hDC, TRANSPARENT);
     SetTextColor(item.hDC, RGB(100, 116, 139));
-    DrawTextW(item.hDC, text.data(), -1, &text_rect,
-              DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    std::array<std::wstring_view, 3> segments{};
+    std::size_t segment_count = 0;
+    std::wstring_view remaining(text.data());
+    while (!remaining.empty() && segment_count < segments.size()) {
+        const std::size_t delimiter = remaining.find(L'\t');
+        const std::wstring_view segment = remaining.substr(0, delimiter);
+        if (!segment.empty()) segments[segment_count++] = segment;
+        if (delimiter == std::wstring_view::npos) break;
+        remaining.remove_prefix(delimiter + 1);
+    }
+
+    int cursor = text_left;
+    for (std::size_t index = 0; index < segment_count && cursor < text_right;
+         ++index) {
+        const auto segment = segments[index];
+        SIZE extent{};
+        const int length = static_cast<int>(segment.size());
+        if (!GetTextExtentPoint32W(item.hDC, segment.data(), length,
+                                   &extent)) {
+            extent.cx = 0;
+        }
+        RECT text_rect{cursor, content_top, text_right, content_bottom};
+        DrawTextW(item.hDC, segment.data(), length, &text_rect,
+                  DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        cursor += std::max(0, static_cast<int>(extent.cx));
+        if (index + 1 == segment_count) break;
+
+        const int divider_left = cursor + text_margin;
+        if (divider_left > text_right - divider_width - text_margin) break;
+        if (divider_brush != nullptr && divider_height > 0) {
+            RECT divider{divider_left,
+                         content_top +
+                             std::max(0, (content_bottom - content_top -
+                                             divider_height) /
+                                            2),
+                         divider_left + divider_width,
+                         content_top +
+                             std::max(0, (content_bottom - content_top -
+                                             divider_height) /
+                                            2) +
+                             divider_height};
+            FillRect(item.hDC, &divider, divider_brush);
+        }
+        cursor = divider_left + divider_width + text_margin;
+    }
+    if (divider_brush != nullptr) DeleteObject(divider_brush);
     if (old_font != nullptr) SelectObject(item.hDC, old_font);
 }
 
@@ -1321,7 +1370,7 @@ void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
     }
     std::wstring text = std::to_wstring(counts.total) + L" items";
     if (counts.selected != 0) {
-        text += L"   ";
+        text += L'\t';
         text += std::to_wstring(counts.selected);
         text += L" selected";
         if (counts.selected_bytes_valid && counts.selected_bytes != 0) {
@@ -1334,7 +1383,7 @@ void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
                                    size_text.data(),
                                    static_cast<UINT>(size_text.size())) !=
                 nullptr) {
-                text += L"   ";
+                text += L'\t';
                 text += size_text.data();
             }
         }
