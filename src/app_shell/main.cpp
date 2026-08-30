@@ -482,6 +482,10 @@ struct AppState {
     // A final save is a single close decision. WM_DESTROY is only allowed to
     // keep its legacy fallback for an unexpected destroy before that decision.
     bool shutdown_save_attempted{};
+    // The durable clean marker may be written only after the successful false
+    // marker save has survived the complete Shell/COM/window teardown.
+    bool shutdown_clean_marker_armed{};
+    bool main_window_destroyed{};
     // WM_ENDSESSION(TRUE) can arrive while a save-failure dialog or a Shell
     // file operation is pumping the STA message loop.
     bool end_session_pending{};
@@ -4718,7 +4722,9 @@ void begin_shutdown(HWND window, AppState& state,
     }
     state.shutdown_save_attempted = true;
     capture_window_placement(window, state);
-    if (!save_now(state, true, true) && allow_keep_open) {
+    const bool save_succeeded = save_now(state, false, true);
+    state.shutdown_clean_marker_armed = save_succeeded;
+    if (!save_succeeded && allow_keep_open) {
         state.shutdown_prompt_active = true;
         const int answer = MessageBoxW(
             window,
@@ -4733,6 +4739,7 @@ void begin_shutdown(HWND window, AppState& state,
         }
         if (answer != IDNO) {
             state.shutdown_save_attempted = false;
+            state.shutdown_clean_marker_armed = false;
             return;
         }
     }
@@ -5811,6 +5818,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         case WM_DESTROY:
             if (state != nullptr) {
+                state->main_window_destroyed = true;
                 state->quit_requested = true;
                 state->startup_realize_pending = false;
                 ++state->startup_realize_generation;
@@ -5820,7 +5828,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 if (state->session_dirty && !state->shutdown_save_attempted) {
                     state->shutdown_save_attempted = true;
                     capture_window_placement(window, *state);
-                    (void)save_now(*state, true, true);
+                    (void)save_now(*state, false, true);
                 }
             }
             release_navigation_icon_font();
@@ -6289,6 +6297,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     destroy_explorers(state);
     assert(panedock::explorer_host::live_view_count() == 0);
     OleUninitialize();
+    if (state.shutdown_clean_marker_armed && state.main_window_destroyed) {
+        // Keep the durable marker false until Shell, the parent HWND and COM
+        // have all gone away. If this write blocks or fails, the false marker
+        // remains and the next startup can report the incomplete shutdown.
+        state.session_document.application = state.application;
+        state.session_document.clean_shutdown = true;
+        if (!panedock::core::write_session(state.session_directory,
+                                            state.session_document,
+                                            flush_session_file)) {
+            OutputDebugStringW(
+                L"PaneDock: final clean-shutdown marker write failed\n");
+        }
+    }
     CloseHandle(single_instance_mutex);
     return exit_code;
 }
