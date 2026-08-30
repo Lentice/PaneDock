@@ -285,6 +285,20 @@ void test_read_fallbacks() {
     result = read_session(directory.path, default_state);
     EXPECT(result.source == SessionSource::default_state);
     EXPECT(!result.recovered_from_corruption);
+
+    write_text(directory.path / kSessionBackupFileName,
+               serialize_session(good));
+    result = read_session(directory.path, default_state);
+    EXPECT(result.source == SessionSource::backup);
+    EXPECT(result.recovered_from_corruption);
+    EXPECT(result.document.application == good.application);
+
+    const auto non_directory = directory.path / "not-a-directory";
+    write_text(non_directory, "not a directory");
+    result = read_session(non_directory, default_state);
+    EXPECT(result.source == SessionSource::default_state);
+    EXPECT(result.recovered_from_corruption);
+    EXPECT(result.document.application == default_state);
 }
 
 void test_atomic_write_and_backup() {

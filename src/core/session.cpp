@@ -649,16 +649,32 @@ SessionReadResult read_session(const std::filesystem::path& directory,
     const auto primary = directory / kSessionFileName;
     const auto backup = directory / kSessionBackupFileName;
     std::error_code error;
+    const bool directory_exists = std::filesystem::exists(directory, error);
+    bool directory_status_error = bool(error);
+    if (!directory_status_error && directory_exists) {
+        error.clear();
+        directory_status_error =
+            !std::filesystem::is_directory(directory, error) || bool(error);
+    }
+    if (directory_status_error)
+        return {{std::move(default_state), {}}, SessionSource::default_state,
+                true};
+
+    error.clear();
     const bool primary_exists = std::filesystem::exists(primary, error);
-    if (!error && primary_exists) {
+    const bool primary_status_error = bool(error);
+    if (!primary_status_error && primary_exists) {
         if (auto document = read_file(primary)) return {std::move(*document), SessionSource::primary, false};
     }
+    error.clear();
     const bool backup_exists = std::filesystem::exists(backup, error);
-    if (!error && backup_exists) {
-        if (auto document = read_file(backup)) return {std::move(*document), SessionSource::backup, primary_exists};
+    const bool backup_status_error = bool(error);
+    if (!backup_status_error && backup_exists) {
+        if (auto document = read_file(backup)) return {std::move(*document), SessionSource::backup, true};
     }
     return {{std::move(default_state), {}}, SessionSource::default_state,
-            primary_exists || backup_exists};
+            primary_exists || backup_exists || primary_status_error ||
+                backup_status_error};
 }
 
 }  // namespace panedock::core

@@ -175,6 +175,7 @@
 | PD-135 | 啟動警告 MessageBox 的 modal loop 內被關閉：後續啟動序對已銷毀 HWND 執行 | 7 | `done` | PD-126, PD-127, PD-130 | [PD-135](tickets/PD-135-startup-dialog-close-destroyed-hwnd.md) |
 | PD-136 | close save failure 在 `WM_DESTROY` 重試且吞掉進行中的 Windows shutdown | 7 | `done` | PD-125, PD-133 | [PD-136](tickets/PD-136-shutdown-save-decision-reentrancy.md) |
 | PD-137 | session backup copy/restore 不是 atomic replace，force kill 可能留下半份設定檔 | 7 | `done` | PD-006, PD-078 | [PD-137](tickets/PD-137-atomic-session-backup-replacement.md) |
+| PD-138 | startup 將 filesystem status error／backup-only recovery 當成無需提示 | 7 | `done` | PD-025, PD-078 | [PD-138](tickets/PD-138-session-read-error-recovery-signal.md) |
 
 ## Dependency lanes
 
