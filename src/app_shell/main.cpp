@@ -471,6 +471,7 @@ struct AppState {
     // must not re-run teardown or destroy the parent HWND while a view is
     // still mid-teardown (§9.4 order).
     bool closing_{};
+    bool shutdown_prompt_active{};
     // PD-123: PerformOperations pumps the STA message loop. A close request
     // records intent and defers the existing teardown until that call returns.
     bool file_operation_call_active{};
@@ -4293,7 +4294,8 @@ LRESULT CALLBACK group_list_proc(HWND window, UINT message, WPARAM wparam,
     return DefSubclassProc(window, message, wparam, lparam);
 }
 
-void begin_shutdown(HWND window, AppState& state) noexcept;
+void begin_shutdown(HWND window, AppState& state,
+                    bool allow_keep_open = true) noexcept;
 void complete_deferred_close(HWND window, AppState& state) noexcept;
 
 LRESULT CALLBACK transfer_close_dialog_proc(HWND window, UINT message,
@@ -4433,8 +4435,21 @@ void show_transfer_close_dialog(HWND owner, AppState& state) noexcept {
     SetForegroundWindow(dialog);
 }
 
-void begin_shutdown(HWND window, AppState& state) noexcept {
-    if (state.closing_) return;
+void begin_shutdown(HWND window, AppState& state,
+                    bool allow_keep_open) noexcept {
+    if (state.closing_ || state.shutdown_prompt_active) return;
+    capture_window_placement(window, state);
+    if (!save_now(state, true, true) && allow_keep_open) {
+        state.shutdown_prompt_active = true;
+        const int answer = MessageBoxW(
+            window,
+            L"PaneDock could not save your session. Keep PaneDock open so "
+            L"you can fix the storage problem and try again? Choose No to "
+            L"close without saving recent changes.",
+            L"PaneDock", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON1);
+        state.shutdown_prompt_active = false;
+        if (answer == IDYES) return;
+    }
     state.closing_ = true;
     state.quit_requested = true;
     state.startup_realize_pending = false;
@@ -4444,8 +4459,6 @@ void begin_shutdown(HWND window, AppState& state) noexcept {
     destroy_pinned_locations_manager(state);
     revoke_drag_hover_targets(state);
     cancel_session_save_timer(state);
-    capture_window_placement(window, state);
-    (void)save_now(state, true, true);
     destroy_explorers(state);
     assert(panedock::explorer_host::live_view_count() == 0);
     DestroyWindow(window);
@@ -5495,7 +5508,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         state->close_after_file_operation = true;
                         state->cancel_file_operation = true;
                     } else {
-                        begin_shutdown(window, *state);
+                        begin_shutdown(window, *state, false);
                     }
                 }
             }
@@ -5717,7 +5730,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         state.pinned_fixed_labels[index] = display_text_for_parsing_name(
             kPinnedFixedParsingNames[index]);
     assert(panedock::core::is_valid(state.application));
-    save_now(state);
+    if (!save_now(state)) {
+        state.startup_warning_message =
+            L"PaneDock could not save its session. Changes may not persist "
+            L"until the storage problem is fixed.";
+    }
 
     const auto& placement = state.application.window_placement;
     const wchar_t* const title = diagnostic_mode

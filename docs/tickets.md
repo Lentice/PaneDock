@@ -170,6 +170,7 @@
 | PD-130 | startup 絕不能因「可復原的 pane/view 失敗」而整窗開不起來或靜默空白;每個失敗都要有提示 | 7 | `done` | (none) | [PD-130](tickets/PD-130-startup-recoverable-failure-never-blocks-window.md) |
 | PD-131 | single-instance mutex 重新取得競態可啟動兩個 PaneDock 並競寫 session | 7 | `done` | PD-084, PD-129 | [PD-131](tickets/PD-131-single-instance-reacquire-race.md) |
 | PD-132 | 被取消的 Windows shutdown 會留下錯誤 clean marker，掩蓋後續 force kill／crash | 7 | `done` | PD-025, PD-032, PD-125 | [PD-132](tickets/PD-132-session-query-marks-cancelled-shutdown-clean.md) |
+| PD-133 | startup／normal close 的 session save failure 對使用者完全靜默 | 7 | `done` | PD-006, PD-025, PD-078, PD-132 | [PD-133](tickets/PD-133-session-save-failure-is-silent.md) |
 
 ## Dependency lanes
 
