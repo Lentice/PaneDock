@@ -5595,6 +5595,13 @@ bool relay_or_wait_for_existing_instance(HANDLE& mutex) noexcept {
                 OutputDebugStringW(L"PaneDock: CreateMutexW failed\n");
                 return true;
             }
+            if (GetLastError() == ERROR_ALREADY_EXISTS) {
+                // Another waiter won the close/relaunch race. Keep waiting for
+                // its window instead of launching a second session writer.
+                CloseHandle(mutex);
+                mutex = nullptr;
+                continue;
+            }
             return false;
         }
         CloseHandle(probe);
