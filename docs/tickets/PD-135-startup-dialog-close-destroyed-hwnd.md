@@ -90,4 +90,7 @@ git diff --check
 
 ## 交接區
 
-<!-- 實作 agent append-only -->
+- 實作結果:`wWinMain` 啟動警示 MessageBox 序列以一個 `bool proceed` 串接,初始化為 `true`;每個 `MessageBoxW` 返回後以 `proceed = !state.closing_ && !state.quit_requested` 更新;後續每個警示框條件加上 `proceed && ...`;`PostMessageW(window, kDeferredRealizeMessage, ...)` 以 `proceed && state.startup_realize_pending` 為條件。任一警示框的 nested modal loop 內觸發 `WM_CLOSE`/`WM_ENDSESSION(TRUE)` → `begin_shutdown`(設 `closing_`/`quit_requested`)→ 其餘警示框與 deferred realize post 全部跳過,不再觸碰已銷毀(或可能被 reuse)的 HWND。
+- 與 PD-126 的關係:PD-126 修「外層 message loop 空佇列永不退出」(`quit_requested` 檢查在 `:5826` 一帶);本票修「啟動序本身在視窗被銷毀後繼續跑」——同一個「啟動後立即關閉」時機的另一個缺陷。
+- Agent checks: `cmake --build build`、`ctest --test-dir build --output-on-failure`(7/7,含 `panedock_launch_smoke`)、`git diff --check`、`rg -n "proceed|PostMessageW\\(window, kDeferredRealizeMessage" src/app_shell/main.cpp`(proceed 串接與 deferred realize 受 guard,`rg` 亦見 `kDeferredRealizeMessage` 於 `:5823` 之 post)。
+- 未驗證項:未以「帶不乾淨關閉標記 session 啟動→警示框顯示期間 Alt+F4」實際 script 重現「不再彈後續框/不再 post 到銷毀 HWND」;此為需真實桌面互動的人工檢查,留予使用者。

@@ -171,8 +171,8 @@
 | PD-131 | single-instance mutex 重新取得競態可啟動兩個 PaneDock 並競寫 session | 7 | `done` | PD-084, PD-129 | [PD-131](tickets/PD-131-single-instance-reacquire-race.md) |
 | PD-132 | 被取消的 Windows shutdown 會留下錯誤 clean marker，掩蓋後續 force kill／crash | 7 | `done` | PD-025, PD-032, PD-125 | [PD-132](tickets/PD-132-session-query-marks-cancelled-shutdown-clean.md) |
 | PD-133 | startup／normal close 的 session save failure 對使用者完全靜默 | 7 | `done` | PD-006, PD-025, PD-078, PD-132 | [PD-133](tickets/PD-133-session-save-failure-is-silent.md) |
-| PD-134 | 主視窗還原到已不存在監視器的位置：app「開啟」但無可見 UI | 7 | `in_progress` | — | [PD-134](tickets/PD-134-offscreen-window-restore.md) |
-| PD-135 | 啟動警告 MessageBox 的 modal loop 內被關閉：後續啟動序對已銷毀 HWND 執行 | 7 | `in_progress` | PD-126, PD-127, PD-130 | [PD-135](tickets/PD-135-startup-dialog-close-destroyed-hwnd.md) |
+| PD-134 | 主視窗還原到已不存在監視器的位置：app「開啟」但無可見 UI | 7 | `done` | — | [PD-134](tickets/PD-134-offscreen-window-restore.md) |
+| PD-135 | 啟動警告 MessageBox 的 modal loop 內被關閉：後續啟動序對已銷毀 HWND 執行 | 7 | `done` | PD-126, PD-127, PD-130 | [PD-135](tickets/PD-135-startup-dialog-close-destroyed-hwnd.md) |
 
 ## Dependency lanes
 

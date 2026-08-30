@@ -99,4 +99,8 @@ rg -n "placement_is_offscreen|SM_CXVIRTUALSCREEN" src/app_shell
 
 ## 交接區
 
-<!-- 實作 agent append-only -->
+- 實作結果:新增 `src/app_shell/window_placement.h`(純 `constexpr` `placement_is_offscreen`,僅 `<algorithm>`),`wWinMain` 在 `CreateWindowExW` 前取得虚拟桌面 metric(`SM_XVIRTUALSCREEN`/`SM_YVIRTUALSCREEN`/`SM_CXVIRTUALSCREEN`/`SM_CYVIRTUALSCREEN`),若 `!maximized` 且矩形完全在虚拟桌面外或尺寸退化,把 x/y 重設為 `CW_USEDEFAULT`(尺寸退化時補回 1000×700)。`maximized` 走 Windows 的 `SW_SHOWMAXIMIZED`,不受影響;部分重疊矩形不改動,讓使用者可抓回。
+- 分工:純幾何在 `window_placement.h`(可 static_assert 測試),Win32 metric 與「何時 reset」留在 `wWinMain`。
+- 為何只在還原:執行期監視器變更(DVI/HDMI 熱插拔)屬既有 NFR-004/`WM_DPICHANGED` 行為,本票只防「開啟即無可見 UI」的還原失敗,不新增熱插拔重排邏輯。
+- Agent checks: `cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake -DCMAKE_BUILD_TYPE=Release`、`cmake --build build`、`ctest --test-dir build --output-on-failure`(7/7 通過,含新增 `panedock_window_placement`)、`git diff --check`、`rg -n "placement_is_offscreen|SM_CXVIRTUALSCREEN" src/app_shell` 皆符合預期。
+- 未驗證項:未以「離螢幕 session」實際重啟桌面驗證 app 出現在螢幕內(需改 session.json 座標＋重啟);靜態自測已覆蓋離螢幕/部分重疊/退化/負原點/`CW_USEDEFAULT` 等分支,人工實機驗證留予使用者。
