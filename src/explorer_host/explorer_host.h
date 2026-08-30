@@ -23,6 +23,21 @@ namespace panedock::explorer_host {
 
 class ExplorerHost final {
 public:
+    using ShellCallCallback = void (*)(void* context,
+                                       bool entering) noexcept;
+
+    class ShellCallScope final {
+    public:
+        explicit ShellCallScope(ExplorerHost& host) noexcept;
+        ~ShellCallScope() noexcept;
+
+        ShellCallScope(const ShellCallScope&) = delete;
+        ShellCallScope& operator=(const ShellCallScope&) = delete;
+
+    private:
+        ExplorerHost& host_;
+    };
+
     struct ItemCounts {
         int total{};
         int selected{};
@@ -36,6 +51,8 @@ public:
     ExplorerHost(const ExplorerHost&) = delete;
     ExplorerHost& operator=(const ExplorerHost&) = delete;
 
+    void set_shell_call_callback(void* context,
+                                 ShellCallCallback callback) noexcept;
     HRESULT initialize(HWND parent, const RECT& rect,
                        std::wstring_view location);
     HRESULT navigate(std::wstring_view location);
@@ -61,6 +78,8 @@ public:
     void navigation_failed() noexcept;
 
 private:
+    void enter_shell_call() noexcept;
+    void leave_shell_call() noexcept;
     static bool register_error_window_class() noexcept;
     static LRESULT CALLBACK error_window_proc(HWND window, UINT message,
                                                WPARAM wparam,
@@ -86,6 +105,8 @@ private:
     std::function<void(std::wstring_view)> navigation_callback_;
     std::function<void()> navigation_failed_callback_;
     std::function<void()> selection_changed_callback_;
+    void* shell_call_context_{nullptr};
+    ShellCallCallback shell_call_callback_{nullptr};
     Microsoft::WRL::ComPtr<IShellView> current_view_;
     mutable std::optional<ItemCounts> item_counts_cache_;
     Microsoft::WRL::ComPtr<IShellFolderViewCB> previous_view_callback_;

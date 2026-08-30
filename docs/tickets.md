@@ -184,6 +184,7 @@
 | PD-144 | startup failure warnings 不得互相覆蓋，deferred Shell failure 必須提示 | 7 | `done` | PD-130, PD-135, PD-141, PD-142 | [PD-144](tickets/PD-144-startup-warning-aggregation.md) |
 | PD-145 | startup message loop 前不得同步執行可避免的 Shell chrome lookup | 7 | `done` | PD-141, PD-142, PD-144 | [PD-145](tickets/PD-145-defer-startup-shell-chrome.md) |
 | PD-146 | 補齊 display-name Shell lookup 的 re-entry shutdown guard | 7 | `done` | PD-140, PD-145 | [PD-146](tickets/PD-146-display-name-shell-reentry-guard.md) |
+| PD-147 | `ExplorerHost` Shell callback 未進入 app re-entry gate，close 可在 callback 內 teardown | 7 | `done` | PD-140, PD-146 | [PD-147](tickets/PD-147-explorerhost-callback-reentry-shutdown-guard.md) |
 
 ## Dependency lanes
 

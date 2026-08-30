@@ -603,6 +603,23 @@ struct AppState {
 
 void begin_shutdown(HWND window, AppState& state, bool allow_keep_open) noexcept;
 
+void finish_shell_call(AppState& state) noexcept {
+    if (state.shell_call_depth == 0 || --state.shell_call_depth != 0 ||
+        !state.shutdown_deferred || state.shutdown_message_queued ||
+        state.main_window == nullptr)
+        return;
+    state.shutdown_message_queued = true;
+    if (PostMessageW(state.main_window, kDeferredShutdownMessage, 0, 0))
+        return;
+    OutputDebugStringW(
+        L"PaneDock: could not queue deferred shutdown\n");
+    state.shutdown_message_queued = false;
+    state.shutdown_deferred = false;
+    if (IsWindow(state.main_window))
+        begin_shutdown(state.main_window, state,
+                       !state.end_session_pending);
+}
+
 class ShellCallScope final {
 public:
     explicit ShellCallScope(AppState& state) noexcept : state_(state) {
@@ -610,20 +627,7 @@ public:
     }
 
     ~ShellCallScope() noexcept {
-        if (state_.shell_call_depth == 0 || --state_.shell_call_depth != 0 ||
-            !state_.shutdown_deferred || state_.shutdown_message_queued ||
-            state_.main_window == nullptr)
-            return;
-        state_.shutdown_message_queued = true;
-        if (PostMessageW(state_.main_window, kDeferredShutdownMessage, 0, 0))
-            return;
-        OutputDebugStringW(
-            L"PaneDock: could not queue deferred shutdown\n");
-        state_.shutdown_message_queued = false;
-        state_.shutdown_deferred = false;
-        if (IsWindow(state_.main_window))
-            begin_shutdown(state_.main_window, state_,
-                           !state_.end_session_pending);
+        finish_shell_call(state_);
     }
 
     ShellCallScope(const ShellCallScope&) = delete;
@@ -632,6 +636,16 @@ public:
 private:
     AppState& state_;
 };
+
+void app_shell_call_state_changed(void* context, bool entering) noexcept {
+    if (context == nullptr) return;
+    auto& state = *static_cast<AppState*>(context);
+    if (entering) {
+        ++state.shell_call_depth;
+    } else {
+        finish_shell_call(state);
+    }
+}
 
 class FileOperationProgressSink final : public IFileOperationProgressSink {
 public:
@@ -2979,6 +2993,8 @@ HRESULT apply_layout(HWND window, AppState& state,
             if (!state.realized[index] && !state.startup_frame_only &&
                 (realize_deferred_panes || !state.startup_realize_pending ||
                  index == active)) {
+                state.explorers[index].set_shell_call_callback(
+                    &state, app_shell_call_state_changed);
                 HRESULT hr = E_UNEXPECTED;
                 {
                     ShellCallScope shell_call(state);

@@ -87,6 +87,7 @@ public:
     HRESULT STDMETHODCALLTYPE MessageSFVCB(UINT message, WPARAM wparam,
                                             LPARAM lparam) noexcept override {
         if (host_ == nullptr) return E_NOTIMPL;
+        ExplorerHost::ShellCallScope shell_call(*host_);
         if (previous_ != nullptr) {
             (void)previous_->MessageSFVCB(message, wparam, lparam);
         }
@@ -228,6 +229,33 @@ HWND view_window(IExplorerBrowser* browser) noexcept {
 
 ExplorerHost::~ExplorerHost() {
     destroy();
+}
+
+ExplorerHost::ShellCallScope::ShellCallScope(ExplorerHost& host) noexcept
+    : host_(host) {
+    host_.enter_shell_call();
+}
+
+ExplorerHost::ShellCallScope::~ShellCallScope() noexcept {
+    host_.leave_shell_call();
+}
+
+void ExplorerHost::set_shell_call_callback(
+    void* context, ShellCallCallback callback) noexcept {
+    shell_call_context_ = context;
+    shell_call_callback_ = callback;
+}
+
+void ExplorerHost::enter_shell_call() noexcept {
+    if (shell_call_callback_ != nullptr) {
+        shell_call_callback_(shell_call_context_, true);
+    }
+}
+
+void ExplorerHost::leave_shell_call() noexcept {
+    if (shell_call_callback_ != nullptr) {
+        shell_call_callback_(shell_call_context_, false);
+    }
 }
 
 bool ExplorerHost::register_error_window_class() noexcept {
@@ -587,6 +615,7 @@ HRESULT ExplorerHost::translate_accelerator(MSG* message) noexcept {
 }
 
 void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
+    ShellCallScope shell_call(*this);
     // PD-038: OnNavigationComplete can fire synchronously inside
     // BrowseToObject -- for the very first navigate() call (from
     // initialize()) that happens before the view HWND is ever shown, and
@@ -655,6 +684,7 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
 }
 
 void ExplorerHost::navigation_failed() noexcept {
+    ShellCallScope shell_call(*this);
     if (parent_ == nullptr) {
         return;
     }
