@@ -5482,11 +5482,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             break;
         case WM_QUERYENDSESSION:
-            if (state != nullptr) {
-                cancel_session_save_timer(*state);
-                capture_window_placement(window, *state);
-                (void)save_now(*state, true, true);
-            }
+            // Query only asks whether shutdown may proceed. Saving a clean
+            // marker here makes a later WM_ENDSESSION(FALSE) look clean and can
+            // block the system query on slow storage. The confirmed path below
+            // performs the normal close sequence.
             return TRUE;
         case WM_ENDSESSION:
             if (wparam) {

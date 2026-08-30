@@ -169,6 +169,7 @@
 | PD-129 | single-instance 啟動競態:前一個 AP 正在關閉／卡死會靜默 no-op,第二個執行個體無 UI 無提示 | 7 | `done` | (none) | [PD-129](tickets/PD-129-single-instance-startup-race-relay.md) |
 | PD-130 | startup 絕不能因「可復原的 pane/view 失敗」而整窗開不起來或靜默空白;每個失敗都要有提示 | 7 | `done` | (none) | [PD-130](tickets/PD-130-startup-recoverable-failure-never-blocks-window.md) |
 | PD-131 | single-instance mutex 重新取得競態可啟動兩個 PaneDock 並競寫 session | 7 | `done` | PD-084, PD-129 | [PD-131](tickets/PD-131-single-instance-reacquire-race.md) |
+| PD-132 | 被取消的 Windows shutdown 會留下錯誤 clean marker，掩蓋後續 force kill／crash | 7 | `done` | PD-025, PD-032, PD-125 | [PD-132](tickets/PD-132-session-query-marks-cancelled-shutdown-clean.md) |
 
 ## Dependency lanes
 
