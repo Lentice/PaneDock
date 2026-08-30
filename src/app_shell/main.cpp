@@ -2461,6 +2461,13 @@ void cancel_session_save_timer(const AppState& state) noexcept {
         KillTimer(state.main_window, kSessionSaveTimerId);
 }
 
+void append_startup_warning(AppState& state, std::wstring_view warning) {
+    if (warning.empty()) return;
+    if (!state.startup_warning_message.empty())
+        state.startup_warning_message += L"\n\n";
+    state.startup_warning_message.append(warning);
+}
+
 bool save_now(AppState& state, bool clean_shutdown = false,
               bool force_during_transition = false) noexcept {
     // Shutdown must still persist dirty model state if Shell re-entry leaves
@@ -5063,18 +5070,18 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 // block, invalid stored location) must not prevent the app from
                 // opening. Keep the window; the failing pane stays unrealized
                 // (blank) and the user is told after create.
-                state->startup_warning_message =
+                append_startup_warning(
+                    *state,
                     L"PaneDock could not open the Shell view for one or more "
-                    L"panes. Some panes may be empty.";
+                    L"panes. Some panes may be empty.");
             }
             if (state->shutdown_deferred || state->closing_) return 0;
             if (!register_tab_drag_hover_targets(window, *state)) {
                 OutputDebugStringW(
                     L"PaneDock: RegisterDragDrop for tab strip failed\n");
                 revoke_drag_hover_targets(*state);
-                if (state->startup_warning_message.empty())
-                    state->startup_warning_message =
-                        L"PaneDock could not enable tab drag-and-drop.";
+                append_startup_warning(
+                    *state, L"PaneDock could not enable tab drag-and-drop.");
             }
             if (state->shutdown_deferred || state->closing_) return 0;
             return 0;
@@ -5094,11 +5101,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 return 0;
             const HRESULT hr = realize_startup_panes(window, *state);
             if (state->shutdown_deferred || state->closing_) return 0;
-            if (FAILED(hr) && state->startup_warning_message.empty()) {
+            if (FAILED(hr)) {
                 // A pane whose Shell view could not be realized stays blank; tell
                 // the user instead of leaving the failure as a silent debug log.
-                // Skip when WM_CREATE already warned (the active pane failed and
-                // the deferred re-attempt failed again).
                 MessageBoxW(
                     window,
                     L"PaneDock could not open the Shell view for one or more "
@@ -6093,9 +6098,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     state.application = state.session_document.application;
     assert(panedock::core::is_valid(state.application));
     if (!save_now(state)) {
-        state.startup_warning_message =
+        append_startup_warning(
+            state,
             L"PaneDock could not save its session. Changes may not persist "
-            L"until the storage problem is fixed.";
+            L"until the storage problem is fixed.");
     }
 
     // PD-134: validate the restored placement against the virtual desktop.
@@ -6132,6 +6138,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         if (!state.startup_error_message.empty()) {
             MessageBoxW(nullptr, state.startup_error_message.c_str(),
                         L"PaneDock", MB_ICONERROR | MB_OK);
+        }
+        if (!state.startup_warning_message.empty()) {
+            MessageBoxW(nullptr, state.startup_warning_message.c_str(),
+                        L"PaneDock", MB_ICONWARNING | MB_OK);
         }
         OleUninitialize();
         CloseHandle(single_instance_mutex);

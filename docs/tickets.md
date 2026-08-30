@@ -181,6 +181,7 @@
 | PD-141 | startup 先顯示 frame，再進行 active/其餘 Shell realization | 7 | `done` | PD-093, PD-109, PD-130, PD-140 | [PD-141](tickets/PD-141-startup-frame-before-shell-realize.md) |
 | PD-142 | 移除 startup frame 顯示前重複的 virtual-folder label Shell lookup | 7 | `done` | PD-141 | [PD-142](tickets/PD-142-startup-no-prewindow-shell-label-lookup.md) |
 | PD-143 | clean marker 延後到完整 Shell/COM teardown 後，避免 force-kill false-clean | 7 | `done` | PD-025, PD-032, PD-132, PD-136 | [PD-143](tickets/PD-143-clean-marker-after-teardown.md) |
+| PD-144 | startup failure warnings 不得互相覆蓋，deferred Shell failure 必須提示 | 7 | `done` | PD-130, PD-135, PD-141, PD-142 | [PD-144](tickets/PD-144-startup-warning-aggregation.md) |
 
 ## Dependency lanes
 
