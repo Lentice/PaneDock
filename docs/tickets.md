@@ -179,6 +179,7 @@
 | PD-139 | single-instance relay 對 stale/closing/hung HWND 靜默退出 | 7 | `done` | PD-084, PD-129, PD-131 | [PD-139](tickets/PD-139-single-instance-activation-handshake.md) |
 | PD-140 | Shell API re-entry 可在 outer call 未返回前 destroy parent 或繼續碰死 COM | 7 | `done` | PD-125, PD-127, PD-136 | [PD-140](tickets/PD-140-shell-call-reentry-shutdown-gate.md) |
 | PD-141 | startup 先顯示 frame，再進行 active/其餘 Shell realization | 7 | `done` | PD-093, PD-109, PD-130, PD-140 | [PD-141](tickets/PD-141-startup-frame-before-shell-realize.md) |
+| PD-142 | 移除 startup frame 顯示前重複的 virtual-folder label Shell lookup | 7 | `done` | PD-141 | [PD-142](tickets/PD-142-startup-no-prewindow-shell-label-lookup.md) |
 
 ## Dependency lanes
 

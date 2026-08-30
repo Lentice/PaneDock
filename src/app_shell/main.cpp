@@ -6083,10 +6083,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     }
     state.session_document = std::move(loaded.document);
     state.application = state.session_document.application;
-    for (std::size_t index = 0; index < kPinnedFixedParsingNames.size();
-         ++index)
-        state.pinned_fixed_labels[index] = display_text_for_parsing_name(
-            kPinnedFixedParsingNames[index]);
     assert(panedock::core::is_valid(state.application));
     if (!save_now(state)) {
         state.startup_warning_message =
