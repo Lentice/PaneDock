@@ -17,7 +17,7 @@ One navigable location within a pane. A tab owns its location, view mode, sort o
 _Avoid_: page, document
 
 **layout template**:
-One of exactly five fixed pane arrangements: single, left/right, top/bottom, three-pane, four-pane grid. PaneDock does not support arbitrary recursive splitting, so there is no general "split" operation to name.
+One of eight fixed pane arrangements: single; left/right; top/bottom; one-left/two-right; two-left/one-right; one-top/two-bottom; two-top/one-bottom; four-pane grid. PaneDock does not support arbitrary recursive splitting, so there is no general "split" operation to name.
 _Avoid_: layout mode, split configuration, arrangement
 
 **sidebar**:
