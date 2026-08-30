@@ -473,6 +473,12 @@ struct AppState {
     // still mid-teardown (§9.4 order).
     bool closing_{};
     bool shutdown_prompt_active{};
+    // A final save is a single close decision. WM_DESTROY is only allowed to
+    // keep its legacy fallback for an unexpected destroy before that decision.
+    bool shutdown_save_attempted{};
+    // WM_ENDSESSION(TRUE) can arrive while a save-failure dialog or a Shell
+    // file operation is pumping the STA message loop.
+    bool end_session_pending{};
     // PD-123: PerformOperations pumps the STA message loop. A close request
     // records intent and defers the existing teardown until that call returns.
     bool file_operation_call_active{};
@@ -4298,6 +4304,7 @@ LRESULT CALLBACK group_list_proc(HWND window, UINT message, WPARAM wparam,
 void begin_shutdown(HWND window, AppState& state,
                     bool allow_keep_open = true) noexcept;
 void complete_deferred_close(HWND window, AppState& state) noexcept;
+void finish_shutdown(HWND window, AppState& state) noexcept;
 
 LRESULT CALLBACK transfer_close_dialog_proc(HWND window, UINT message,
                                             WPARAM wparam, LPARAM lparam) {
@@ -4436,25 +4443,13 @@ void show_transfer_close_dialog(HWND owner, AppState& state) noexcept {
     SetForegroundWindow(dialog);
 }
 
-void begin_shutdown(HWND window, AppState& state,
-                    bool allow_keep_open) noexcept {
-    if (state.closing_ || state.shutdown_prompt_active) return;
-    capture_window_placement(window, state);
-    if (!save_now(state, true, true) && allow_keep_open) {
-        state.shutdown_prompt_active = true;
-        const int answer = MessageBoxW(
-            window,
-            L"PaneDock could not save your session. Keep PaneDock open so "
-            L"you can fix the storage problem and try again? Choose No to "
-            L"close without saving recent changes.",
-            L"PaneDock", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON1);
-        state.shutdown_prompt_active = false;
-        if (answer == IDYES) return;
-    }
+void finish_shutdown(HWND window, AppState& state) noexcept {
+    if (state.closing_) return;
     state.closing_ = true;
     state.quit_requested = true;
     state.startup_realize_pending = false;
     ++state.startup_realize_generation;
+    state.end_session_pending = false;
     if (state.transfer_close_dialog != nullptr)
         DestroyWindow(state.transfer_close_dialog);
     destroy_pinned_locations_manager(state);
@@ -4466,6 +4461,40 @@ void begin_shutdown(HWND window, AppState& state,
     PostQuitMessage(0);
 }
 
+void begin_shutdown(HWND window, AppState& state,
+                    bool allow_keep_open) noexcept {
+    if (state.closing_) return;
+    if (state.shutdown_prompt_active) {
+        if (!allow_keep_open) state.end_session_pending = true;
+        return;
+    }
+    if (state.shutdown_save_attempted) {
+        if (!allow_keep_open) state.end_session_pending = true;
+        return;
+    }
+    state.shutdown_save_attempted = true;
+    capture_window_placement(window, state);
+    if (!save_now(state, true, true) && allow_keep_open) {
+        state.shutdown_prompt_active = true;
+        const int answer = MessageBoxW(
+            window,
+            L"PaneDock could not save your session. Keep PaneDock open so "
+            L"you can fix the storage problem and try again? Choose No to "
+            L"close without saving recent changes.",
+            L"PaneDock", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON1);
+        state.shutdown_prompt_active = false;
+        if (state.end_session_pending) {
+            finish_shutdown(window, state);
+            return;
+        }
+        if (answer != IDNO) {
+            state.shutdown_save_attempted = false;
+            return;
+        }
+    }
+    finish_shutdown(window, state);
+}
+
 void complete_deferred_close(HWND window, AppState& state) noexcept {
     if (!state.close_after_file_operation ||
         state.file_operation_call_active || state.file_operation_in_progress ||
@@ -4473,7 +4502,7 @@ void complete_deferred_close(HWND window, AppState& state) noexcept {
         return;
     if (state.transfer_close_dialog != nullptr)
         DestroyWindow(state.transfer_close_dialog);
-    begin_shutdown(window, state);
+    begin_shutdown(window, state, !state.end_session_pending);
 }
 
 bool perform_clipboard_paste(HWND window, AppState& state,
@@ -5468,7 +5497,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     show_transfer_close_dialog(window, *state);
                     return 0;
                 }
-                begin_shutdown(window, *state);
+                begin_shutdown(window, *state,
+                               !state->end_session_pending);
             }
             return 0;
         case WM_DESTROY:
@@ -5479,7 +5509,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 destroy_pinned_locations_manager(*state);
                 revoke_drag_hover_targets(*state);
                 cancel_session_save_timer(*state);
-                if (state->session_dirty) {
+                if (state->session_dirty && !state->shutdown_save_attempted) {
+                    state->shutdown_save_attempted = true;
                     capture_window_placement(window, *state);
                     (void)save_now(*state, true, true);
                 }
@@ -5502,8 +5533,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             // performs the normal close sequence.
             return TRUE;
         case WM_ENDSESSION:
-            if (wparam) {
-                if (state != nullptr) {
+            if (state != nullptr) {
+                if (wparam) {
+                    state->end_session_pending = true;
                     if (state->file_operation_call_active ||
                         state->file_operation_in_progress) {
                         state->close_after_file_operation = true;
@@ -5511,6 +5543,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     } else {
                         begin_shutdown(window, *state, false);
                     }
+                } else {
+                    state->end_session_pending = false;
                 }
             }
             return 0;
