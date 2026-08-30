@@ -160,14 +160,14 @@
 | PD-120 | Pinned Locations 管理視窗區分 Apply、OK 與 Cancel | 7 | `done` | PD-119 | [PD-120](tickets/PD-120-pinned-locations-apply-ok-cancel-semantics.md) |
 | PD-121 | 跨 Group 剪貼簿 Copy / Paste | 7 | `done` | PD-017, PD-019, PD-021, PD-023, PD-086, PD-091 | [PD-121](tickets/PD-121-cross-group-clipboard-copy-paste.md) |
 | PD-122 | 跨 Group 檔案拖放 | 7 | `done` | PD-034, PD-050, PD-090, PD-091, PD-121 | [PD-122](tickets/PD-122-cross-group-file-drag-and-drop.md) |
-| PD-123 | 複製進行中關閉 PaneDock 的驗證、確認與修正 | 7 | `in_progress` | PD-023, PD-032, PD-106, PD-121, PD-122 | [PD-123](tickets/PD-123-close-during-shell-copy-validation.md) |
-| PD-124 | 巢狀 modal loop 內關閉時 `WM_QUIT` 被吃掉,外層 message loop 永不退出(程序殘留) | 7 | `in_progress` | PD-007, PD-032, PD-068, PD-106 | [PD-124](tickets/PD-124-nested-modal-loop-close-lost-quit-message.md) |
-| PD-125 | 關閉序列重入與 `WM_ENDSESSION` 未退出訊息迴圈(違反 §9.4) | 7 | `in_progress` | PD-007, PD-032, PD-106, PD-124 | [PD-125](tickets/PD-125-close-sequence-reentrancy-and-endsession-exit.md) |
-| PD-126 | 啟動後立即關閉(UI 剛出現)會在啟動 MessageBox 的 modal loop 內吃掉 `WM_QUIT`,外層 loop 空佇列時永遠阻塞 | 7 | `in_progress` | PD-124, PD-125 | [PD-126](tickets/PD-126-early-close-after-start-lost-quit-before-loop.md) |
-| PD-127 | teardown 重入未受守衛:queued 訊息在 `IExplorerBrowser::Destroy` pump 內重入,重新建立 live view 後 parent 才被銷毀 | 7 | `in_progress` | PD-124, PD-125, PD-126 | [PD-127](tickets/PD-127-teardown-reentrancy-guard-and-deferred-startup-error.md) |
+| PD-123 | 複製進行中關閉 PaneDock 的驗證、確認與修正 | 7 | `done` | PD-023, PD-032, PD-106, PD-121, PD-122 | [PD-123](tickets/PD-123-close-during-shell-copy-validation.md) |
+| PD-124 | 巢狀 modal loop 內關閉時 `WM_QUIT` 被吃掉,外層 message loop 永不退出(程序殘留) | 7 | `done` | PD-007, PD-032, PD-068, PD-106 | [PD-124](tickets/PD-124-nested-modal-loop-close-lost-quit-message.md) |
+| PD-125 | 關閉序列重入與 `WM_ENDSESSION` 未退出訊息迴圈(違反 §9.4) | 7 | `done` | PD-007, PD-032, PD-106, PD-124 | [PD-125](tickets/PD-125-close-sequence-reentrancy-and-endsession-exit.md) |
+| PD-126 | 啟動後立即關閉(UI 剛出現)會在啟動 MessageBox 的 modal loop 內吃掉 `WM_QUIT`,外層 loop 空佇列時永遠阻塞 | 7 | `done` | PD-124, PD-125 | [PD-126](tickets/PD-126-early-close-after-start-lost-quit-before-loop.md) |
+| PD-127 | teardown 重入未受守衛:queued 訊息在 `IExplorerBrowser::Destroy` pump 內重入,重新建立 live view 後 parent 才被銷毀 | 7 | `done` | PD-124, PD-125, PD-126 | [PD-127](tickets/PD-127-teardown-reentrancy-guard-and-deferred-startup-error.md) |
 | PD-128 | `panedock_launch_smoke`／關閉時間歇性 `STATUS_STACK_BUFFER_OVERRUN`(0xC0000409)的調查 | 7 | `planned` | 可重現的 runtime repro | [PD-128](tickets/PD-128-investigate-launch-smoke-stack-buffer-overrun.md) |
-| PD-129 | single-instance 啟動競態:前一個 AP 正在關閉／卡死會靜默 no-op,第二個執行個體無 UI 無提示 | 7 | `in_progress` | (none) | [PD-129](tickets/PD-129-single-instance-startup-race-relay.md) |
-| PD-130 | startup 絕不能因「可復原的 pane/view 失敗」而整窗開不起來或靜默空白;每個失敗都要有提示 | 7 | `in_progress` | (none) | [PD-130](tickets/PD-130-startup-recoverable-failure-never-blocks-window.md) |
+| PD-129 | single-instance 啟動競態:前一個 AP 正在關閉／卡死會靜默 no-op,第二個執行個體無 UI 無提示 | 7 | `done` | (none) | [PD-129](tickets/PD-129-single-instance-startup-race-relay.md) |
+| PD-130 | startup 絕不能因「可復原的 pane/view 失敗」而整窗開不起來或靜默空白;每個失敗都要有提示 | 7 | `done` | (none) | [PD-130](tickets/PD-130-startup-recoverable-failure-never-blocks-window.md) |
 
 ## Dependency lanes
 

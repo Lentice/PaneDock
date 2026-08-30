@@ -57,6 +57,15 @@ constexpr UINT kActivateExistingInstanceMessage = WM_APP + 50;
 constexpr UINT kDragHoverMessage = WM_APP + 51;
 // PD-093: realize non-active startup panes after the first window paint.
 constexpr UINT kDeferredRealizeMessage = WM_APP + 52;
+// PD-123: keep the main window alive until a PaneDock-owned Shell paste has
+// returned from PerformOperations.
+constexpr UINT kFileOperationFinishedMessage = WM_APP + 53;
+constexpr wchar_t kTransferCloseDialogClassName[] =
+    L"PaneDockTransferCloseDialog";
+constexpr int kTransferCloseKeepOpenId = 1;
+constexpr int kTransferCloseAfterTransferId = 2;
+constexpr int kTransferCancelAndCloseId = 3;
+constexpr int kTransferCloseStatusId = 4;
 // PD-091: coalesce navigation completions without keeping a polling timer.
 constexpr UINT kSessionSaveDelayMilliseconds = 500;
 constexpr UINT_PTR kSessionSaveTimerId = 0xD050;
@@ -462,6 +471,13 @@ struct AppState {
     // must not re-run teardown or destroy the parent HWND while a view is
     // still mid-teardown (§9.4 order).
     bool closing_{};
+    // PD-123: PerformOperations pumps the STA message loop. A close request
+    // records intent and defers the existing teardown until that call returns.
+    bool file_operation_call_active{};
+    bool file_operation_in_progress{};
+    bool close_after_file_operation{};
+    bool cancel_file_operation{};
+    HWND transfer_close_dialog{nullptr};
     // Set by WM_CREATE when the Shell view cannot be opened. Never raised as a
     // modal MessageBox from inside WM_CREATE (that nested loop could dispatch a
     // WM_CLOSE to a half-created HWND); shown by wWinMain after create returns.
@@ -560,6 +576,177 @@ struct AppState {
     Microsoft::WRL::ComPtr<DragHoverTarget> sidebar_drag_target;
     std::array<Microsoft::WRL::ComPtr<DragHoverTarget>, kExplorerCount>
         tab_drag_targets{};
+};
+
+class FileOperationProgressSink final : public IFileOperationProgressSink {
+public:
+    explicit FileOperationProgressSink(AppState* state) : state_(state) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid,
+                                              void** object) override {
+        if (object == nullptr) return E_POINTER;
+        *object = nullptr;
+        if (riid != IID_IUnknown && riid != IID_IFileOperationProgressSink)
+            return E_NOINTERFACE;
+        *object = static_cast<IFileOperationProgressSink*>(this);
+        AddRef();
+        return S_OK;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return references_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining =
+            references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        if (remaining == 0) delete this;
+        return remaining;
+    }
+
+    HRESULT STDMETHODCALLTYPE StartOperations() override {
+        if (state_ != nullptr) state_->file_operation_in_progress = true;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE FinishOperations(HRESULT result) override {
+        (void)result;
+        if (state_ != nullptr) {
+            state_->file_operation_in_progress = false;
+            if (state_->main_window != nullptr)
+                PostMessageW(state_->main_window,
+                             kFileOperationFinishedMessage, 0, 0);
+        }
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE PreRenameItem(DWORD flags, IShellItem* item,
+                                             LPCWSTR new_name) override {
+        (void)flags;
+        (void)item;
+        (void)new_name;
+        return cancel_requested() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
+                                  : S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE PostRenameItem(
+        DWORD flags, IShellItem* item, LPCWSTR new_name, HRESULT result,
+        IShellItem* newly_created) override {
+        (void)flags;
+        (void)item;
+        (void)new_name;
+        (void)result;
+        (void)newly_created;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE PreMoveItem(DWORD flags, IShellItem* item,
+                                           IShellItem* destination,
+                                           LPCWSTR new_name) override {
+        (void)flags;
+        (void)item;
+        (void)destination;
+        (void)new_name;
+        return cancel_requested() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
+                                  : S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE PostMoveItem(
+        DWORD flags, IShellItem* item, IShellItem* destination,
+        LPCWSTR new_name, HRESULT result, IShellItem* newly_created) override {
+        (void)flags;
+        (void)item;
+        (void)destination;
+        (void)new_name;
+        (void)result;
+        (void)newly_created;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE PreCopyItem(DWORD flags, IShellItem* item,
+                                           IShellItem* destination,
+                                           LPCWSTR new_name) override {
+        (void)flags;
+        (void)item;
+        (void)destination;
+        (void)new_name;
+        return cancel_requested() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
+                                  : S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE PostCopyItem(
+        DWORD flags, IShellItem* item, IShellItem* destination,
+        LPCWSTR new_name, HRESULT result, IShellItem* newly_created) override {
+        (void)flags;
+        (void)item;
+        (void)destination;
+        (void)new_name;
+        (void)result;
+        (void)newly_created;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE PreDeleteItem(DWORD flags,
+                                             IShellItem* item) override {
+        (void)flags;
+        (void)item;
+        return cancel_requested() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
+                                  : S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE PostDeleteItem(
+        DWORD flags, IShellItem* item, HRESULT result,
+        IShellItem* newly_created) override {
+        (void)flags;
+        (void)item;
+        (void)result;
+        (void)newly_created;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE PreNewItem(DWORD flags,
+                                          IShellItem* destination,
+                                          LPCWSTR new_name) override {
+        (void)flags;
+        (void)destination;
+        (void)new_name;
+        return cancel_requested() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
+                                  : S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE PostNewItem(
+        DWORD flags, IShellItem* destination, LPCWSTR new_name,
+        LPCWSTR template_name, DWORD attributes, HRESULT result,
+        IShellItem* new_item) override {
+        (void)flags;
+        (void)destination;
+        (void)new_name;
+        (void)template_name;
+        (void)attributes;
+        (void)result;
+        (void)new_item;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE UpdateProgress(UINT work_total,
+                                              UINT work_so_far) override {
+        (void)work_total;
+        (void)work_so_far;
+        return cancel_requested() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
+                                  : S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE ResetTimer() override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE PauseTimer() override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE ResumeTimer() override { return S_OK; }
+
+private:
+    bool cancel_requested() const noexcept {
+        return state_ != nullptr && state_->cancel_file_operation;
+    }
+
+    std::atomic<ULONG> references_{1};
+    AppState* state_;
 };
 
 void revoke_drag_hover_targets(AppState& state) noexcept {
@@ -4106,6 +4293,230 @@ LRESULT CALLBACK group_list_proc(HWND window, UINT message, WPARAM wparam,
     return DefSubclassProc(window, message, wparam, lparam);
 }
 
+void begin_shutdown(HWND window, AppState& state) noexcept;
+void complete_deferred_close(HWND window, AppState& state) noexcept;
+
+LRESULT CALLBACK transfer_close_dialog_proc(HWND window, UINT message,
+                                            WPARAM wparam, LPARAM lparam) {
+    auto* state = reinterpret_cast<AppState*>(
+        GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
+        state = static_cast<AppState*>(create->lpCreateParams);
+        SetWindowLongPtrW(window, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(state));
+    }
+
+    switch (message) {
+        case WM_CREATE: {
+            if (state == nullptr) return -1;
+            const UINT dpi = GetDpiForWindow(window);
+            const auto scaled = [dpi](int value) {
+                return MulDiv(value, static_cast<int>(dpi), 96);
+            };
+            HINSTANCE instance = GetModuleHandleW(nullptr);
+            CreateWindowExW(
+                0, L"STATIC", L"A file transfer is still running.",
+                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
+                scaled(16), scaled(18), scaled(480), scaled(28), window,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(
+                    kTransferCloseStatusId)),
+                instance, nullptr);
+            CreateWindowExW(
+                0, L"BUTTON", L"Keep PaneDock Open",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                scaled(16), scaled(92), scaled(140), scaled(32), window,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(
+                    kTransferCloseKeepOpenId)),
+                instance, nullptr);
+            CreateWindowExW(
+                0, L"BUTTON", L"Close After Transfer",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                scaled(164), scaled(92), scaled(150), scaled(32), window,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(
+                    kTransferCloseAfterTransferId)),
+                instance, nullptr);
+            CreateWindowExW(
+                0, L"BUTTON", L"Cancel Transfer and Close",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                scaled(322), scaled(92), scaled(182), scaled(32), window,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(
+                    kTransferCancelAndCloseId)),
+                instance, nullptr);
+            SetFocus(GetDlgItem(window, kTransferCloseAfterTransferId));
+            return 0;
+        }
+        case WM_COMMAND:
+            if (state == nullptr) break;
+            switch (LOWORD(wparam)) {
+                case kTransferCloseKeepOpenId:
+                    state->close_after_file_operation = false;
+                    state->cancel_file_operation = false;
+                    DestroyWindow(window);
+                    return 0;
+                case kTransferCloseAfterTransferId:
+                    state->close_after_file_operation = true;
+                    state->cancel_file_operation = false;
+                    DestroyWindow(window);
+                    complete_deferred_close(state->main_window, *state);
+                    return 0;
+                case kTransferCancelAndCloseId:
+                    state->close_after_file_operation = true;
+                    state->cancel_file_operation = true;
+                    SetWindowTextW(
+                        GetDlgItem(window, kTransferCloseStatusId),
+                        L"Cancelling transfer...");
+                    EnableWindow(GetDlgItem(window, kTransferCloseKeepOpenId),
+                                 FALSE);
+                    EnableWindow(
+                        GetDlgItem(window, kTransferCloseAfterTransferId),
+                        FALSE);
+                    EnableWindow(GetDlgItem(window, kTransferCancelAndCloseId),
+                                 FALSE);
+                    return 0;
+                default:
+                    break;
+            }
+            break;
+        case WM_CLOSE:
+            if (state != nullptr) {
+                state->close_after_file_operation = false;
+                state->cancel_file_operation = false;
+            }
+            DestroyWindow(window);
+            return 0;
+        case WM_NCDESTROY:
+            if (state != nullptr && state->transfer_close_dialog == window) {
+                state->transfer_close_dialog = nullptr;
+                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+            }
+            break;
+        default:
+            break;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+void show_transfer_close_dialog(HWND owner, AppState& state) noexcept {
+    if (state.transfer_close_dialog != nullptr) {
+        SetForegroundWindow(state.transfer_close_dialog);
+        return;
+    }
+    const UINT dpi = GetDpiForWindow(owner);
+    const int width = MulDiv(520, static_cast<int>(dpi), 96);
+    const int height = MulDiv(170, static_cast<int>(dpi), 96);
+    HWND dialog = CreateWindowExW(
+        WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+        kTransferCloseDialogClassName, L"File transfer in progress",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU, 0, 0, width, height, owner,
+        nullptr, GetModuleHandleW(nullptr), &state);
+    if (dialog == nullptr) return;
+
+    RECT owner_rect{};
+    int x = 0;
+    int y = 0;
+    if (GetWindowRect(owner, &owner_rect)) {
+        x = owner_rect.left +
+            std::max(0, (static_cast<int>(owner_rect.right - owner_rect.left) -
+                         width) /
+                        2);
+        y = owner_rect.top +
+            std::max(0, (static_cast<int>(owner_rect.bottom - owner_rect.top) -
+                         height) /
+                        2);
+    }
+    state.transfer_close_dialog = dialog;
+    SetWindowPos(dialog, HWND_TOP, x, y, width, height,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    ShowWindow(dialog, SW_SHOWNORMAL);
+    UpdateWindow(dialog);
+    SetForegroundWindow(dialog);
+}
+
+void begin_shutdown(HWND window, AppState& state) noexcept {
+    if (state.closing_) return;
+    state.closing_ = true;
+    state.quit_requested = true;
+    state.startup_realize_pending = false;
+    ++state.startup_realize_generation;
+    if (state.transfer_close_dialog != nullptr)
+        DestroyWindow(state.transfer_close_dialog);
+    destroy_pinned_locations_manager(state);
+    revoke_drag_hover_targets(state);
+    cancel_session_save_timer(state);
+    capture_window_placement(window, state);
+    (void)save_now(state, true, true);
+    destroy_explorers(state);
+    assert(panedock::explorer_host::live_view_count() == 0);
+    DestroyWindow(window);
+    PostQuitMessage(0);
+}
+
+void complete_deferred_close(HWND window, AppState& state) noexcept {
+    if (!state.close_after_file_operation ||
+        state.file_operation_call_active || state.file_operation_in_progress ||
+        state.closing_ || window == nullptr)
+        return;
+    if (state.transfer_close_dialog != nullptr)
+        DestroyWindow(state.transfer_close_dialog);
+    begin_shutdown(window, state);
+}
+
+bool perform_clipboard_paste(HWND window, AppState& state,
+                             std::size_t pane_index) noexcept {
+    if (state.file_operation_call_active) return true;
+    if (pane_index >= kExplorerCount || !state.realized[pane_index])
+        return false;
+
+    Microsoft::WRL::ComPtr<IDataObject> data;
+    if (FAILED(OleGetClipboard(data.GetAddressOf())) || data == nullptr)
+        return false;
+    const std::wstring& parsing_name = state.explorers[pane_index].location();
+    if (parsing_name.empty()) return false;
+
+    Microsoft::WRL::ComPtr<IShellItem> destination;
+    if (FAILED(SHCreateItemFromParsingName(
+            parsing_name.c_str(), nullptr, IID_PPV_ARGS(&destination))))
+        return false;
+
+    Microsoft::WRL::ComPtr<IFileOperation> operation;
+    if (FAILED(CoCreateInstance(CLSID_FileOperation, nullptr,
+                                CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&operation))))
+        return false;
+    if (FAILED(operation->SetOwnerWindow(window))) return false;
+
+    Microsoft::WRL::ComPtr<FileOperationProgressSink> sink;
+    sink.Attach(new (std::nothrow) FileOperationProgressSink(&state));
+    if (sink == nullptr) return false;
+
+    DWORD cookie = 0;
+    HRESULT hr = operation->Advise(sink.Get(), &cookie);
+    if (FAILED(hr)) return false;
+    hr = operation->CopyItems(data.Get(), destination.Get());
+    if (FAILED(hr)) {
+        (void)operation->Unadvise(cookie);
+        return false;
+    }
+
+    state.file_operation_call_active = true;
+    state.file_operation_in_progress = true;
+    state.close_after_file_operation = false;
+    state.cancel_file_operation = false;
+    hr = operation->PerformOperations();
+    BOOL operations_aborted = FALSE;
+    (void)operation->GetAnyOperationsAborted(&operations_aborted);
+    (void)hr;
+    (void)operations_aborted;
+    (void)operation->Unadvise(cookie);
+    operation.Reset();
+    sink.Reset();
+    state.file_operation_in_progress = false;
+    state.file_operation_call_active = false;
+    complete_deferred_close(window, state);
+    return true;
+}
+
 void activate_main_window_on_own_thread(HWND window) noexcept;
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
@@ -5031,23 +5442,19 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 if (pane < kExplorerCount) set_active_pane(window, *state, pane);
             }
             return 0;
+        case kFileOperationFinishedMessage:
+            if (state != nullptr)
+                complete_deferred_close(window, *state);
+            return 0;
         case WM_CLOSE:
             if (state != nullptr) {
-                if (!state->closing_) {
-                    state->closing_ = true;
-                    state->quit_requested = true;
-                    state->startup_realize_pending = false;
-                    ++state->startup_realize_generation;
-                    destroy_pinned_locations_manager(*state);
-                    revoke_drag_hover_targets(*state);
-                    cancel_session_save_timer(*state);
-                    capture_window_placement(window, *state);
-                    (void)save_now(*state, true, true);
-                    destroy_explorers(*state);
-                    assert(panedock::explorer_host::live_view_count() == 0);
-                    DestroyWindow(window);
-                    PostQuitMessage(0);
+                if (state->file_operation_call_active ||
+                    state->file_operation_in_progress) {
+                    state->close_after_file_operation = true;
+                    show_transfer_close_dialog(window, *state);
+                    return 0;
                 }
+                begin_shutdown(window, *state);
             }
             return 0;
         case WM_DESTROY:
@@ -5083,18 +5490,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return TRUE;
         case WM_ENDSESSION:
             if (wparam) {
-                if (state != nullptr && !state->closing_) {
-                    state->closing_ = true;
-                    state->quit_requested = true;
-                    state->startup_realize_pending = false;
-                    ++state->startup_realize_generation;
-                    destroy_pinned_locations_manager(*state);
-                    revoke_drag_hover_targets(*state);
-                    cancel_session_save_timer(*state);
-                    destroy_explorers(*state);
-                    assert(panedock::explorer_host::live_view_count() == 0);
-                    DestroyWindow(window);
-                    PostQuitMessage(0);
+                if (state != nullptr) {
+                    if (state->file_operation_call_active ||
+                        state->file_operation_in_progress) {
+                        state->close_after_file_operation = true;
+                        state->cancel_file_operation = true;
+                    } else {
+                        begin_shutdown(window, *state);
+                    }
                 }
             }
             return 0;
@@ -5113,6 +5516,15 @@ bool register_window_class(HINSTANCE instance) noexcept {
         reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     manager_class.lpszClassName = kPinnedLocationsWindowClassName;
     if (RegisterClassExW(&manager_class) == 0) return false;
+
+    WNDCLASSEXW transfer_class{};
+    transfer_class.cbSize = sizeof(transfer_class);
+    transfer_class.hInstance = instance;
+    transfer_class.lpfnWndProc = transfer_close_dialog_proc;
+    transfer_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    transfer_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    transfer_class.lpszClassName = kTransferCloseDialogClassName;
+    if (RegisterClassExW(&transfer_class) == 0) return false;
 
     WNDCLASSEXW window_class{};
     window_class.cbSize = sizeof(window_class);
@@ -5378,14 +5790,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         if (result <= 0) break;
         if (has_active_group(state)) {
             const std::size_t active = active_pane_index(active_group(state));
-            if (!address_bar_has_focus(state) &&
-                state.explorers[active].translate_accelerator(&message) == S_OK)
-                continue;
             const bool key_down = message.message == WM_KEYDOWN ||
                                   message.message == WM_SYSKEYDOWN;
             const bool control = GetKeyState(VK_CONTROL) < 0;
             const bool alt = GetKeyState(VK_MENU) < 0;
             const bool shift = GetKeyState(VK_SHIFT) < 0;
+            if (key_down && control && !alt && !shift &&
+                message.wParam == 'V' && !address_bar_has_focus(state) &&
+                perform_clipboard_paste(window, state, active))
+                continue;
+            if (!address_bar_has_focus(state) &&
+                state.explorers[active].translate_accelerator(&message) == S_OK)
+                continue;
             if (key_down && control && !alt && message.wParam == 'T') {
                 add_tab_to_pane(window, state, active);
                 continue;
