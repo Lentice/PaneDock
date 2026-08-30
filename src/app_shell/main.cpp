@@ -452,6 +452,25 @@ struct AppState {
     HWND main_window{nullptr};
     bool diagnostic_mode{};
     bool session_dirty{};
+    // A nested modal loop (TrackPopupMenu, shell context menu, IFileOperation
+    // progress) may consume the WM_QUIT posted in WM_CLOSE, leaving the outer
+    // GetMessageW loop stuck with the window already destroyed. The outer loop
+    // checks this flag after every dispatch so it exits regardless.
+    bool quit_requested{};
+    // First close request starts teardown; re-entrant WM_CLOSE/WM_ENDSESSION
+    // during IExplorerBrowser::Destroy (the Shell pumps a nested loop there)
+    // must not re-run teardown or destroy the parent HWND while a view is
+    // still mid-teardown (§9.4 order).
+    bool closing_{};
+    // Set by WM_CREATE when the Shell view cannot be opened. Never raised as a
+    // modal MessageBox from inside WM_CREATE (that nested loop could dispatch a
+    // WM_CLOSE to a half-created HWND); shown by wWinMain after create returns.
+    std::wstring startup_error_message;
+    // A recoverable startup problem the window can still open with (e.g. one
+    // pane's Shell view could not be realized, or tab drag-and-drop failed).
+    // Shown by wWinMain after the window is created; never an inside-WM_CREATE
+    // modal box.
+    std::wstring startup_warning_message;
     struct SidebarDrag final {
         int start_x{};
         int start_width{};
@@ -2530,6 +2549,11 @@ void destroy_explorers(AppState& state) noexcept {
 HRESULT apply_layout(HWND window, AppState& state,
                      bool realize_deferred_panes = false,
                      bool recompute_content = true) {
+    // A close torn down the Shell views; any message re-dispatched by the
+    // IExplorerBrowser::Destroy pump must not re-create a live view while the
+    // parent HWND is being destroyed (§9.4). Guard the shared entry, not every
+    // caller.
+    if (state.closing_) return S_OK;
     if (recompute_content) {
         layout_sidebar(window, state);
         layout_header(window, state);
@@ -2781,6 +2805,7 @@ panedock::core::GroupState new_group_state(const AppState& state,
 }
 
 void activate_group(HWND window, AppState& state, std::size_t index) {
+    if (state.closing_) return;  // re-dispatched during Shell teardown pump
     if (index >= state.application.groups.size()) return;
     const std::string target_id = state.application.groups[index].id;
     if (target_id == state.application.active_group_id) {
@@ -2935,6 +2960,7 @@ std::string unique_tab_id(const panedock::core::GroupState& group,
 
 void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
                        const std::string& tab_id) {
+    if (state.closing_) return;  // re-dispatched during Shell teardown pump
     if (!has_active_group(state)) return;
     auto& group = active_group(state);
     if (pane_index >= group.panes.size()) return;
@@ -4097,6 +4123,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
     switch (message) {
         case WM_CREATE: {
             state->startup_realize_pending = true;
+            // Every fatal child-construction failure (sidebar, subclass, control
+            // create, drag-drop registration) returns -1 below, which makes
+            // CreateWindowExW return null and wWinMain show this message. Without
+            // this default those paths would exit with no user-facing prompt.
+            state->startup_error_message =
+                L"PaneDock could not create its user interface.";
             INITCOMMONCONTROLSEX controls{
                 sizeof(controls), ICC_TAB_CLASSES | ICC_WIN95_CLASSES};
             if (!InitCommonControlsEx(&controls)) return -1;
@@ -4272,11 +4304,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             refresh_sidebar(*state);
             refresh_tab_strips(*state);
             if (FAILED(apply_layout(window, *state))) {
-                MessageBoxW(window, L"PaneDock could not open the Shell view.",
-                            L"PaneDock", MB_ICONERROR | MB_OK);
-                revoke_drag_hover_targets(*state);
-                destroy_explorers(*state);
-                return -1;
+                // A single unreachable pane (offline drive, permission or AV
+                // block, invalid stored location) must not prevent the app from
+                // opening. Keep the window; the failing pane stays unrealized
+                // (blank) and the user is told after create.
+                state->startup_warning_message =
+                    L"PaneDock could not open the Shell view for one or more "
+                    L"panes. Some panes may be empty.";
             }
             if (has_active_group(*state)) {
                 const std::size_t active =
@@ -4287,8 +4321,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 OutputDebugStringW(
                     L"PaneDock: RegisterDragDrop for tab strip failed\n");
                 revoke_drag_hover_targets(*state);
-                destroy_explorers(*state);
-                return -1;
+                if (state->startup_warning_message.empty())
+                    state->startup_warning_message =
+                        L"PaneDock could not enable tab drag-and-drop.";
             }
             return 0;
         }
@@ -4299,9 +4334,17 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 return 0;
             const HRESULT hr = apply_layout(window, *state, true);
             state->startup_realize_pending = false;
-            if (FAILED(hr))
-                OutputDebugStringW(
-                    L"PaneDock: deferred Shell view realization failed\n");
+            if (FAILED(hr) && state->startup_warning_message.empty()) {
+                // A pane whose Shell view could not be realized stays blank; tell
+                // the user instead of leaving the failure as a silent debug log.
+                // Skip when WM_CREATE already warned (the active pane failed and
+                // the deferred re-attempt failed again).
+                MessageBoxW(
+                    window,
+                    L"PaneDock could not open the Shell view for one or more "
+                    L"panes. Some panes may be empty.",
+                    L"PaneDock", MB_OK | MB_ICONWARNING);
+            }
             return 0;
         }
         case kTabStripSelectionMessage:
@@ -4990,21 +5033,26 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         case WM_CLOSE:
             if (state != nullptr) {
-                state->startup_realize_pending = false;
-                ++state->startup_realize_generation;
-                destroy_pinned_locations_manager(*state);
-                revoke_drag_hover_targets(*state);
-                cancel_session_save_timer(*state);
-                capture_window_placement(window, *state);
-                (void)save_now(*state, true, true);
-                destroy_explorers(*state);
-                assert(panedock::explorer_host::live_view_count() == 0);
+                if (!state->closing_) {
+                    state->closing_ = true;
+                    state->quit_requested = true;
+                    state->startup_realize_pending = false;
+                    ++state->startup_realize_generation;
+                    destroy_pinned_locations_manager(*state);
+                    revoke_drag_hover_targets(*state);
+                    cancel_session_save_timer(*state);
+                    capture_window_placement(window, *state);
+                    (void)save_now(*state, true, true);
+                    destroy_explorers(*state);
+                    assert(panedock::explorer_host::live_view_count() == 0);
+                    DestroyWindow(window);
+                    PostQuitMessage(0);
+                }
             }
-            DestroyWindow(window);
-            PostQuitMessage(0);
             return 0;
         case WM_DESTROY:
             if (state != nullptr) {
+                state->quit_requested = true;
                 state->startup_realize_pending = false;
                 ++state->startup_realize_generation;
                 destroy_pinned_locations_manager(*state);
@@ -5035,11 +5083,18 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return TRUE;
         case WM_ENDSESSION:
             if (wparam) {
-                if (state != nullptr) {
+                if (state != nullptr && !state->closing_) {
+                    state->closing_ = true;
+                    state->quit_requested = true;
                     state->startup_realize_pending = false;
                     ++state->startup_realize_generation;
                     destroy_pinned_locations_manager(*state);
+                    revoke_drag_hover_targets(*state);
+                    cancel_session_save_timer(*state);
                     destroy_explorers(*state);
+                    assert(panedock::explorer_host::live_view_count() == 0);
+                    DestroyWindow(window);
+                    PostQuitMessage(0);
                 }
             }
             return 0;
@@ -5072,16 +5127,6 @@ bool register_window_class(HINSTANCE instance) noexcept {
     return RegisterClassExW(&window_class) != 0;
 }
 
-HWND find_existing_main_window() noexcept {
-    const ULONGLONG deadline =
-        GetTickCount64() + kSingleInstanceWindowRetryTimeoutMs;
-    for (;;) {
-        HWND window = FindWindowW(kWindowClassName, nullptr);
-        if (window != nullptr || GetTickCount64() >= deadline) return window;
-        Sleep(kSingleInstanceWindowRetryIntervalMs);
-    }
-}
-
 void activate_main_window_on_own_thread(HWND window) noexcept {
     if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
 
@@ -5102,34 +5147,76 @@ void activate_main_window_on_own_thread(HWND window) noexcept {
         OutputDebugStringW(L"PaneDock: existing window activation failed\n");
 }
 
-void activate_existing_main_window() noexcept {
-    const HWND window = find_existing_main_window();
-    if (window == nullptr) {
-        OutputDebugStringW(
-            L"PaneDock: timed out waiting for existing main window\n");
-        return;
+// A previous instance holds the single-instance mutex. Either activate its
+// main window (running), wait for it to release the mutex and start fresh
+// (finishing a close), or report that it is alive but unresponsive.
+// Returns true if wWinMain must exit now; on false the caller keeps `mutex`
+// (a freshly acquired handle) and proceeds to launch a new instance.
+bool relay_or_wait_for_existing_instance(HANDLE& mutex) noexcept {
+    CloseHandle(mutex);
+    // The main window is the honest signal of a usable instance, but a closing
+    // instance destroys its window early and keeps the mutex until teardown
+    // ends. Poll both: activate the window if it appears, launch fresh the
+    // moment the previous releases the mutex, otherwise tell the user rather
+    // than exiting with no visible result.
+    const ULONGLONG deadline =
+        GetTickCount64() + kSingleInstanceWindowRetryTimeoutMs;
+    for (;;) {
+        const HWND window = FindWindowW(kWindowClassName, nullptr);
+        if (window != nullptr) {
+            DWORD process_id = 0;
+            if (GetWindowThreadProcessId(window, &process_id) != 0 &&
+                process_id != 0)
+                (void)AllowSetForegroundWindow(process_id);
+            if (!PostMessageW(window, kActivateExistingInstanceMessage, 0, 0))
+                OutputDebugStringW(
+                    L"PaneDock: could not request window activation\n");
+            return true;
+        }
+        const HANDLE probe = OpenMutexW(SYNCHRONIZE, FALSE,
+                                        kSingleInstanceMutexName);
+        if (probe == nullptr) {
+            // The previous instance released the mutex while we waited, so it is
+            // gone. Take a fresh handle and let the caller launch normally.
+            mutex = CreateMutexW(nullptr, FALSE, kSingleInstanceMutexName);
+            if (mutex == nullptr) {
+                OutputDebugStringW(L"PaneDock: CreateMutexW failed\n");
+                return true;
+            }
+            return false;
+        }
+        CloseHandle(probe);
+        if (GetTickCount64() >= deadline) break;
+        Sleep(kSingleInstanceWindowRetryIntervalMs);
     }
+    MessageBoxW(
+        nullptr,
+        L"PaneDock is already running but not responding, or it is "
+        L"shutting down. Wait a moment and try again.",
+        L"PaneDock", MB_OK | MB_ICONWARNING);
+    return true;
+}
 
-    DWORD process_id = 0;
-    if (GetWindowThreadProcessId(window, &process_id) != 0 && process_id != 0)
-        (void)AllowSetForegroundWindow(process_id);
-    if (!PostMessageW(window, kActivateExistingInstanceMessage, 0, 0))
-        OutputDebugStringW(L"PaneDock: could not request window activation\n");
+void report_startup_failure(const wchar_t* message) noexcept {
+    MessageBoxW(nullptr, message, L"PaneDock", MB_OK | MB_ICONERROR);
 }
 
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
-    const HANDLE single_instance_mutex =
+    HANDLE single_instance_mutex =
         CreateMutexW(nullptr, FALSE, kSingleInstanceMutexName);
     if (single_instance_mutex == nullptr) {
         OutputDebugStringW(L"PaneDock: CreateMutexW failed\n");
+        report_startup_failure(
+            L"PaneDock could not start (the single-instance lock was "
+            L"unavailable).");
         return 1;
     }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        activate_existing_main_window();
-        CloseHandle(single_instance_mutex);
-        return 0;
+        if (relay_or_wait_for_existing_instance(single_instance_mutex)) return 0;
+        // The previous instance released the mutex during the wait; fall through
+        // and launch a fresh window with the acquired handle.
     }
 
     bool diagnostic_mode = false;
@@ -5167,6 +5254,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
 
     const HRESULT com_result = OleInitialize(nullptr);
     if (FAILED(com_result)) {
+        report_startup_failure(L"PaneDock could not initialize COM.");
         CloseHandle(single_instance_mutex);
         return static_cast<int>(com_result);
     }
@@ -5176,6 +5264,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
         OutputDebugStringW(L"PaneDock: SetProcessDpiAwarenessContext failed\n");
     if (!register_window_class(instance)) {
+        report_startup_failure(
+            L"PaneDock could not create its main window class.");
         OleUninitialize();
         CloseHandle(single_instance_mutex);
         return exit_code;
@@ -5185,7 +5275,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     state.diagnostic_mode = diagnostic_mode;
     const auto directory = session_directory();
     if (!directory.has_value()) {
-        OutputDebugStringW(L"PaneDock: LocalAppData resolution failed\n");
+        report_startup_failure(
+            L"PaneDock could not resolve its data folder.");
         OleUninitialize();
         CloseHandle(single_instance_mutex);
         return exit_code;
@@ -5222,6 +5313,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     if (window == nullptr) {
         destroy_explorers(state);
         assert(panedock::explorer_host::live_view_count() == 0);
+        if (!state.startup_error_message.empty()) {
+            MessageBoxW(nullptr, state.startup_error_message.c_str(),
+                        L"PaneDock", MB_ICONERROR | MB_OK);
+        }
         OleUninitialize();
         CloseHandle(single_instance_mutex);
         return exit_code;
@@ -5253,6 +5348,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             L"third-party shell extensions.",
             L"PaneDock", MB_OK | MB_ICONWARNING);
     }
+    if (!state.startup_warning_message.empty()) {
+        MessageBoxW(window, state.startup_warning_message.c_str(),
+                    L"PaneDock", MB_OK | MB_ICONWARNING);
+    }
     if (state.startup_realize_pending) {
         const UINT_PTR generation = ++state.startup_realize_generation;
         if (!PostMessageW(window, kDeferredRealizeMessage, 0,
@@ -5268,7 +5367,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     }
     MSG message{};
     int result = 0;
-    while ((result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
+    for (;;) {
+        // A close can be issued before this loop starts (e.g. the startup
+        // recovery / unclean-shutdown MessageBox runs a modal loop that
+        // dispatches WM_CLOSE and consumes the posted WM_QUIT). Check the flag
+        // before blocking in GetMessageW, or an empty queue would leave the
+        // loop blocked forever with quit_requested already true.
+        if (state.quit_requested) break;
+        result = GetMessageW(&message, nullptr, 0, 0);
+        if (result <= 0) break;
         if (has_active_group(state)) {
             const std::size_t active = active_pane_index(active_group(state));
             if (!address_bar_has_focus(state) &&
@@ -5324,8 +5431,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         }
         TranslateMessage(&message);
         DispatchMessageW(&message);
+        // win32: a nested modal loop can consume the WM_QUIT posted in
+        // WM_CLOSE/WM_DESTROY. Exit on the flag so a close issued from inside a
+        // shell popup / context menu still terminates the process.
+        if (state.quit_requested) break;
     }
     exit_code = result < 0 ? 1 : static_cast<int>(message.wParam);
+    if (state.quit_requested) exit_code = 0;
 
     destroy_pinned_locations_manager(state);
     destroy_explorers(state);
