@@ -185,6 +185,7 @@
 | PD-145 | startup message loop 前不得同步執行可避免的 Shell chrome lookup | 7 | `done` | PD-141, PD-142, PD-144 | [PD-145](tickets/PD-145-defer-startup-shell-chrome.md) |
 | PD-146 | 補齊 display-name Shell lookup 的 re-entry shutdown guard | 7 | `done` | PD-140, PD-145 | [PD-146](tickets/PD-146-display-name-shell-reentry-guard.md) |
 | PD-147 | `ExplorerHost` Shell callback 未進入 app re-entry gate，close 可在 callback 內 teardown | 7 | `done` | PD-140, PD-146 | [PD-147](tickets/PD-147-explorerhost-callback-reentry-shutdown-guard.md) |
+| PD-148 | activation handshake 將 `SetForegroundWindow` 拒絕誤判為成功 | 7 | `done` | PD-139 | [PD-148](tickets/PD-148-activation-handshake-reports-foreground-failure.md) |
 
 ## Dependency lanes
 
@@ -613,6 +614,10 @@ Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `
 ### 2026-08-29 — 使用者要求跨 Group 複製貼上與跨 Group 拖放,開 PD-121/122
 
 使用者要求把「從某個 Group 複製到另一個 Group」與「從某個 Group 拖放到另一個 Group」各自建立 ticket 並實作。盤點後確認兩條底層能力已由原生 `IExplorerBrowser` Shell view、PD-034 的 Group row OLE hover、PD-090 的延後 message 與 PD-091 的 session 防抖提供,不新增自有 clipboard／檔案操作引擎。PD-121 定義跨 Group `Ctrl+C`／`Ctrl+V` 與原生 Copy／Paste;PD-122 定義拖曳到目標 Group row 懸停約 800ms、切換後移入指定 pane 內容區放開。第一張票明確不含 Cut／Paste;第二張票明確不接受在 Group row 或 tab header 直接放開。另將 `activate_group` 的一般保存改走既有 `schedule_session_save`,避免跨 Group clipboard／OLE drag 路徑同步 flush session;關閉路徑的 force save 不變。
+
+### 2026-08-30 — startup audit 發現 PD-139 handshake 未傳遞前景化失敗,開 PD-148
+
+最後一輪 close/startup audit 追查到 PD-139 的 handshake 雖然已由 `PostMessageW` 改成 bounded `SendMessageTimeoutW`，但第一實例的 activation handler 仍呼叫回傳 `void` 的 `activate_main_window_on_own_thread()`，無論 `SetForegroundWindow()` 回傳成功或失敗都回傳 handshake success (`0`)。Windows 前景鎖定規則可讓 `SetForegroundWindow()` 靜默拒絕；此時第二實例會錯誤地正常退出，使用者既沒有被帶到既有 UI，也沒有看到 PD-139 的 timeout warning。PD-148 只把這個既有 Win32 結果沿 relay 回傳，讓失敗重新進入既有 bounded wait／提示路徑，不改變單一實例、前景化技巧或等待政策。
 
 ### 2026-08-30 — 複製進行中關閉 PaneDock 先驗證再決策,開 PD-123
 

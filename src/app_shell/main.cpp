@@ -4885,7 +4885,7 @@ bool perform_clipboard_paste(HWND window, AppState& state,
     return true;
 }
 
-void activate_main_window_on_own_thread(HWND window) noexcept;
+bool activate_main_window_on_own_thread(HWND window) noexcept;
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                              LPARAM lparam) {
@@ -5185,8 +5185,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case kActivateExistingInstanceMessage:
             if (state == nullptr || state->closing_ || state->quit_requested)
                 return 1;
-            activate_main_window_on_own_thread(window);
-            return 0;
+            return activate_main_window_on_own_thread(window) ? 0 : 1;
         case WM_MEASUREITEM:
             if (state != nullptr) {
                 auto* item = reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
@@ -5941,7 +5940,7 @@ bool register_window_class(HINSTANCE instance) noexcept {
     return RegisterClassExW(&window_class) != 0;
 }
 
-void activate_main_window_on_own_thread(HWND window) noexcept {
+bool activate_main_window_on_own_thread(HWND window) noexcept {
     if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
 
     const DWORD current_thread = GetCurrentThreadId();
@@ -5959,6 +5958,7 @@ void activate_main_window_on_own_thread(HWND window) noexcept {
     }
     if (activated == FALSE)
         OutputDebugStringW(L"PaneDock: existing window activation failed\n");
+    return activated != FALSE;
 }
 
 // A previous instance holds the single-instance mutex. Either activate its
