@@ -178,6 +178,7 @@
 | PD-138 | startup 將 filesystem status error／backup-only recovery 當成無需提示 | 7 | `done` | PD-025, PD-078 | [PD-138](tickets/PD-138-session-read-error-recovery-signal.md) |
 | PD-139 | single-instance relay 對 stale/closing/hung HWND 靜默退出 | 7 | `done` | PD-084, PD-129, PD-131 | [PD-139](tickets/PD-139-single-instance-activation-handshake.md) |
 | PD-140 | Shell API re-entry 可在 outer call 未返回前 destroy parent 或繼續碰死 COM | 7 | `done` | PD-125, PD-127, PD-136 | [PD-140](tickets/PD-140-shell-call-reentry-shutdown-gate.md) |
+| PD-141 | startup 先顯示 frame，再進行 active/其餘 Shell realization | 7 | `done` | PD-093, PD-109, PD-130, PD-140 | [PD-141](tickets/PD-141-startup-frame-before-shell-realize.md) |
 
 ## Dependency lanes
 

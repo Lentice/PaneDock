@@ -458,6 +458,9 @@ struct AppState {
     // PD-093: startup shows the active Shell view first; the posted message
     // realizes the remaining visible panes after the window is interactive.
     bool startup_realize_pending{};
+    // WM_CREATE only lays out the frame. Shell work starts after the top-level
+    // window has been shown, so a slow active location cannot hide the UI.
+    bool startup_frame_only{};
     UINT_PTR startup_realize_generation{};
     panedock::core::ApplicationState application;
     panedock::core::SessionDocument session_document;
@@ -2958,7 +2961,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                                             container_radius);
             }
             const RECT local_rect{0, 0, container_width, container_height};
-            if (!state.realized[index] &&
+            if (!state.realized[index] && !state.startup_frame_only &&
                 (realize_deferred_panes || !state.startup_realize_pending ||
                  index == active)) {
                 HRESULT hr = E_UNEXPECTED;
@@ -3044,6 +3047,26 @@ HRESULT apply_layout(HWND window, AppState& state,
     }
     if (recompute_content) write_live_view_count(state.diagnostic_mode);
     return first_failure.has_value() ? first_failure->result : S_OK;
+}
+
+HRESULT realize_startup_panes(HWND window, AppState& state) {
+    // startup_realize_pending keeps the first pass limited to the active pane.
+    const HRESULT active_result = apply_layout(window, state);
+    if (state.shutdown_deferred || state.closing_) return E_ABORT;
+    if (has_active_group(state)) {
+        const std::size_t active = active_pane_index(active_group(state));
+        {
+            ShellCallScope shell_call(state);
+            state.explorers[active].focus();
+        }
+        if (state.shutdown_deferred || state.closing_) return E_ABORT;
+    }
+
+    state.startup_realize_pending = false;
+    const HRESULT remaining_result = apply_layout(window, state, true);
+    if (state.shutdown_deferred || state.closing_) return E_ABORT;
+    if (FAILED(active_result)) return active_result;
+    return remaining_result;
 }
 
 std::string unique_group_id(const panedock::core::ApplicationState& application) {
@@ -4842,6 +4865,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
     switch (message) {
         case WM_CREATE: {
             state->startup_realize_pending = true;
+            state->startup_frame_only = true;
             // Every fatal child-construction failure (sidebar, subclass, control
             // create, drag-drop registration) returns -1 below, which makes
             // CreateWindowExW return null and wWinMain show this message. Without
@@ -4853,8 +4877,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (!InitCommonControlsEx(&controls)) return -1;
             state->sidebar_drag_target =
                 make_sidebar_drag_hover_target(window, *state);
-            if (!state->sidebar.create(window, kGroupListId,
-                                       state->sidebar_drag_target.Get())) {
+            bool sidebar_created = false;
+            {
+                ShellCallScope shell_call(*state);
+                sidebar_created = state->sidebar.create(
+                    window, kGroupListId, state->sidebar_drag_target.Get());
+            }
+            if (state->shutdown_deferred || state->closing_) return 0;
+            if (!sidebar_created) {
                 state->sidebar_drag_target.Reset();
                 return -1;
             }
@@ -5021,7 +5051,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             refresh_ui_font(window, *state);
             refresh_sidebar(*state);
-            refresh_tab_strips(*state);
             if (FAILED(apply_layout(window, *state))) {
                 // A single unreachable pane (offline drive, permission or AV
                 // block, invalid stored location) must not prevent the app from
@@ -5032,15 +5061,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     L"panes. Some panes may be empty.";
             }
             if (state->shutdown_deferred || state->closing_) return 0;
-            if (has_active_group(*state)) {
-                const std::size_t active =
-                    active_pane_index(active_group(*state));
-                {
-                    ShellCallScope shell_call(*state);
-                    state->explorers[active].focus();
-                }
-                if (state->shutdown_deferred || state->closing_) return 0;
-            }
             if (!register_tab_drag_hover_targets(window, *state)) {
                 OutputDebugStringW(
                     L"PaneDock: RegisterDragDrop for tab strip failed\n");
@@ -5049,6 +5069,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     state->startup_warning_message =
                         L"PaneDock could not enable tab drag-and-drop.";
             }
+            if (state->shutdown_deferred || state->closing_) return 0;
             return 0;
         }
         case kDeferredShutdownMessage:
@@ -5064,8 +5085,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 static_cast<UINT_PTR>(lparam) !=
                     state->startup_realize_generation)
                 return 0;
-            const HRESULT hr = apply_layout(window, *state, true);
-            state->startup_realize_pending = false;
+            const HRESULT hr = realize_startup_panes(window, *state);
+            if (state->shutdown_deferred || state->closing_) return 0;
             if (FAILED(hr) && state->startup_warning_message.empty()) {
                 // A pane whose Shell view could not be realized stays blank; tell
                 // the user instead of leaving the failure as a silent debug log.
@@ -6114,13 +6135,26 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     }
     ShowWindow(window, placement.maximized ? SW_SHOWMAXIMIZED : show_command);
     UpdateWindow(window);
+    state.startup_frame_only = false;
+    {
+        ShellCallScope shell_call(state);
+        for (std::size_t index = 0; index < kPinnedFixedParsingNames.size();
+             ++index) {
+            if (state.shutdown_deferred || state.closing_) break;
+            state.pinned_fixed_labels[index] = display_text_for_parsing_name(
+                kPinnedFixedParsingNames[index]);
+        }
+        if (!state.shutdown_deferred && !state.closing_)
+            refresh_tab_strips(state);
+    }
     // PD-135: each startup MessageBox owns a nested modal loop that dispatches
     // the main window's messages. A WM_CLOSE / WM_ENDSESSION issued there runs
     // begin_shutdown, which destroys the main HWND; the remaining startup dialogs
     // and the deferred-realize post must not run against that destroyed (or
     // reused) HWND. `proceed` short-circuits the rest of the sequence once the
     // window has been torn down.
-    bool proceed = true;
+    bool proceed = !state.closing_ && !state.shutdown_deferred &&
+                   !state.quit_requested;
     if (recovered_from_corruption &&
         session_source == panedock::core::SessionSource::backup) {
         MessageBoxW(
@@ -6160,11 +6194,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                           static_cast<LPARAM>(generation))) {
             OutputDebugStringW(
                 L"PaneDock: could not queue deferred Shell view realization\n");
-            state.startup_realize_pending = false;
-            ++state.startup_realize_generation;
-            if (FAILED(apply_layout(window, state)))
-                OutputDebugStringW(
-                    L"PaneDock: fallback Shell view realization failed\n");
+            const HRESULT hr = realize_startup_panes(window, state);
+            if (FAILED(hr) && !state.closing_ && !state.shutdown_deferred)
+                MessageBoxW(
+                    window,
+                    L"PaneDock could not open the Shell view for one or more "
+                    L"panes. Some panes may be empty.",
+                    L"PaneDock", MB_OK | MB_ICONWARNING);
         }
     }
     MSG message{};
