@@ -25,4 +25,41 @@ Assert-Source 'case kDeferredShutdownMessage:' `
 Assert-Source 'ShellCallScope shell_call\(state\)' `
     'ExplorerHost callers use the shared Shell-call gate'
 
+$helperStart = $source.IndexOf(
+    'std::wstring display_text_for_parsing_name(')
+$helperEnd = $source.IndexOf(
+    'panedock::core::ApplicationState default_application_state()',
+    $helperStart)
+if ($helperStart -lt 0 -or $helperEnd -lt 0) {
+    throw 'Shell re-entry invariant failed: display-name helper missing'
+}
+$helperBody = $source.Substring($helperStart, $helperEnd - $helperStart)
+if ($helperBody -notmatch 'AppState& state' -or
+    $helperBody -notmatch 'ShellCallScope shell_call\(state\);[\s\S]*SHCreateItemFromParsingName' -or
+    $helperBody -notmatch 'SHCreateItemFromParsingName[\s\S]*GetDisplayName') {
+    throw 'Shell re-entry invariant failed: display-name Shell calls are unguarded'
+}
+$callSiteSource = $source.Remove($helperStart, $helperEnd - $helperStart)
+if ([regex]::Matches($callSiteSource, 'display_text_for_parsing_name\(').Count -ne
+    [regex]::Matches($callSiteSource,
+        'display_text_for_parsing_name\(\s*state\s*,').Count) {
+    throw 'Shell re-entry invariant failed: state-less display-name caller exists'
+}
+Assert-Source 'std::wstring tab_display_text\(AppState& state' `
+    'tab display text carries the Shell-call state'
+$tabHelperStart = $source.IndexOf(
+    'std::wstring tab_display_text(AppState& state')
+$tabHelperEnd = $source.IndexOf(
+    'void update_tab_strip_tooltips(', $tabHelperStart)
+if ($tabHelperStart -lt 0 -or $tabHelperEnd -lt 0) {
+    throw 'Shell re-entry invariant failed: tab display helper missing'
+}
+$tabCallSiteSource = $source.Remove($tabHelperStart,
+    $tabHelperEnd - $tabHelperStart)
+if ([regex]::Matches($tabCallSiteSource, 'tab_display_text\(').Count -ne
+    [regex]::Matches($tabCallSiteSource,
+        'tab_display_text\(\s*state\s*,').Count) {
+    throw 'Shell re-entry invariant failed: state-less tab display caller exists'
+}
+
 Write-Output 'PASSED: shell_reentry_gate_check'

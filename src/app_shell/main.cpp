@@ -843,10 +843,11 @@ panedock::core::ShellLocation location(std::wstring parsing_name) {
 }
 
 std::wstring display_text_for_parsing_name(
-    std::wstring_view parsing_name) {
+    AppState& state, std::wstring_view parsing_name) {
     if (!parsing_name.starts_with(L"::")) return std::wstring(parsing_name);
 
     const std::wstring parsing_text(parsing_name);
+    ShellCallScope shell_call(state);
     Microsoft::WRL::ComPtr<IShellItem> item;
     if (FAILED(SHCreateItemFromParsingName(
             parsing_text.c_str(), nullptr, IID_PPV_ARGS(&item)))) {
@@ -1569,6 +1570,7 @@ void refresh_navigation_chrome(AppState& state, std::size_t pane_index) {
     if (has_active_group(state) &&
         pane_index < active_group(state).panes.size()) {
         text = display_text_for_parsing_name(
+            state,
             active_tab(active_group(state).panes[pane_index])
                 .location.parsing_name);
     }
@@ -1688,11 +1690,12 @@ void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
     SetWindowTextW(state.status_bars[pane_index], text.c_str());
 }
 
-std::wstring tab_display_text(const panedock::core::TabState& tab) {
+std::wstring tab_display_text(AppState& state,
+                              const panedock::core::TabState& tab) {
     const auto& parsing_name = tab.location.parsing_name;
     const std::size_t separator = parsing_name.find_last_of(L"\\/");
     if (separator == std::wstring::npos || separator + 1 == parsing_name.size())
-        return display_text_for_parsing_name(parsing_name);
+        return display_text_for_parsing_name(state, parsing_name);
     return parsing_name.substr(separator + 1);
 }
 
@@ -1952,7 +1955,8 @@ void refresh_tab_strip(AppState& state, std::size_t pane_index) {
 
     const auto& pane = active_group(state).panes[pane_index];
     for (const auto& tab : pane.tabs)
-        state.tab_visuals[pane_index].push_back({tab_display_text(tab), {}});
+        state.tab_visuals[pane_index].push_back(
+            {tab_display_text(state, tab), {}});
     apply_tab_item_size(state, pane_index, true);
     refresh_navigation_chrome(state, pane_index);
 }
@@ -2543,7 +2547,7 @@ void refresh_pinned_locations_manager(
     SendMessageW(state.pinned_locations_list, LB_RESETCONTENT, 0, 0);
     for (const auto& pinned : application.pinned_locations) {
         const std::wstring label =
-            display_text_for_parsing_name(pinned.parsing_name);
+            display_text_for_parsing_name(state, pinned.parsing_name);
         SendMessageW(state.pinned_locations_list, LB_ADDSTRING, 0,
                      reinterpret_cast<LPARAM>(label.c_str()));
     }
@@ -3066,7 +3070,7 @@ void refresh_startup_chrome(AppState& state) {
          ++index) {
         if (state.shutdown_deferred || state.closing_) break;
         state.pinned_fixed_labels[index] = display_text_for_parsing_name(
-            kPinnedFixedParsingNames[index]);
+            state, kPinnedFixedParsingNames[index]);
     }
     if (!state.shutdown_deferred && !state.closing_)
         refresh_tab_strips(state);
@@ -3617,7 +3621,7 @@ void show_pinned_locations_menu(HWND window, AppState& state,
         static_cast<std::size_t>(kPinnedMenuMaxLocationCount));
     for (std::size_t index = 0; index < count; ++index) {
         const std::wstring label = display_text_for_parsing_name(
-            state.application.pinned_locations[index].parsing_name);
+            state, state.application.pinned_locations[index].parsing_name);
         AppendMenuW(
             menu, MF_STRING,
             static_cast<UINT_PTR>(menu_id_base + kPinnedMenuLocationOffset +
@@ -4171,7 +4175,7 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
                 text_rect.right = std::max(text_rect.left,
                                            text_rect.right - text_padding);
                 SetTextColor(dc, panedock::sidebar::kPlaceholderContent);
-                const std::wstring text = tab_display_text(*source_tab);
+                const std::wstring text = tab_display_text(state, *source_tab);
                 DrawTextW(dc, text.c_str(), -1, &text_rect,
                           DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS |
                               DT_NOPREFIX);
