@@ -45,6 +45,11 @@ if(WIN32)
                 "${CMAKE_CURRENT_SOURCE_DIR}/release/single_instance_relay_check.ps1"
                 -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp")
     add_test(
+        NAME panedock_shell_reentry_gate
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/release/shell_reentry_gate_check.ps1"
+                -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp")
+    add_test(
         NAME panedock_launch_smoke
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
                 "${CMAKE_CURRENT_SOURCE_DIR}/release/launch_smoke.ps1"
