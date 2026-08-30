@@ -160,6 +160,14 @@
 | PD-120 | Pinned Locations 管理視窗區分 Apply、OK 與 Cancel | 7 | `done` | PD-119 | [PD-120](tickets/PD-120-pinned-locations-apply-ok-cancel-semantics.md) |
 | PD-121 | 跨 Group 剪貼簿 Copy / Paste | 7 | `done` | PD-017, PD-019, PD-021, PD-023, PD-086, PD-091 | [PD-121](tickets/PD-121-cross-group-clipboard-copy-paste.md) |
 | PD-122 | 跨 Group 檔案拖放 | 7 | `done` | PD-034, PD-050, PD-090, PD-091, PD-121 | [PD-122](tickets/PD-122-cross-group-file-drag-and-drop.md) |
+| PD-123 | 複製進行中關閉 PaneDock 的驗證、確認與修正 | 7 | `in_progress` | PD-023, PD-032, PD-106, PD-121, PD-122 | [PD-123](tickets/PD-123-close-during-shell-copy-validation.md) |
+| PD-124 | 巢狀 modal loop 內關閉時 `WM_QUIT` 被吃掉,外層 message loop 永不退出(程序殘留) | 7 | `in_progress` | PD-007, PD-032, PD-068, PD-106 | [PD-124](tickets/PD-124-nested-modal-loop-close-lost-quit-message.md) |
+| PD-125 | 關閉序列重入與 `WM_ENDSESSION` 未退出訊息迴圈(違反 §9.4) | 7 | `in_progress` | PD-007, PD-032, PD-106, PD-124 | [PD-125](tickets/PD-125-close-sequence-reentrancy-and-endsession-exit.md) |
+| PD-126 | 啟動後立即關閉(UI 剛出現)會在啟動 MessageBox 的 modal loop 內吃掉 `WM_QUIT`,外層 loop 空佇列時永遠阻塞 | 7 | `in_progress` | PD-124, PD-125 | [PD-126](tickets/PD-126-early-close-after-start-lost-quit-before-loop.md) |
+| PD-127 | teardown 重入未受守衛:queued 訊息在 `IExplorerBrowser::Destroy` pump 內重入,重新建立 live view 後 parent 才被銷毀 | 7 | `in_progress` | PD-124, PD-125, PD-126 | [PD-127](tickets/PD-127-teardown-reentrancy-guard-and-deferred-startup-error.md) |
+| PD-128 | `panedock_launch_smoke`／關閉時間歇性 `STATUS_STACK_BUFFER_OVERRUN`(0xC0000409)的調查 | 7 | `planned` | 可重現的 runtime repro | [PD-128](tickets/PD-128-investigate-launch-smoke-stack-buffer-overrun.md) |
+| PD-129 | single-instance 啟動競態:前一個 AP 正在關閉／卡死會靜默 no-op,第二個執行個體無 UI 無提示 | 7 | `in_progress` | (none) | [PD-129](tickets/PD-129-single-instance-startup-race-relay.md) |
+| PD-130 | startup 絕不能因「可復原的 pane/view 失敗」而整窗開不起來或靜默空白;每個失敗都要有提示 | 7 | `in_progress` | (none) | [PD-130](tickets/PD-130-startup-recoverable-failure-never-blocks-window.md) |
 
 ## Dependency lanes
 
@@ -233,6 +241,9 @@ Phase 7 — Pinned Locations,對照使用者 2026-08-28 grilling session
 Phase 7 — Cross-Group file transfer integration,對照使用者 2026-08-29 需求
   PD-017 + PD-019 + PD-021 + PD-023 + PD-086 + PD-091 ─── PD-121(Copy／Paste across Groups)
   PD-034 + PD-050 + PD-090 + PD-091 + PD-121 ─── PD-122(drag and drop across Groups)
+
+Phase 7 — Shell operation shutdown validation,對照使用者 2026-08-30 需求
+  PD-023 + PD-032 + PD-106 + PD-121 + PD-122 ─── PD-123(validate → user checkpoint → remediate in the same ticket)
 
 PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `IShellFolder` fallback in `docs/design-spec.md` §9.1, and the tickets below it must be rewritten rather than adjusted.
 
@@ -557,3 +568,35 @@ Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `
 ### 2026-08-28 — 使用者要求 tab 允許跨 pane 拖曳搬移,延續 PD-035 決策 1,開 PD-110
 
 使用者原文:「pane tab 允許被 drag & drop across different panes」,經 `/grill-with-docs` 一輪問答確認。PD-035(2026-08-25)當初把 tab 拖拉排序範圍明確限定在「同一個 pane 內」,並在票面留話「若未來需要,另開新票」——本票即是那張後續票,不是重開已否決的方向。調查確認關鍵架構事實:live `IExplorerBrowser` 綁在 pane 插槽而非 tab(`switch_active_tab` 只對既有 browser 呼叫 `navigate()`,從不 destroy/recreate),所以跨 pane 搬移不需要新增或搬移任何 COM/Shell view 生命週期,只要搬 `TabState` 資料再各自 navigate 即可;tab id 在整個 Group 內保證唯一,不會跨 pane 撞 id。使用者接著追加要求:拖曳時要在游標處顯示被拖曳 tab 的圖案。追查發現這正是 PD-066 決策 2 與 PD-074 決策 1 已經明確否決的「跟隨游標的浮動縮圖」(需要 layered window 或即時 blit,不符合本專案純 GDI 路線),因此沒有直接照做,而是提出替代方案並經使用者確認採用:延伸 PD-074 既有的「placeholder 空槽內淡化畫出被拖曳項目」機制,讓它能畫在**目標 pane** 的 tab strip 裡(而非只能畫在來源 pane),不新增任何視窗、不 override PD-066/074 的既有決定。搬移語意採兩個新決策:(1) 搬走 pane 僅剩的最後一個 tab 時,比照 `close_tab` 既有精神,來源保留 1 個 tab 並重置成預設路徑,不允許 pane 變空;(2) 被丟到目標 pane 的 tab 在目標裡自動變成 active tab(比照瀏覽器拖曳分頁到新視窗的慣例)。開票為 [PD-110](tickets/PD-110-cross-pane-tab-drag.md),依賴 PD-035(同 pane 拖曳排序的既有基礎與明確留下的範圍缺口)、PD-050(目前 tab strip 拖曳事件重接的實作)、PD-074(要延伸的淡化 placeholder 機制)。
+
+### 2026-08-29 — 補齊三窗格方向並按 pane 數排序版型按鈕,開 PD-114/115
+
+使用者原文:「add more layout for 3 panes, 1 up 2 bottom, 2 left 1 right」,並追加「reorder the pane layout. 1 pane to 4 panes」。經 `/grill-with-docs` 查核並由使用者核准計畫:現有 `three_pane` 是 1 left / 2 right,PD-099 的 `two_over_one` 是 2 up / 1 down,因此新需求正好補齊另外兩個非對稱三窗格旋轉。這仍採固定、具名的 `LayoutTemplate` enum 值,不重開已否決的任意遞迴 pane 分割。開 [PD-114](tickets/PD-114-add-missing-three-pane-layout-orientations.md) 處理兩個新幾何、splitter、persistence、glyph、規格與 focused tests；另開 [PD-115](tickets/PD-115-order-layout-controls-by-pane-count.md) 將 UI 次序固定為 1 pane→2 panes→3 panes→4 panes,並在三窗格內先放左右鏡像對、再放上下鏡像對。重排只改 UI array/index 對應,不改 enum 宣告順序或 persisted identity。`CONTEXT.md` 同步把 `layout template` 詞彙更新為八種固定排列；此決策可逆且沒有新的架構取捨,不建立 ADR。
+
+### 2026-08-29 — Pane footer 資訊段落加入垂直 divider,開 PD-116
+
+使用者附現況截圖回報 pane footer 的 file count、selected item info 之間沒有分隔線且距離太近，後續提供 Windows 檔案總管 footer 截圖確認目標。這項新實機 UX 證據明確覆寫 PD-060「三段資訊固定使用 3 個空白、不用 `|` 等符號」的局部決策：改成三個獨立資訊段，相鄰且存在的段落之間以 GDI 畫短垂直 divider；無選取時不畫，有 selected count 但無 size 時畫一條，三段齊全時畫兩條。Divider 左右各沿用 `kSpaceSnug = 8` logical px，線條為 1×12 logical px、垂直置中並沿用 `RGB(232,237,242)`。不新增 child control、dependency、glossary 或 ADR；PD-060 的資料取得、上限、格式化與 footer 其餘視覺決策維持不變。開票為 [PD-116](tickets/PD-116-pane-footer-information-dividers.md)，依賴 PD-060 與 PD-069。
+
+### 2026-08-29 — PD-003 實機量測完成,轉 `done`
+
+使用者要求完成 PD-003 積壓已久的實機量測。`-CollectMeasurements` 路徑原設計為純人工互動(逐步 `Read-Host` 等操作者按 20 次 `Ctrl+Shift+L`、切換資料夾組態),經使用者確認改由 agent 代為執行——但**不是**用滑鼠/鍵盤合成輸入(computer-use 會搶走使用者實體滑鼠),而是用 UIA/Win32 訊息直接對 PaneDock 視窗控制項送 `WM_KEYDOWN`(位址列)與 `BM_CLICK`(版型按鈕),對主視窗 HWND 送 `WM_CLOSE`。過程中發現 `FindWindow` 從本 agent 的 shell 找不到該視窗(class atom 查找疑似受某種跨 process 限制影響,原因未深究),改用 `EnumWindows` 依 PID 過濾繞過,問題解除。量測未動 `tests/release/release_evidence.ps1` 本體——它「不合成輸入」是已記錄的設計決策,本次改用一支不進 repo 的暫存 driver script(dot-source 該檔取用其 helper functions),避免覆寫既有決策。
+
+實測結果(路徑:`D:\Documents\Desktop\screenGif`、`D:\downloads`、`D:\OneDrive - via.com.tw\附件`、`\\vianextfs06\Tmp\Lentice\test`,完整讀數見 `docs/release-evidence.md` 與 `docs/performance-baseline.md`):閒置 CPU 0.004948%(PASS,門檻 <0.1%);閒置磁碟 I/O 307294 bytes(**FAIL**,門檻零 bytes)——來源未診斷,已列入候選;三種記憶體組態、20 次版型切換後 handle 數(不單調成長)皆有讀數;縮圖記憶體差值因兩組態共用同一 run 內已快取過的資料夾而讀出 0,不可信,已在候選表註記需要全新 process 重測。量測期間偶發一次 `panedock_launch_smoke` 崩潰(`STATUS_STACK_BUFFER_OVERRUN`),立即重跑兩次皆通過,無法穩定重現,已記錄進候選表而非直接修——PD-003 明確排除任何最佳化/修復,只負責量測與如實記錄。
+
+依 ticket 文件既有的驗收標準,PD-003 的產出(腳本、環境紀錄、閒置讀數、記憶體讀數、handle 數、release-evidence.md、performance-baseline.md 更新)已全部完成;磁碟 I/O 門檻本身 FAIL 不代表 ticket 未完成——那正是本票要交付的量測證據,NFR-001 的真正放行判定留給 PD-027。狀態自 `blocked` 轉 `done`,交接區記錄見 [PD-003](tickets/PD-003-idle-resource-baseline.md) 檔案。
+
+### 2026-08-29 — 使用者要求 pane 按鈕 tooltip、quick path 空心星號與管理視窗 Apply/Cancel,開 PD-117/118/119
+
+使用者原文為「For all buttons in the pane they should have tooltip」、「For quick path it should use 空心star instead of pin icon」及「For manager quick paths dialog it should have a apply and a cancel button」。盤點現況後，PD-117 將「pane 內所有按鈕」定義為六顆導覽按鈕、tab `+` 與 overflow 左右捲動按鈕，沿用既有 Win32 tooltip；不擴及 header、sidebar、Shell view 或管理視窗的文字按鈕。PD-118 覆寫 PD-111 交接區的 Pin glyph，改用 Segoe MDL2 Assets `U+E734` 空心 Favorite Star。PD-119 覆寫 PD-112 的立即寫入與 Close：管理視窗先以 draft 編輯，Apply 提交並關閉，Cancel/X 放棄並關閉；這個 Apply 關閉視窗的語意是本次未另行指定時採用的最小預設，若使用者要保留視窗開啟可再調整。
+
+### 2026-08-29 — 使用者釐清管理視窗 Apply/OK/Cancel 語意,開 PD-120
+
+使用者補充：「Apply寫回不關閉、確定寫回並關閉、Cancel 放棄並關閉」。因此 PD-120 覆寫 PD-119 的 Apply 關閉決策：UI 使用英文 `OK` 對應「確定」；Apply 寫回後重設 draft baseline 並保持視窗開啟，OK 寫回後關閉，Cancel 與標題列 X 放棄未提交變更並關閉。PD-119 保留為歷史決策並標記 `superseded`，PD-120 完成後成為目前語意。
+
+### 2026-08-29 — 使用者要求跨 Group 複製貼上與跨 Group 拖放,開 PD-121/122
+
+使用者要求把「從某個 Group 複製到另一個 Group」與「從某個 Group 拖放到另一個 Group」各自建立 ticket 並實作。盤點後確認兩條底層能力已由原生 `IExplorerBrowser` Shell view、PD-034 的 Group row OLE hover、PD-090 的延後 message 與 PD-091 的 session 防抖提供,不新增自有 clipboard／檔案操作引擎。PD-121 定義跨 Group `Ctrl+C`／`Ctrl+V` 與原生 Copy／Paste;PD-122 定義拖曳到目標 Group row 懸停約 800ms、切換後移入指定 pane 內容區放開。第一張票明確不含 Cut／Paste;第二張票明確不接受在 Group row 或 tab header 直接放開。另將 `activate_group` 的一般保存改走既有 `schedule_session_save`,避免跨 Group clipboard／OLE drag 路徑同步 flush session;關閉路徑的 force save 不變。
+
+### 2026-08-30 — 複製進行中關閉 PaneDock 先驗證再決策,開 PD-123
+
+使用者詢問檔案複製進行中關閉 PaneDock 是否安全，並要求考慮 pane↔pane、PaneDock↔Windows File Explorer 等方向組合。靜態追查只能確認 `WM_CLOSE` 目前會同步 force-save、`destroy_explorers`、`DestroyWindow`，而 Shell view 內部檔案操作由原生 `IFileOperation`／`IDataObject` 處理；它不能證明 operation 的實際 process ownership、關閉時會繼續或取消，也不能證明 clipboard 在 source process 離開後是否仍可貼上。兩次 UIA 嘗試雖能讀到完整控制樹，但 automation provider 均回報 `failed to activate captured window`，所以沒有取得 runtime 證據。使用者要求先建 ticket，且必須先確認才開始實作；接著釐清驗證與修正要包含在同一票。開 [PD-123](tickets/PD-123-close-during-shell-copy-validation.md)，流程固定為 Phase A 真實桌面驗證 → 提交具體 proposal 並停下等待使用者 checkpoint → 核准後在同票 Phase B 做最小修正與完整回歸。狀態因目前沒有可互動桌面而列 `blocked`；Approved remediation plan 出現前禁止修改產品，也不另開修正票。
