@@ -77,7 +77,7 @@ bool fake_durability_hook(const std::filesystem::path& path) {
     if (active_probe->failure == DurabilityFailure::temporary &&
         name == std::filesystem::path(kSessionTemporaryFileName)) return false;
     return active_probe->failure != DurabilityFailure::backup ||
-           name != std::filesystem::path(kSessionBackupFileName);
+           name != std::filesystem::path(kSessionBackupTemporaryFileName);
 }
 
 void test_round_trip_and_plain_json() {
@@ -341,7 +341,8 @@ void test_durability_hook_order_and_failure() {
     active_probe = nullptr;
     EXPECT(probe.call_count == 2);
     EXPECT(probe.calls[0] == std::filesystem::path(kSessionTemporaryFileName));
-    EXPECT(probe.calls[1] == std::filesystem::path(kSessionBackupFileName));
+    EXPECT(probe.calls[1] ==
+           std::filesystem::path(kSessionBackupTemporaryFileName));
     EXPECT(probe.primary_snapshots[0] == old_primary);
     EXPECT(probe.primary_snapshots[1] == old_primary);
     const std::string new_primary = read_text(primary);
@@ -367,6 +368,31 @@ void test_durability_hook_order_and_failure() {
     EXPECT(read_text(primary) == new_primary);
     EXPECT(!std::filesystem::exists(
         directory.path / kSessionTemporaryFileName));
+    EXPECT(!std::filesystem::exists(
+        directory.path / kSessionBackupTemporaryFileName));
+}
+
+void test_backup_replace_failure_preserves_primary() {
+    TemporaryDirectory directory;
+    SessionDocument document{sample(), {}};
+    EXPECT(write_session(directory.path, document));
+    document.application.window_placement.width = 1440;
+    EXPECT(write_session(directory.path, document));
+    const auto primary = directory.path / kSessionFileName;
+    const std::string unchanged_primary = read_text(primary);
+
+    const auto backup = directory.path / kSessionBackupFileName;
+    std::filesystem::remove(backup);
+    std::filesystem::create_directory(backup);
+    write_text(backup / "keep", "do not replace");
+
+    document.application.window_placement.width = 1600;
+    EXPECT(!write_session(directory.path, document));
+    EXPECT(read_text(primary) == unchanged_primary);
+    EXPECT(std::filesystem::is_directory(backup));
+    EXPECT(read_text(backup / "keep") == "do not replace");
+    EXPECT(!std::filesystem::exists(
+        directory.path / kSessionBackupTemporaryFileName));
 }
 
 }  // namespace
@@ -382,6 +408,7 @@ int main() {
     test_clean_shutdown_type_mismatch_defaults_true();
     test_read_fallbacks();
     test_atomic_write_and_backup();
+    test_backup_replace_failure_preserves_primary();
     test_corrupt_primary_does_not_replace_good_backup();
     test_durability_hook_order_and_failure();
     return panedock::test::summary("core_session");

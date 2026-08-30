@@ -586,14 +586,24 @@ bool write_session(const std::filesystem::path& directory,
     const auto primary = directory / kSessionFileName;
     const auto backup = directory / kSessionBackupFileName;
     const auto temporary = directory / kSessionTemporaryFileName;
+    const auto backup_temporary =
+        directory / kSessionBackupTemporaryFileName;
     std::filesystem::remove(temporary, error);
+    if (error) return false;
+    error.clear();
+    std::filesystem::remove(backup_temporary, error);
+    if (error) return false;
     error.clear();
     {
         std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
         if (!stream) return false;
         stream << serialize_session(document);
         stream.flush();
-        if (!stream) { stream.close(); std::filesystem::remove(temporary, error); return false; }
+        if (!stream) {
+            stream.close();
+            std::filesystem::remove(temporary, error);
+            return false;
+        }
     }
     if (durability_hook != nullptr && !durability_hook(temporary)) {
         std::filesystem::remove(temporary, error);
@@ -605,27 +615,32 @@ bool write_session(const std::filesystem::path& directory,
         // A corrupt primary must never replace the last known-good backup.
         if (read_file(primary)) {
             std::filesystem::copy_file(
-                primary, backup,
-                std::filesystem::copy_options::overwrite_existing, error);
+                primary, backup_temporary,
+                std::filesystem::copy_options::none, error);
             if (error) {
                 std::filesystem::remove(temporary, error);
+                std::filesystem::remove(backup_temporary, error);
                 return false;
             }
-            if (durability_hook != nullptr && !durability_hook(backup)) {
+            if (durability_hook != nullptr &&
+                !durability_hook(backup_temporary)) {
                 std::filesystem::remove(temporary, error);
+                std::filesystem::remove(backup_temporary, error);
+                return false;
+            }
+            error.clear();
+            std::filesystem::rename(backup_temporary, backup, error);
+            if (error) {
+                std::filesystem::remove(temporary, error);
+                std::filesystem::remove(backup_temporary, error);
                 return false;
             }
         }
     }
     std::filesystem::rename(temporary, primary, error);
     if (!error) return true;
-    if (had_primary) {
-        std::error_code restore_error;
-        std::filesystem::copy_file(backup, primary,
-                                   std::filesystem::copy_options::overwrite_existing,
-                                   restore_error);
-    }
     std::filesystem::remove(temporary, error);
+    std::filesystem::remove(backup_temporary, error);
     return false;
 }
 

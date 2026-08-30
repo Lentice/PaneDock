@@ -13,6 +13,8 @@ inline constexpr std::uint32_t kSessionSchemaVersion = 1;
 inline constexpr std::string_view kSessionFileName = "session.json";
 inline constexpr std::string_view kSessionBackupFileName = "session.json.bak";
 inline constexpr std::string_view kSessionTemporaryFileName = "session.json.tmp";
+inline constexpr std::string_view kSessionBackupTemporaryFileName =
+    "session.json.bak.tmp";
 
 struct SessionDocument final {
     ApplicationState application;

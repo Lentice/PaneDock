@@ -174,6 +174,7 @@
 | PD-134 | 主視窗還原到已不存在監視器的位置：app「開啟」但無可見 UI | 7 | `done` | — | [PD-134](tickets/PD-134-offscreen-window-restore.md) |
 | PD-135 | 啟動警告 MessageBox 的 modal loop 內被關閉：後續啟動序對已銷毀 HWND 執行 | 7 | `done` | PD-126, PD-127, PD-130 | [PD-135](tickets/PD-135-startup-dialog-close-destroyed-hwnd.md) |
 | PD-136 | close save failure 在 `WM_DESTROY` 重試且吞掉進行中的 Windows shutdown | 7 | `done` | PD-125, PD-133 | [PD-136](tickets/PD-136-shutdown-save-decision-reentrancy.md) |
+| PD-137 | session backup copy/restore 不是 atomic replace，force kill 可能留下半份設定檔 | 7 | `done` | PD-006, PD-078 | [PD-137](tickets/PD-137-atomic-session-backup-replacement.md) |
 
 ## Dependency lanes
 
