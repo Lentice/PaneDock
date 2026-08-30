@@ -1120,7 +1120,7 @@ void draw_layout_button(const DRAWITEMSTRUCT& item,
         }
     }
     draw_layout_glyph(item.hDC, item.rcItem, index, glyph);
-    if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
+    if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &button);
 }
 
 void draw_layout_segment_background(HDC dc, RECT rect, UINT dpi) noexcept {

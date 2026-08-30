@@ -186,6 +186,7 @@
 | PD-146 | 補齊 display-name Shell lookup 的 re-entry shutdown guard | 7 | `done` | PD-140, PD-145 | [PD-146](tickets/PD-146-display-name-shell-reentry-guard.md) |
 | PD-147 | `ExplorerHost` Shell callback 未進入 app re-entry gate，close 可在 callback 內 teardown | 7 | `done` | PD-140, PD-146 | [PD-147](tickets/PD-147-explorerhost-callback-reentry-shutdown-guard.md) |
 | PD-148 | activation handshake 將 `SetForegroundWindow` 拒絕誤判為成功 | 7 | `done` | PD-139 | [PD-148](tickets/PD-148-activation-handshake-reports-foreground-failure.md) |
+| PD-149 | 版型按鈕失焦後殘留虛線 focus border | 7 | `in_progress` | PD-056, PD-115 | [PD-149](tickets/PD-149-layout-button-focus-border-ghost.md) |
 
 ## Dependency lanes
 
@@ -262,6 +263,9 @@ Phase 7 — Cross-Group file transfer integration,對照使用者 2026-08-29 需
 
 Phase 7 — Shell operation shutdown validation,對照使用者 2026-08-30 需求
   PD-023 + PD-032 + PD-106 + PD-121 + PD-122 ─── PD-123(validate → user checkpoint → remediate in the same ticket)
+
+Phase 7 — Layout button focus rendering
+  PD-056 + PD-115 ─── PD-149(版型按鈕失焦後殘留虛線 focus border)
 
 PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `IShellFolder` fallback in `docs/design-spec.md` §9.1, and the tickets below it must be rewritten rather than adjusted.
 
@@ -618,6 +622,10 @@ Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `
 ### 2026-08-30 — startup audit 發現 PD-139 handshake 未傳遞前景化失敗,開 PD-148
 
 最後一輪 close/startup audit 追查到 PD-139 的 handshake 雖然已由 `PostMessageW` 改成 bounded `SendMessageTimeoutW`，但第一實例的 activation handler 仍呼叫回傳 `void` 的 `activate_main_window_on_own_thread()`，無論 `SetForegroundWindow()` 回傳成功或失敗都回傳 handshake success (`0`)。Windows 前景鎖定規則可讓 `SetForegroundWindow()` 靜默拒絕；此時第二實例會錯誤地正常退出，使用者既沒有被帶到既有 UI，也沒有看到 PD-139 的 timeout warning。PD-148 只把這個既有 Win32 結果沿 relay 回傳，讓失敗重新進入既有 bounded wait／提示路徑，不改變單一實例、前景化技巧或等待政策。
+
+### 2026-08-30 — 使用者截圖回報版型按鈕失焦後殘留虛線,開 PD-149
+
+使用者附圖顯示目前 active layout 的藍底白圖示正確,但數個曾經點選過的 layout button 外圍仍殘留虛線。覆核程式碼後確認 PD-056 已處理 active highlight 的 stale repaint（`layout_header` 對全部 button `InvalidateRect(..., FALSE)`），本次是不同的 owner-draw focus frame 問題：`draw_layout_button` 只填 `InflateRect(item.rcItem, -1, -1)` 後的內部矩形，卻在完整 `item.rcItem` 上以 `DrawFocusRect` 畫 XOR 虛線；失焦重繪時外圈沒有被既有填色覆蓋，因此舊像素留下。開票為 [PD-149](tickets/PD-149-layout-button-focus-border-ghost.md)，依賴 PD-056 與 PD-115；修法保留 keyboard focus indicator，優先把 focus frame 限定在既有 inset 矩形，不改 active/hover/八顆 layout 對應，也不新增 UI automation、timer 或 polling。
 
 ### 2026-08-30 — 複製進行中關閉 PaneDock 先驗證再決策,開 PD-123
 
