@@ -52,6 +52,7 @@ constexpr wchar_t kSingleInstanceMutexName[] =
     L"PaneDock-SingleInstanceMutex";
 constexpr DWORD kSingleInstanceWindowRetryIntervalMs = 50;
 constexpr ULONGLONG kSingleInstanceWindowRetryTimeoutMs = 5000;
+constexpr DWORD kSingleInstanceActivationTimeoutMs = 250;
 // PD-089: the first instance handles this on its own UI thread.
 constexpr UINT kActivateExistingInstanceMessage = WM_APP + 50;
 // PD-090: run drag-hover callbacks after the WM_TIMER handler returns.
@@ -4838,6 +4839,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         }
         case kActivateExistingInstanceMessage:
+            if (state == nullptr || state->closing_ || state->quit_requested)
+                return 1;
             activate_main_window_on_own_thread(window);
             return 0;
         case WM_MEASUREITEM:
@@ -5627,19 +5630,34 @@ bool relay_or_wait_for_existing_instance(HANDLE& mutex) noexcept {
             if (GetWindowThreadProcessId(window, &process_id) != 0 &&
                 process_id != 0)
                 (void)AllowSetForegroundWindow(process_id);
-            if (!PostMessageW(window, kActivateExistingInstanceMessage, 0, 0))
-                OutputDebugStringW(
-                    L"PaneDock: could not request window activation\n");
-            return true;
+            DWORD_PTR activation_result = 0;
+            const LRESULT delivered = SendMessageTimeoutW(
+                window, kActivateExistingInstanceMessage, 0, 0,
+                SMTO_ABORTIFHUNG | SMTO_BLOCK,
+                kSingleInstanceActivationTimeoutMs, &activation_result);
+            if (delivered != 0 && activation_result == 0) return true;
         }
         const HANDLE probe = OpenMutexW(SYNCHRONIZE, FALSE,
                                         kSingleInstanceMutexName);
         if (probe == nullptr) {
+            const DWORD probe_error = GetLastError();
+            if (probe_error != ERROR_FILE_NOT_FOUND) {
+                MessageBoxW(
+                    nullptr,
+                    L"PaneDock could not check whether another instance is "
+                    L"running.",
+                    L"PaneDock", MB_OK | MB_ICONERROR);
+                return true;
+            }
             // The previous instance released the mutex while we waited, so it is
             // gone. Take a fresh handle and let the caller launch normally.
             mutex = CreateMutexW(nullptr, FALSE, kSingleInstanceMutexName);
             if (mutex == nullptr) {
                 OutputDebugStringW(L"PaneDock: CreateMutexW failed\n");
+                MessageBoxW(
+                    nullptr,
+                    L"PaneDock could not acquire its single-instance lock.",
+                    L"PaneDock", MB_OK | MB_ICONERROR);
                 return true;
             }
             if (GetLastError() == ERROR_ALREADY_EXISTS) {
