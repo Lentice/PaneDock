@@ -35,6 +35,7 @@
 
 #include "app_shell/diagnostic_mode.h"
 #include "app_shell/tab_overflow.h"
+#include "app_shell/window_placement.h"
 #include "core/layout.h"
 #include "core/model.h"
 #include "core/session.h"
@@ -5736,7 +5737,26 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             L"until the storage problem is fixed.";
     }
 
-    const auto& placement = state.application.window_placement;
+    // PD-134: validate the restored placement against the virtual desktop.
+    // window_placement is saved from GetWindowPlacement's rcNormalPosition,
+    // which can reference a monitor that no longer exists (external display
+    // unplugged, dock removed). Restoring that verbatim leaves the window
+    // created but fully off-screen -- "opened" with no visible UI. CW_USEDEFAULT
+    // lets Windows pick an on-screen cascade slot.
+    auto placement = state.application.window_placement;
+    const int virtual_x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const int virtual_y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int virtual_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int virtual_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    if (virtual_width > 0 && virtual_height > 0 && !placement.maximized &&
+        panedock::app_shell::placement_is_offscreen(
+            placement.x, placement.y, placement.width, placement.height,
+            virtual_x, virtual_y, virtual_width, virtual_height)) {
+        placement.x = CW_USEDEFAULT;
+        placement.y = CW_USEDEFAULT;
+        if (placement.width <= 0) placement.width = 1000;
+        if (placement.height <= 0) placement.height = 700;
+    }
     const wchar_t* const title = diagnostic_mode
                                      ? L"PaneDock \x2014 Diagnostic Mode"
                                      : L"PaneDock";
@@ -5758,6 +5778,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     }
     ShowWindow(window, placement.maximized ? SW_SHOWMAXIMIZED : show_command);
     UpdateWindow(window);
+    // PD-135: each startup MessageBox owns a nested modal loop that dispatches
+    // the main window's messages. A WM_CLOSE / WM_ENDSESSION issued there runs
+    // begin_shutdown, which destroys the main HWND; the remaining startup dialogs
+    // and the deferred-realize post must not run against that destroyed (or
+    // reused) HWND. `proceed` short-circuits the rest of the sequence once the
+    // window has been torn down.
+    bool proceed = true;
     if (recovered_from_corruption &&
         session_source == panedock::core::SessionSource::backup) {
         MessageBoxW(
@@ -5765,8 +5792,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             L"PaneDock could not read its saved session and restored the "
             L"previous good version. Some recent changes may be missing.",
             L"PaneDock", MB_OK | MB_ICONWARNING);
+        proceed = !state.closing_ && !state.quit_requested;
     }
-    if (recovered_from_corruption &&
+    if (proceed && recovered_from_corruption &&
         session_source == panedock::core::SessionSource::default_state) {
         MessageBoxW(
             window,
@@ -5774,20 +5802,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             L"started with a default Group. Your previous Groups could not "
             L"be recovered.",
             L"PaneDock", MB_OK | MB_ICONWARNING);
+        proceed = !state.closing_ && !state.quit_requested;
     }
-    if (!clean_shutdown) {
+    if (proceed && !clean_shutdown) {
         MessageBoxW(
             window,
             L"PaneDock did not shut down cleanly last time. If this keeps "
             L"happening, start it with --diagnostic to run without "
             L"third-party shell extensions.",
             L"PaneDock", MB_OK | MB_ICONWARNING);
+        proceed = !state.closing_ && !state.quit_requested;
     }
-    if (!state.startup_warning_message.empty()) {
+    if (proceed && !state.startup_warning_message.empty()) {
         MessageBoxW(window, state.startup_warning_message.c_str(),
                     L"PaneDock", MB_OK | MB_ICONWARNING);
+        proceed = !state.closing_ && !state.quit_requested;
     }
-    if (state.startup_realize_pending) {
+    if (proceed && state.startup_realize_pending) {
         const UINT_PTR generation = ++state.startup_realize_generation;
         if (!PostMessageW(window, kDeferredRealizeMessage, 0,
                           static_cast<LPARAM>(generation))) {
