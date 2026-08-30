@@ -313,6 +313,8 @@ bool close_tab(PaneState& pane, const std::string& tab_id,
     }
     if (pane.tabs.size() == 1) {
         tab->location = default_location;
+        tab->history.clear();
+        tab->history_index = 0;
         return true;
     }
     const bool was_active = pane.active_tab_id == tab_id;

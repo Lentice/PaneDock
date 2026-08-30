@@ -168,10 +168,15 @@ void test_tab_and_pane_mutations() {
     EXPECT(first.active_tab_id == "second");
     EXPECT(close_tab(first, "second", kDefault));
     EXPECT(first.active_tab_id == "tab-1");
+    record_navigation(first.tabs.front(), kDefault);
+    EXPECT(!first.tabs.front().history.empty());
     EXPECT(close_tab(first, "tab-1", kDefault));
     EXPECT(first.tabs.size() == 1);
     EXPECT(first.tabs.front().id == "tab-1");
     EXPECT(first.tabs.front().location == kDefault);
+    EXPECT(first.tabs.front().history.empty());
+    EXPECT(first.tabs.front().history_index == 0);
+    EXPECT(is_valid(value));
 
     EXPECT(switch_layout(value, LayoutTemplate::left_right, kDefault,
                          {"pane-2"}, {"tab-2"}));
