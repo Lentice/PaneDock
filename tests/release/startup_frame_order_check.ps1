@@ -16,16 +16,10 @@ $windowCreation = $source.IndexOf('HWND window = CreateWindowExW(')
 if ($windowCreation -lt 0) {
     throw 'startup frame order check failed: top-level window creation missing'
 }
-$fixedLabelLookup = $source.IndexOf(
-    'state.pinned_fixed_labels[index] = display_text_for_parsing_name(')
-if ($fixedLabelLookup -lt 0 -or $fixedLabelLookup -lt $windowCreation) {
-    throw 'startup frame order check failed: fixed label lookup is pre-window'
-}
 $windowShown = $source.IndexOf('ShowWindow(window', $windowCreation)
 $windowUpdated = $source.IndexOf('UpdateWindow(window);', $windowShown)
-if ($windowShown -lt 0 -or $windowUpdated -lt 0 -or
-    $fixedLabelLookup -lt $windowUpdated) {
-    throw 'startup frame order check failed: fixed label lookup is not post-show'
+if ($windowShown -lt 0 -or $windowUpdated -lt 0) {
+    throw 'startup frame order check failed: frame is not shown'
 }
 
 Assert-Source 'bool\s+startup_frame_only\{\};' 'frame-only state exists'
@@ -35,6 +29,32 @@ Assert-Source 'ShowWindow\(window,[\s\S]*?UpdateWindow\(window\);\s*state\.start
 Assert-Source 'const HRESULT active_result = apply_layout\(window, state\);' 'startup pass realizes active layout first'
 Assert-Source 'state\.startup_realize_pending\s*=\s*false;\s*const HRESULT remaining_result = apply_layout\(window, state, true\);' 'remaining panes follow active pane'
 Assert-Source 'case kDeferredRealizeMessage:[\s\S]*?realize_startup_panes\(window, \*state\)' 'deferred message owns startup realization'
+Assert-Source 'void\s+refresh_startup_chrome\(AppState& state\)' 'startup chrome has one deferred helper'
+Assert-Source 'refresh_startup_chrome\(state\);\s*if \(state\.shutdown_deferred \|\| state\.closing_\) return E_ABORT;' 'startup chrome is gated before layout'
+
+$chromeStart = $source.IndexOf('void refresh_startup_chrome(AppState& state)')
+$chromeEnd = $source.IndexOf('HRESULT realize_startup_panes(', $chromeStart)
+$realizeEnd = $source.IndexOf('std::string unique_group_id', $chromeEnd)
+if ($chromeStart -lt 0 -or $chromeEnd -lt 0 -or $realizeEnd -lt 0) {
+    throw 'startup frame order check failed: startup chrome ownership missing'
+}
+$chromeBody = $source.Substring($chromeStart, $chromeEnd - $chromeStart)
+$realizeBody = $source.Substring($chromeEnd, $realizeEnd - $chromeEnd)
+if ($chromeBody -notmatch 'state\.pinned_fixed_labels\[index\]\s*=\s*display_text_for_parsing_name' -or
+    $chromeBody -notmatch 'refresh_tab_strips\(state\)' -or
+    $realizeBody -notmatch 'refresh_startup_chrome\(state\)') {
+    throw 'startup frame order check failed: deferred helper does not own startup chrome'
+}
+
+$mainStart = $source.IndexOf('int WINAPI wWinMain(')
+$messageLoopStart = $source.IndexOf('MSG message{}', $mainStart)
+if ($mainStart -lt 0 -or $messageLoopStart -lt 0) {
+    throw 'startup frame order check failed: startup message loop missing'
+}
+$startupPrologue = $source.Substring($mainStart, $messageLoopStart - $mainStart)
+if ($startupPrologue -match 'refresh_startup_chrome\(state\)|state\.pinned_fixed_labels\[index\]\s*=\s*display_text_for_parsing_name|refresh_tab_strips\(state\)') {
+    throw 'startup frame order check failed: normal prologue performs startup chrome lookup'
+}
 
 $deferredStart = $source.IndexOf('case kDeferredRealizeMessage:')
 $deferredEnd = $source.IndexOf('case kTabStripSelectionMessage:', $deferredStart)

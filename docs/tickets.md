@@ -182,6 +182,7 @@
 | PD-142 | 移除 startup frame 顯示前重複的 virtual-folder label Shell lookup | 7 | `done` | PD-141 | [PD-142](tickets/PD-142-startup-no-prewindow-shell-label-lookup.md) |
 | PD-143 | clean marker 延後到完整 Shell/COM teardown 後，避免 force-kill false-clean | 7 | `done` | PD-025, PD-032, PD-132, PD-136 | [PD-143](tickets/PD-143-clean-marker-after-teardown.md) |
 | PD-144 | startup failure warnings 不得互相覆蓋，deferred Shell failure 必須提示 | 7 | `done` | PD-130, PD-135, PD-141, PD-142 | [PD-144](tickets/PD-144-startup-warning-aggregation.md) |
+| PD-145 | startup message loop 前不得同步執行可避免的 Shell chrome lookup | 7 | `done` | PD-141, PD-142, PD-144 | [PD-145](tickets/PD-145-defer-startup-shell-chrome.md) |
 
 ## Dependency lanes
 

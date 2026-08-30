@@ -3060,8 +3060,22 @@ HRESULT apply_layout(HWND window, AppState& state,
     return first_failure.has_value() ? first_failure->result : S_OK;
 }
 
+void refresh_startup_chrome(AppState& state) {
+    ShellCallScope shell_call(state);
+    for (std::size_t index = 0; index < kPinnedFixedParsingNames.size();
+         ++index) {
+        if (state.shutdown_deferred || state.closing_) break;
+        state.pinned_fixed_labels[index] = display_text_for_parsing_name(
+            kPinnedFixedParsingNames[index]);
+    }
+    if (!state.shutdown_deferred && !state.closing_)
+        refresh_tab_strips(state);
+}
+
 HRESULT realize_startup_panes(HWND window, AppState& state) {
     // startup_realize_pending keeps the first pass limited to the active pane.
+    refresh_startup_chrome(state);
+    if (state.shutdown_deferred || state.closing_) return E_ABORT;
     const HRESULT active_result = apply_layout(window, state);
     if (state.shutdown_deferred || state.closing_) return E_ABORT;
     if (has_active_group(state)) {
@@ -6150,17 +6164,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     ShowWindow(window, placement.maximized ? SW_SHOWMAXIMIZED : show_command);
     UpdateWindow(window);
     state.startup_frame_only = false;
-    {
-        ShellCallScope shell_call(state);
-        for (std::size_t index = 0; index < kPinnedFixedParsingNames.size();
-             ++index) {
-            if (state.shutdown_deferred || state.closing_) break;
-            state.pinned_fixed_labels[index] = display_text_for_parsing_name(
-                kPinnedFixedParsingNames[index]);
-        }
-        if (!state.shutdown_deferred && !state.closing_)
-            refresh_tab_strips(state);
-    }
     // PD-135: each startup MessageBox owns a nested modal loop that dispatches
     // the main window's messages. A WM_CLOSE / WM_ENDSESSION issued there runs
     // begin_shutdown, which destroys the main HWND; the remaining startup dialogs
