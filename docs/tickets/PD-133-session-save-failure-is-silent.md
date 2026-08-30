@@ -66,3 +66,8 @@ git diff --check
 - sandbox 實測：PaneDock 無權寫 workspace 外 `%LOCALAPPDATA%` 時，startup warning 實際出現；normal close 不靜默退出而保持 process/UI，證明兩個新 failure UX 路徑可達。測試建立的 stale process 已依明確 PID 清理，未刪改 session 檔。
 - `cmake --build build` PASS；五個 deterministic CTest PASS；`git diff --check` PASS。`panedock_launch_smoke` 在 sandbox 內因新 warning 正確阻止 silent close 而 timeout；嘗試 elevated 重跑被安全審查拒絕，理由是會寫 repository 外的真實 `%LOCALAPPDATA%\PaneDock`。因此未宣稱完整 6/6，本項待使用者明確批准外部 session write 或於一般桌面手動驗證。
 - 未新增 persistence schema、background I/O、retry timer、dependency 或每次 autosave 彈窗。同步 storage driver 永不返回仍是 OS/force-if-hung 邊界。
+
+### 2026-08-30 — external-write approval 後補驗
+
+- 使用者明確允許測試寫入 PaneDock 的 `%LOCALAPPDATA%\PaneDock` 設定檔後，在 elevated context 重跑完整 CTest：6/6 PASS，`panedock_launch_smoke` 1.08 秒 PASS。
+- 這證明正常可寫環境下 startup marker、final clean save 與 graceful close 正常；先前 sandbox timeout 確認是設定檔寫入被 sandbox 拒絕後，新 warning／keep-open 行為正確觸發，不是正常路徑 regression。

@@ -55,3 +55,9 @@ Phase 7 · investigation(門檻:可重現再修正)· Depends on: 可重現的 r
 - 先前證據:PD-003 量測期間(2026-08-29)偶發一次,內容見 `docs/tickets.md` §候選 與 `docs/release-evidence.md`。
 - 本次(2026-08-30)在 `PD-124`~`PD-127` 改動後,完整 `ctest` 執行 `panedock_launch_smoke` 時再偶發一次 `0xC0000409`;隨後單獨 `ctest -R panedock_launch_smoke` 與完整 `ctest` 重跑均 6/6 通過。確認與本次改動無關(該崩潰早於本次)。
 - 已先掃 `src/` 的固定 stack buffer:`GetWindowTextW` 兩處 buffer=length+1 正確;`std::array<wchar_t,256>`(status bar)與 JSON parser 遞迴深度上限皆無明顯越界。尚未取得 faulting stack,門檻未達成,不修改產品碼。
+
+### 2026-08-30 — close/startup audit 後的重現嘗試
+
+- 使用者明確允許 PaneDock 測試正常寫入 `%LOCALAPPDATA%\PaneDock` 後，先在 elevated context 跑完整 CTest 6/6 PASS，再連續執行 `panedock_launch_smoke` 30 次。
+- 結果 30/30 PASS，每輪約 0.81–0.89 秒，沒有 process crash、非零 exit、close timeout 或 `0xC0000409`；因此仍無法取得 CDB faulting stack，Acceptance 1 未達成。
+- 依本票既有門檻與 audit evidence contract，不在沒有 raise stack 時猜修固定 buffer，也不把歷史兩次偶發事件抹除。狀態改為 `deferred`；若 launch smoke 再次回傳 `0xC0000409`，立即以本票步驟在同一 session/repro 上掛 CDB，重新轉為 active investigation。
