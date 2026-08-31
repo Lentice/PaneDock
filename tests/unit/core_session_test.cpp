@@ -93,6 +93,9 @@ void test_round_trip_and_plain_json() {
     EXPECT(json.find("blob") == std::string::npos);
     EXPECT(json.find("工作") != std::string::npos);
     EXPECT(json.find("\"view_mode\":\"FVM_ICON:48\"") != std::string::npos);
+    EXPECT(json.find("\"sort_column\":\"System.ItemNameDisplay\"") !=
+           std::string::npos);
+    EXPECT(json.find("\"sort_ascending\":false") != std::string::npos);
     EXPECT(json.find("\"pinned_locations\"") != std::string::npos);
 
     std::string legacy = json;

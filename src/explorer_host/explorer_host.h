@@ -61,6 +61,8 @@ public:
     HRESULT set_view_mode(FOLDERVIEWMODE mode, int image_size = -1) noexcept;
     HRESULT get_view_mode(FOLDERVIEWMODE& mode,
                           int* image_size = nullptr) const noexcept;
+    HRESULT set_sort(std::string_view column, bool ascending) noexcept;
+    HRESULT get_sort(std::string& column, bool& ascending) const noexcept;
     void set_navigation_callback(
         std::function<void(std::wstring_view)> callback);
     void set_navigation_failed_callback(std::function<void()> callback);

@@ -1,11 +1,13 @@
 param(
     [string] $SourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\main.cpp'),
+    [string] $ShellCoreSourcePath = (Join-Path $PSScriptRoot '..\..\src\shell_core\shell_core.cpp'),
     [string] $ExplorerHostSourcePath = (Join-Path $PSScriptRoot '..\..\src\explorer_host\explorer_host.cpp'),
     [string] $ExplorerHostHeaderPath = (Join-Path $PSScriptRoot '..\..\src\explorer_host\explorer_host.h')
 )
 
 $ErrorActionPreference = 'Stop'
 $source = Get-Content -LiteralPath $SourcePath -Raw
+$shellCoreSource = Get-Content -LiteralPath $ShellCoreSourcePath -Raw
 $explorerHostSource = Get-Content -LiteralPath $ExplorerHostSourcePath -Raw
 $explorerHostHeader = Get-Content -LiteralPath $ExplorerHostHeaderPath -Raw
 
@@ -38,6 +40,12 @@ Assert-Source 'finish_shell_call\(state\)' `
     'ExplorerHost callback leave uses the shared leave logic'
 Assert-Source 'bool\s+navigate_realized_panes\(\s*AppState& state,\s*const panedock::core::GroupState& group\)\s*noexcept' `
     'Group transitions share realized-pane navigation'
+Assert-Source 'state\.file_operation_in_progress\s*=\s*false;[\s\S]*paste_from_clipboard' `
+    'clipboard setup is not reported as an active transfer'
+Assert-Source 'file_operation_setup_aborted[\s\S]*state\.shutdown_deferred\s*\|\|' `
+    'clipboard setup observes deferred shutdown'
+Assert-Source 'case WM_CLOSE:[\s\S]*if \(state->file_operation_in_progress\)[\s\S]*begin_shutdown' `
+    'close defers Shell setup but prompts only for an active transfer'
 
 $navigationHelperStart = $source.IndexOf('bool navigate_realized_panes(')
 $navigationHelperEnd = $source.IndexOf(
@@ -120,9 +128,11 @@ if ($helperStart -lt 0 -or $helperEnd -lt 0) {
 }
 $helperBody = $source.Substring($helperStart, $helperEnd - $helperStart)
 if ($helperBody -notmatch 'AppState& state' -or
-    $helperBody -notmatch 'ShellCallScope shell_call\(state\);[\s\S]*SHCreateItemFromParsingName' -or
-    $helperBody -notmatch 'SHCreateItemFromParsingName[\s\S]*GetDisplayName') {
+    $helperBody -notmatch 'ShellCallScope shell_call\(state\);[\s\S]*panedock::shell_core::display_text_for_parsing_name') {
     throw 'Shell re-entry invariant failed: display-name Shell calls are unguarded'
+}
+if ($shellCoreSource -notmatch 'SHCreateItemFromParsingName[\s\S]*GetDisplayName') {
+    throw 'Shell re-entry invariant failed: shell_core display lookup is incomplete'
 }
 $callSiteSource = $source.Remove($helperStart, $helperEnd - $helperStart)
 if ([regex]::Matches($callSiteSource, 'display_text_for_parsing_name\(').Count -ne

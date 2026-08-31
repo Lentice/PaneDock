@@ -193,6 +193,9 @@
 | PD-153 | 新 tab 預設使用詳細資料檢視 | 7 | `done` | PD-052, PD-079, PD-082 | [PD-153](tickets/PD-153-default-view-mode-details.md) |
 | PD-154 | 雙擊 pane tab 條空白區新增 tab | 7 | `done` | PD-019, PD-049, PD-055 | [PD-154](tickets/PD-154-double-click-empty-tab-strip-adds-tab.md) |
 | PD-155 | Window、pane splitter 與 Groups sidebar 共用原子 live-resize geometry transaction | 7 | `in_progress` | PD-077, PD-095, PD-097, PD-104, PD-108 | [PD-155](tickets/PD-155-atomic-live-resize-geometry-transaction.md) |
+| PD-156 | 擷取、持久化並還原 Shell 排序欄位與方向 | 7 | `in_progress` | PD-006, PD-052, PD-153 | [PD-156](tickets/PD-156-shell-sort-state-restore.md) |
+| PD-157 | 建立 `shell_core` 並移出 app_shell 的 Shell location/value 操作 | 7 | `in_progress` | PD-006, PD-022, PD-140, PD-146 | [PD-157](tickets/PD-157-shell-core-location-boundary.md) |
+| PD-158 | 建立 `file_operations` 並讓 Ctrl+V 正確區分 Cut／Copy | 7 | `in_progress` | PD-023, PD-121, PD-123, PD-140, PD-157 | [PD-158](tickets/PD-158-cut-aware-clipboard-paste.md) |
 
 ## Dependency lanes
 
@@ -269,6 +272,11 @@ Phase 7 — Cross-Group file transfer integration,對照使用者 2026-08-29 需
 
 Phase 7 — Shell operation shutdown validation,對照使用者 2026-08-30 需求
   PD-023 + PD-032 + PD-106 + PD-121 + PD-122 ─── PD-123(validate → user checkpoint → remediate in the same ticket)
+
+Phase 7 — Spec/code alignment,對照 2026-08-31 使用者決策
+  PD-006 + PD-052 + PD-153 ─── PD-156(Shell sort capture/apply/restore)
+  PD-006 + PD-022 + PD-140 + PD-146 ─── PD-157(shell_core location/value boundary)
+  PD-023 + PD-121 + PD-123 + PD-140 + PD-157 ─── PD-158(file_operations + Cut-aware paste)
 
 Phase 7 — Layout button focus rendering
   PD-056 + PD-115 ─── PD-149(版型按鈕失焦後殘留虛線 focus border)

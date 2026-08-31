@@ -45,7 +45,15 @@ panedock_set_warnings(panedock_core)
 # Shell-facing modules. These do link Windows libraries; core does not.
 # PD-007 creates the first single ExplorerBrowser host and app shell.
 # ---------------------------------------------------------------------------
-# add_library(panedock_shell_core STATIC src/shell_core/...)
+add_library(panedock_shell_core STATIC
+    src/shell_core/shell_core.cpp
+)
+target_include_directories(panedock_shell_core PUBLIC src)
+target_compile_definitions(panedock_shell_core PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
+)
+target_link_libraries(panedock_shell_core PRIVATE shell32 ole32 uuid)
+panedock_set_warnings(panedock_shell_core)
 add_library(panedock_explorer_host STATIC
     src/explorer_host/explorer_host.cpp
 )
@@ -54,10 +62,18 @@ target_compile_definitions(panedock_explorer_host PRIVATE
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
 )
 target_link_libraries(panedock_explorer_host PRIVATE
-    ole32 shell32 shlwapi user32 uuid
+    ole32 propsys shell32 shlwapi user32 uuid
 )
 panedock_set_warnings(panedock_explorer_host)
-# add_library(panedock_file_operations STATIC src/file_operations/...)
+add_library(panedock_file_operations STATIC
+    src/file_operations/file_operations.cpp
+)
+target_include_directories(panedock_file_operations PUBLIC src)
+target_compile_definitions(panedock_file_operations PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
+)
+target_link_libraries(panedock_file_operations PRIVATE shell32 ole32 uuid)
+panedock_set_warnings(panedock_file_operations)
 add_library(panedock_sidebar STATIC
     src/sidebar/sidebar.cpp
 )
@@ -78,7 +94,8 @@ target_compile_definitions(PaneDock PRIVATE
 )
 target_link_options(PaneDock PRIVATE -municode)
 target_link_libraries(PaneDock PRIVATE
-    panedock_core panedock_explorer_host panedock_sidebar
+    panedock_core panedock_shell_core panedock_explorer_host
+    panedock_file_operations panedock_sidebar
     shell32 ole32 shlwapi user32 gdi32 comctl32 uuid
 )
 panedock_set_warnings(PaneDock)

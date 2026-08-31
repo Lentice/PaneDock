@@ -14,6 +14,7 @@ set(PANEDOCK_TESTS
     "core_model|unit/core_model_test.cpp|panedock_core"
     "core_layout|unit/core_layout_test.cpp|panedock_core"
     "core_session|unit/core_session_test.cpp|panedock_core"
+    "file_operation_effect|unit/file_operation_effect_test.cpp|panedock_file_operations"
 )
 
 foreach(entry IN LISTS PANEDOCK_TESTS)
@@ -49,6 +50,10 @@ if(WIN32)
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
                 "${CMAKE_CURRENT_SOURCE_DIR}/release/shell_reentry_gate_check.ps1"
                 -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp")
+    add_test(
+        NAME panedock_shell_core_boundary
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/release/shell_core_boundary_check.ps1")
     add_test(
         NAME panedock_startup_frame_order
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File

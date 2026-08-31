@@ -40,7 +40,9 @@
 #include "core/model.h"
 #include "core/session.h"
 #include "explorer_host/explorer_host.h"
+#include "file_operations/file_operations.h"
 #include "resource.h"
+#include "shell_core/shell_core.h"
 #include "sidebar/sidebar.h"
 
 namespace {
@@ -642,177 +644,6 @@ void app_shell_call_state_changed(void* context, bool entering) noexcept {
     }
 }
 
-class FileOperationProgressSink final : public IFileOperationProgressSink {
-public:
-    explicit FileOperationProgressSink(AppState* state) : state_(state) {}
-
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid,
-                                              void** object) override {
-        if (object == nullptr) return E_POINTER;
-        *object = nullptr;
-        if (riid != IID_IUnknown && riid != IID_IFileOperationProgressSink)
-            return E_NOINTERFACE;
-        *object = static_cast<IFileOperationProgressSink*>(this);
-        AddRef();
-        return S_OK;
-    }
-
-    ULONG STDMETHODCALLTYPE AddRef() override {
-        return references_.fetch_add(1, std::memory_order_relaxed) + 1;
-    }
-
-    ULONG STDMETHODCALLTYPE Release() override {
-        const ULONG remaining =
-            references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
-        if (remaining == 0) delete this;
-        return remaining;
-    }
-
-    HRESULT STDMETHODCALLTYPE StartOperations() override {
-        if (state_ != nullptr) state_->file_operation_in_progress = true;
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE FinishOperations(HRESULT result) override {
-        (void)result;
-        if (state_ != nullptr) {
-            state_->file_operation_in_progress = false;
-            if (state_->main_window != nullptr)
-                PostMessageW(state_->main_window,
-                             kFileOperationFinishedMessage, 0, 0);
-        }
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE PreRenameItem(DWORD flags, IShellItem* item,
-                                             LPCWSTR new_name) override {
-        (void)flags;
-        (void)item;
-        (void)new_name;
-        return cancel_requested() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
-                                  : S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE PostRenameItem(
-        DWORD flags, IShellItem* item, LPCWSTR new_name, HRESULT result,
-        IShellItem* newly_created) override {
-        (void)flags;
-        (void)item;
-        (void)new_name;
-        (void)result;
-        (void)newly_created;
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE PreMoveItem(DWORD flags, IShellItem* item,
-                                           IShellItem* destination,
-                                           LPCWSTR new_name) override {
-        (void)flags;
-        (void)item;
-        (void)destination;
-        (void)new_name;
-        return cancel_requested() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
-                                  : S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE PostMoveItem(
-        DWORD flags, IShellItem* item, IShellItem* destination,
-        LPCWSTR new_name, HRESULT result, IShellItem* newly_created) override {
-        (void)flags;
-        (void)item;
-        (void)destination;
-        (void)new_name;
-        (void)result;
-        (void)newly_created;
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE PreCopyItem(DWORD flags, IShellItem* item,
-                                           IShellItem* destination,
-                                           LPCWSTR new_name) override {
-        (void)flags;
-        (void)item;
-        (void)destination;
-        (void)new_name;
-        return cancel_requested() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
-                                  : S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE PostCopyItem(
-        DWORD flags, IShellItem* item, IShellItem* destination,
-        LPCWSTR new_name, HRESULT result, IShellItem* newly_created) override {
-        (void)flags;
-        (void)item;
-        (void)destination;
-        (void)new_name;
-        (void)result;
-        (void)newly_created;
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE PreDeleteItem(DWORD flags,
-                                             IShellItem* item) override {
-        (void)flags;
-        (void)item;
-        return cancel_requested() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
-                                  : S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE PostDeleteItem(
-        DWORD flags, IShellItem* item, HRESULT result,
-        IShellItem* newly_created) override {
-        (void)flags;
-        (void)item;
-        (void)result;
-        (void)newly_created;
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE PreNewItem(DWORD flags,
-                                          IShellItem* destination,
-                                          LPCWSTR new_name) override {
-        (void)flags;
-        (void)destination;
-        (void)new_name;
-        return cancel_requested() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
-                                  : S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE PostNewItem(
-        DWORD flags, IShellItem* destination, LPCWSTR new_name,
-        LPCWSTR template_name, DWORD attributes, HRESULT result,
-        IShellItem* new_item) override {
-        (void)flags;
-        (void)destination;
-        (void)new_name;
-        (void)template_name;
-        (void)attributes;
-        (void)result;
-        (void)new_item;
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE UpdateProgress(UINT work_total,
-                                              UINT work_so_far) override {
-        (void)work_total;
-        (void)work_so_far;
-        return cancel_requested() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
-                                  : S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE ResetTimer() override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE PauseTimer() override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE ResumeTimer() override { return S_OK; }
-
-private:
-    bool cancel_requested() const noexcept {
-        return state_ != nullptr && state_->cancel_file_operation;
-    }
-
-    std::atomic<ULONG> references_{1};
-    AppState* state_;
-};
-
 void revoke_drag_hover_targets(AppState& state) noexcept {
     state.sidebar.revoke_drag_drop();
     state.sidebar_drag_target.Reset();
@@ -822,18 +653,6 @@ void revoke_drag_hover_targets(AppState& state) noexcept {
             RevokeDragDrop(state.tab_strips[index]);
         state.tab_drag_targets[index].Reset();
     }
-}
-
-std::optional<std::filesystem::path> session_directory() noexcept {
-    PWSTR local_app_data = nullptr;
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr,
-                                    &local_app_data))) {
-        return std::nullopt;
-    }
-    const std::filesystem::path directory =
-        std::filesystem::path(local_app_data) / L"PaneDock";
-    CoTaskMemFree(local_app_data);
-    return directory;
 }
 
 bool flush_session_file(const std::filesystem::path& path) noexcept {
@@ -848,36 +667,15 @@ bool flush_session_file(const std::filesystem::path& path) noexcept {
 }
 
 panedock::core::ShellLocation location(std::wstring parsing_name) {
-    return {std::move(parsing_name), {}, {}};
+    return panedock::shell_core::location(std::move(parsing_name));
 }
 
 std::wstring display_text_for_parsing_name(
     AppState& state, std::wstring_view parsing_name) {
     if (!parsing_name.starts_with(L"::")) return std::wstring(parsing_name);
 
-    const std::wstring parsing_text(parsing_name);
     ShellCallScope shell_call(state);
-    Microsoft::WRL::ComPtr<IShellItem> item;
-    if (FAILED(SHCreateItemFromParsingName(
-            parsing_text.c_str(), nullptr, IID_PPV_ARGS(&item)))) {
-        return parsing_text;
-    }
-
-    PWSTR display_name = nullptr;
-    if (FAILED(item->GetDisplayName(SIGDN_NORMALDISPLAY, &display_name)) ||
-        display_name == nullptr) {
-        return parsing_text;
-    }
-
-    std::wstring result;
-    try {
-        result.assign(display_name);
-    } catch (...) {
-        CoTaskMemFree(display_name);
-        return parsing_text;
-    }
-    CoTaskMemFree(display_name);
-    return result;
+    return panedock::shell_core::display_text_for_parsing_name(parsing_name);
 }
 
 panedock::core::ApplicationState default_application_state() {
@@ -1753,6 +1551,24 @@ void capture_pane_view_mode(AppState& state, std::size_t pane_index) {
     }
 }
 
+void capture_pane_sort(AppState& state, std::size_t pane_index) {
+    if (!has_active_group(state) || pane_index >= active_group(state).panes.size() ||
+        !state.realized[pane_index]) return;
+    std::string column;
+    bool ascending{};
+    HRESULT hr = E_UNEXPECTED;
+    {
+        ShellCallScope shell_call(state);
+        hr = state.explorers[pane_index].get_sort(column, ascending);
+    }
+    if (state.shutdown_deferred || state.closing_) return;
+    if (SUCCEEDED(hr)) {
+        auto& tab = active_tab(active_group(state).panes[pane_index]);
+        tab.sort_column = std::move(column);
+        tab.sort_ascending = ascending;
+    }
+}
+
 void apply_pane_view_mode(AppState& state, std::size_t pane_index) {
     if (!has_active_group(state) || pane_index >= active_group(state).panes.size() ||
         !state.realized[pane_index]) return;
@@ -1772,6 +1588,21 @@ void apply_pane_view_mode(AppState& state, std::size_t pane_index) {
     }
     if (state.shutdown_deferred || state.closing_) return;
     capture_pane_view_mode(state, pane_index);
+}
+
+void apply_pane_sort(AppState& state, std::size_t pane_index) {
+    if (!has_active_group(state) || pane_index >= active_group(state).panes.size() ||
+        !state.realized[pane_index]) return;
+    const auto& tab = active_tab(active_group(state).panes[pane_index]);
+    if (tab.sort_column.empty()) return;
+    HRESULT hr = E_UNEXPECTED;
+    {
+        ShellCallScope shell_call(state);
+        hr = state.explorers[pane_index].set_sort(tab.sort_column,
+                                                  tab.sort_ascending);
+    }
+    if (state.shutdown_deferred || state.closing_ || FAILED(hr)) return;
+    capture_pane_sort(state, pane_index);
 }
 
 void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
@@ -1993,6 +1824,8 @@ void capture_pane_location(AppState& state, std::size_t pane_index) {
     auto& tab = active_tab(group.panes[pane_index]);
     tab.location.parsing_name = state.explorers[pane_index].location();
     capture_pane_view_mode(state, pane_index);
+    if (state.shutdown_deferred || state.closing_) return;
+    capture_pane_sort(state, pane_index);
     if (!tab.history.empty() && tab.history_index < tab.history.size()) {
         tab.history[tab.history_index] = tab.location;
     }
@@ -2840,6 +2673,8 @@ void handle_navigation_complete(AppState& state, std::size_t pane_index,
     }
     apply_pane_view_mode(state, pane_index);
     if (state.shutdown_deferred || state.closing_) return;
+    apply_pane_sort(state, pane_index);
+    if (state.shutdown_deferred || state.closing_) return;
     refresh_tab_strip(state, pane_index);
     schedule_session_save(state);
 }
@@ -3089,6 +2924,9 @@ HRESULT apply_layout(HWND window, AppState& state,
                     state.explorers[index].set_selection_changed_callback(
                         [&state, index]() { refresh_status_bar(state, index); });
                     apply_pane_view_mode(state, index);
+                    if (state.shutdown_deferred || state.closing_)
+                        return E_ABORT;
+                    apply_pane_sort(state, index);
                     if (state.shutdown_deferred || state.closing_)
                         return E_ABORT;
                 } catch (...) {
@@ -4855,6 +4693,32 @@ void complete_deferred_close(HWND window, AppState& state) noexcept {
     begin_shutdown(window, state, !state.end_session_pending);
 }
 
+void file_operation_started(void* context) noexcept {
+    if (context != nullptr)
+        static_cast<AppState*>(context)->file_operation_in_progress = true;
+}
+
+void file_operation_finished(void* context) noexcept {
+    if (context == nullptr) return;
+    auto& state = *static_cast<AppState*>(context);
+    state.file_operation_in_progress = false;
+    if (state.main_window != nullptr)
+        PostMessageW(state.main_window, kFileOperationFinishedMessage, 0, 0);
+}
+
+bool file_operation_cancel_requested(void* context) noexcept {
+    if (context == nullptr) return false;
+    const auto& state = *static_cast<AppState*>(context);
+    return state.cancel_file_operation || state.shutdown_deferred ||
+           state.closing_;
+}
+
+bool file_operation_setup_aborted(void* context) noexcept {
+    if (context == nullptr) return false;
+    const auto& state = *static_cast<AppState*>(context);
+    return state.shutdown_deferred || state.closing_;
+}
+
 bool perform_clipboard_paste(HWND window, AppState& state,
                              std::size_t pane_index) noexcept {
     if (state.file_operation_call_active || state.closing_ ||
@@ -4862,85 +4726,26 @@ bool perform_clipboard_paste(HWND window, AppState& state,
         return true;
     if (pane_index >= kExplorerCount || !state.realized[pane_index])
         return false;
-
-    Microsoft::WRL::ComPtr<IDataObject> data;
-    HRESULT hr = E_UNEXPECTED;
-    {
-        ShellCallScope shell_call(state);
-        hr = OleGetClipboard(data.GetAddressOf());
-    }
-    if (state.shutdown_deferred || state.closing_) return true;
-    if (FAILED(hr) || data == nullptr)
-        return false;
     const std::wstring& parsing_name = state.explorers[pane_index].location();
     if (parsing_name.empty()) return false;
 
-    Microsoft::WRL::ComPtr<IShellItem> destination;
-    {
-        ShellCallScope shell_call(state);
-        hr = SHCreateItemFromParsingName(
-            parsing_name.c_str(), nullptr, IID_PPV_ARGS(&destination));
-    }
-    if (state.shutdown_deferred || state.closing_) return true;
-    if (FAILED(hr))
-        return false;
-
-    Microsoft::WRL::ComPtr<IFileOperation> operation;
-    {
-        ShellCallScope shell_call(state);
-        hr = CoCreateInstance(CLSID_FileOperation, nullptr,
-                               CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&operation));
-    }
-    if (state.shutdown_deferred || state.closing_) return true;
-    if (FAILED(hr))
-        return false;
-    {
-        ShellCallScope shell_call(state);
-        hr = operation->SetOwnerWindow(window);
-    }
-    if (state.shutdown_deferred || state.closing_) return true;
-    if (FAILED(hr)) return false;
-
-    Microsoft::WRL::ComPtr<FileOperationProgressSink> sink;
-    sink.Attach(new (std::nothrow) FileOperationProgressSink(&state));
-    if (sink == nullptr) return false;
-
-    DWORD cookie = 0;
-    {
-        ShellCallScope shell_call(state);
-        hr = operation->Advise(sink.Get(), &cookie);
-    }
-    if (state.shutdown_deferred || state.closing_) return true;
-    if (FAILED(hr)) return false;
-    {
-        ShellCallScope shell_call(state);
-        hr = operation->CopyItems(data.Get(), destination.Get());
-    }
-    if (state.shutdown_deferred || state.closing_) {
-        (void)operation->Unadvise(cookie);
-        return true;
-    }
-    if (FAILED(hr)) {
-        (void)operation->Unadvise(cookie);
-        return false;
-    }
-
     state.file_operation_call_active = true;
-    state.file_operation_in_progress = true;
+    state.file_operation_in_progress = false;
     state.close_after_file_operation = false;
     state.cancel_file_operation = false;
-    hr = operation->PerformOperations();
-    BOOL operations_aborted = FALSE;
-    (void)operation->GetAnyOperationsAborted(&operations_aborted);
-    (void)hr;
-    (void)operations_aborted;
-    (void)operation->Unadvise(cookie);
-    operation.Reset();
-    sink.Reset();
+    panedock::file_operations::PasteResult result;
+    {
+        ShellCallScope shell_call(state);
+        result = panedock::file_operations::paste_from_clipboard(
+            window, parsing_name,
+            {&state, file_operation_started, file_operation_finished,
+             file_operation_cancel_requested,
+             file_operation_setup_aborted});
+    }
     state.file_operation_in_progress = false;
     state.file_operation_call_active = false;
     complete_deferred_close(window, state);
-    return true;
+    return state.shutdown_deferred || state.closing_ || result.handled;
 }
 
 bool activate_main_window_on_own_thread(HWND window) noexcept;
@@ -5878,8 +5683,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         case WM_CLOSE:
             if (state != nullptr) {
-                if (state->file_operation_call_active ||
-                    state->file_operation_in_progress) {
+                if (state->file_operation_in_progress) {
                     state->close_after_file_operation = true;
                     show_transfer_close_dialog(window, *state);
                     return 0;
@@ -6143,7 +5947,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
 
     AppState state;
     state.diagnostic_mode = diagnostic_mode;
-    const auto directory = session_directory();
+    std::optional<std::filesystem::path> directory;
+    {
+        ShellCallScope shell_call(state);
+        directory = panedock::shell_core::session_directory();
+    }
+    if (state.shutdown_deferred || state.closing_) {
+        OleUninitialize();
+        CloseHandle(single_instance_mutex);
+        return exit_code;
+    }
     if (!directory.has_value()) {
         report_startup_failure(
             L"PaneDock could not resolve its data folder.");

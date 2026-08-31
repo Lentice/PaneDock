@@ -9,6 +9,7 @@
 #include <shlwapi.h>
 #include <shlobj.h>
 #include <propkey.h>
+#include <propsys.h>
 
 namespace panedock::explorer_host {
 namespace {
@@ -455,6 +456,76 @@ HRESULT ExplorerHost::get_view_mode(FOLDERVIEWMODE& mode,
     hr = folder_view->GetViewModeAndIconSize(&mode, &value);
     if (SUCCEEDED(hr) && image_size != nullptr) *image_size = value;
     return hr;
+}
+
+HRESULT ExplorerHost::set_sort(std::string_view column,
+                               bool ascending) noexcept {
+    if (browser_ == nullptr) return E_UNEXPECTED;
+    if (column.empty() || column.size() >= PKEYSTR_MAX) return E_INVALIDARG;
+    wchar_t column_text[PKEYSTR_MAX]{};
+    for (std::size_t index = 0; index < column.size(); ++index) {
+        const auto value = static_cast<unsigned char>(column[index]);
+        if (value == 0 || value > 0x7f) return E_INVALIDARG;
+        column_text[index] = static_cast<wchar_t>(value);
+    }
+    SORTCOLUMN sort{};
+    HRESULT hr = PSPropertyKeyFromString(column_text, &sort.propkey);
+    if (FAILED(hr)) {
+        log_hresult(L"PSPropertyKeyFromString", hr);
+        return hr;
+    }
+    sort.direction = ascending ? SORT_ASCENDING : SORT_DESCENDING;
+    Microsoft::WRL::ComPtr<IFolderView2> folder_view;
+    hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
+    if (FAILED(hr)) {
+        log_hresult(L"IExplorerBrowser::GetCurrentView", hr);
+        return hr;
+    }
+    hr = folder_view->SetSortColumns(&sort, 1);
+    log_hresult(L"IFolderView2::SetSortColumns", hr);
+    return hr;
+}
+
+HRESULT ExplorerHost::get_sort(std::string& column,
+                               bool& ascending) const noexcept {
+    if (browser_ == nullptr) return E_UNEXPECTED;
+    Microsoft::WRL::ComPtr<IFolderView2> folder_view;
+    HRESULT hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
+    if (FAILED(hr)) {
+        log_hresult(L"IExplorerBrowser::GetCurrentView", hr);
+        return hr;
+    }
+    SORTCOLUMN sort{};
+    hr = folder_view->GetSortColumns(&sort, 1);
+    if (FAILED(hr)) {
+        log_hresult(L"IFolderView2::GetSortColumns", hr);
+        return hr;
+    }
+    if (sort.direction != SORT_ASCENDING &&
+        sort.direction != SORT_DESCENDING) {
+        hr = HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+        log_hresult(L"IFolderView2::GetSortColumns(direction)", hr);
+        return hr;
+    }
+    wchar_t text[PKEYSTR_MAX]{};
+    hr = PSStringFromPropertyKey(sort.propkey, text, ARRAYSIZE(text));
+    if (FAILED(hr)) {
+        log_hresult(L"PSStringFromPropertyKey", hr);
+        return hr;
+    }
+    char result[PKEYSTR_MAX]{};
+    std::size_t length = 0;
+    for (const wchar_t value : std::wstring_view(text)) {
+        if (value > 0x7f) return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+        result[length++] = static_cast<char>(value);
+    }
+    try {
+        column.assign(result, length);
+    } catch (const std::bad_alloc&) {
+        return E_OUTOFMEMORY;
+    }
+    ascending = sort.direction == SORT_ASCENDING;
+    return S_OK;
 }
 
 HRESULT ExplorerHost::navigate_up() noexcept {

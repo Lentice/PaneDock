@@ -5,6 +5,8 @@
 
 #include <array>
 #include <cstdio>
+#include <propkey.h>
+#include <propsys.h>
 
 int main() {
     using panedock::explorer_host::LiveViewRegistration;
@@ -55,6 +57,24 @@ int main() {
             EXPECT(SUCCEEDED(host.get_view_mode(mode, &image_size)));
             std::printf("initial view mode=%d image size=%d\n",
                         static_cast<int>(mode), image_size);
+            EXPECT(host.set_sort({}, true) == E_INVALIDARG);
+            EXPECT(host.set_sort(std::string(PKEYSTR_MAX, 'x'), true) ==
+                   E_INVALIDARG);
+            wchar_t name_key_text[PKEYSTR_MAX]{};
+            EXPECT(SUCCEEDED(PSStringFromPropertyKey(
+                PKEY_ItemNameDisplay, name_key_text, ARRAYSIZE(name_key_text))));
+            std::string name_key;
+            for (const wchar_t value : std::wstring_view(name_key_text))
+                name_key.push_back(static_cast<char>(value));
+            for (const bool expected_ascending : std::array{true, false}) {
+                EXPECT(SUCCEEDED(host.set_sort(name_key, expected_ascending)));
+                std::string actual_column;
+                bool actual_ascending{};
+                EXPECT(SUCCEEDED(host.get_sort(actual_column,
+                                               actual_ascending)));
+                EXPECT(actual_column == name_key);
+                EXPECT(actual_ascending == expected_ascending);
+            }
             for (const int expected_size : std::array{256, 96, 48, 16}) {
                 EXPECT(SUCCEEDED(host.set_view_mode(FVM_ICON, expected_size)));
                 int actual_size{};
