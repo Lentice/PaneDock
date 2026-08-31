@@ -5240,7 +5240,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
 
                 POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
                 POINT client = point;
-                MapWindowPoints(window, target, &client, 1);
+                ScreenToClient(target, &client);
                 const auto item = tab_item_at_point(*state, target, client);
                 const auto& tabs = active_group(*state).panes[*pane_index].tabs;
                 if (!item.has_value() || *item >= tabs.size()) return 0;
