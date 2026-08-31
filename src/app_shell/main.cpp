@@ -6142,6 +6142,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             const bool control = GetKeyState(VK_CONTROL) < 0;
             const bool alt = GetKeyState(VK_MENU) < 0;
             const bool shift = GetKeyState(VK_SHIFT) < 0;
+            if (message.message == WM_KEYDOWN && !control && !alt && !shift &&
+                message.wParam == VK_F2 &&
+                GetFocus() == state.sidebar.window()) {
+                state.sidebar.begin_rename();
+                continue;
+            }
             if (key_down && control && !alt && !shift &&
                 message.wParam == 'V' && !address_bar_has_focus(state) &&
                 perform_clipboard_paste(window, state, active))

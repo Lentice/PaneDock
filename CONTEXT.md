@@ -24,6 +24,10 @@ _Avoid_: layout mode, split configuration, arrangement
 The persistent left-hand region listing Groups. It is always visible and is not part of any Group's state.
 _Avoid_: navigation pane, tree, panel
 
+**Group row**:
+A selectable row in the sidebar's Group list that represents one Group. It is a UI representation of a Group, not a separate domain object.
+_Avoid_: group item, list item
+
 **active pane**:
 The pane that receives keyboard commands, clipboard operations and shortcuts. Exactly one pane is active at any time, and it is visually indicated.
 _Avoid_: focused pane, current pane, selected pane
