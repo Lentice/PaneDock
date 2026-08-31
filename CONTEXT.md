@@ -9,7 +9,7 @@ A named, saved working context, and the primary abstraction of the product. Sele
 _Avoid_: workspace, session, profile, project, favourite
 
 **pane**:
-One of the 1–4 rectangular regions on the right side that hosts file views. A pane is a container; it holds one or more tabs. The number and arrangement of panes is fixed by the layout template.
+One of up to four stable identity slots on the right side that host file views. Each pane permanently owns its tabs; the layout template decides only which panes are visible and how they are arranged, never which tabs belong to which pane. A pane persists — keeping its tabs — even while the current template hides it.
 _Avoid_: window, view, frame, split
 
 **tab**:

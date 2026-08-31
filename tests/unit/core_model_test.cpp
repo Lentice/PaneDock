@@ -269,40 +269,38 @@ void test_move_tab() {
     EXPECT(target.active_tab_id == "two");
 }
 
-void test_layout_migration_both_directions() {
+void test_layout_migration_stable_pane_identity() {
     GroupState value = group("group", LayoutTemplate::four_pane_grid);
     EXPECT(add_tab(value.panes[1], tab("tab-2b")));
     EXPECT(add_tab(value.panes[3], tab("tab-4b")));
     value.active_pane_id = "pane-4";
 
+    // Shrinking to one pane never merges or discards panes: each identity
+    // keeps its own tabs and only the visible count changes.
     EXPECT(switch_layout(value, LayoutTemplate::single, kDefault));
-    EXPECT(value.panes.size() == 1);
-    const std::vector<std::string> expected_ids{
-        "tab-1", "tab-2", "tab-2b", "tab-3", "tab-4", "tab-4b"};
-    std::vector<std::string> actual_ids;
-    for (const auto& item : value.panes.front().tabs) actual_ids.push_back(item.id);
-    EXPECT(actual_ids == expected_ids);
-    EXPECT(value.active_pane_id == "pane-1");
+    EXPECT(value.panes.size() == 4);
+    EXPECT(value.panes[0].tabs.size() == 1);
+    EXPECT(value.panes[0].tabs.front().id == "tab-1");
+    EXPECT(value.panes[1].tabs.size() == 2);
+    EXPECT(value.panes[3].tabs.size() == 2);
+    EXPECT(value.panes[3].tabs[1].id == "tab-4b");
+    EXPECT(value.active_pane_id == "pane-1");  // old active now hidden -> first visible
     EXPECT(is_valid(value));
 
-    EXPECT(switch_layout(value, LayoutTemplate::four_pane_grid, kDefault,
-                         {"new-pane-2", "new-pane-3", "new-pane-4"},
-                         {"new-tab-2", "new-tab-3", "new-tab-4"}));
+    // Growing back to four reveals the same identities with their tabs intact.
+    EXPECT(switch_layout(value, LayoutTemplate::four_pane_grid, kDefault));
     EXPECT(value.panes.size() == 4);
-    for (std::size_t index = 1; index < value.panes.size(); ++index) {
-        EXPECT(value.panes[index].tabs.size() == 1);
-        EXPECT(value.panes[index].tabs.front().location == kDefault);
-        EXPECT(value.panes[index].active_tab_id == value.panes[index].tabs.front().id);
-    }
+    EXPECT(value.panes[3].tabs.size() == 2);
+    EXPECT(value.panes[3].active_tab_id == "tab-4");
     EXPECT(value.divider_ratios == std::vector<double>({0.5, 0.5}));
     EXPECT(is_valid(value));
 }
 
-void test_layout_migration_dedups_cross_pane_tab_ids() {
+void test_layout_keeps_cross_pane_duplicate_tab_ids() {
     // A group is legal with the same tab id in different panes (ids are only
-    // required unique within a pane). Merging such a group to fewer panes must
-    // re-id colliding tabs or the survivor pane becomes invalid and the switch
-    // silently fails. Mirrors the "CPU MPT" session shape.
+    // required unique within a pane). Because shrinking no longer merges panes,
+    // these duplicates survive a shrink/grow round trip without making the
+    // group invalid. Mirrors the "CPU MPT" session shape.
     GroupState value{"group-4", L"CPU MPT", LayoutTemplate::three_pane,
                      {0.5, 0.5}, {}, "pane-0"};
     value.panes.push_back(pane("pane-0", {tab("tab-2"), tab("tab-0"),
@@ -313,19 +311,20 @@ void test_layout_migration_dedups_cross_pane_tab_ids() {
     EXPECT(is_valid(value));
 
     EXPECT(switch_layout(value, LayoutTemplate::single, kDefault));
-    EXPECT(value.panes.size() == 1);
-    EXPECT(value.panes.front().tabs.size() == 7);
+    EXPECT(value.panes.size() == 3);
+    EXPECT(is_valid(value));
+    EXPECT(value.panes[0].tabs.size() == 5);
+    EXPECT(value.panes[1].tabs.front().id == "tab-1");
+    EXPECT(value.panes[2].tabs.front().id == "tab-2");
+
+    EXPECT(switch_layout(value, LayoutTemplate::four_pane_grid, kDefault,
+                         {"pane-3"}, {"tab-9"}));
+    EXPECT(value.panes.size() == 4);
     EXPECT(is_valid(value));
 
-    EXPECT(switch_layout(value, LayoutTemplate::three_pane, kDefault,
-                         {"pane-2", "pane-3"}, {"new-tab-2", "new-tab-3"}));
     EXPECT(switch_layout(value, LayoutTemplate::left_right, kDefault));
-    EXPECT(value.panes.size() == 2);
+    EXPECT(value.panes.size() == 4);
     EXPECT(is_valid(value));
-    for (const auto& pane_value : value.panes) {
-        EXPECT(pane_value.tabs.size() >= 1);
-        EXPECT(is_valid(value));
-    }
 }
 
 void test_failed_mutations_leave_valid_state() {
@@ -368,8 +367,8 @@ int main() {
     test_tab_and_pane_mutations();
     test_reorder_tab();
     test_move_tab();
-    test_layout_migration_both_directions();
-    test_layout_migration_dedups_cross_pane_tab_ids();
+    test_layout_migration_stable_pane_identity();
+    test_layout_keeps_cross_pane_duplicate_tab_ids();
     test_failed_mutations_leave_valid_state();
     test_pinned_location_deduplication();
     return panedock::test::summary("core_model");

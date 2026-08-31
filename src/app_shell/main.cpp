@@ -2817,7 +2817,8 @@ HRESULT apply_layout(HWND window, AppState& state,
     };
     std::optional<LayoutFailure> first_failure;
     for (std::size_t index = 0; index < state.explorers.size(); ++index) {
-        const bool visible = index < group.panes.size();
+        const bool visible =
+            index < panedock::core::pane_count(group.layout_template);
         RECT pane_rect{};
         bool pane_geometry_changed = false;
         if (visible) {
@@ -6184,14 +6185,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             }
             if (key_down && !control && !alt && message.wParam == VK_TAB &&
                 !address_bar_has_focus(state)) {
-                const std::size_t count = active_group(state).panes.size();
+                const std::size_t count =
+                    panedock::core::pane_count(active_group(state)
+                                                   .layout_template);
                 const std::size_t next = shift ? (active + count - 1) % count
                                                : (active + 1) % count;
                 set_active_pane(window, state, next);
                 continue;
             }
             if (message.message == WM_KEYDOWN && message.wParam == VK_F6) {
-                const std::size_t count = active_group(state).panes.size();
+                const std::size_t count =
+                    panedock::core::pane_count(active_group(state)
+                                                   .layout_template);
                 const std::size_t next = shift ? (active + count - 1) % count
                                                : (active + 1) % count;
                 set_active_pane(window, state, next);

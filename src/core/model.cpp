@@ -27,19 +27,6 @@ auto find_id(Range& values, const std::string& id) {
     });
 }
 
-// The merge path of switch_layout concatenates orphaned panes' tabs into a
-// survivor pane. Tab ids are only required to be unique within a pane, so a
-// group may legally carry the same tab id in different panes; merging then
-// yields a duplicate id inside the survivor pane and flakes is_valid. Assign a
-// fresh group-wide id to any colliding tab as it is appended.
-std::string fresh_unique_tab_id(std::unordered_set<std::string>& used) {
-    std::size_t index = 0;
-    for (;;) {
-        const std::string candidate = "tab-" + std::to_string(index++);
-        if (used.insert(candidate).second) return candidate;
-    }
-}
-
 }  // namespace
 
 std::size_t pane_count(LayoutTemplate layout_template) noexcept {
@@ -109,7 +96,12 @@ bool navigate_tab_forward(TabState& tab) noexcept {
 }
 
 bool is_valid(const GroupState& group) noexcept {
-    if (group.id.empty() || group.panes.size() != pane_count(group.layout_template) ||
+    // Panes are stable identities (up to kMaxPaneCount) that persist across
+    // layout switches; the template only decides which of them are visible,
+    // so the pane count may exceed the template's visible count but never
+    // fall short of it.
+    if (group.id.empty() || group.panes.size() < pane_count(group.layout_template) ||
+        group.panes.size() > kMaxPaneCount ||
         group.divider_ratios.size() != divider_ratio_count(group.layout_template) ||
         !std::all_of(group.divider_ratios.begin(), group.divider_ratios.end(),
                      [](double ratio) {
@@ -250,37 +242,25 @@ bool switch_layout(GroupState& group, LayoutTemplate layout_template,
 
     GroupState candidate = group;
 
-    if (new_count < old_count) {
-        std::unordered_set<std::string> used_ids;
-        for (const auto& pane : candidate.panes)
-            for (const auto& tab : pane.tabs) used_ids.insert(tab.id);
-        for (std::size_t index = new_count; index < old_count; ++index) {
-            auto& destination =
-                candidate.panes[(index - new_count) % new_count].tabs;
-            for (auto& tab : candidate.panes[index].tabs) {
-                if (std::any_of(destination.begin(), destination.end(),
-                                [&](const TabState& existing) {
-                                    return existing.id == tab.id;
-                                })) {
-                    tab.id = fresh_unique_tab_id(used_ids);
-                }
-                destination.push_back(std::move(tab));
-            }
-        }
-        candidate.panes.resize(new_count);
-    } else {
-        for (std::size_t index = 0; index < added; ++index) {
-            candidate.panes.push_back(PaneState{
-                new_pane_ids[index],
-                {TabState{new_tab_ids[index], default_location, {}, {}, true}},
-                new_tab_ids[index]});
-        }
+    // Panes are stable identities and are never discarded or merged on a
+    // shrink: the template only changes which of them are visible. Growth
+    // appends the new identities (each seeded with a default-location tab).
+    for (std::size_t index = 0; index < added; ++index) {
+        candidate.panes.push_back(PaneState{
+            new_pane_ids[index],
+            {TabState{new_tab_ids[index], default_location, {}, {}, true}},
+            new_tab_ids[index]});
     }
 
     candidate.layout_template = layout_template;
     candidate.divider_ratios = default_divider_ratios(layout_template);
-    if (find_id(candidate.panes, candidate.active_pane_id) ==
-        candidate.panes.end()) {
+    // The active pane must stay visible (index < visible count). If it landed
+    // in the now-hidden region, fall back to the first visible pane.
+    const auto active =
+        find_id(candidate.panes, candidate.active_pane_id);
+    const std::size_t active_index = static_cast<std::size_t>(
+        std::distance(candidate.panes.begin(), active));
+    if (active_index >= new_count) {
         candidate.active_pane_id = candidate.panes.front().id;
     }
     if (!is_valid(candidate)) {

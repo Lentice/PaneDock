@@ -8,6 +8,7 @@
 namespace panedock::core {
 
 inline constexpr int kDefaultSidebarWidth = 194;
+inline constexpr std::size_t kMaxPaneCount = 4;
 
 struct ShellLocation final {
     std::wstring parsing_name;
