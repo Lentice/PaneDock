@@ -186,12 +186,13 @@
 | PD-146 | 補齊 display-name Shell lookup 的 re-entry shutdown guard | 7 | `done` | PD-140, PD-145 | [PD-146](tickets/PD-146-display-name-shell-reentry-guard.md) |
 | PD-147 | `ExplorerHost` Shell callback 未進入 app re-entry gate，close 可在 callback 內 teardown | 7 | `done` | PD-140, PD-146 | [PD-147](tickets/PD-147-explorerhost-callback-reentry-shutdown-guard.md) |
 | PD-148 | activation handshake 將 `SetForegroundWindow` 拒絕誤判為成功 | 7 | `done` | PD-139 | [PD-148](tickets/PD-148-activation-handshake-reports-foreground-failure.md) |
-| PD-149 | 版型按鈕失焦後殘留虛線 focus border | 7 | `in_progress` | PD-056, PD-115 | [PD-149](tickets/PD-149-layout-button-focus-border-ghost.md) |
-| PD-150 | Group row 按 F2 開始 inline rename | 7 | `in_progress` | PD-017, PD-021, PD-023 | [PD-150](tickets/PD-150-group-row-f2-rename.md) |
+| PD-149 | 版型按鈕失焦後殘留虛線 focus border | 7 | `done` | PD-056, PD-115 | [PD-149](tickets/PD-149-layout-button-focus-border-ghost.md) |
+| PD-150 | Group row 按 F2 開始 inline rename | 7 | `done` | PD-017, PD-021, PD-023 | [PD-150](tickets/PD-150-group-row-f2-rename.md) |
 | PD-151 | pane 為穩定 identity，切換版型不搬移 tab（覆寫 design-spec FR-003 併入語意） | 7 | `done` | PD-004, PD-005, PD-006, PD-009, PD-087 | [PD-151](tickets/PD-151-stable-pane-identity-across-layout-switch.md) |
-| PD-152 | Group row inline rename editor 偶發只剩 caret、背景與文字不可見 | 7 | `in_progress` | PD-017, PD-041, PD-150 | [PD-152](tickets/PD-152-group-row-rename-editor-occasionally-invisible.md) |
+| PD-152 | Group row inline rename editor 偶發只剩 caret、背景與文字不可見 | 7 | `done` | PD-017, PD-041, PD-150 | [PD-152](tickets/PD-152-group-row-rename-editor-occasionally-invisible.md) |
 | PD-153 | 新 tab 預設使用詳細資料檢視 | 7 | `done` | PD-052, PD-079, PD-082 | [PD-153](tickets/PD-153-default-view-mode-details.md) |
-| PD-154 | 雙擊 pane tab 條空白區新增 tab | 7 | `in_progress` | PD-019, PD-049, PD-055 | [PD-154](tickets/PD-154-double-click-empty-tab-strip-adds-tab.md) |
+| PD-154 | 雙擊 pane tab 條空白區新增 tab | 7 | `done` | PD-019, PD-049, PD-055 | [PD-154](tickets/PD-154-double-click-empty-tab-strip-adds-tab.md) |
+| PD-155 | Window、pane splitter 與 Groups sidebar 共用原子 live-resize geometry transaction | 7 | `in_progress` | PD-077, PD-095, PD-097, PD-104, PD-108 | [PD-155](tickets/PD-155-atomic-live-resize-geometry-transaction.md) |
 
 ## Dependency lanes
 
@@ -646,3 +647,7 @@ Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `
 ### 2026-08-31 — 使用者要求雙擊 pane tab 條空白區新增 tab，開 PD-154
 
 使用者原文：「for pane tab bar, double clicks on empty space of tab bar will crate a new tab」。盤點確認 pane tab 條已由 PD-049 改為自繪 `STATIC` 子視窗，PD-055 已以 `SS_NOTIFY` 恢復滑鼠訊息，而 `tab_strip_proc` 已集中處理 tab、`+` 與 overflow 捲動按鈕的命中；新增行為也已集中在 `add_tab_to_pane`。因此 [PD-154](tickets/PD-154-double-click-empty-tab-strip-adds-tab.md) 只新增空白區的 `WM_LBUTTONDBLCLK` 路由並複用既有新增流程，不建立新 helper、core 邏輯、timer 或自訂雙擊判定。空白區明確排除 tab、`+` 與左右捲動按鈕，避免雙擊既有控制目標時意外新增 tab。
+
+### 2026-08-31 — 使用者要求三種 resize 統一為無節流 live resize，開 PD-155
+
+使用者實機回報：主視窗 resize 時 pane 內 nav buttons 不閃爍，但拖曳 pane splitter 時部分按鈕與 address bar 會閃爍；並要求 Groups sidebar resize 採用同一最佳方案、保留 true live resize、不使用 throttling。追查確認三種 resize 最終都依賴 `apply_layout`，但 splitter/sidebar 被 PD-097/104 的 200 ms timer 節流，且 `apply_layout` 仍逐一 `SetWindowPos` child HWND，再對 changed pane 同步執行 `RDW_ERASE | RDW_ALLCHILDREN`；`ExplorerHost::set_rect` 也把 `IExplorerBrowser::SetRect` 的 `HDWP*` 固定傳成 `nullptr`。因此 [PD-155](tickets/PD-155-atomic-live-resize-geometry-transaction.md) 明確覆寫 PD-097 與 PD-104 的 throttling 決策，保留 PD-095 的 geometry/content 分離與 PD-108 的 unchanged-pane skip，將 window、pane splitter、sidebar 三條路徑收斂到單一 `apply_layout` pass：主視窗直系 child 使用一批 `BeginDeferWindowPos`，每個 Explorer container 依 Win32 same-parent 契約使用自己的 batch，並在同一 pass commit。未採 PaneHost、snapshot、`WS_EX_COMPOSITED`、`WM_SETREDRAW` 或 composition framework；原生 parent-scoped deferred positioning 已足以處理根因。

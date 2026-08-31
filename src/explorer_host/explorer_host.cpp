@@ -276,6 +276,11 @@ LRESULT CALLBACK ExplorerHost::error_window_proc(
         const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
         SetWindowLongPtrW(window, GWLP_USERDATA,
                           reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+    } else if (message == WM_SIZE) {
+        auto* host = reinterpret_cast<ExplorerHost*>(
+            GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (host != nullptr) host->layout_error_controls();
+        return 0;
     } else if (message == WM_COMMAND && LOWORD(wparam) == kRetryButtonId &&
                HIWORD(wparam) == BN_CLICKED) {
         auto* host = reinterpret_cast<ExplorerHost*>(
@@ -543,16 +548,30 @@ void ExplorerHost::selection_changed() noexcept {
     }
 }
 
-void ExplorerHost::set_rect(const RECT& rect) noexcept {
+void ExplorerHost::set_rect(const RECT& rect, HDWP* deferred) noexcept {
     rect_ = rect;
     if (initialized_ && browser_ != nullptr) {
+        // The supplied batch belongs to parent_, which is the Explorer
+        // container. It must not be the app's main-window batch: Win32
+        // requires every DeferWindowPos entry in one batch to share a parent.
         log_hresult(L"IExplorerBrowser::SetRect",
-                    browser_->SetRect(nullptr, rect));
+                    browser_->SetRect(deferred, rect));
     }
     if (error_window_ != nullptr) {
-        SetWindowPos(error_window_, HWND_TOP, rect.left, rect.top,
-                     rect.right - rect.left, rect.bottom - rect.top,
-                     SWP_NOACTIVATE);
+        const UINT flags = SWP_NOACTIVATE;
+        if (deferred != nullptr && *deferred != nullptr) {
+            const HDWP next = DeferWindowPos(
+                *deferred, error_window_, HWND_TOP, rect.left, rect.top,
+                rect.right - rect.left, rect.bottom - rect.top, flags);
+            if (next != nullptr) *deferred = next;
+            else {
+                *deferred = nullptr;
+                deferred = nullptr;
+            }
+        }
+        if (deferred == nullptr)
+            SetWindowPos(error_window_, HWND_TOP, rect.left, rect.top,
+                         rect.right - rect.left, rect.bottom - rect.top, flags);
         layout_error_controls();
     }
 }

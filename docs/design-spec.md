@@ -82,7 +82,7 @@ Q-Dir 解決了一半：一個視窗內 1–4 個 pane。但它沒有「已儲�
 
 ### 4.1 視窗結構
 
-單一頂層視窗。左側為固定寬度的 Group 側邊欄,右側為 pane 區域。兩者之間有可拖曳的分隔線,寬度屬於全域設定而非個別 Group 的狀態。
+單一頂層視窗。左側為可調整寬度的 Group 側邊欄,右側為 pane 區域。兩者之間有可拖曳的分隔線,寬度屬於全域設定而非個別 Group 的狀態。側邊欄、pane 分隔線與頂層視窗邊框的調整皆為 live resize；每個中繼尺寸的 app chrome 與 Shell view 必須同步更新,不得以節流造成階梯式跳動或以 erase 造成閃爍。
 
 ### 4.2 Group 切換
 
@@ -141,6 +141,8 @@ pane 內部的一切互動由 Shell view 處理:多選手勢、右鍵選單、�
 ### FR-004 分隔比例
 
 pane 分隔線可拖曳,比例以 0.0–1.0 的相對值儲存於該 Group,視窗縮放時維持比例。
+
+調整 pane 分隔線、Group 側邊欄或頂層視窗時,版面幾何在同一個 layout frame 以 parent-scoped deferred-position 批次提交；導覽按鈕、網址列、分頁列、狀態列與 Shell view 不得在同一個中繼 frame 暴露不一致的位置。Win32 的 `DeferWindowPos` 要求同一批次內的視窗共用 parent,因此主視窗 child 與各 Explorer container child 各自使用一批,但在同一個 layout pass 完成提交。拖曳中的更新只重排幾何,內容重算與持久化在拖曳結束時處理。
 
 #### FR-004a 退化尺寸
 

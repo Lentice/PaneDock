@@ -73,10 +73,9 @@ constexpr int kTransferCloseStatusId = 4;
 // PD-091: coalesce navigation completions without keeping a polling timer.
 constexpr UINT kSessionSaveDelayMilliseconds = 500;
 constexpr UINT_PTR kSessionSaveTimerId = 0xD050;
-// PD-097: keep splitter geometry updates periodic without matching every
-// WM_MOUSEMOVE while retaining visible progress during a sustained drag.
-constexpr UINT kSplitterDragThrottleIntervalMilliseconds = 200;
-constexpr UINT_PTR kSplitterDragTimerId = 0xD051;
+// PD-155: coalesce a geometry request that arrives while Shell is pumping the
+// message loop during the current layout pass.
+constexpr UINT kDeferredLayoutMessage = WM_APP + 55;
 constexpr int kSidebarMinimumWidth = 160;
 constexpr int kSidebarMaximumWidth = 420;
 constexpr std::size_t kExplorerCount = 4;
@@ -516,8 +515,9 @@ struct AppState {
     };
     std::optional<Splitter> splitter_drag;
     std::optional<SidebarDrag> sidebar_drag;
-    std::optional<POINT> latest_geometry_drag_point;
-    bool geometry_drag_timer_armed{};
+    bool layout_in_progress{};
+    bool layout_pending{};
+    bool layout_message_queued{};
     struct TabDrag final {
         HWND strip{nullptr};
         std::size_t pane_index{};
@@ -1003,6 +1003,83 @@ int current_sidebar_width(HWND window, const AppState& state) noexcept {
     const RECT client = client_rect(window);
     return std::min(static_cast<int>(client.right - client.left),
                     scaled_value(window, state.application.sidebar_width));
+}
+
+class WindowPositionBatch final {
+public:
+    WindowPositionBatch() noexcept
+        : handle_(BeginDeferWindowPos(static_cast<int>(kCapacity))) {
+    }
+
+    ~WindowPositionBatch() {
+        if (handle_ != nullptr) (void)EndDeferWindowPos(handle_);
+    }
+
+    WindowPositionBatch(const WindowPositionBatch&) = delete;
+    WindowPositionBatch& operator=(const WindowPositionBatch&) = delete;
+
+    void position(HWND window, HWND insert_after, const RECT& rect,
+                  UINT flags) noexcept {
+        if (window == nullptr) return;
+        if (entry_count_ == entries_.size()) {
+            handle_ = nullptr;
+            (void)SetWindowPos(window, insert_after, rect.left, rect.top,
+                               rect.right - rect.left, rect.bottom - rect.top,
+                               flags);
+            return;
+        }
+        entries_[entry_count_++] = {window, insert_after, rect, flags};
+        if (handle_ == nullptr) return;
+        const HDWP next = DeferWindowPos(
+            handle_, window, insert_after, rect.left, rect.top,
+            rect.right - rect.left, rect.bottom - rect.top, flags);
+        if (next == nullptr) handle_ = nullptr;
+        else handle_ = next;
+    }
+
+    bool active() const noexcept { return handle_ != nullptr; }
+    HDWP* handle() noexcept {
+        return handle_ == nullptr ? nullptr : &handle_;
+    }
+
+    bool commit() noexcept {
+        if (handle_ != nullptr) {
+            const HDWP handle = handle_;
+            handle_ = nullptr;
+            if (EndDeferWindowPos(handle) != FALSE) return true;
+        }
+        for (std::size_t index = 0; index < entry_count_; ++index) {
+            const Entry& entry = entries_[index];
+            (void)SetWindowPos(
+                entry.window, entry.insert_after, entry.rect.left,
+                entry.rect.top, entry.rect.right - entry.rect.left,
+                entry.rect.bottom - entry.rect.top, entry.flags);
+        }
+        return false;
+    }
+
+private:
+    static constexpr std::size_t kCapacity = 128;
+    struct Entry final {
+        HWND window{nullptr};
+        HWND insert_after{nullptr};
+        RECT rect{};
+        UINT flags{};
+    };
+
+    HDWP handle_{};
+    std::array<Entry, kCapacity> entries_{};
+    std::size_t entry_count_{};
+};
+
+void position_window(WindowPositionBatch* batch, HWND window,
+                     const RECT& rect, UINT flags) noexcept {
+    if (batch != nullptr) {
+        batch->position(window, nullptr, rect, flags);
+        return;
+    }
+    (void)SetWindowPos(window, nullptr, rect.left, rect.top,
+                       rect.right - rect.left, rect.bottom - rect.top, flags);
 }
 
 // PD-031: the navigation row's geometry (tab-strip height, back/forward/up
@@ -1954,7 +2031,9 @@ void refresh_sidebar(AppState& state) {
     EnableWindow(state.sidebar_buttons[0], TRUE);
 }
 
-void layout_sidebar(HWND window, AppState& state) noexcept {
+void layout_sidebar(HWND window, AppState& state,
+                    WindowPositionBatch* batch = nullptr,
+                    RECT* list_rect_out = nullptr) noexcept {
     const RECT client = client_rect(window);
     const int width = current_sidebar_width(window, state);
     const int margin = scaled_value(window, kSpaceSnug);
@@ -1965,29 +2044,36 @@ void layout_sidebar(HWND window, AppState& state) noexcept {
     const int controls_height = static_cast<int>(state.sidebar_buttons.size()) *
                                     button_height +
                                 static_cast<int>(state.sidebar_buttons.size() - 1) * gap;
-    SetWindowPos(state.group_label, nullptr, margin, brand_height + margin,
-                 std::max(0, width - 2 * margin), heading_height,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+    position_window(batch, state.group_label,
+                    RECT{margin, brand_height + margin,
+                         margin + std::max(0, width - 2 * margin),
+                         brand_height + margin + heading_height},
+                    SWP_NOZORDER | SWP_NOACTIVATE);
     ShowWindow(state.group_label, SW_SHOW);
     const int list_top = brand_height + margin + heading_height + gap;
     RECT list_rect{margin, list_top, std::max(margin, width - margin),
                    std::max(list_top, static_cast<int>(client.bottom) - margin -
                                              controls_height - gap)};
-    state.sidebar.set_rect(list_rect, GetDpiForWindow(window));
+    if (list_rect_out != nullptr) *list_rect_out = list_rect;
+    state.sidebar.set_rect(
+        list_rect, GetDpiForWindow(window),
+        batch != nullptr ? batch->handle() : nullptr);
     int y = list_rect.bottom + gap;
     for (HWND button : state.sidebar_buttons) {
-        SetWindowPos(button, nullptr, margin, y,
-                     std::max(0, width - 2 * margin), button_height,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
+        position_window(batch, button,
+                        RECT{margin, y, margin + std::max(0, width - 2 * margin),
+                             y + button_height},
+                        SWP_NOZORDER | SWP_NOACTIVATE);
         y += button_height + gap;
     }
     const RECT panes = pane_area(window, state);
-    SetWindowPos(state.empty_message, nullptr, panes.left, panes.top,
-                 panes.right - panes.left, panes.bottom - panes.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+    position_window(batch, state.empty_message, panes,
+                    SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-void layout_header(HWND window, AppState& state) noexcept {
+void layout_header(HWND window, AppState& state,
+                   WindowPositionBatch* batch = nullptr,
+                   bool update_selection = true) noexcept {
     const RECT client = client_rect(window);
     const int sidebar_width = current_sidebar_width(window, state);
     const int margin = scaled_value(window, kSpaceBase);
@@ -2015,13 +2101,17 @@ void layout_header(HWND window, AppState& state) noexcept {
                                      total_width);
     int x = x_start;
     for (HWND button : state.layout_buttons) {
-        SetWindowPos(button, nullptr, x,
-                     std::max(0, (header_height - button_height) / 2),
-                     button_width, button_height,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
+        position_window(
+            batch, button,
+            RECT{x, std::max(0, (header_height - button_height) / 2),
+                 x + button_width,
+                 std::max(0, (header_height - button_height) / 2) +
+                     button_height},
+            SWP_NOZORDER | SWP_NOACTIVATE);
         ShowWindow(button, SW_SHOW);
         x += button_width + segment_gap;
     }
+    if (!update_selection) return;
     const bool enabled = has_active_group(state);
     const auto current = enabled ? active_group(state).layout_template
                                  : panedock::core::LayoutTemplate::single;
@@ -2227,7 +2317,10 @@ void apply_pane_container_region(HWND container, int width, int height,
     }
     DeleteObject(top_strip);
     DeleteObject(rounded);
-    if (SetWindowRgn(container, region, TRUE) == 0) {
+    // Do not repaint this pane immediately. During a live layout pass every
+    // changed pane gets its region here; apply_layout invalidates all of them
+    // after the geometry commits have completed.
+    if (SetWindowRgn(container, region, FALSE) == 0) {
         DeleteObject(region);
     }
 }
@@ -2768,6 +2861,35 @@ void destroy_explorers(AppState& state) noexcept {
     write_live_view_count(state.diagnostic_mode);
 }
 
+class LayoutPassScope final {
+public:
+    LayoutPassScope(HWND window, AppState& state) noexcept
+        : window_(window), state_(state) {
+        state_.layout_in_progress = true;
+    }
+
+    ~LayoutPassScope() noexcept {
+        state_.layout_in_progress = false;
+        if (!state_.layout_pending || state_.layout_message_queued ||
+            state_.closing_ || state_.shutdown_deferred ||
+            state_.main_window == nullptr)
+            return;
+        state_.layout_message_queued = true;
+        if (!PostMessageW(window_, kDeferredLayoutMessage, 0, 0)) {
+            state_.layout_message_queued = false;
+            OutputDebugStringW(
+                L"PaneDock: could not queue deferred layout\n");
+        }
+    }
+
+    LayoutPassScope(const LayoutPassScope&) = delete;
+    LayoutPassScope& operator=(const LayoutPassScope&) = delete;
+
+private:
+    HWND window_;
+    AppState& state_;
+};
+
 HRESULT apply_layout(HWND window, AppState& state,
                      bool realize_deferred_panes = false,
                      bool recompute_content = true) {
@@ -2776,13 +2898,21 @@ HRESULT apply_layout(HWND window, AppState& state,
     // parent HWND is being destroyed (§9.4). Guard the shared entry, not every
     // caller.
     if (state.closing_ || state.shutdown_deferred) return E_ABORT;
-    if (recompute_content) {
-        layout_sidebar(window, state);
-        layout_header(window, state);
-        InvalidateRect(window, nullptr, TRUE);
+    if (state.layout_in_progress) {
+        state.layout_pending = true;
+        return S_OK;
     }
+    LayoutPassScope layout_scope(window, state);
+    WindowPositionBatch positions;
+    // DeferWindowPos requires every window in a batch to share one parent.
+    // The app chrome and each ExplorerBrowser therefore get separate native
+    // batches, committed by this one layout pass.
+    std::array<std::optional<WindowPositionBatch>, kExplorerCount>
+        explorer_positions;
+    RECT sidebar_list_rect{};
+    layout_sidebar(window, state, &positions, &sidebar_list_rect);
+    layout_header(window, state, &positions, recompute_content);
     if (!has_active_group(state)) {
-        state.laid_out_pane_rects.fill(std::nullopt);
         for (std::size_t index = 0; index < state.explorers.size(); ++index) {
             {
                 ShellCallScope shell_call(state);
@@ -2801,6 +2931,10 @@ HRESULT apply_layout(HWND window, AppState& state,
             ShowWindow(state.status_bars[index], SW_HIDE);
         }
         ShowWindow(state.empty_message, SW_SHOW);
+        state.laid_out_pane_rects.fill(std::nullopt);
+        if (!positions.commit())
+            state.sidebar.set_rect(sidebar_list_rect, GetDpiForWindow(window));
+        InvalidateRect(window, nullptr, FALSE);
         if (recompute_content) write_live_view_count(state.diagnostic_mode);
         return S_OK;
     }
@@ -2815,6 +2949,10 @@ HRESULT apply_layout(HWND window, AppState& state,
         std::size_t pane_index;
     };
     std::optional<LayoutFailure> first_failure;
+    std::array<bool, kExplorerCount> changed_panes{};
+    std::array<std::optional<RECT>, kExplorerCount> pending_shell_rects{};
+    std::array<bool, kExplorerCount> shell_positions_deferred{};
+    std::array<RECT, kExplorerCount> container_rects{};
     for (std::size_t index = 0; index < state.explorers.size(); ++index) {
         const bool visible =
             index < panedock::core::pane_count(group.layout_template);
@@ -2826,18 +2964,19 @@ HRESULT apply_layout(HWND window, AppState& state,
                 !state.laid_out_pane_rects[index].has_value() ||
                 !EqualRect(&state.laid_out_pane_rects[index].value(),
                            &pane_rect);
+            changed_panes[index] = pane_geometry_changed;
             const int strip_height = scaled_value(window, kTabStripHeight);
             const int actual_strip_height =
                 std::min(strip_height, static_cast<int>(pane_rect.bottom -
                                                         pane_rect.top));
             if (pane_geometry_changed) {
-                SetWindowPos(state.tab_strips[index], nullptr, pane_rect.left,
-                             pane_rect.top, pane_rect.right - pane_rect.left,
-                             actual_strip_height,
-                             SWP_NOZORDER | SWP_NOACTIVATE);
+                position_window(
+                    &positions, state.tab_strips[index],
+                    RECT{pane_rect.left, pane_rect.top, pane_rect.right,
+                         pane_rect.top + actual_strip_height},
+                    SWP_NOZORDER | SWP_NOACTIVATE);
             }
             ShowWindow(state.tab_strips[index], SW_SHOW);
-            if (recompute_content) apply_tab_item_size(state, index);
 
             const NavigationGeometry geometry =
                 navigation_geometry(window, pane_rect);
@@ -2855,10 +2994,12 @@ HRESULT apply_layout(HWND window, AppState& state,
             int x = pane_rect.left + button_offset_x;
             for (HWND button : buttons) {
                 if (pane_geometry_changed) {
-                    SetWindowPos(button, nullptr, x,
-                                 navigation_top + button_offset_y,
-                                 geometry.button_width, button_height,
-                                 SWP_NOZORDER | SWP_NOACTIVATE);
+                    position_window(
+                        &positions, button,
+                        RECT{x, navigation_top + button_offset_y,
+                             x + geometry.button_width,
+                             navigation_top + button_offset_y + button_height},
+                        SWP_NOZORDER | SWP_NOACTIVATE);
                 }
                 ShowWindow(button, SW_SHOW);
                 x += geometry.button_width;
@@ -2872,11 +3013,9 @@ HRESULT apply_layout(HWND window, AppState& state,
                 geometry.address_background,
                 scaled_value(window, kAddressBarInset));
             if (pane_geometry_changed) {
-                SetWindowPos(state.address_bars[index], nullptr,
-                             address_rect.left, address_rect.top,
-                             address_rect.right - address_rect.left,
-                             address_rect.bottom - address_rect.top,
-                             SWP_NOZORDER | SWP_NOACTIVATE);
+                position_window(&positions, state.address_bars[index],
+                                address_rect,
+                                SWP_NOZORDER | SWP_NOACTIVATE);
             }
             ShowWindow(state.address_bars[index], SW_SHOW);
 
@@ -2888,11 +3027,9 @@ HRESULT apply_layout(HWND window, AppState& state,
             const RECT status_rect{rect.left, rect.bottom - status_height,
                                    rect.right, rect.bottom};
             if (pane_geometry_changed) {
-                SetWindowPos(state.status_bars[index], nullptr, status_rect.left,
-                             status_rect.top,
-                             status_rect.right - status_rect.left,
-                             status_rect.bottom - status_rect.top,
-                             SWP_NOZORDER | SWP_NOACTIVATE);
+                position_window(&positions, state.status_bars[index],
+                                status_rect,
+                                SWP_NOZORDER | SWP_NOACTIVATE);
             }
             ShowWindow(state.status_bars[index], SW_SHOW);
             rect.bottom -= status_height;
@@ -2907,17 +3044,11 @@ HRESULT apply_layout(HWND window, AppState& state,
             const int container_width = rect.right - rect.left;
             const int container_height = rect.bottom - rect.top;
             if (pane_geometry_changed) {
-                SetWindowPos(state.explorer_containers[index], nullptr,
-                             rect.left, rect.top, container_width,
-                             container_height,
-                             SWP_NOZORDER | SWP_NOACTIVATE);
+                position_window(&positions, state.explorer_containers[index],
+                                rect, SWP_NOZORDER | SWP_NOACTIVATE);
+                container_rects[index] = rect;
             }
             ShowWindow(state.explorer_containers[index], SW_SHOW);
-            if (pane_geometry_changed) {
-                apply_pane_container_region(state.explorer_containers[index],
-                                            container_width, container_height,
-                                            container_radius);
-            }
             const RECT local_rect{0, 0, container_width, container_height};
             if (!state.realized[index] && !state.startup_frame_only &&
                 (realize_deferred_panes || !state.startup_realize_pending ||
@@ -2964,9 +3095,16 @@ HRESULT apply_layout(HWND window, AppState& state,
                     return E_OUTOFMEMORY;
                 }
             } else if (pane_geometry_changed) {
-                {
+                pending_shell_rects[index] = local_rect;
+                explorer_positions[index].emplace();
+                if (explorer_positions[index]->active()) {
+                    shell_positions_deferred[index] = true;
                     ShellCallScope shell_call(state);
-                    state.explorers[index].set_rect(local_rect);
+                    state.explorers[index].set_rect(
+                        local_rect, explorer_positions[index]->handle());
+                } else {
+                    ShellCallScope shell_call(state);
+                    state.explorers[index].set_rect(local_rect, nullptr);
                 }
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
             }
@@ -2974,9 +3112,8 @@ HRESULT apply_layout(HWND window, AppState& state,
                 refresh_status_bar(state, index);
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
             }
-            state.laid_out_pane_rects[index] = pane_rect;
+            // Commit the cache only after the deferred position batch below.
         } else {
-            state.laid_out_pane_rects[index].reset();
             if (state.realized[index]) {
                 {
                     ShellCallScope shell_call(state);
@@ -3000,11 +3137,47 @@ HRESULT apply_layout(HWND window, AppState& state,
             state.explorers[index].set_visible(visible);
         }
         if (state.shutdown_deferred || state.closing_) return E_ABORT;
-        if (visible && pane_geometry_changed) {
-            RedrawWindow(window, &pane_rect, nullptr,
-                         RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    }
+    const bool committed = positions.commit();
+    if (!committed) {
+        state.sidebar.set_rect(sidebar_list_rect, GetDpiForWindow(window));
+    }
+    // The tab strip's custom add/scroll-button geometry depends on its new
+    // client width. Recompute only after the app batch has committed; before
+    // then GetClientRect still describes the previous live-resize frame.
+    const std::size_t visible_panes =
+        panedock::core::pane_count(group.layout_template);
+    for (std::size_t index = 0; index < state.tab_strips.size(); ++index) {
+        if (index < visible_panes &&
+            (changed_panes[index] || recompute_content))
+            apply_tab_item_size(state, index);
+    }
+    for (std::size_t index = 0; index < state.explorers.size(); ++index) {
+        if (!explorer_positions[index].has_value()) continue;
+        const bool explorer_committed = explorer_positions[index]->commit();
+        if (!explorer_committed && shell_positions_deferred[index]) {
+            ShellCallScope shell_call(state);
+            state.explorers[index].set_rect(
+                *pending_shell_rects[index], nullptr);
+            if (state.shutdown_deferred || state.closing_) return E_ABORT;
         }
     }
+    for (std::size_t index = 0; index < state.explorers.size(); ++index) {
+        if (changed_panes[index]) {
+            apply_pane_container_region(
+                state.explorer_containers[index],
+                container_rects[index].right - container_rects[index].left,
+                container_rects[index].bottom - container_rects[index].top,
+                container_radius);
+            RedrawWindow(state.explorer_containers[index], nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_NOERASE | RDW_ALLCHILDREN);
+        }
+        if (index < panedock::core::pane_count(group.layout_template))
+            state.laid_out_pane_rects[index] = to_win32_rect(rects[index]);
+        else
+            state.laid_out_pane_rects[index].reset();
+    }
+    InvalidateRect(window, nullptr, FALSE);
     if (recompute_content) write_live_view_count(state.diagnostic_mode);
     return first_failure.has_value() ? first_failure->result : S_OK;
 }
@@ -3644,11 +3817,6 @@ void update_sidebar_drag(HWND window, AppState& state, POINT point,
     state.application.sidebar_width = std::clamp(
         state.sidebar_drag->start_width + delta, kSidebarMinimumWidth,
         kSidebarMaximumWidth);
-    if (!recompute_content) {
-        layout_sidebar(window, state);
-        layout_header(window, state);
-        InvalidateRect(window, nullptr, TRUE);
-    }
     if (FAILED(apply_layout(window, state, false, recompute_content)))
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
 }
@@ -5018,6 +5186,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                !state->end_session_pending);
             }
             return 0;
+        case kDeferredLayoutMessage:
+            if (state != nullptr && state->layout_message_queued) {
+                state->layout_message_queued = false;
+                state->layout_pending = false;
+                if (!state->closing_ && !state->shutdown_deferred)
+                    (void)apply_layout(window, *state, false, false);
+            }
+            return 0;
         case kDeferredRealizeMessage: {
             if (state == nullptr || !state->startup_realize_pending ||
                 static_cast<UINT_PTR>(lparam) !=
@@ -5239,12 +5415,24 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 }
             }
             break;
-        case WM_ERASEBKGND:
+        case WM_PAINT:
             if (state != nullptr) {
-                paint_client_background(window,
-                                        reinterpret_cast<HDC>(wparam), *state);
-                return 1;
+                PAINTSTRUCT paint{};
+                const HDC dc = BeginPaint(window, &paint);
+                if (dc != nullptr) {
+                    const int saved = SaveDC(dc);
+                    IntersectClipRect(dc, paint.rcPaint.left,
+                                      paint.rcPaint.top, paint.rcPaint.right,
+                                      paint.rcPaint.bottom);
+                    paint_client_background(window, dc, *state);
+                    RestoreDC(dc, saved);
+                    EndPaint(window, &paint);
+                    return 0;
+                }
             }
+            break;
+        case WM_ERASEBKGND:
+            if (state != nullptr) return 1;
             break;
         case WM_CONTEXTMENU: {
             if (state == nullptr) break;
@@ -5531,7 +5719,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             return 0;
         case WM_SIZE:
-            if (state != nullptr && FAILED(apply_layout(window, *state)))
+            if (state != nullptr &&
+                FAILED(apply_layout(window, *state, false, false)))
                 OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
             return 0;
         case WM_DPICHANGED: {
@@ -5556,9 +5745,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         std::clamp(state->application.sidebar_width,
                                    kSidebarMinimumWidth,
                                    kSidebarMaximumWidth)};
-                    KillTimer(window, kSplitterDragTimerId);
-                    state->latest_geometry_drag_point.reset();
-                    state->geometry_drag_timer_armed = false;
                     SetCapture(window);
                     return 0;
                 }
@@ -5566,9 +5752,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     state->splitter_drag = splitter_at_point(
                         window, *state, active_group(*state), point);
                     if (state->splitter_drag.has_value()) {
-                        KillTimer(window, kSplitterDragTimerId);
-                        state->latest_geometry_drag_point.reset();
-                        state->geometry_drag_timer_armed = false;
                         SetCapture(window);
                         return 0;
                     }
@@ -5580,39 +5763,27 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 (state->sidebar_drag.has_value() ||
                  state->splitter_drag.has_value()) &&
                 (wparam & MK_LBUTTON) != 0) {
-                state->latest_geometry_drag_point = point_from_lparam(lparam);
-                if (!state->geometry_drag_timer_armed) {
-                    if (SetTimer(window, kSplitterDragTimerId,
-                                 kSplitterDragThrottleIntervalMilliseconds,
-                                 nullptr) != 0) {
-                        state->geometry_drag_timer_armed = true;
-                    } else {
-                        OutputDebugStringW(
-                            L"PaneDock: geometry drag timer failed\n");
-                    }
-                }
+                const POINT point = point_from_lparam(lparam);
+                if (state->sidebar_drag.has_value())
+                    update_sidebar_drag(window, *state, point, false);
+                if (state->splitter_drag.has_value())
+                    update_splitter_drag(window, *state, point, false);
                 return 0;
             }
             break;
         case WM_LBUTTONUP:
             if (state != nullptr && state->sidebar_drag.has_value()) {
-                KillTimer(window, kSplitterDragTimerId);
-                state->geometry_drag_timer_armed = false;
                 update_sidebar_drag(window, *state,
                                     point_from_lparam(lparam), true);
                 state->sidebar_drag.reset();
-                state->latest_geometry_drag_point.reset();
                 save_now(*state);
                 ReleaseCapture();
                 return 0;
             }
             if (state != nullptr && state->splitter_drag.has_value()) {
-                KillTimer(window, kSplitterDragTimerId);
-                state->geometry_drag_timer_armed = false;
                 update_splitter_drag(window, *state,
                                      point_from_lparam(lparam), true);
                 state->splitter_drag.reset();
-                state->latest_geometry_drag_point.reset();
                 save_now(*state);
                 ReleaseCapture();
                 return 0;
@@ -5620,9 +5791,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             break;
         case WM_CAPTURECHANGED:
             if (state != nullptr) {
-                KillTimer(window, kSplitterDragTimerId);
-                state->geometry_drag_timer_armed = false;
-                state->latest_geometry_drag_point.reset();
                 state->sidebar_drag.reset();
                 state->splitter_drag.reset();
                 return 0;
@@ -5648,35 +5816,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (timer == kSessionSaveTimerId) {
                 KillTimer(window, kSessionSaveTimerId);
                 if (state->session_dirty) (void)save_now(*state);
-                return 0;
-            }
-            if (timer == kSplitterDragTimerId) {
-                KillTimer(window, kSplitterDragTimerId);
-                state->geometry_drag_timer_armed = false;
-                if (state->latest_geometry_drag_point.has_value()) {
-                    if (state->sidebar_drag.has_value()) {
-                        update_sidebar_drag(
-                            window, *state, *state->latest_geometry_drag_point,
-                            false);
-                    }
-                    if (state->splitter_drag.has_value()) {
-                        update_splitter_drag(
-                            window, *state, *state->latest_geometry_drag_point,
-                            false);
-                    }
-                    if (state->sidebar_drag.has_value() ||
-                        state->splitter_drag.has_value()) {
-                        if (SetTimer(
-                                window, kSplitterDragTimerId,
-                                kSplitterDragThrottleIntervalMilliseconds,
-                                nullptr) != 0) {
-                            state->geometry_drag_timer_armed = true;
-                        } else {
-                            OutputDebugStringW(
-                                L"PaneDock: geometry drag timer failed\n");
-                        }
-                    }
-                }
                 return 0;
             }
             if (timer == kDragHoverSidebarTimerId &&

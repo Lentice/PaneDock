@@ -67,7 +67,7 @@ public:
     void set_selection_changed_callback(std::function<void()> callback);
     HRESULT item_counts(ItemCounts& counts) const noexcept;
     void selection_changed() noexcept;
-    void set_rect(const RECT& rect) noexcept;
+    void set_rect(const RECT& rect, HDWP* deferred = nullptr) noexcept;
     void set_visible(bool visible) noexcept;
     void focus() noexcept;
     HRESULT translate_accelerator(MSG* message) noexcept;

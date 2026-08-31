@@ -35,7 +35,7 @@ class Sidebar final {
 public:
     bool create(HWND parent, int control_id, ::IDropTarget* drop_target) noexcept;
     void revoke_drag_drop() noexcept;
-    void set_rect(const RECT& rect, UINT dpi) noexcept;
+    void set_rect(const RECT& rect, UINT dpi, HDWP* deferred = nullptr) noexcept;
     void set_groups(const std::vector<GroupSummary>& groups);
     std::optional<std::size_t> selected_index() const noexcept;
     void set_selected_index(std::size_t index) noexcept;
@@ -62,7 +62,7 @@ private:
     std::vector<GroupSummary> groups_;
     std::optional<std::size_t> hover_index_;
     std::optional<std::wstring> pending_rename_;
-    UINT dpi_{96};
+    UINT dpi_{};
 };
 
 }  // namespace panedock::sidebar
