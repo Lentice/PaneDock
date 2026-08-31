@@ -196,6 +196,7 @@
 | PD-156 | 擷取、持久化並還原 Shell 排序欄位與方向 | 7 | `in_progress` | PD-006, PD-052, PD-153 | [PD-156](tickets/PD-156-shell-sort-state-restore.md) |
 | PD-157 | 建立 `shell_core` 並移出 app_shell 的 Shell location/value 操作 | 7 | `in_progress` | PD-006, PD-022, PD-140, PD-146 | [PD-157](tickets/PD-157-shell-core-location-boundary.md) |
 | PD-158 | 建立 `file_operations` 並讓 Ctrl+V 正確區分 Cut／Copy | 7 | `in_progress` | PD-023, PD-121, PD-123, PD-140, PD-157 | [PD-158](tickets/PD-158-cut-aware-clipboard-paste.md) |
+| PD-159 | pane 空白處的背景 Shell verb 無法取得目前資料夾 | 7 | `in_progress` | PD-007, PD-014, PD-024 | [PD-159](tickets/PD-159-background-shell-verb-current-folder.md) |
 
 ## Dependency lanes
 
@@ -277,6 +278,7 @@ Phase 7 — Spec/code alignment,對照 2026-08-31 使用者決策
   PD-006 + PD-052 + PD-153 ─── PD-156(Shell sort capture/apply/restore)
   PD-006 + PD-022 + PD-140 + PD-146 ─── PD-157(shell_core location/value boundary)
   PD-023 + PD-121 + PD-123 + PD-140 + PD-157 ─── PD-158(file_operations + Cut-aware paste)
+  PD-007 + PD-014 + PD-024 ─── PD-159(background Shell verb current-folder contract)
 
 Phase 7 — Layout button focus rendering
   PD-056 + PD-115 ─── PD-149(版型按鈕失焦後殘留虛線 focus border)
@@ -659,3 +661,11 @@ Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `
 ### 2026-08-31 — 使用者要求三種 resize 統一為無節流 live resize，開 PD-155
 
 使用者實機回報：主視窗 resize 時 pane 內 nav buttons 不閃爍，但拖曳 pane splitter 時部分按鈕與 address bar 會閃爍；並要求 Groups sidebar resize 採用同一最佳方案、保留 true live resize、不使用 throttling。追查確認三種 resize 最終都依賴 `apply_layout`，但 splitter/sidebar 被 PD-097/104 的 200 ms timer 節流，且 `apply_layout` 仍逐一 `SetWindowPos` child HWND，再對 changed pane 同步執行 `RDW_ERASE | RDW_ALLCHILDREN`；`ExplorerHost::set_rect` 也把 `IExplorerBrowser::SetRect` 的 `HDWP*` 固定傳成 `nullptr`。因此 [PD-155](tickets/PD-155-atomic-live-resize-geometry-transaction.md) 明確覆寫 PD-097 與 PD-104 的 throttling 決策，保留 PD-095 的 geometry/content 分離與 PD-108 的 unchanged-pane skip，將 window、pane splitter、sidebar 三條路徑收斂到單一 `apply_layout` pass：主視窗直系 child 使用一批 `BeginDeferWindowPos`，每個 Explorer container 依 Win32 same-parent 契約使用自己的 batch，並在同一 pass commit。未採 PaneHost、snapshot、`WS_EX_COMPOSITED`、`WM_SETREDRAW` 或 composition framework；原生 parent-scoped deferred positioning 已足以處理根因。
+
+### 2026-08-31 — 使用者回報 pane 空白處的 current-folder verbs 無反應，開 PD-159
+
+使用者在 `Github` Group 的 `PaneDock` tab（`E:\GitHub\PaneDock`）空白處選 `以 Code 開啟`，選單關閉但 VS Code 視窗集合與標題在 1.5 秒後不變；`Open Git Bash here` 也失敗。相反地，同一個 PaneDock 背景選單的 `FileLocator Pro...` 可成功執行，且使用者確認一般 Windows 檔案總管可順利以相同命令開啟 VS Code。這組對照排除 VS Code 安裝、整體 context-menu invoke 及單一 extension 特例，將失敗邊界收斂到依賴目前資料夾的 `Directory\Background` verbs；此機器的 Git Bash command 確實使用 `%v`。程式碼追查另確認 `ExplorerHost` 的自訂 `IServiceProvider::QueryService` 對所有 service/IID 一律回 `E_NOINTERFACE`，與 Microsoft `IExplorerBrowser` host 契約及症狀吻合。開 [PD-159](tickets/PD-159-background-shell-verb-current-folder.md)，要求先擷取實際 service/IID/HRESULT 與 Process Create 參數，再只補實證必要的共享 site contract；不新增 VS Code/Git Bash 特例、不攔截右鍵選單、不自行展開 `%V`，也不預建通用 `IShellBrowser` 假殼。
+
+### 2026-08-31 — PD-159 根因反證與 scope override
+
+標準 `CDefView::DoBackgroundContextMenu` 的 debugger trace 顯示 `CRegistryVerbsContextMenu::_Execute` 收到的 invoke 結構 `lpDirectory` 為 null，`_GetShellItemArray` 回 `E_INVALIDARG`；先前只補 `ICommDlgBrowser`／`SID_SExplorerBrowserFrame` 沒有改變結果。公開 Shell host 參考（ChromaFiler）證實最小可行 seam 是 `IShellView::GetItemObject(SVGIO_BACKGROUND, IID_IContextMenu)` + view site + `CMINVOKECOMMANDINFO(EX).lpDirectory`，故 PD-159 明確覆寫原先「不攔截、重建或包裝原生 context menu」的方向：`ExplorerHost` 僅對零選取背景 `WM_CONTEXTMENU` 建立同一份原生 `IContextMenu` bridge，保留所有已安裝 extension，並把各 host 的 `location_` 傳給 verb；不加入產品專屬字串、`ShellExecute`、registry 或 `%V` 自行展開。實機已驗證 `E:\GitHub\PaneDock` 的 `以 Code 開啟`、`Open Git Bash here`、`FileLocator Pro...` 與項目右鍵；同一 Group 的 `E:\GitHub\NimbleRun` 也取得正確 Git Bash `--cd`，且 `Misc` 四 pane Group 可正常 realize 後切回原 tab；close-while-menu 的完整矩陣仍待補驗，因此 tracker 維持 `in_progress`。

@@ -62,7 +62,7 @@ target_compile_definitions(panedock_explorer_host PRIVATE
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
 )
 target_link_libraries(panedock_explorer_host PRIVATE
-    ole32 propsys shell32 shlwapi user32 uuid
+    comctl32 ole32 propsys shell32 shlwapi user32 uuid
 )
 panedock_set_warnings(panedock_explorer_host)
 add_library(panedock_file_operations STATIC

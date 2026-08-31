@@ -82,6 +82,15 @@ public:
 private:
     void enter_shell_call() noexcept;
     void leave_shell_call() noexcept;
+    void install_context_menu_subclass() noexcept;
+    void remove_context_menu_subclass() noexcept;
+    bool show_background_context_menu(HWND owner, LPARAM lparam) noexcept;
+    LRESULT handle_context_menu_message(HWND window, UINT message,
+                                        WPARAM wparam,
+                                        LPARAM lparam) noexcept;
+    static LRESULT CALLBACK context_menu_subclass_proc(
+        HWND window, UINT message, WPARAM wparam, LPARAM lparam,
+        UINT_PTR subclass_id, DWORD_PTR ref_data) noexcept;
     static bool register_error_window_class() noexcept;
     static LRESULT CALLBACK error_window_proc(HWND window, UINT message,
                                                WPARAM wparam,
@@ -113,6 +122,11 @@ private:
     mutable std::optional<ItemCounts> item_counts_cache_;
     Microsoft::WRL::ComPtr<IShellFolderViewCB> previous_view_callback_;
     Microsoft::WRL::ComPtr<IShellFolderViewCB> view_callback_;
+    HWND context_menu_view_window_{nullptr};
+    Microsoft::WRL::ComPtr<IContextMenu> context_menu_;
+    Microsoft::WRL::ComPtr<IContextMenu2> context_menu2_;
+    Microsoft::WRL::ComPtr<IContextMenu3> context_menu3_;
+    bool context_menu_active_{false};
 };
 
 }  // namespace panedock::explorer_host

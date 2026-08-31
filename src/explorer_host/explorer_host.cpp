@@ -8,14 +8,18 @@
 
 #include <shlwapi.h>
 #include <shlobj.h>
+#include <shellapi.h>
+#include <windowsx.h>
 #include <propkey.h>
 #include <propsys.h>
+#include <commctrl.h>
 
 namespace panedock::explorer_host {
 namespace {
 
 constexpr wchar_t kErrorWindowClassName[] = L"PaneDock.ErrorPanel";
 constexpr int kRetryButtonId = 1;
+constexpr UINT_PTR kContextMenuSubclassId = 0x5044;
 // ponytail: fixed 1000-item UI ceiling; raise only with measured
 // non-blocking Shell enumeration.
 constexpr int kSelectionSizeItemLimit = 1000;
@@ -38,17 +42,6 @@ void log_hresult(const wchar_t* operation, HRESULT result) noexcept {
         OutputDebugStringW(operation);
         OutputDebugStringW(L" failed\n");
     }
-}
-
-void log_service_query(REFGUID service_id) noexcept {
-    wchar_t guid_text[64]{};
-    OutputDebugStringW(L"ExplorerHost::QueryService service=");
-    if (StringFromGUID2(service_id, guid_text, ARRAYSIZE(guid_text)) != 0) {
-        OutputDebugStringW(guid_text);
-    } else {
-        OutputDebugStringW(L"<unformatted>");
-    }
-    OutputDebugStringW(L"\n");
 }
 
 class ViewCallback final : public IShellFolderViewCB {
@@ -104,7 +97,9 @@ private:
     Microsoft::WRL::ComPtr<IShellFolderViewCB> previous_;
 };
 
-class Site final : public IServiceProvider, public IExplorerBrowserEvents {
+class Site final : public IServiceProvider,
+                   public ICommDlgBrowser,
+                   public IExplorerBrowserEvents {
 public:
     explicit Site(ExplorerHost* host) noexcept : host_(host) {}
 
@@ -120,6 +115,8 @@ public:
         if (IsEqualIID(iid, IID_IUnknown) ||
             IsEqualIID(iid, IID_IServiceProvider)) {
             *object = static_cast<IServiceProvider*>(this);
+        } else if (IsEqualIID(iid, IID_ICommDlgBrowser)) {
+            *object = static_cast<ICommDlgBrowser*>(this);
         } else if (IsEqualIID(iid, IID_IExplorerBrowserEvents)) {
             *object = static_cast<IExplorerBrowserEvents*>(this);
         } else {
@@ -152,9 +149,25 @@ public:
         if (host_ == nullptr) {
             return E_NOINTERFACE;
         }
-        log_service_query(service_id);
-        (void)iid;
-        return E_NOINTERFACE;
+        if (!IsEqualGUID(service_id, SID_SExplorerBrowserFrame)) {
+            return E_NOINTERFACE;
+        }
+        return QueryInterface(iid, object);
+    }
+
+    HRESULT STDMETHODCALLTYPE OnDefaultCommand(IShellView*) override {
+        // Let the default Shell view handle its command. The host only
+        // supplies the documented frame service; it does not own navigation.
+        return S_FALSE;
+    }
+
+    HRESULT STDMETHODCALLTYPE OnStateChange(IShellView*, ULONG) override {
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE IncludeObject(IShellView*,
+                                             PCUITEMID_CHILD) override {
+        return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE OnNavigationPending(
@@ -257,6 +270,169 @@ void ExplorerHost::leave_shell_call() noexcept {
     if (shell_call_callback_ != nullptr) {
         shell_call_callback_(shell_call_context_, false);
     }
+}
+
+void ExplorerHost::install_context_menu_subclass() noexcept {
+    remove_context_menu_subclass();
+    if (current_view_ == nullptr) return;
+
+    HWND window = nullptr;
+    if (FAILED(current_view_->GetWindow(&window)) || window == nullptr) {
+        return;
+    }
+    if (!SetWindowSubclass(window, context_menu_subclass_proc,
+                           kContextMenuSubclassId,
+                           reinterpret_cast<DWORD_PTR>(this))) {
+        log_message(L"ExplorerHost: SetWindowSubclass failed");
+        return;
+    }
+    context_menu_view_window_ = window;
+}
+
+void ExplorerHost::remove_context_menu_subclass() noexcept {
+    if (context_menu_view_window_ != nullptr) {
+        (void)RemoveWindowSubclass(context_menu_view_window_,
+                                   context_menu_subclass_proc,
+                                   kContextMenuSubclassId);
+        context_menu_view_window_ = nullptr;
+    }
+}
+
+bool ExplorerHost::show_background_context_menu(HWND owner,
+                                                 LPARAM lparam) noexcept {
+    if (owner == nullptr || current_view_ == nullptr ||
+        context_menu_active_ || destroying_) {
+        return false;
+    }
+
+    ShellCallScope shell_call(*this);
+    Microsoft::WRL::ComPtr<IFolderView2> folder_view;
+    if (FAILED(current_view_->QueryInterface(IID_PPV_ARGS(&folder_view)))) {
+        return false;
+    }
+    int selected = 0;
+    if (FAILED(folder_view->ItemCount(SVGIO_SELECTION, &selected)) ||
+        selected != 0) {
+        return false;
+    }
+
+    POINT point{};
+    if (lparam == -1) {
+        if (!GetCursorPos(&point)) return false;
+    } else {
+        point.x = GET_X_LPARAM(lparam);
+        point.y = GET_Y_LPARAM(lparam);
+    }
+
+    Microsoft::WRL::ComPtr<IContextMenu> menu;
+    HRESULT hr = current_view_->GetItemObject(
+        SVGIO_BACKGROUND, IID_PPV_ARGS(&menu));
+    if (FAILED(hr)) {
+        log_hresult(L"IShellView::GetItemObject(SVGIO_BACKGROUND)", hr);
+        return false;
+    }
+    // Background verbs such as Directory\Background\shell commands need
+    // the hosting view as their site; it also keeps extension callbacks on
+    // the same Shell view used to create the menu.
+    (void)IUnknown_SetSite(menu.Get(), current_view_.Get());
+
+    HMENU popup = CreatePopupMenu();
+    if (popup == nullptr) return false;
+    hr = menu->QueryContextMenu(popup, 0, 1, 0x7fff, CMF_NORMAL);
+    if (FAILED(hr)) {
+        log_hresult(L"IContextMenu::QueryContextMenu", hr);
+        DestroyMenu(popup);
+        return false;
+    }
+
+    context_menu_ = std::move(menu);
+    (void)context_menu_.As(&context_menu2_);
+    (void)context_menu_.As(&context_menu3_);
+    context_menu_active_ = true;
+    SetForegroundWindow(owner);
+    const int command = TrackPopupMenuEx(
+        popup, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, owner,
+        nullptr);
+    context_menu_active_ = false;
+
+    if (command != 0) {
+        std::string ansi_directory;
+        if (!location_.empty()) {
+            const int length = WideCharToMultiByte(
+                CP_ACP, WC_NO_BEST_FIT_CHARS, location_.c_str(), -1,
+                nullptr, 0, nullptr, nullptr);
+            if (length > 0) {
+                try {
+                    ansi_directory.resize(static_cast<std::size_t>(length));
+                    if (WideCharToMultiByte(
+                            CP_ACP, WC_NO_BEST_FIT_CHARS, location_.c_str(),
+                            -1, ansi_directory.data(), length, nullptr,
+                            nullptr) == 0) {
+                        ansi_directory.clear();
+                    }
+                } catch (const std::bad_alloc&) {
+                    ansi_directory.clear();
+                }
+            }
+        }
+        CMINVOKECOMMANDINFOEX invoke{};
+        invoke.cbSize = sizeof(invoke);
+        invoke.fMask = CMIC_MASK_UNICODE;
+        invoke.hwnd = owner;
+        invoke.lpVerb = MAKEINTRESOURCEA(command - 1);
+        invoke.lpVerbW = MAKEINTRESOURCEW(command - 1);
+        invoke.lpDirectory = ansi_directory.empty() ? nullptr
+                                                     : ansi_directory.c_str();
+        invoke.lpDirectoryW = location_.empty() ? nullptr : location_.c_str();
+        invoke.nShow = SW_SHOWNORMAL;
+        hr = context_menu_->InvokeCommand(
+            reinterpret_cast<LPCMINVOKECOMMANDINFO>(&invoke));
+        log_hresult(L"IContextMenu::InvokeCommand", hr);
+    }
+    DestroyMenu(popup);
+    PostMessageW(owner, WM_NULL, 0, 0);
+    context_menu3_.Reset();
+    context_menu2_.Reset();
+    context_menu_.Reset();
+    return true;
+}
+
+LRESULT ExplorerHost::handle_context_menu_message(HWND window,
+                                                   UINT message,
+                                                   WPARAM wparam,
+                                                   LPARAM lparam) noexcept {
+    if (context_menu_active_ && context_menu3_ != nullptr &&
+        (message == WM_INITMENUPOPUP || message == WM_DRAWITEM ||
+         message == WM_MEASUREITEM || message == WM_MENUCHAR)) {
+        LRESULT result = 0;
+        if (SUCCEEDED(context_menu3_->HandleMenuMsg2(
+                message, wparam, lparam, &result))) {
+            return result;
+        }
+    }
+    if (context_menu_active_ && context_menu2_ != nullptr &&
+        (message == WM_INITMENUPOPUP || message == WM_DRAWITEM ||
+         message == WM_MEASUREITEM)) {
+        if (SUCCEEDED(context_menu2_->HandleMenuMsg(message, wparam,
+                                                    lparam))) {
+            return 0;
+        }
+    }
+    if (message == WM_CONTEXTMENU &&
+        show_background_context_menu(window, lparam)) {
+        return 0;
+    }
+    return DefSubclassProc(window, message, wparam, lparam);
+}
+
+LRESULT CALLBACK ExplorerHost::context_menu_subclass_proc(
+    HWND window, UINT message, WPARAM wparam, LPARAM lparam,
+    UINT_PTR subclass_id, DWORD_PTR ref_data) noexcept {
+    auto* host = reinterpret_cast<ExplorerHost*>(ref_data);
+    if (host == nullptr || subclass_id != kContextMenuSubclassId) {
+        return DefSubclassProc(window, message, wparam, lparam);
+    }
+    return host->handle_context_menu_message(window, message, wparam, lparam);
 }
 
 bool ExplorerHost::register_error_window_class() noexcept {
@@ -718,12 +894,14 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
                      RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     }
 
+    remove_context_menu_subclass();
     item_counts_cache_.reset();
     current_view_.Reset();
     previous_view_callback_.Reset();
     view_callback_.Reset();
     if (browser_ != nullptr &&
         SUCCEEDED(browser_->GetCurrentView(IID_PPV_ARGS(&current_view_)))) {
+        install_context_menu_subclass();
         Microsoft::WRL::ComPtr<IShellFolderView> folder_view;
         if (SUCCEEDED(current_view_->QueryInterface(
                 kIidShellFolderView,
@@ -832,6 +1010,12 @@ void ExplorerHost::destroy() noexcept {
 
     destroying_ = true;
     initialized_ = false;
+
+    remove_context_menu_subclass();
+    context_menu_active_ = false;
+    context_menu3_.Reset();
+    context_menu2_.Reset();
+    context_menu_.Reset();
 
     if (site_ != nullptr) {
         static_cast<Site*>(site_.Get())->detach();
