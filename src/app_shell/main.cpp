@@ -1690,8 +1690,7 @@ void apply_pane_view_mode(AppState& state, std::size_t pane_index) {
     } else if (tab.view_mode.empty()) {
         {
             ShellCallScope shell_call(state);
-            (void)state.explorers[pane_index].set_view_mode(FVM_ICON,
-                                                            kLargeIconSize);
+            (void)state.explorers[pane_index].set_view_mode(FVM_DETAILS);
         }
     }
     if (state.shutdown_deferred || state.closing_) return;

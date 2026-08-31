@@ -189,6 +189,7 @@
 | PD-149 | 版型按鈕失焦後殘留虛線 focus border | 7 | `in_progress` | PD-056, PD-115 | [PD-149](tickets/PD-149-layout-button-focus-border-ghost.md) |
 | PD-150 | Group row 按 F2 開始 inline rename | 7 | `in_progress` | PD-017, PD-021, PD-023 | [PD-150](tickets/PD-150-group-row-f2-rename.md) |
 | PD-151 | pane 為穩定 identity，切換版型不搬移 tab（覆寫 design-spec FR-003 併入語意） | 7 | `done` | PD-004, PD-005, PD-006, PD-009, PD-087 | [PD-151](tickets/PD-151-stable-pane-identity-across-layout-switch.md) |
+| PD-153 | 新 tab 預設使用詳細資料檢視 | 7 | `done` | PD-052, PD-079, PD-082 | [PD-153](tickets/PD-153-default-view-mode-details.md) |
 
 ## Dependency lanes
 
