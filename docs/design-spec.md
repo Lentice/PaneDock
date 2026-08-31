@@ -9,7 +9,7 @@
 | 文件狀態 | Phase 0 可行性基準 |
 | 目標平台 | Windows 10 22H2／Windows 11，x64 |
 | 技術基準 | C++20、原生 Win32、Shell COM（WRL ComPtr） |
-| 最後更新 | 2026-08-20 |
+| 最後更新 | 2026-08-31 |
 
 ## 1 文件目的
 
@@ -125,6 +125,8 @@ pane 內部的一切互動由 Shell view 處理:多選手勢、右鍵選單、�
 ### FR-001 Group 生命週期
 
 使用者可新增、重新命名、複製、刪除、重新排序 Group。刪除需二次確認。複製會複製完整狀態但產生新的 identity。
+
+以拖曳重新排序時採 **remove source，再 insert at target index** 的語意。拖曳中的 placeholder 必須顯示被拖曳 Group 的淡化內容；來源 Group 不再留在原列，插入位置起的其他 Group 依最終順序位移，不得以 placeholder 覆蓋或隱藏原本位於目標位置的 Group。此預覽順序必須與放開後的實際順序一致，包含單一 Group、原位放開、第一個移到最後一個、最後一個移到第一個，以及任何中間位置的雙向拖曳。
 
 ### FR-002 Group 切換與還原
 

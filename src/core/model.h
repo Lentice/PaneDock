@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -101,6 +102,9 @@ bool duplicate_group(ApplicationState& application,
 bool delete_group(ApplicationState& application, const std::string& group_id);
 bool reorder_group(ApplicationState& application, const std::string& group_id,
                    std::size_t new_index);
+std::optional<std::size_t> reorder_source_index(
+    std::size_t item_count, std::size_t source_index,
+    std::size_t target_index, std::size_t destination_index) noexcept;
 
 bool switch_layout(GroupState& group, LayoutTemplate layout_template,
                    const ShellLocation& default_location,

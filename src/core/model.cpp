@@ -206,6 +206,21 @@ bool reorder_group(ApplicationState& application, const std::string& group_id,
     return true;
 }
 
+std::optional<std::size_t> reorder_source_index(
+    std::size_t item_count, std::size_t source_index,
+    std::size_t target_index, std::size_t destination_index) noexcept {
+    if (source_index >= item_count || target_index >= item_count ||
+        destination_index >= item_count) {
+        return std::nullopt;
+    }
+    if (destination_index == target_index) return source_index;
+    const std::size_t remaining_index =
+        destination_index < target_index ? destination_index
+                                         : destination_index - 1;
+    return remaining_index < source_index ? remaining_index
+                                          : remaining_index + 1;
+}
+
 bool switch_layout(GroupState& group, LayoutTemplate layout_template,
                    const ShellLocation& default_location,
                    const std::vector<std::string>& new_pane_ids,

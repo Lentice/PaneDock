@@ -160,6 +160,48 @@ void test_group_mutations() {
     EXPECT(is_valid(application));
 }
 
+void test_reorder_projection() {
+    const auto expect_projection = [](std::size_t source, std::size_t target,
+                                      std::initializer_list<std::size_t> expected) {
+        std::size_t destination = 0;
+        for (const std::size_t source_index : expected) {
+            EXPECT(reorder_source_index(expected.size(), source, target,
+                                        destination++) == source_index);
+        }
+    };
+
+    expect_projection(0, 3, {1, 2, 3, 0});
+    expect_projection(3, 0, {3, 0, 1, 2});
+    expect_projection(1, 3, {0, 2, 3, 1});
+    expect_projection(2, 0, {2, 0, 1, 3});
+    expect_projection(1, 1, {0, 1, 2, 3});
+    expect_projection(0, 0, {0});
+
+    for (std::size_t count = 1; count <= 6; ++count) {
+        for (std::size_t source = 0; source < count; ++source) {
+            for (std::size_t target = 0; target < count; ++target) {
+                std::vector<std::size_t> expected;
+                for (std::size_t index = 0; index < count; ++index) {
+                    if (index != source) expected.push_back(index);
+                }
+                expected.insert(expected.begin() +
+                                    static_cast<std::ptrdiff_t>(target),
+                                source);
+                for (std::size_t destination = 0; destination < count;
+                     ++destination) {
+                    EXPECT(reorder_source_index(count, source, target,
+                                                destination) ==
+                           expected[destination]);
+                }
+            }
+        }
+    }
+
+    EXPECT(!reorder_source_index(4, 4, 0, 0).has_value());
+    EXPECT(!reorder_source_index(4, 0, 4, 0).has_value());
+    EXPECT(!reorder_source_index(4, 0, 0, 4).has_value());
+}
+
 void test_tab_and_pane_mutations() {
     GroupState value = group();
     PaneState& first = value.panes.front();
@@ -292,6 +334,7 @@ int main() {
     test_invariants_reject_deliberate_breakage();
     test_tab_navigation_history();
     test_group_mutations();
+    test_reorder_projection();
     test_tab_and_pane_mutations();
     test_reorder_tab();
     test_move_tab();

@@ -41,9 +41,8 @@ public:
     void set_selected_index(std::size_t index) noexcept;
     void set_hover_index(std::optional<std::size_t> index) noexcept;
     bool measure_item(MEASUREITEMSTRUCT* item, UINT dpi) const noexcept;
-    bool draw_item(const DRAWITEMSTRUCT* item,
-                   std::optional<std::size_t> placeholder_source,
-                   bool dragged) const noexcept;
+    bool draw_item(const DRAWITEMSTRUCT* item, std::size_t group_index,
+                   bool placeholder) const noexcept;
 
     bool begin_rename();
     std::optional<std::wstring> take_rename_text() noexcept;

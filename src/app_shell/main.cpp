@@ -5175,20 +5175,25 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 }
                 const auto* list_item =
                     reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
-                std::optional<std::size_t> placeholder_source;
+                std::size_t group_index =
+                    list_item != nullptr ? list_item->itemID : 0;
+                bool placeholder = false;
                 if (list_item != nullptr && state->group_drag.has_value() &&
                     state->group_drag->dragging &&
-                    state->group_drag->target_index.has_value() &&
-                    *state->group_drag->target_index == list_item->itemID) {
-                    placeholder_source = state->group_drag->source_index;
+                    state->group_drag->target_index.has_value()) {
+                    const auto projected =
+                        panedock::core::reorder_source_index(
+                            state->application.groups.size(),
+                            state->group_drag->source_index,
+                            *state->group_drag->target_index,
+                            list_item->itemID);
+                    if (projected.has_value()) group_index = *projected;
+                    placeholder = *state->group_drag->target_index ==
+                                  list_item->itemID;
                 }
-                const bool dragged =
-                    list_item != nullptr && state->group_drag.has_value() &&
-                    state->group_drag->dragging &&
-                    state->group_drag->source_index == list_item->itemID;
                 if (state->sidebar.draw_item(
                         reinterpret_cast<DRAWITEMSTRUCT*>(lparam),
-                        placeholder_source, dragged)) {
+                        group_index, placeholder)) {
                     return TRUE;
                 }
             }

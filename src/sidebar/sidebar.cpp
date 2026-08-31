@@ -127,25 +127,20 @@ bool Sidebar::measure_item(MEASUREITEMSTRUCT* item, UINT dpi) const noexcept {
 }
 
 bool Sidebar::draw_item(
-    const DRAWITEMSTRUCT* item,
-    std::optional<std::size_t> placeholder_source,
-    bool dragged) const noexcept {
+    const DRAWITEMSTRUCT* item, std::size_t group_index,
+    bool placeholder) const noexcept {
     if (item == nullptr || item->CtlType != ODT_LISTBOX ||
         item->CtlID != static_cast<UINT>(control_id_)) return false;
     if (item->itemID == static_cast<UINT>(-1) ||
-        item->itemID >= groups_.size()) return true;
-    const bool placeholder = placeholder_source.has_value();
-    if (placeholder && *placeholder_source >= groups_.size()) return true;
+        group_index >= groups_.size()) return true;
 
-    const bool selected = (item->itemState & ODS_SELECTED) != 0;
+    const bool selected = selected_index() == group_index;
     const bool hovered = hover_index_ == item->itemID;
     HBRUSH background = CreateSolidBrush(kSidebarBackground);
     if (background != nullptr) {
         FillRect(item->hDC, &item->rcItem, background);
         DeleteObject(background);
     }
-    if (dragged && !placeholder) return true;
-
     RECT pill = item->rcItem;
     pill.left += MulDiv(4, static_cast<int>(dpi_), 96);
     pill.right -= MulDiv(4, static_cast<int>(dpi_), 96);
@@ -180,8 +175,6 @@ bool Sidebar::draw_item(
         }
     }
 
-    const std::size_t group_index =
-        placeholder ? *placeholder_source : item->itemID;
     const auto& group = groups_[group_index];
 
     RECT text_area = pill;
