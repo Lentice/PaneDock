@@ -4194,6 +4194,19 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
             }
             return 0;
         }
+        if (message == WM_LBUTTONDBLCLK && has_active_group(*state) &&
+            pane_index < active_group(*state).panes.size()) {
+            const POINT point = point_from_lparam(lparam);
+            const RECT add =
+                to_win32_rect(state->tab_strip_geometry[pane_index].add_rect);
+            if (!tab_scroll_button_at_point(*state, pane_index, point) &&
+                !tab_item_at_point(*state, window, point) &&
+                !PtInRect(&add, point)) {
+                SendMessageW(GetParent(window), kTabStripSelectionMessage,
+                             static_cast<WPARAM>(pane_index), -1);
+                return 0;
+            }
+        }
         if (message == WM_MOUSEMOVE) {
             const POINT point = point_from_lparam(lparam);
             TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};

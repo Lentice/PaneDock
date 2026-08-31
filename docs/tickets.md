@@ -189,7 +189,9 @@
 | PD-149 | 版型按鈕失焦後殘留虛線 focus border | 7 | `in_progress` | PD-056, PD-115 | [PD-149](tickets/PD-149-layout-button-focus-border-ghost.md) |
 | PD-150 | Group row 按 F2 開始 inline rename | 7 | `in_progress` | PD-017, PD-021, PD-023 | [PD-150](tickets/PD-150-group-row-f2-rename.md) |
 | PD-151 | pane 為穩定 identity，切換版型不搬移 tab（覆寫 design-spec FR-003 併入語意） | 7 | `done` | PD-004, PD-005, PD-006, PD-009, PD-087 | [PD-151](tickets/PD-151-stable-pane-identity-across-layout-switch.md) |
+| PD-152 | Group row inline rename editor 偶發只剩 caret、背景與文字不可見 | 7 | `in_progress` | PD-017, PD-041, PD-150 | [PD-152](tickets/PD-152-group-row-rename-editor-occasionally-invisible.md) |
 | PD-153 | 新 tab 預設使用詳細資料檢視 | 7 | `done` | PD-052, PD-079, PD-082 | [PD-153](tickets/PD-153-default-view-mode-details.md) |
+| PD-154 | 雙擊 pane tab 條空白區新增 tab | 7 | `in_progress` | PD-019, PD-049, PD-055 | [PD-154](tickets/PD-154-double-click-empty-tab-strip-adds-tab.md) |
 
 ## Dependency lanes
 
@@ -269,6 +271,9 @@ Phase 7 — Shell operation shutdown validation,對照使用者 2026-08-30 需�
 
 Phase 7 — Layout button focus rendering
   PD-056 + PD-115 ─── PD-149(版型按鈕失焦後殘留虛線 focus border)
+
+Phase 7 — Group row inline rename rendering
+  PD-017 + PD-041 + PD-150 ─── PD-152(EDIT 偶發被 LISTBOX repaint 蓋掉)
 
 PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `IShellFolder` fallback in `docs/design-spec.md` §9.1, and the tickets below it must be rewritten rather than adjusted.
 
@@ -633,3 +638,11 @@ Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `
 ### 2026-08-30 — 複製進行中關閉 PaneDock 先驗證再決策,開 PD-123
 
 使用者詢問檔案複製進行中關閉 PaneDock 是否安全，並要求考慮 pane↔pane、PaneDock↔Windows File Explorer 等方向組合。靜態追查只能確認 `WM_CLOSE` 目前會同步 force-save、`destroy_explorers`、`DestroyWindow`，而 Shell view 內部檔案操作由原生 `IFileOperation`／`IDataObject` 處理；它不能證明 operation 的實際 process ownership、關閉時會繼續或取消，也不能證明 clipboard 在 source process 離開後是否仍可貼上。兩次 UIA 嘗試雖能讀到完整控制樹，但 automation provider 均回報 `failed to activate captured window`，所以沒有取得 runtime 證據。使用者要求先建 ticket，且必須先確認才開始實作；接著釐清驗證與修正要包含在同一票。開 [PD-123](tickets/PD-123-close-during-shell-copy-validation.md)，流程固定為 Phase A 真實桌面驗證 → 提交具體 proposal 並停下等待使用者 checkpoint → 核准後在同票 Phase B 做最小修正與完整回歸。狀態因目前沒有可互動桌面而列 `blocked`；Approved remediation plan 出現前禁止修改產品，也不另開修正票。
+
+### 2026-08-31 — 使用者回報 Group row rename editor 偶發只剩 caret，開 PD-152
+
+使用者實機回報：從 Group row 右鍵選 `Rename Group` 時，偶爾 inline EDIT 的背景與文字不顯示，但 caret 仍閃爍。靜態追查確認 `Sidebar::begin_rename()` 把 EDIT 與 owner-draw LISTBOX 建成重疊的主視窗 siblings，兩者皆未使用 sibling clipping；右鍵路徑又在 menu 前以 `LB_RESETCONTENT`／重新選取排入 listbox repaint。依 Win32 clipping 契約，這足以解釋 listbox repaint 蓋掉 EDIT pixels、focus/caret 仍存活的精確症狀，但目前沒有可互動桌面，尚未取得 runtime capture，故不能把推測冒充已確認根因。開 [PD-152](tickets/PD-152-group-row-rename-editor-occasionally-invisible.md)，要求先以 50 次自然／強制 repaint loop 建立紅燈，再採最小修法：EDIT 改為 LISTBOX child、直接沿用 `LB_GETITEMRECT` 座標、LISTBOX 加 `WS_CLIPCHILDREN`；不以 z-order、額外 invalidate、timer 或 polling 掩蓋 race。
+
+### 2026-08-31 — 使用者要求雙擊 pane tab 條空白區新增 tab，開 PD-154
+
+使用者原文：「for pane tab bar, double clicks on empty space of tab bar will crate a new tab」。盤點確認 pane tab 條已由 PD-049 改為自繪 `STATIC` 子視窗，PD-055 已以 `SS_NOTIFY` 恢復滑鼠訊息，而 `tab_strip_proc` 已集中處理 tab、`+` 與 overflow 捲動按鈕的命中；新增行為也已集中在 `add_tab_to_pane`。因此 [PD-154](tickets/PD-154-double-click-empty-tab-strip-adds-tab.md) 只新增空白區的 `WM_LBUTTONDBLCLK` 路由並複用既有新增流程，不建立新 helper、core 邏輯、timer 或自訂雙擊判定。空白區明確排除 tab、`+` 與左右捲動按鈕，避免雙擊既有控制目標時意外新增 tab。

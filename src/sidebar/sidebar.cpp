@@ -58,8 +58,9 @@ bool Sidebar::create(HWND parent, int control_id,
     control_id_ = control_id;
     list_box_ = CreateWindowExW(
         0, L"LISTBOX", nullptr,
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_HASSTRINGS |
-            LBS_NOINTEGRALHEIGHT | LBS_NOTIFY | LBS_OWNERDRAWFIXED,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WS_CLIPCHILDREN |
+            LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT | LBS_NOTIFY |
+            LBS_OWNERDRAWFIXED,
         0, 0, 0, 0, parent, reinterpret_cast<HMENU>(control_id),
         GetModuleHandleW(nullptr), nullptr);
     if (list_box_ != nullptr) {
@@ -239,11 +240,10 @@ bool Sidebar::begin_rename() {
     RECT rect{};
     if (SendMessageW(list_box_, LB_GETITEMRECT, *selected,
                      reinterpret_cast<LPARAM>(&rect)) == LB_ERR) return false;
-    MapWindowPoints(list_box_, parent_, reinterpret_cast<POINT*>(&rect), 2);
     editor_ = CreateWindowExW(
         WS_EX_CLIENTEDGE, L"EDIT", groups_[*selected].name.c_str(),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, rect.left,
-        rect.top, rect.right - rect.left, rect.bottom - rect.top, parent_,
+        rect.top, rect.right - rect.left, rect.bottom - rect.top, list_box_,
         nullptr, GetModuleHandleW(nullptr), nullptr);
     if (editor_ == nullptr) return false;
     SendMessageW(editor_, WM_SETFONT, SendMessageW(list_box_, WM_GETFONT, 0, 0),

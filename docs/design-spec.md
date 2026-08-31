@@ -102,7 +102,7 @@ pane 之間的分隔線可拖曳,比例記錄於該 Group。
 
 ### 4.6 tab
 
-每個 pane 有一個以上的 tab,可新增、關閉、切換。tab 條在 pane 上緣。
+每個 pane 有一個以上的 tab,可新增、關閉、切換。tab 條在 pane 上緣；在 tab 條未被 tab、`+` 或捲動按鈕占用的空白區雙擊會新增 tab。
 
 ### 4.7 導覽
 
@@ -148,7 +148,7 @@ pane 分隔線可拖曳,比例以 0.0–1.0 的相對值儲存於該 Group,視�
 
 ### FR-005 tab 管理
 
-每個 pane 至少一個 tab。可新增、關閉、切換 tab。關閉 pane 的最後一個 tab 時,該 tab 導覽至預設 location 而非留下空 pane。
+每個 pane 至少一個 tab。可新增、關閉、切換 tab；在 tab 條未被 tab、`+` 或捲動按鈕占用的空白區雙擊會新增 tab。關閉 pane 的最後一個 tab 時,該 tab 導覽至預設 location 而非留下空 pane。
 
 ### FR-006 原生 Shell 檔案檢視
 
