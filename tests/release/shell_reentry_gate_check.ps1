@@ -36,6 +36,29 @@ Assert-Source 'finish_shell_call\(state_\)' `
     'RAII ShellCallScope uses the shared leave logic'
 Assert-Source 'finish_shell_call\(state\)' `
     'ExplorerHost callback leave uses the shared leave logic'
+Assert-Source 'bool\s+navigate_realized_panes\(\s*AppState& state,\s*const panedock::core::GroupState& group\)\s*noexcept' `
+    'Group transitions share realized-pane navigation'
+
+$navigationHelperStart = $source.IndexOf('bool navigate_realized_panes(')
+$navigationHelperEnd = $source.IndexOf(
+    'RECT to_win32_rect(const panedock::core::PaneRect& rect)', $navigationHelperStart)
+if ($navigationHelperStart -lt 0 -or $navigationHelperEnd -lt 0) {
+    throw 'Shell re-entry invariant failed: realized-pane navigation helper body missing'
+}
+$navigationHelperBody = $source.Substring(
+    $navigationHelperStart, $navigationHelperEnd - $navigationHelperStart)
+if ($navigationHelperBody -notmatch 'state\.suppress_location_capture\s*=\s*true' -or
+    $navigationHelperBody -notmatch 'ShellCallScope shell_call\(state\)' -or
+    $navigationHelperBody -notmatch 'state\.explorers\[pane\]\.navigate') {
+    throw 'Shell re-entry invariant failed: realized-pane navigation helper is incomplete'
+}
+$navigationCallSiteSource = $source.Remove(
+    $navigationHelperStart, $navigationHelperEnd - $navigationHelperStart)
+if ([regex]::Matches(
+        $navigationCallSiteSource,
+        'navigate_realized_panes\(\s*state,\s*group\s*\)').Count -ne 2) {
+    throw 'Shell re-entry invariant failed: both Group transitions must use the shared helper'
+}
 
 function Assert-ExplorerHostSource([string] $Pattern, [string] $Name) {
     if ($explorerHostSource -notmatch $Pattern) {

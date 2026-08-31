@@ -1,4 +1,10 @@
 #include "app_shell/tab_overflow.h"
+#include "unit/test_util.h"
+
+#include <array>
+#include <optional>
+#include <span>
+#include <vector>
 
 int main() {
     constexpr auto fits =
@@ -91,5 +97,66 @@ int main() {
             50);
     static_assert(overlapped[0].right == 27 && overlapped[1].left == 27);
     static_assert(overlapped[0].right <= overlapped[1].left);
+
+    const std::vector<int> preferred_widths{100, 120};
+    const auto fits_layout = panedock::app_shell::layout_tab_strip(
+        {std::span<const int>(preferred_widths), 300, 31, 72, 200, 36, 5, 3,
+         20, 18, 20, 6, 1, 0, std::nullopt, std::nullopt});
+    EXPECT(fits_layout.tab_rects.size() == preferred_widths.size());
+    EXPECT(fits_layout.tab_rects[0].left == 0);
+    EXPECT(fits_layout.tab_rects[0].right == 100);
+    EXPECT(fits_layout.tab_rects[1].left == 100);
+    EXPECT(fits_layout.tab_rects[1].right == 220);
+    EXPECT(fits_layout.viewport.width() == 264);
+    EXPECT(fits_layout.max_scroll_offset == 0);
+    EXPECT(panedock::app_shell::tab_strip_hit_test(
+                fits_layout, 110, 10) == std::optional<std::size_t>{1});
+
+    const std::array<int, 5> overflow_widths{100, 100, 100, 100, 100};
+    const auto overflow_layout = panedock::app_shell::layout_tab_strip(
+        {std::span<const int>(overflow_widths), 300, 31, 72, 200, 36, 5, 3,
+         20, 18, 20, 6, 1, 0, std::nullopt, std::nullopt});
+    EXPECT(overflow_layout.viewport.width() == 224);
+    EXPECT(overflow_layout.max_scroll_offset == 136);
+    EXPECT(overflow_layout.scroll_button_rects[0].right >
+           overflow_layout.scroll_button_rects[0].left);
+    EXPECT(panedock::app_shell::tab_scroll_button_hit_test(
+                overflow_layout,
+                overflow_layout.scroll_button_rects[1].left + 1, 10) ==
+           std::optional<std::size_t>{1});
+    EXPECT(panedock::app_shell::tab_scroll_button_hit_test(
+                overflow_layout, 1, 10) == std::nullopt);
+    EXPECT(panedock::app_shell::tab_scroll_step(overflow_layout, true) == 72);
+
+    const std::array<int, 3> drag_widths{100, 110, 120};
+    const auto dragged_layout = panedock::app_shell::layout_tab_strip(
+        {std::span<const int>(drag_widths), 300, 31, 72, 200, 36, 5, 3, 20,
+         18, 20, 6, 1, 0,
+         panedock::app_shell::TabStripDragLayout{
+             0, std::optional<std::size_t>{2}, false, 0},
+         std::nullopt});
+    EXPECT(dragged_layout.placeholder_index ==
+           std::optional<std::size_t>{2});
+    EXPECT(dragged_layout.tab_rects[0].width() == 0);
+    EXPECT(dragged_layout.tab_rects[1].left == 0);
+    EXPECT(dragged_layout.tab_rects[2].left ==
+           dragged_layout.tab_rects[1].right);
+    EXPECT(dragged_layout.placeholder_rect.has_value());
+    EXPECT(panedock::app_shell::tab_strip_hit_test(
+                dragged_layout, dragged_layout.placeholder_rect->left + 1, 10) ==
+           std::optional<std::size_t>{2});
+
+    const auto foreign_layout = panedock::app_shell::layout_tab_strip(
+        {std::span<const int>(preferred_widths), 300, 31, 72, 200, 36, 5, 3,
+         20, 18, 20, 6, 1, 0,
+         panedock::app_shell::TabStripDragLayout{
+             0, std::optional<std::size_t>{1}, true, 100},
+         std::nullopt});
+    EXPECT(foreign_layout.placeholder_index ==
+           std::optional<std::size_t>{1});
+    EXPECT(foreign_layout.placeholder_rect.has_value());
+    EXPECT(panedock::app_shell::tab_strip_hit_test(
+                foreign_layout, foreign_layout.placeholder_rect->left + 1, 10) ==
+           std::optional<std::size_t>{1});
     return 0;
 }

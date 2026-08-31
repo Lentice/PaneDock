@@ -549,18 +549,13 @@ struct AppState {
     HWND empty_message{nullptr};
     struct TabVisual final {
         std::wstring text;
-        RECT rect{};
     };
     std::array<HWND, kExplorerCount> tab_strips{};
     std::array<std::vector<TabVisual>, kExplorerCount> tab_visuals{};
-    std::array<std::optional<RECT>, kExplorerCount> tab_placeholder_rects{};
-    std::array<RECT, kExplorerCount> tab_add_rects{};
-    std::array<RECT, kExplorerCount> tab_viewport_rects{};
-    // PD-073: UI-only scroll state; never persisted with the session.
-    std::array<std::array<RECT, 2>, kExplorerCount>
-        tab_scroll_button_rects{};
-    std::array<int, kExplorerCount> tab_scroll_offsets{};
-    std::array<int, kExplorerCount> tab_scroll_max_offsets{};
+    // PD-073: UI-only tab geometry and scroll state; never persisted with the
+    // session. Paint and hit-test consume the same computed result.
+    std::array<panedock::app_shell::TabStripGeometry, kExplorerCount>
+        tab_strip_geometry{};
     std::optional<std::size_t> tab_context_menu_pane;
     std::string tab_context_menu_tab_id;
     // A tab index is stored here; pane.tabs.size() represents the add button.
@@ -953,8 +948,44 @@ panedock::core::TabState& active_tab(panedock::core::PaneState& pane) {
     return *tab;
 }
 
+const panedock::core::TabState& active_tab(
+    const panedock::core::PaneState& pane) {
+    const auto tab = std::find_if(
+        pane.tabs.begin(), pane.tabs.end(), [&](const auto& candidate) {
+            return candidate.id == pane.active_tab_id;
+        });
+    assert(tab != pane.tabs.end());
+    return *tab;
+}
+
+bool navigate_realized_panes(
+    AppState& state, const panedock::core::GroupState& group) noexcept {
+    const bool previous_suppression = state.suppress_location_capture;
+    state.suppress_location_capture = true;
+    const std::size_t pane_count =
+        std::min(group.panes.size(), state.explorers.size());
+    for (std::size_t pane = 0; pane < pane_count; ++pane) {
+        if (!state.realized[pane]) continue;
+        {
+            ShellCallScope shell_call(state);
+            state.explorers[pane].navigate(
+                active_tab(group.panes[pane]).location.parsing_name);
+        }
+        if (state.shutdown_deferred || state.closing_) {
+            state.suppress_location_capture = previous_suppression;
+            return false;
+        }
+    }
+    state.suppress_location_capture = previous_suppression;
+    return true;
+}
+
 RECT to_win32_rect(const panedock::core::PaneRect& rect) noexcept {
     return {rect.x, rect.y, rect.x + rect.width, rect.y + rect.height};
+}
+
+RECT to_win32_rect(const panedock::app_shell::TabStripRect& rect) noexcept {
+    return {rect.left, rect.top, rect.right, rect.bottom};
 }
 
 RECT client_rect(HWND window) noexcept {
@@ -1721,10 +1752,11 @@ void update_tab_strip_tooltips(AppState& state,
     const HWND strip = state.tab_strips[pane_index];
     if (strip == nullptr) return;
 
+    const auto& geometry = state.tab_strip_geometry[pane_index];
     const std::array<RECT, 3> rects{
-        state.tab_add_rects[pane_index],
-        state.tab_scroll_button_rects[pane_index][0],
-        state.tab_scroll_button_rects[pane_index][1]};
+        to_win32_rect(geometry.add_rect),
+        to_win32_rect(geometry.scroll_button_rects[0]),
+        to_win32_rect(geometry.scroll_button_rects[1])};
     const std::array<UINT_PTR, 3> ids{
         kTabAddTooltipIdBase + static_cast<UINT_PTR>(pane_index),
         kTabScrollTooltipIdBase + static_cast<UINT_PTR>(pane_index * 2),
@@ -1748,18 +1780,6 @@ void update_tab_strip_tooltips(AppState& state,
     state.tab_tooltips_registered[pane_index] = true;
 }
 
-int clamp_tab_scroll_offset(AppState& state, std::size_t pane_index,
-                            int requested, int content_width,
-                            int viewport_width) noexcept {
-    const int maximum = std::max(
-        0, content_width - viewport_width);
-    state.tab_scroll_max_offsets[pane_index] = maximum;
-    state.tab_scroll_offsets[pane_index] =
-        panedock::app_shell::clamp_tab_scroll_offset(
-            requested, content_width, viewport_width);
-    return state.tab_scroll_offsets[pane_index];
-}
-
 void apply_tab_item_size(AppState& state, std::size_t pane_index,
                          bool reveal_active = false) {
     if (pane_index >= state.tab_strips.size()) return;
@@ -1769,14 +1789,11 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
     const int min_width = scaled_value(strip, kTabMinWidth);
     const int max_width = scaled_value(strip, kTabMaxWidth);
     const int add_width = scaled_value(strip, kTabAddButtonWidth);
-    const int available = std::max(0, static_cast<int>(client.right) - add_width);
     auto& visuals = state.tab_visuals[pane_index];
-    auto& placeholder = state.tab_placeholder_rects[pane_index];
-    placeholder.reset();
-    std::vector<int> widths;
-    widths.reserve(visuals.size());
     const int text_reserve = scaled_value(
         strip, 2 * kTabTextHorizontalPadding + kTabCloseButtonSpace);
+    std::vector<int> preferred_widths;
+    preferred_widths.reserve(visuals.size());
     HDC dc = GetDC(strip);
     const HFONT font = state.chrome_font;
     HGDIOBJ previous = dc == nullptr ? nullptr : SelectObject(dc, font);
@@ -1785,105 +1802,50 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
         if (dc != nullptr)
             GetTextExtentPoint32W(dc, visual.text.c_str(),
                                   static_cast<int>(visual.text.size()), &size);
-        widths.push_back(std::clamp(static_cast<int>(size.cx) + text_reserve,
-                                    min_width, max_width));
+        preferred_widths.push_back(
+            static_cast<int>(size.cx) + text_reserve);
     }
     if (dc != nullptr) {
         SelectObject(dc, previous);
         ReleaseDC(strip, dc);
     }
+    std::optional<panedock::app_shell::TabStripDragLayout> drag_layout;
     const bool foreign_placeholder =
         state.tab_drag.has_value() && state.tab_drag->dragging &&
         state.tab_drag->target_pane_index == pane_index &&
         state.tab_drag->pane_index != pane_index &&
         state.tab_drag->target_index.has_value();
-    int placeholder_width = min_width;
-    if (foreign_placeholder &&
-        state.tab_drag->pane_index < state.tab_visuals.size() &&
-        state.tab_drag->source_index <
-            state.tab_visuals[state.tab_drag->pane_index].size()) {
-        const auto& source = state.tab_visuals[state.tab_drag->pane_index]
+    if (foreign_placeholder) {
+        int placeholder_width = min_width;
+        if (state.tab_drag->pane_index < state.tab_visuals.size() &&
+            state.tab_drag->source_index <
+                state.tab_visuals[state.tab_drag->pane_index].size()) {
+            const auto& source = state.tab_visuals[state.tab_drag->pane_index]
                                              [state.tab_drag->source_index];
-        SIZE size{};
-        HDC measure = GetDC(strip);
-        const HGDIOBJ old = measure == nullptr ? nullptr
-                                               : SelectObject(measure, font);
-        if (measure != nullptr) {
-            GetTextExtentPoint32W(measure, source.text.c_str(),
-                                  static_cast<int>(source.text.size()), &size);
-            SelectObject(measure, old);
-            ReleaseDC(strip, measure);
+            SIZE size{};
+            HDC measure = GetDC(strip);
+            const HGDIOBJ old =
+                measure == nullptr ? nullptr : SelectObject(measure, font);
+            if (measure != nullptr) {
+                GetTextExtentPoint32W(measure, source.text.c_str(),
+                                      static_cast<int>(source.text.size()),
+                                      &size);
+                SelectObject(measure, old);
+                ReleaseDC(strip, measure);
+            }
+            placeholder_width = std::clamp(
+                static_cast<int>(size.cx) + text_reserve, min_width, max_width);
         }
-        placeholder_width = std::clamp(
-            static_cast<int>(size.cx) + text_reserve, min_width, max_width);
-    }
-    const int total = std::accumulate(widths.begin(), widths.end(),
-                                      foreign_placeholder ? placeholder_width : 0);
-    if (total > available && total > 0) {
-        for (int& width : widths)
-            width = std::max(min_width, MulDiv(width, available, total));
-        if (foreign_placeholder)
-            placeholder_width = std::max(
-                min_width, MulDiv(placeholder_width, available, total));
-    }
-    const int content_width = std::accumulate(
-        widths.begin(), widths.end(),
-        foreign_placeholder ? placeholder_width : 0);
-    const auto viewport = panedock::app_shell::tab_strip_viewport(
-        content_width, available, scaled_value(strip, kTabScrollButtonWidth));
-    const int add_horizontal_inset =
-        scaled_value(strip, kTabAddButtonHorizontalInset);
-    const int add_vertical_inset =
-        scaled_value(strip, kTabAddButtonVerticalInset);
-    // PD-107: this is the final add-button visual and hit-test rectangle.
-    state.tab_add_rects[pane_index] = {
-        available + add_horizontal_inset, add_vertical_inset,
-        client.right - add_horizontal_inset,
-        client.bottom - add_vertical_inset};
-    state.tab_viewport_rects[pane_index] = {
-        0, 0, viewport.width, client.bottom};
-    state.tab_scroll_button_rects[pane_index] = {};
-    if (viewport.overflow && viewport.scroll_button_width > 0) {
-        const int button_left = viewport.width;
-        const int button_middle = button_left + viewport.scroll_button_width;
-        const int visual_width =
-            scaled_value(strip, kTabScrollButtonVisualWidth);
-        const int visual_height =
-            scaled_value(strip, kTabScrollButtonVisualHeight);
-        const int visual_offset_x =
-            scaled_value(strip, kTabScrollButtonVisualOffsetX);
-        const int visual_offset_y =
-            scaled_value(strip, kTabScrollButtonVisualOffsetY);
-        const auto back_visual = panedock::app_shell::tab_scroll_button_visual(
-            button_left, 0, button_middle, client.bottom, visual_width,
-            visual_height, visual_offset_x, visual_offset_y, false);
-        const auto forward_visual =
-            panedock::app_shell::tab_scroll_button_visual(
-                button_middle, 0, available, client.bottom, visual_width,
-                visual_height, visual_offset_x, visual_offset_y, true);
-        const auto hit_rects = panedock::app_shell::tab_scroll_button_hit_rects(
-            back_visual, forward_visual, available);
-        state.tab_scroll_button_rects[pane_index][0] = {
-            hit_rects[0].left, hit_rects[0].top, hit_rects[0].right,
-            hit_rects[0].bottom};
-        state.tab_scroll_button_rects[pane_index][1] = {
-            hit_rects[1].left, hit_rects[1].top, hit_rects[1].right,
-            hit_rects[1].bottom};
-    }
-    std::vector<std::size_t> order(visuals.size());
-    std::iota(order.begin(), order.end(), 0);
-    if (state.tab_drag.has_value() && state.tab_drag->dragging &&
-        state.tab_drag->pane_index == pane_index &&
-        state.tab_drag->target_index.has_value() &&
-        state.tab_drag->source_index < order.size() &&
-        *state.tab_drag->target_index < order.size()) {
-        const std::size_t source = state.tab_drag->source_index;
-        order.erase(order.begin() + source);
-        order.insert(order.begin() + *state.tab_drag->target_index, source);
-    } else if (foreign_placeholder) {
-        order.insert(order.begin() + static_cast<std::ptrdiff_t>(std::min(
-                         *state.tab_drag->target_index, order.size())),
-                     visuals.size());
+        drag_layout = panedock::app_shell::TabStripDragLayout{
+            state.tab_drag->source_index, state.tab_drag->target_index, true,
+            placeholder_width};
+    } else if (state.tab_drag.has_value() && state.tab_drag->dragging &&
+               state.tab_drag->pane_index == pane_index &&
+               !state.tab_drag->target_pane_index.has_value() &&
+               state.tab_drag->target_index.has_value()) {
+        drag_layout = panedock::app_shell::TabStripDragLayout{
+            state.tab_drag->source_index, state.tab_drag->target_index, false,
+            0};
     }
 
     std::optional<std::size_t> active_index;
@@ -1897,60 +1859,27 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
             }
         }
     }
-    int active_left = 0;
-    int active_right = 0;
-    int content_x = 0;
-    if (active_index.has_value()) {
-        for (const std::size_t index : order) {
-            if (index == visuals.size()) {
-                content_x += placeholder_width;
-                continue;
-            }
-            if (index == *active_index) {
-                active_left = content_x;
-                active_right = content_x + widths[index];
-                break;
-            }
-            content_x += widths[index];
-        }
-    }
-    int requested_offset = state.tab_scroll_offsets[pane_index];
-    if (active_index.has_value()) {
-        if (active_left < requested_offset)
-            requested_offset = active_left;
-        else if (active_right > requested_offset + viewport.width)
-            requested_offset = active_right - viewport.width;
-    }
-    const int scroll_offset = clamp_tab_scroll_offset(
-        state, pane_index, requested_offset, content_width, viewport.width);
-    int x = 0;
-    for (const std::size_t index : order) {
-        const int width = index == visuals.size() ? placeholder_width
-                                                   : widths[index];
-        const RECT rect{x - scroll_offset, 0, x + width - scroll_offset,
-                        client.bottom};
-        if (index == visuals.size()) {
-            placeholder = rect;
-        } else if (state.tab_drag.has_value() && state.tab_drag->dragging &&
-            state.tab_drag->pane_index == pane_index &&
-            !state.tab_drag->target_pane_index.has_value() &&
-            state.tab_drag->target_index.has_value() &&
-            index == state.tab_drag->source_index) {
-            visuals[index].rect = {};
-            placeholder = rect;
-        } else {
-            visuals[index].rect = rect;
-        }
-        x += width;
-    }
-#ifndef NDEBUG
-    for (std::size_t index = 0; index < visuals.size(); ++index) {
-        const RECT& rect = visuals[index].rect;
-        const bool empty = rect.left == 0 && rect.top == 0 &&
-                           rect.right == 0 && rect.bottom == 0;
-        assert(empty || rect.right - rect.left == widths[index]);
-    }
-#endif
+    const std::span<const int> preferred_span(
+        preferred_widths.data(), preferred_widths.size());
+    const panedock::app_shell::TabStripLayoutInput layout_input{
+        preferred_span,
+        static_cast<int>(client.right - client.left),
+        static_cast<int>(client.bottom - client.top),
+        min_width,
+        max_width,
+        add_width,
+        scaled_value(strip, kTabAddButtonHorizontalInset),
+        scaled_value(strip, kTabAddButtonVerticalInset),
+        scaled_value(strip, kTabScrollButtonWidth),
+        scaled_value(strip, kTabScrollButtonVisualWidth),
+        scaled_value(strip, kTabScrollButtonVisualHeight),
+        scaled_value(strip, kTabScrollButtonVisualOffsetX),
+        scaled_value(strip, kTabScrollButtonVisualOffsetY),
+        state.tab_strip_geometry[pane_index].scroll_offset,
+        drag_layout,
+        active_index};
+    state.tab_strip_geometry[pane_index] =
+        panedock::app_shell::layout_tab_strip(layout_input);
     InvalidateRect(strip, nullptr, FALSE);
     update_tab_strip_tooltips(state, pane_index);
 }
@@ -1970,7 +1899,7 @@ void refresh_tab_strip(AppState& state, std::size_t pane_index) {
     const auto& pane = active_group(state).panes[pane_index];
     for (const auto& tab : pane.tabs)
         state.tab_visuals[pane_index].push_back(
-            {tab_display_text(state, tab), {}});
+            {tab_display_text(state, tab)});
     apply_tab_item_size(state, pane_index, true);
     refresh_navigation_chrome(state, pane_index);
 }
@@ -3178,22 +3107,8 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
     capture_locations(state);
     state.application.active_group_id = target_id;
     refresh_tab_strips(state);
-    state.suppress_location_capture = true;
     auto& group = active_group(state);
-    for (std::size_t pane = 0; pane < group.panes.size(); ++pane) {
-        if (state.realized[pane]) {
-            {
-                ShellCallScope shell_call(state);
-                state.explorers[pane].navigate(
-                    active_tab(group.panes[pane]).location.parsing_name);
-            }
-            if (state.shutdown_deferred || state.closing_) {
-                state.suppress_location_capture = false;
-                return;
-            }
-        }
-    }
-    state.suppress_location_capture = false;
+    if (!navigate_realized_panes(state, group)) return;
     if (FAILED(apply_layout(window, state)))
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
     if (state.shutdown_deferred || state.closing_) return;
@@ -3280,20 +3195,8 @@ void delete_group(HWND window, AppState& state) {
     if (!panedock::core::delete_group(state.application, id)) return;
     refresh_tab_strips(state);
     if (deleted_active && has_active_group(state)) {
-        state.suppress_location_capture = true;
         auto& group = active_group(state);
-        for (std::size_t pane = 0; pane < group.panes.size(); ++pane) {
-            if (state.realized[pane]) {
-                {
-                    ShellCallScope shell_call(state);
-                    state.explorers[pane].navigate(
-                        active_tab(group.panes[pane])
-                            .location.parsing_name);
-                }
-                if (state.shutdown_deferred || state.closing_) break;
-            }
-        }
-        state.suppress_location_capture = false;
+        if (!navigate_realized_panes(state, group)) return;
     }
     if (state.shutdown_deferred || state.closing_) return;
     if (FAILED(apply_layout(window, state)))
@@ -3840,7 +3743,7 @@ void close_tab_at_point(HWND window, AppState& state, POINT point) {
 }
 
 RECT tab_viewport_rect(const AppState& state, std::size_t pane_index) noexcept {
-    return state.tab_viewport_rects[pane_index];
+    return to_win32_rect(state.tab_strip_geometry[pane_index].viewport);
 }
 
 std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
@@ -3850,68 +3753,35 @@ std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
         *pane_index >= active_group(state).panes.size()) {
         return std::nullopt;
     }
-    const RECT viewport = tab_viewport_rect(state, *pane_index);
-    if (!PtInRect(&viewport, point)) return std::nullopt;
-    if (state.tab_drag.has_value() &&
-        state.tab_drag->target_pane_index.value_or(
-            state.tab_drag->pane_index) == *pane_index &&
-        state.tab_drag->target_index.has_value() &&
-        state.tab_placeholder_rects[*pane_index].has_value() &&
-        PtInRect(&*state.tab_placeholder_rects[*pane_index], point))
-        return state.tab_drag->target_index;
-    const auto& visuals = state.tab_visuals[*pane_index];
-    for (std::size_t index = 0; index < visuals.size(); ++index)
-        if (PtInRect(&visuals[index].rect, point)) return index;
-    return std::nullopt;
+    return panedock::app_shell::tab_strip_hit_test(
+        state.tab_strip_geometry[*pane_index], point.x, point.y);
 }
 
 std::optional<std::size_t> tab_scroll_button_at_point(
     const AppState& state, std::size_t pane_index, POINT point) noexcept {
-    if (pane_index >= state.tab_scroll_button_rects.size())
+    if (pane_index >= state.tab_strip_geometry.size())
         return std::nullopt;
-    const auto& buttons = state.tab_scroll_button_rects[pane_index];
-    const int offset = state.tab_scroll_offsets[pane_index];
-    const int maximum = state.tab_scroll_max_offsets[pane_index];
-    if (offset > 0 && PtInRect(&buttons[0], point)) return 0;
-    if (offset < maximum && PtInRect(&buttons[1], point)) return 1;
-    return std::nullopt;
+    return panedock::app_shell::tab_scroll_button_hit_test(
+        state.tab_strip_geometry[pane_index], point.x, point.y);
 }
 
 int tab_scroll_step(const AppState& state, std::size_t pane_index,
                     bool forward) noexcept {
-    const RECT viewport = tab_viewport_rect(state, pane_index);
-    const auto& visuals = state.tab_visuals[pane_index];
-    auto width_if_visible = [&viewport](const AppState::TabVisual& visual) {
-        if (visual.rect.right <= visual.rect.left ||
-            visual.rect.right <= viewport.left ||
-            visual.rect.left >= viewport.right) return 0;
-        return static_cast<int>(visual.rect.right - visual.rect.left);
-    };
-    int edge = forward ? std::numeric_limits<int>::max()
-                       : std::numeric_limits<int>::min();
-    int step = 0;
-    for (const auto& visual : visuals) {
-        const int width = width_if_visible(visual);
-        if (width <= 0) continue;
-        const int candidate = forward ? visual.rect.left : visual.rect.right;
-        if ((forward && candidate < edge) || (!forward && candidate > edge)) {
-            edge = candidate;
-            step = width;
-        }
-    }
-    return step;
+    if (pane_index >= state.tab_strip_geometry.size()) return 0;
+    return panedock::app_shell::tab_scroll_step(
+        state.tab_strip_geometry[pane_index], forward);
 }
 
 void scroll_tab_strip(AppState& state, std::size_t pane_index, bool forward) {
-    if (pane_index >= state.tab_scroll_offsets.size() ||
-        state.tab_scroll_max_offsets[pane_index] <= 0) return;
-    const int offset = state.tab_scroll_offsets[pane_index];
-    const int maximum = state.tab_scroll_max_offsets[pane_index];
+    if (pane_index >= state.tab_strip_geometry.size()) return;
+    auto& geometry = state.tab_strip_geometry[pane_index];
+    if (geometry.max_scroll_offset <= 0) return;
+    const int offset = geometry.scroll_offset;
+    const int maximum = geometry.max_scroll_offset;
     if ((!forward && offset <= 0) || (forward && offset >= maximum)) return;
     const int step = tab_scroll_step(state, pane_index, forward);
     if (step <= 0) return;
-    state.tab_scroll_offsets[pane_index] =
-        offset + (forward ? step : -step);
+    geometry.scroll_offset = offset + (forward ? step : -step);
     apply_tab_item_size(state, pane_index);
 }
 
@@ -4024,8 +3894,10 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
                           ? std::nullopt
                           : std::optional<std::size_t>{index};
         target = tab_item_at_point(state, candidate, client_point);
+        const RECT viewport =
+            to_win32_rect(state.tab_strip_geometry[index].viewport);
         if (!target.has_value() && index != state.tab_drag->pane_index &&
-            PtInRect(&state.tab_viewport_rects[index], client_point)) {
+            PtInRect(&viewport, client_point)) {
             target = active_group(state).panes[index].tabs.size();
         }
         break;
@@ -4117,7 +3989,8 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
         if (state.tab_drag.has_value() && state.tab_drag->dragging &&
             state.tab_drag->pane_index == pane_index &&
             index == state.tab_drag->source_index) continue;
-        RECT rect = visuals[index].rect;
+        RECT rect = to_win32_rect(
+            state.tab_strip_geometry[pane_index].tab_rects[index]);
         rect.left = std::min(rect.right, rect.left + left_gap);
         rect.right = std::max(rect.left, rect.right - right_gap);
         rect.top = std::min(rect.bottom, rect.top + vertical_padding);
@@ -4153,8 +4026,9 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
         DrawTextW(dc, visuals[index].text.c_str(), -1, &text_rect,
                   DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
-    if (state.tab_placeholder_rects[pane_index].has_value()) {
-        RECT rect = *state.tab_placeholder_rects[pane_index];
+    const auto& geometry = state.tab_strip_geometry[pane_index];
+    if (geometry.placeholder_rect.has_value()) {
+        RECT rect = to_win32_rect(*geometry.placeholder_rect);
         rect.left = std::min(rect.right, rect.left + left_gap);
         rect.right = std::max(rect.left, rect.right - right_gap);
         rect.top = std::min(rect.bottom, rect.top + vertical_padding);
@@ -4199,19 +4073,18 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
         }
     }
     if (saved_dc != 0) RestoreDC(dc, saved_dc);
-    const auto& scroll_buttons = state.tab_scroll_button_rects[pane_index];
+    const auto& scroll_buttons = geometry.scroll_button_rects;
     if (scroll_buttons[0].right > scroll_buttons[0].left) {
         draw_tab_scroll_button(
-            window, dc, scroll_buttons[0], false,
-            state.tab_scroll_offsets[pane_index] <= 0,
+            window, dc, to_win32_rect(scroll_buttons[0]), false,
+            geometry.scroll_offset <= 0,
             state.tab_scroll_hover_indices[pane_index] == 0);
         draw_tab_scroll_button(
-            window, dc, scroll_buttons[1], true,
-            state.tab_scroll_offsets[pane_index] >=
-                state.tab_scroll_max_offsets[pane_index],
+            window, dc, to_win32_rect(scroll_buttons[1]), true,
+            geometry.scroll_offset >= geometry.max_scroll_offset,
             state.tab_scroll_hover_indices[pane_index] == 1);
     }
-    const RECT add = state.tab_add_rects[pane_index];
+    const RECT add = to_win32_rect(geometry.add_rect);
     if (state.tab_hover_indices[pane_index].has_value() &&
         *state.tab_hover_indices[pane_index] == pane.tabs.size() &&
         add.right > add.left && add.bottom > add.top) {
@@ -4301,6 +4174,8 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                 return 0;
             }
             const auto item = tab_item_at_point(*state, window, point);
+            const RECT add =
+                to_win32_rect(state->tab_strip_geometry[pane_index].add_rect);
             if (item.has_value()) {
                 const auto& tabs = active_group(*state).panes[pane_index].tabs;
                 if (*item >= tabs.size()) return 0;
@@ -4313,7 +4188,7 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                 SendMessageW(GetParent(window), kTabStripSelectionMessage,
                              static_cast<WPARAM>(pane_index),
                              static_cast<LPARAM>(*item));
-            } else if (PtInRect(&state->tab_add_rects[pane_index], point)) {
+            } else if (PtInRect(&add, point)) {
                 SendMessageW(GetParent(window), kTabStripSelectionMessage,
                              static_cast<WPARAM>(pane_index), -1);
             }
@@ -4325,9 +4200,11 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
             TrackMouseEvent(&tracking);
             std::optional<std::size_t> hover =
                 tab_item_at_point(*state, window, point);
+            const RECT add =
+                to_win32_rect(state->tab_strip_geometry[pane_index].add_rect);
             if (!hover.has_value() && has_active_group(*state) &&
                 pane_index < active_group(*state).panes.size() &&
-                PtInRect(&state->tab_add_rects[pane_index], point)) {
+                PtInRect(&add, point)) {
                 hover = active_group(*state).panes[pane_index].tabs.size();
             }
             const bool tab_hover_changed =
