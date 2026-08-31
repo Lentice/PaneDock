@@ -27,6 +27,19 @@ auto find_id(Range& values, const std::string& id) {
     });
 }
 
+// The merge path of switch_layout concatenates orphaned panes' tabs into a
+// survivor pane. Tab ids are only required to be unique within a pane, so a
+// group may legally carry the same tab id in different panes; merging then
+// yields a duplicate id inside the survivor pane and flakes is_valid. Assign a
+// fresh group-wide id to any colliding tab as it is appended.
+std::string fresh_unique_tab_id(std::unordered_set<std::string>& used) {
+    std::size_t index = 0;
+    for (;;) {
+        const std::string candidate = "tab-" + std::to_string(index++);
+        if (used.insert(candidate).second) return candidate;
+    }
+}
+
 }  // namespace
 
 std::size_t pane_count(LayoutTemplate layout_template) noexcept {
@@ -238,12 +251,21 @@ bool switch_layout(GroupState& group, LayoutTemplate layout_template,
     GroupState candidate = group;
 
     if (new_count < old_count) {
+        std::unordered_set<std::string> used_ids;
+        for (const auto& pane : candidate.panes)
+            for (const auto& tab : pane.tabs) used_ids.insert(tab.id);
         for (std::size_t index = new_count; index < old_count; ++index) {
             auto& destination =
                 candidate.panes[(index - new_count) % new_count].tabs;
-            destination.insert(destination.end(),
-                std::make_move_iterator(candidate.panes[index].tabs.begin()),
-                std::make_move_iterator(candidate.panes[index].tabs.end()));
+            for (auto& tab : candidate.panes[index].tabs) {
+                if (std::any_of(destination.begin(), destination.end(),
+                                [&](const TabState& existing) {
+                                    return existing.id == tab.id;
+                                })) {
+                    tab.id = fresh_unique_tab_id(used_ids);
+                }
+                destination.push_back(std::move(tab));
+            }
         }
         candidate.panes.resize(new_count);
     } else {

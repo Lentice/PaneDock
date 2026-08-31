@@ -298,6 +298,36 @@ void test_layout_migration_both_directions() {
     EXPECT(is_valid(value));
 }
 
+void test_layout_migration_dedups_cross_pane_tab_ids() {
+    // A group is legal with the same tab id in different panes (ids are only
+    // required unique within a pane). Merging such a group to fewer panes must
+    // re-id colliding tabs or the survivor pane becomes invalid and the switch
+    // silently fails. Mirrors the "CPU MPT" session shape.
+    GroupState value{"group-4", L"CPU MPT", LayoutTemplate::three_pane,
+                     {0.5, 0.5}, {}, "pane-0"};
+    value.panes.push_back(pane("pane-0", {tab("tab-2"), tab("tab-0"),
+                                          tab("tab-1"), tab("tab-3"),
+                                          tab("tab-4")}));
+    value.panes.push_back(pane("pane-1", {tab("tab-1")}));
+    value.panes.push_back(pane("pane-2", {tab("tab-2")}));
+    EXPECT(is_valid(value));
+
+    EXPECT(switch_layout(value, LayoutTemplate::single, kDefault));
+    EXPECT(value.panes.size() == 1);
+    EXPECT(value.panes.front().tabs.size() == 7);
+    EXPECT(is_valid(value));
+
+    EXPECT(switch_layout(value, LayoutTemplate::three_pane, kDefault,
+                         {"pane-2", "pane-3"}, {"new-tab-2", "new-tab-3"}));
+    EXPECT(switch_layout(value, LayoutTemplate::left_right, kDefault));
+    EXPECT(value.panes.size() == 2);
+    EXPECT(is_valid(value));
+    for (const auto& pane_value : value.panes) {
+        EXPECT(pane_value.tabs.size() >= 1);
+        EXPECT(is_valid(value));
+    }
+}
+
 void test_failed_mutations_leave_valid_state() {
     ApplicationState application{1, {group("one")}, "one", {},
                                  kDefaultSidebarWidth, {}};
@@ -339,6 +369,7 @@ int main() {
     test_reorder_tab();
     test_move_tab();
     test_layout_migration_both_directions();
+    test_layout_migration_dedups_cross_pane_tab_ids();
     test_failed_mutations_leave_valid_state();
     test_pinned_location_deduplication();
     return panedock::test::summary("core_model");
