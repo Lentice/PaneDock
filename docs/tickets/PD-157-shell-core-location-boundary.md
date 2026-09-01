@@ -123,3 +123,15 @@ rg -n "SHGetKnownFolderPath|SHCreateItemFromParsingName|GetDisplayName" src/app_
 ### 2026-08-31 review correction
 
 - Tracker status returned to `in_progress` pending the ticket's real-desktop virtual-location, ordinary-path, startup, and recovery behavior matrix. Automated boundary and launch checks do not prove that matrix by themselves.
+
+### 2026-09-01 — real-desktop location/startup/recovery matrix
+
+- 在實際 `build\\PaneDock.exe` Release 視窗的 `Group 1` 四窗格中，將左上 tab 導覽至 `shell:MyComputerFolder`；tab 與位址列均顯示友善名稱 `本機`，內容列出 3 個本機磁碟。這確認 virtual location display/value path 未把 parsing name 泄漏到 UI。
+- 將同一 tab 導回普通路徑 `C:\\Windows`；tab 顯示 `Windows`、位址列顯示 `C:\\Windows`，內容正常載入。普通 path 顯示與 virtual location 均可在同一 Group 內切換。
+- 以標題列正常關閉後，fresh app listing 找不到 `process:E:\\GitHub\\PaneDock\\build\\PaneDock.exe`；再啟動同一實際 exe 只出現一個 PaneDock 視窗，`Group 1`、`Windows` tab、四窗格與先前 session 內容（含 PD-158 disposable fixture 的 moved item）均恢復，無空白主窗或 startup/recovery error。
+- 上述桌面矩陣與既有 boundary、re-entry、Release build／CTest／launch smoke 證據合併，完成本票 review correction；未改 session schema 或 persisted bytes。
+
+### 2026-09-01 — final automated verification
+
+- `cmake --build build` PASS（Ninja reports no work）；提升環境完整 `ctest --test-dir build --output-on-failure` `13/13 PASS`，包含 `panedock_launch_smoke`。
+- `shell_core_boundary_check.ps1`、`shell_reentry_gate_check.ps1`、`live_view_count_parse_check.ps1` 與 `git diff --check` 均 PASS。

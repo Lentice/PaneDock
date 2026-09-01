@@ -153,3 +153,20 @@ git diff --check
 - `ExplorerHost` 現在在每次 navigation 完成後，對該 `IShellView` 安裝唯一的 `SetWindowSubclass`。只有零選取的 `WM_CONTEXTMENU` 走 `SVGIO_BACKGROUND` 原生 `IContextMenu`；以同一 `IShellView` 設 site，將 `location_` 同時放入 `lpDirectoryW` 與可轉換的 `lpDirectory`，並轉發 `IContextMenu2/3` menu messages。navigation／destroy 先移除 subclass 並清空 menu COM 參照；流程全程使用 `ShellCallScope`，不改 `src/core`、tab／Group persistence 或 Shell view lifetime policy。
 - 真實桌面（Windows `10.0.26200.0`、PaneDock Release、VS Code `1.135.0` x64、Git `2.55.0.windows.3`）結果：`Github`／`PaneDock`／`E:\GitHub\PaneDock` 背景選 `以 Code 開啟` 成功，VS Code 出現標題 `main.cpp - PaneDock - Visual Studio Code`；同處 `Open Git Bash here` 成功，Process command line 為 `"C:\\Program Files\\Git\\git-bash.exe" "--cd=E:\\GitHub\\PaneDock."`。切換同一 Group 的 `NimbleRun` tab 後，Git Bash command line 為 `"C:\\Program Files\\Git\\git-bash.exe" "--cd=E:\\GitHub\\NimbleRun."`，未誤用其他 pane；切換 `Misc` 四 pane Group 可正常 realize 四個 Shell view，並已切回原本的 `Github`／`PaneDock` tab。`FileLocator Pro...` 仍成功，項目右鍵仍為原生 item menu，右上 `E:\GitHub\PaneDock\build` 背景 menu 仍保留 Git／Shell extensions。close-while-menu 矩陣尚未完成。
 - 自動檢查：CMake configure／Release build PASS；`ctest --test-dir build --output-on-failure -E panedock_launch_smoke` `12/12 PASS`；`panedock_explorer_host_lifetime_check.exe` PASS；boundary `rg` PASS；無 `[DEBUG-PD159]`／throwaway capture code；`git diff --check` PASS。完整 `panedock_launch_smoke` 在目前 medium-integrity sandbox 會因 `%LOCALAPPDATA%\PaneDock` session save 權限跳出「could not save its session」對話框，非產品 Shell invoke 失敗；以可寫入 session 的同等權限隔離啟動測得 graceful close／exit code 0。
+
+### 2026-09-01 實機驗證（close-while-background-menu）
+
+- 使用 Computer Use 啟動實際 `build\PaneDock.exe` Release build，在 `Github`／`PaneDock`／`E:\GitHub\PaneDock` 單窗格 Shell view 空白處開啟原生背景選單；選單可見且包含已安裝的 Shell verbs。
+- 選單保持開啟時直接按 PaneDock 標題列關閉；立即重新讀取視窗回報原視窗已不可用，等待 2.5 秒後 fresh `list_apps()` 找不到 `process:E:\GitHub\PaneDock\build\PaneDock.exe`。未 crash、deadlock 或殘留 PaneDock 程序，結果 PASS。
+- 本次未執行任何 Shell verb、未修改檔案；四窗格另一次啟動只完成一般清理關閉，誤觸 PaneDock splitter 選單的結果不計入背景 Shell menu PASS。PD-159 tracker 維持 `in_progress`，因完整四窗格／多 location close 矩陣仍待補驗。
+
+### 2026-09-01 實機驗證（四窗格 close-while-background-menu）
+
+- 在實際 Release `build\\PaneDock.exe` 的 `Group 1` 四窗格中，對右下 pane 的空白清單區開啟原生背景 menu；menu 可見並保留 `Open with Visual Studio`、`Open Git GUI here`、`Open Git Bash here`、`FileLocator Pro...` 與 Git/TortoiseGit 等 installed extensions。
+- menu 保持開啟時按 PaneDock 標題列 Close；fresh window state 隨即不可用，fresh `list_apps()` 找不到該實際 exe，未出現 crash、deadlock 或殘留 PaneDock process，PASS。此次未執行 verb、未修改檔案。
+- 與前述 `E:\\GitHub\\PaneDock`／`E:\\GitHub\\NimbleRun` location、FileLocator、item menu、Group/tab、四 pane realization 及單窗格 close 矩陣合併後，完成本票要求的多 location／四 pane close 驗證。
+
+### 2026-09-01 — final automated verification
+
+- `cmake --build build` PASS（Ninja reports no work）；提升環境完整 `ctest --test-dir build --output-on-failure` `13/13 PASS`，包含 `panedock_launch_smoke`。
+- `shell_core_boundary_check.ps1`、`shell_reentry_gate_check.ps1`、`live_view_count_parse_check.ps1` 與 `git diff --check` 均 PASS；未留下 `[DEBUG-PD159]` 或 throwaway capture code。

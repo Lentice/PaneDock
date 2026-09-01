@@ -149,3 +149,26 @@ rg -n "OleGetClipboard|CLSID_FileOperation|CopyItems|MoveItems|IFileOperationPro
 - Restored the PD-140 shutdown-abatement behavior across the extracted module. Clipboard setup now checks a non-owning abort callback after every re-entrant Shell/COM call and after queueing CopyItems/MoveItems, unadvises when necessary, and never enters PerformOperations after deferred shutdown.
 - `file_operation_call_active` now protects setup lifetime without claiming that a transfer is already running. A re-entered close during setup follows the existing Shell-call deferred-shutdown path; the transfer dialog remains limited to `StartOperations` through `FinishOperations`.
 - Strengthened `panedock_shell_reentry_gate` for this distinction. No fake `IDataObject`/COM test seam was added because `docs/testing.md` and the rejected-directions ledger explicitly prohibit fake COM abstractions; malformed-medium and `SetData` ownership remain covered by code review plus the pending real-desktop disposable-data matrix.
+
+### 2026-09-01 — real-desktop attempt
+
+- Prepared only the repository-local disposable fixture under `build\\pd158-disposable`; no user file was created, moved, copied, or deleted. Computer Use could read the real PaneDock window but repeated `failed to activate captured window` on the layout input after fresh re-selection, so the Ctrl+C/Ctrl+V and Ctrl+X/Ctrl+V matrix was not executed. Tracker remains `in_progress`.
+
+### 2026-09-01 — real-desktop PaneDock pane↔pane Copy/Cut
+
+- 只使用 repository-local `build\\pd158-disposable` fixture，在實際 Release PaneDock 的 `Group 1` 四窗格執行。同磁碟 `copy-source\\copy-me.txt` 做 Ctrl+C，再於 `copy-destination` Ctrl+V；來源仍存在、目的地出現 29-byte `copy-me.txt`，兩者 SHA-256 均為 `23FCA6B4A1C601D6E73FEA9EAF6F49B748EB7D81CD952EBDE7E7D7C359542B79`，PASS。
+- `cut-source\\move-me.txt` 做 Ctrl+X，再於 `cut-destination` Ctrl+V；目的地出現 28-byte `move-me.txt`，來源目錄為空，目的檔 SHA-256 為 `792177BE4914C50010F01A2CABBCC2B5F1CF1DAF95C8FA06711E41073BD8543E`，PASS。這是 Shell `MoveItems` 語意；PaneDock 未自行刪除來源。
+- 本次只動到 repo-local disposable fixture，未建立、移動、複製或刪除任何 user file。Windows File Explorer→PaneDock、跨 Group 與跨磁碟 Move 仍未取得完整實機證據，因此 tracker 保持 `in_progress`，不可宣稱本票全部 acceptance 已完成。
+
+### 2026-09-01 — final automated verification
+
+- `cmake --build build` PASS（Ninja reports no work）；提升環境完整 `ctest --test-dir build --output-on-failure` `13/13 PASS`，包含 `panedock_file_operation_effect` 與 `panedock_launch_smoke`。
+- `shell_core_boundary_check.ps1`、`shell_reentry_gate_check.ps1`、`live_view_count_parse_check.ps1` 與 `git diff --check` 均 PASS；剩餘未完成項目限於上段列出的實機案例，不是自動測試失敗。
+
+### 2026-09-01 — remaining real-desktop matrix completed
+
+- 在已確認不存在的 `D:\\Temp\\PaneDock\\pd158-disposable-cross-volume` 建立 disposable source／destination，完成後已刪除整個 fixture；repo 內只移除本次新增的 `cut-destination\\cross-move.txt`，原有 fixtures 保留。
+- 跨磁碟 Cut：PaneDock `Group 1` 的 D: `source\\cross-move.txt` 以 Ctrl+X，再貼到 E: repo-local `cut-destination`；D: source 不再有該檔，E: destination 出現 41-byte 檔案，SHA-256 `9F4228D0702CD1938EA471CE9CDC53FF19EA5AABFBA51A5B9636B2EFA4D74432`，PASS。
+- 跨 Group Copy：在 `Group 1` 對 D: `source\\group-copy.txt` Ctrl+C，切換 `Github` Group 後貼到 D: `destination`；source 保留，destination 出現 40-byte 檔案，兩者 SHA-256 均為 `16DB71524F05312BCD6ABA40F3D7BDF9909B30522558B0F2E75AACF8AE4CFEAE`，PASS。
+- Windows Explorer→PaneDock Copy：Explorer 從 E: `cut-destination\\cross-move.txt` 複製，切回 PaneDock `Github` Group 的 D: `destination` 貼上；Explorer source 保留，PaneDock destination 出現檔案，兩者 SHA-256 均為 `9F4228D0702CD1938EA471CE9CDC53FF19EA5AABFBA51A5B9636B2EFA4D74432`，PASS。
+- 加上前段已完成的同磁碟 PaneDock pane↔pane Copy/Cut、來源／目的地 hash、Move source disappearance 與完整自動檢查，PD-158 acceptance matrix 已完成；tracker 可標為 `done`。

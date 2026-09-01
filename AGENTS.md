@@ -68,6 +68,16 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+## Windows GUI verification (Used for Codex only)
+
+- Read the `computer-use` skill and bundled guidance/API/confirmation docs before UI automation. Initialize `@oai/sky` in `node_repl`; launch with `{app: "<returned app id or explicit .exe path>"}`, then select exactly one target from fresh `list_apps()`/`list_windows()` results.
+- Treat every `get_window_state()` as a new snapshot: perform one action, refresh immediately, and never reuse stale coordinates, indexes, or screenshot IDs. On `failed to activate captured window`, fresh-list/reselect, call `activate_window`, then capture fresh state and retry once; if activation still fails, stop GUI verification for that task.
+- Use the `sky` API names exactly: `element_index` for accessibility clicks, `press_key` for chords, and `drag` with `from_x/from_y/to_x/to_y` plus the current `screenshotId`; do not invent `element`, `keypress`, or `start/end` arguments.
+- Native Shell menus may exist only in the screenshot; verify that screenshot and right-click visibly empty list space. For verbs that open another app, re-list windows and close only the newly opened test window. Do not automate terminal apps or use verb tests for file changes.
+- PaneDock is single-instance: launching `build\PaneDock.exe` again activates/relays to the original window instead of creating a second test window. Re-list and select that original window before continuing.
+- If `node_repl` reports `failed to start Node runtime` or `os error 3`, reset and retry once; after a second failure, stop UI automation and use non-UI checks.
+- `panedock_launch_smoke` tests the real `build\PaneDock.exe`. A restricted `%LOCALAPPDATA%\PaneDock` save failure can leave its intentional `MessageBoxW` open; verify with writable session storage before treating a timeout as a shutdown bug, and never force-kill or bypass `IExplorerBrowser::Destroy`.
+
 ## Safety boundaries
 
 - Do not push branches, publish releases, or modify anything outside this repository without explicit approval.

@@ -14,6 +14,8 @@
 #include <propsys.h>
 #include <commctrl.h>
 
+#include "shell_core/shell_core.h"
+
 namespace panedock::explorer_host {
 namespace {
 
@@ -357,15 +359,17 @@ bool ExplorerHost::show_background_context_menu(HWND owner,
 
     if (command != 0) {
         std::string ansi_directory;
-        if (!location_.empty()) {
+        if (!location_.parsing_name.empty()) {
             const int length = WideCharToMultiByte(
-                CP_ACP, WC_NO_BEST_FIT_CHARS, location_.c_str(), -1,
-                nullptr, 0, nullptr, nullptr);
+                CP_ACP, WC_NO_BEST_FIT_CHARS,
+                location_.parsing_name.c_str(), -1, nullptr, 0, nullptr,
+                nullptr);
             if (length > 0) {
                 try {
                     ansi_directory.resize(static_cast<std::size_t>(length));
                     if (WideCharToMultiByte(
-                            CP_ACP, WC_NO_BEST_FIT_CHARS, location_.c_str(),
+                            CP_ACP, WC_NO_BEST_FIT_CHARS,
+                            location_.parsing_name.c_str(),
                             -1, ansi_directory.data(), length, nullptr,
                             nullptr) == 0) {
                         ansi_directory.clear();
@@ -383,7 +387,9 @@ bool ExplorerHost::show_background_context_menu(HWND owner,
         invoke.lpVerbW = MAKEINTRESOURCEW(command - 1);
         invoke.lpDirectory = ansi_directory.empty() ? nullptr
                                                      : ansi_directory.c_str();
-        invoke.lpDirectoryW = location_.empty() ? nullptr : location_.c_str();
+        invoke.lpDirectoryW = location_.parsing_name.empty()
+                                  ? nullptr
+                                  : location_.parsing_name.c_str();
         invoke.nShow = SW_SHOWNORMAL;
         hr = context_menu_->InvokeCommand(
             reinterpret_cast<LPCMINVOKECOMMANDINFO>(&invoke));
@@ -497,7 +503,7 @@ void ExplorerHost::layout_error_controls() noexcept {
 
 void ExplorerHost::retry_navigation() noexcept {
     try {
-        const std::wstring location = location_;
+        const core::ShellLocation location = location_;
         (void)navigate(location);
     } catch (...) {
         log_message(L"ExplorerHost: retry location copy failed");
@@ -505,7 +511,7 @@ void ExplorerHost::retry_navigation() noexcept {
 }
 
 HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
-                                 std::wstring_view location) {
+                                 const core::ShellLocation& location) {
     if (parent == nullptr || initialized_ || browser_ != nullptr) {
         return E_INVALIDARG;
     }
@@ -578,14 +584,15 @@ HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
     return navigate(location);
 }
 
-HRESULT ExplorerHost::navigate(std::wstring_view location) {
+HRESULT ExplorerHost::navigate(const core::ShellLocation& location) {
     if (!initialized_ || browser_ == nullptr) return E_UNEXPECTED;
+    ShellCallScope shell_call(*this);
 
     // Preserve the requested parsing name while navigation is pending or if
     // the Shell cannot currently resolve it. Session capture must not replace
     // a newly selected Group's destination with the previous Group's folder.
     location_ = location;
-    std::wstring location_text(location);
+    const std::wstring location_text = shell_core::resolve_location(location_);
     Microsoft::WRL::ComPtr<IShellItem> item;
     HRESULT hr = SHCreateItemFromParsingName(location_text.c_str(), nullptr,
                                               IID_PPV_ARGS(&item));
@@ -717,7 +724,7 @@ HRESULT ExplorerHost::navigate_up() noexcept {
 }
 
 void ExplorerHost::set_navigation_callback(
-    std::function<void(std::wstring_view)> callback) {
+    std::function<void(const core::ShellLocation&)> callback) {
     navigation_callback_ = std::move(callback);
 }
 
@@ -920,22 +927,20 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
     }
 
     Microsoft::WRL::ComPtr<IShellItem> item;
-    if (FAILED(SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&item)))) {
-        return;
-    }
-
+    if (FAILED(SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&item)))) return;
     PWSTR parsing_name = nullptr;
     if (FAILED(item->GetDisplayName(SIGDN_DESKTOPABSOLUTEPARSING,
-                                    &parsing_name))) {
-        return;
-    }
+                                    &parsing_name)) ||
+        parsing_name == nullptr) return;
     try {
-        location_.assign(parsing_name);
+        const std::wstring completed(parsing_name);
+        CoTaskMemFree(parsing_name);
+        parsing_name = nullptr;
+        location_ = shell_core::capture_location(completed);
     } catch (...) {
         CoTaskMemFree(parsing_name);
         return;
     }
-    CoTaskMemFree(parsing_name);
 
     error_visible_ = false;
     if (error_window_ != nullptr) {
@@ -982,7 +987,7 @@ void ExplorerHost::navigation_failed() noexcept {
         }
         try {
             const std::wstring message =
-                L"This location is not available:\n" + location_ +
+                L"This location is not available:\n" + location_.parsing_name +
                 L"\n\nReconnect the drive or check the path, then retry.";
             SetWindowTextW(error_message_, message.c_str());
         } catch (...) {
@@ -1067,7 +1072,7 @@ void ExplorerHost::destroy() noexcept {
     site_.Reset();
     browser_.Reset();
     parent_ = nullptr;
-    location_.clear();
+    location_ = {};
     navigation_callback_ = {};
     navigation_failed_callback_ = {};
     selection_changed_callback_ = {};

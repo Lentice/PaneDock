@@ -114,3 +114,9 @@ git diff --check
 ### 2026-08-31 review correction
 
 - Tracker status returned to `in_progress`: the required real-desktop Name ascending/descending Group, tab, and restart matrix has not been executed, so the end-to-end acceptance criteria are not yet proven.
+
+### 2026-09-01 — real-desktop Group/tab/restart matrix
+
+- 在實際 PaneDock Release build 的 `Odoo` Group 第一個 pane 將 Name 設為 descending；切換到 `Github` 再切回 `Odoo` 後，第一個項目仍為 `readme`，證明 Group round trip 保留方向。
+- 正常關閉並重新啟動 PaneDock 後，`Odoo` 第一個 pane 仍以 `readme` 開頭；點擊 Name 欄標題改回 ascending 後，清單以 `auditlog`、`auth_ldaps`、`auto_logout_idle_user_odoo` 開頭。Group、tab 與 restart 驗收 PASS。
+- 搭配既有 `core_session_test`、`panedock_explorer_host_lifetime_check`（ascending／descending／invalid key）、Release build 與非 launch CTest 12/12 PASS，PD-156 的 acceptance criteria 已具備證據；tracker 可轉為 `done`。

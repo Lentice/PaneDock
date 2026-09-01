@@ -9,7 +9,9 @@
 
 namespace panedock::shell_core {
 
-core::ShellLocation location(std::wstring parsing_name);
+core::ShellLocation capture_location(std::wstring parsing_name);
+
+std::wstring resolve_location(const core::ShellLocation& location);
 
 std::wstring display_text_for_parsing_name(std::wstring_view parsing_name);
 

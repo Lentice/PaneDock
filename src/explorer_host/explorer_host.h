@@ -17,6 +17,7 @@
 #include <shlobj.h>
 #include <wrl/client.h>
 
+#include "core/model.h"
 #include "explorer_host/live_view_count.h"
 
 namespace panedock::explorer_host {
@@ -54,8 +55,8 @@ public:
     void set_shell_call_callback(void* context,
                                  ShellCallCallback callback) noexcept;
     HRESULT initialize(HWND parent, const RECT& rect,
-                       std::wstring_view location);
-    HRESULT navigate(std::wstring_view location);
+                       const core::ShellLocation& location);
+    HRESULT navigate(const core::ShellLocation& location);
     HRESULT navigate_up() noexcept;
     HRESULT refresh();
     HRESULT set_view_mode(FOLDERVIEWMODE mode, int image_size = -1) noexcept;
@@ -64,7 +65,7 @@ public:
     HRESULT set_sort(std::string_view column, bool ascending) noexcept;
     HRESULT get_sort(std::string& column, bool& ascending) const noexcept;
     void set_navigation_callback(
-        std::function<void(std::wstring_view)> callback);
+        std::function<void(const core::ShellLocation&)> callback);
     void set_navigation_failed_callback(std::function<void()> callback);
     void set_selection_changed_callback(std::function<void()> callback);
     HRESULT item_counts(ItemCounts& counts) const noexcept;
@@ -74,7 +75,7 @@ public:
     void focus() noexcept;
     HRESULT translate_accelerator(MSG* message) noexcept;
     void destroy() noexcept;
-    const std::wstring& location() const noexcept { return location_; }
+    const core::ShellLocation& location() const noexcept { return location_; }
 
     void navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept;
     void navigation_failed() noexcept;
@@ -112,8 +113,8 @@ private:
     HWND error_message_{nullptr};
     HWND retry_button_{nullptr};
     bool error_visible_{false};
-    std::wstring location_;
-    std::function<void(std::wstring_view)> navigation_callback_;
+    core::ShellLocation location_;
+    std::function<void(const core::ShellLocation&)> navigation_callback_;
     std::function<void()> navigation_failed_callback_;
     std::function<void()> selection_changed_callback_;
     void* shell_call_context_{nullptr};

@@ -44,7 +44,8 @@ int main() {
         panedock::explorer_host::ExplorerHost host;
         const RECT rect{0, 0, 640, 480};
         const HRESULT initialize_result =
-            host.initialize(parent, rect, L"shell:Desktop");
+            host.initialize(parent, rect,
+                            {L"shell:Desktop", {}, {}});
         EXPECT(SUCCEEDED(initialize_result));
         if (SUCCEEDED(initialize_result)) {
             ItemCounts counts;
@@ -97,8 +98,8 @@ int main() {
             }
             constexpr std::wstring_view missing =
                 L"?:\\PaneDock-PD-022-definitely-not-there";
-            EXPECT(SUCCEEDED(host.navigate(missing)));
-            EXPECT(host.location() == missing);
+            EXPECT(SUCCEEDED(host.navigate({std::wstring(missing), {}, {}})));
+            EXPECT(host.location().parsing_name == missing);
         }
         host.destroy();
         EXPECT(live_view_count() == 0);

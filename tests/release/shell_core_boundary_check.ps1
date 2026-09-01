@@ -24,6 +24,15 @@ foreach ($required in @('SHGetKnownFolderPath', 'SHCreateItemFromParsingName', '
         throw "shell_core boundary failed: missing implementation $required"
     }
 }
+foreach ($required in @('FindFolderFromIDList', 'GetShellItem',
+                         'SIGDN_FILESYSPATH', 'resolve_location')) {
+    if ($shellCoreSource -notmatch $required) {
+        throw "shell_core boundary failed: missing location identity operation $required"
+    }
+}
+if ($appSource -match 'FindFolderFromIDList|SIGDN_FILESYSPATH|CLSIDFromString') {
+    throw 'shell_core boundary failed: app_shell reimplements Shell identity logic'
+}
 $coreLeak = Get-ChildItem -LiteralPath $CorePath -File -Recurse |
     Select-String -Pattern 'windows\.h|IUnknown|IShellItem|ITEMIDLIST|PIDL|ComPtr'
 if ($coreLeak) {

@@ -161,3 +161,12 @@ git diff --check
 - 修正：將 `apply_tab_item_size` 移到 app `WindowPositionBatch::commit` 後，對可見且 geometry changed 的 pane（一般 content recompute 仍照常）重算 tab、`+`、overflow 按鈕與 tooltip 矩形；保留非 erase invalidate。
 - 驗證：Release build PASS；排除 launch smoke 的 10 個 CTest PASS；`panedock_explorer_host_lifetime_check.exe` PASS；真實桌面以 Group 1 的 overflow tabs 拖曳 splitter，確認 tab 導航按鈕與 `+` 隨 pane 新寬度更新。
 - 已知限制：`panedock_launch_smoke` 在本次環境的立即關閉情境仍逾時於 `CloseMainWindow` 後的 process exit；非 UI 測試與手動正常關閉均可完成。完整 resize/DPI/Shell operation matrix 仍需錄影驗證。
+
+### 2026-09-01 實際 PaneDock.exe resize follow-up
+
+- 實機對象：Release `build\\PaneDock.exe`，單一 `Github` Group、四 panes；先將測試造成的失效路徑恢復為 `E:\\GitHub\\PaneDock\\build`。
+- 實機結果：非最大化視窗右緣由 1389 px 拖至 1101 px；垂直 pane splitter、水平 pane splitter、Groups sidebar boundary 均完成連續拖曳；四個 Shell view、nav controls、address bars、tab/status chrome 持續可見，未觀察到白閃、空白 frame、crash 或殘留視窗。
+- Layout/size：逐一點擊 Single、Left / Right、Top / Bottom、Three、Two beside One、One over Two、Two over One、Four，八種 layout 都能存活並完成重排；下緣縮放至 701 px 高仍保留完整 chrome，之後以最大化正常恢復。
+- 關閉：透過 PaneDock 的 Close button 正常關閉，重新列舉視窗後無 PaneDock window。
+- 自動驗證：`cmake --build build`（no work）；elevated CTest `13/13 PASS`（含 `panedock_launch_smoke`）；`panedock_explorer_host_lifetime_check.exe` PASS；`git diff --check` PASS。
+- 未驗證：目前 Computer Use 桌面只有單一 DPI 螢幕，無法完成跨混合 DPI 螢幕；未在正在進行的 Shell file operation/drag 中關閉視窗；未以錄影工具擷取每一個 Windows paint frame，因此不能對所有中繼 frame 作像素級無閃爍斷言。這三項仍需具備對應環境後的實機驗證。

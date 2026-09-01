@@ -14,9 +14,87 @@
 #include <wrl/client.h>
 
 namespace panedock::shell_core {
+namespace {
 
-core::ShellLocation location(std::wstring parsing_name) {
-    return {std::move(parsing_name), {}, {}};
+std::wstring item_name(IShellItem* item, SIGDN kind) {
+    PWSTR text = nullptr;
+    if (item == nullptr || FAILED(item->GetDisplayName(kind, &text)) ||
+        text == nullptr) return {};
+    std::wstring result;
+    try {
+        result.assign(text);
+    } catch (...) {
+        CoTaskMemFree(text);
+        throw;
+    }
+    CoTaskMemFree(text);
+    return result;
+}
+
+Microsoft::WRL::ComPtr<IShellItem> parse(std::wstring_view text) {
+    Microsoft::WRL::ComPtr<IShellItem> item;
+    if (text.empty()) return item;
+    const std::wstring value(text);
+    (void)SHCreateItemFromParsingName(value.c_str(), nullptr,
+                                      IID_PPV_ARGS(&item));
+    return item;
+}
+
+}  // namespace
+
+core::ShellLocation capture_location(std::wstring parsing_name) {
+    core::ShellLocation result{std::move(parsing_name), {}, {}};
+    const auto item = parse(result.parsing_name);
+    if (item == nullptr) return result;
+
+    const std::wstring canonical =
+        item_name(item.Get(), SIGDN_DESKTOPABSOLUTEPARSING);
+    if (!canonical.empty()) result.parsing_name = canonical;
+    result.fallback_path = item_name(item.Get(), SIGDN_FILESYSPATH);
+
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (FAILED(SHGetIDListFromObject(item.Get(), &pidl)) || pidl == nullptr)
+        return result;
+    Microsoft::WRL::ComPtr<IKnownFolderManager> manager;
+    Microsoft::WRL::ComPtr<IKnownFolder> folder;
+    if (SUCCEEDED(CoCreateInstance(CLSID_KnownFolderManager, nullptr,
+                                   CLSCTX_INPROC_SERVER,
+                                   IID_PPV_ARGS(&manager))) &&
+        SUCCEEDED(manager->FindFolderFromIDList(pidl, &folder))) {
+        KNOWNFOLDERID id{};
+        wchar_t guid[39]{};
+        if (SUCCEEDED(folder->GetId(&id)) &&
+            StringFromGUID2(id, guid, ARRAYSIZE(guid)) != 0)
+            result.known_folder_identity = guid;
+    }
+    CoTaskMemFree(pidl);
+    return result;
+}
+
+std::wstring resolve_location(const core::ShellLocation& location) {
+    if (!location.known_folder_identity.empty()) {
+        GUID id{};
+        Microsoft::WRL::ComPtr<IKnownFolderManager> manager;
+        Microsoft::WRL::ComPtr<IKnownFolder> folder;
+        Microsoft::WRL::ComPtr<IShellItem> item;
+        if (SUCCEEDED(CLSIDFromString(
+                location.known_folder_identity.c_str(), &id)) &&
+            SUCCEEDED(CoCreateInstance(CLSID_KnownFolderManager, nullptr,
+                                       CLSCTX_INPROC_SERVER,
+                                       IID_PPV_ARGS(&manager))) &&
+            SUCCEEDED(manager->GetFolder(id, &folder)) &&
+            SUCCEEDED(folder->GetShellItem(0, IID_PPV_ARGS(&item)))) {
+            const std::wstring target =
+                item_name(item.Get(), SIGDN_DESKTOPABSOLUTEPARSING);
+            if (!target.empty()) return target;
+        }
+    }
+    if (parse(location.parsing_name) != nullptr)
+        return location.parsing_name;
+    if (location.fallback_path != location.parsing_name &&
+        parse(location.fallback_path) != nullptr)
+        return location.fallback_path;
+    return location.parsing_name;
 }
 
 std::wstring display_text_for_parsing_name(std::wstring_view parsing_name) {

@@ -82,6 +82,19 @@ Assert-ExplorerHostSource 'ExplorerHost::ShellCallScope::ShellCallScope' `
 Assert-ExplorerHostSource 'set_shell_call_callback\(\s*void\*\s+context,\s*ShellCallCallback\s+callback\)\s*noexcept' `
     'ExplorerHost stores the app gate without a new COM abstraction'
 
+$navigateStart = $explorerHostSource.IndexOf(
+    'HRESULT ExplorerHost::navigate(const core::ShellLocation& location)')
+$navigateEnd = $explorerHostSource.IndexOf(
+    'HRESULT ExplorerHost::refresh()', $navigateStart)
+if ($navigateStart -lt 0 -or $navigateEnd -lt 0) {
+    throw 'Shell re-entry invariant failed: value navigation body missing'
+}
+$navigateBody = $explorerHostSource.Substring(
+    $navigateStart, $navigateEnd - $navigateStart)
+if ($navigateBody -notmatch 'ShellCallScope shell_call\(\*this\);[\s\S]*shell_core::resolve_location') {
+    throw 'Shell re-entry invariant failed: location resolution is unguarded'
+}
+
 $navigationStart = $explorerHostSource.IndexOf(
     'void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept')
 $navigationEnd = $explorerHostSource.IndexOf(

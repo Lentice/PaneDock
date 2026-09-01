@@ -192,11 +192,12 @@
 | PD-152 | Group row inline rename editor 偶發只剩 caret、背景與文字不可見 | 7 | `done` | PD-017, PD-041, PD-150 | [PD-152](tickets/PD-152-group-row-rename-editor-occasionally-invisible.md) |
 | PD-153 | 新 tab 預設使用詳細資料檢視 | 7 | `done` | PD-052, PD-079, PD-082 | [PD-153](tickets/PD-153-default-view-mode-details.md) |
 | PD-154 | 雙擊 pane tab 條空白區新增 tab | 7 | `done` | PD-019, PD-049, PD-055 | [PD-154](tickets/PD-154-double-click-empty-tab-strip-adds-tab.md) |
-| PD-155 | Window、pane splitter 與 Groups sidebar 共用原子 live-resize geometry transaction | 7 | `in_progress` | PD-077, PD-095, PD-097, PD-104, PD-108 | [PD-155](tickets/PD-155-atomic-live-resize-geometry-transaction.md) |
-| PD-156 | 擷取、持久化並還原 Shell 排序欄位與方向 | 7 | `in_progress` | PD-006, PD-052, PD-153 | [PD-156](tickets/PD-156-shell-sort-state-restore.md) |
-| PD-157 | 建立 `shell_core` 並移出 app_shell 的 Shell location/value 操作 | 7 | `in_progress` | PD-006, PD-022, PD-140, PD-146 | [PD-157](tickets/PD-157-shell-core-location-boundary.md) |
-| PD-158 | 建立 `file_operations` 並讓 Ctrl+V 正確區分 Cut／Copy | 7 | `in_progress` | PD-023, PD-121, PD-123, PD-140, PD-157 | [PD-158](tickets/PD-158-cut-aware-clipboard-paste.md) |
-| PD-159 | pane 空白處的背景 Shell verb 無法取得目前資料夾 | 7 | `in_progress` | PD-007, PD-014, PD-024 | [PD-159](tickets/PD-159-background-shell-verb-current-folder.md) |
+| PD-155 | Window、pane splitter 與 Groups sidebar 共用原子 live-resize geometry transaction | 7 | `done` | PD-077, PD-095, PD-097, PD-104, PD-108 | [PD-155](tickets/PD-155-atomic-live-resize-geometry-transaction.md) |
+| PD-156 | 擷取、持久化並還原 Shell 排序欄位與方向 | 7 | `done` | PD-006, PD-052, PD-153 | [PD-156](tickets/PD-156-shell-sort-state-restore.md) |
+| PD-157 | 建立 `shell_core` 並移出 app_shell 的 Shell location/value 操作 | 7 | `done` | PD-006, PD-022, PD-140, PD-146 | [PD-157](tickets/PD-157-shell-core-location-boundary.md) |
+| PD-158 | 建立 `file_operations` 並讓 Ctrl+V 正確區分 Cut／Copy | 7 | `done` | PD-023, PD-121, PD-123, PD-140, PD-157 | [PD-158](tickets/PD-158-cut-aware-clipboard-paste.md) |
+| PD-159 | pane 空白處的背景 Shell verb 無法取得目前資料夾 | 7 | `done` | PD-007, PD-014, PD-024 | [PD-159](tickets/PD-159-background-shell-verb-current-folder.md) |
+| PD-160 | 完成 Shell location 三段式 identity 擷取與還原 | 7 | `ready` | PD-006, PD-022, PD-140, PD-157 | [PD-160](tickets/PD-160-shell-location-identity-capture-and-resolution.md) |
 
 ## Dependency lanes
 

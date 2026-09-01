@@ -667,7 +667,7 @@ bool flush_session_file(const std::filesystem::path& path) noexcept {
 }
 
 panedock::core::ShellLocation location(std::wstring parsing_name) {
-    return panedock::shell_core::location(std::move(parsing_name));
+    return {std::move(parsing_name), {}, {}};
 }
 
 std::wstring display_text_for_parsing_name(
@@ -767,7 +767,7 @@ bool navigate_realized_panes(
         {
             ShellCallScope shell_call(state);
             state.explorers[pane].navigate(
-                active_tab(group.panes[pane]).location.parsing_name);
+                active_tab(group.panes[pane]).location);
         }
         if (state.shutdown_deferred || state.closing_) {
             state.suppress_location_capture = previous_suppression;
@@ -1820,9 +1820,9 @@ void capture_pane_location(AppState& state, std::size_t pane_index) {
     if (state.suppress_location_capture || !has_active_group(state)) return;
     auto& group = active_group(state);
     if (pane_index >= group.panes.size() || !state.realized[pane_index] ||
-        state.explorers[pane_index].location().empty()) return;
+        state.explorers[pane_index].location().parsing_name.empty()) return;
     auto& tab = active_tab(group.panes[pane_index]);
-    tab.location.parsing_name = state.explorers[pane_index].location();
+    tab.location = state.explorers[pane_index].location();
     capture_pane_view_mode(state, pane_index);
     if (state.shutdown_deferred || state.closing_) return;
     capture_pane_sort(state, pane_index);
@@ -2656,12 +2656,13 @@ void show_pinned_locations_manager(HWND owner, AppState& state) {
 }
 
 void handle_navigation_complete(AppState& state, std::size_t pane_index,
-                                std::wstring_view new_location) {
+                                const panedock::core::ShellLocation&
+                                    new_location) {
     if (state.shutdown_deferred || state.closing_) return;
     if (!has_active_group(state) ||
         pane_index >= active_group(state).panes.size()) return;
     auto& tab = active_tab(active_group(state).panes[pane_index]);
-    auto completed_location = location(std::wstring(new_location));
+    auto completed_location = new_location;
     if (state.suppress_history_record[pane_index]) {
         state.suppress_history_record[pane_index] = false;
         tab.location = std::move(completed_location);
@@ -2895,8 +2896,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                     ShellCallScope shell_call(state);
                     hr = state.explorers[index].initialize(
                         state.explorer_containers[index], local_rect,
-                        active_tab(group.panes[index])
-                            .location.parsing_name);
+                        active_tab(group.panes[index]).location);
                 }
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
                 if (FAILED(hr)) {
@@ -2913,7 +2913,8 @@ HRESULT apply_layout(HWND window, AppState& state,
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
                 try {
                     state.explorers[index].set_navigation_callback(
-                        [&state, index](std::wstring_view new_location) {
+                        [&state, index](
+                            const panedock::core::ShellLocation& new_location) {
                             handle_navigation_complete(state, index,
                                                        new_location);
                         });
@@ -3291,7 +3292,7 @@ void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
         {
             ShellCallScope shell_call(state);
             state.explorers[pane_index].navigate(
-                active_tab(pane).location.parsing_name);
+                active_tab(pane).location);
         }
         if (state.shutdown_deferred || state.closing_) return;
     }
@@ -3373,7 +3374,7 @@ void add_tab_to_pane(HWND, AppState& state, std::size_t pane_index) {
         {
             ShellCallScope shell_call(state);
             state.explorers[pane_index].navigate(
-                active_tab(pane).location.parsing_name);
+                active_tab(pane).location);
         }
         if (state.shutdown_deferred || state.closing_) return;
     }
@@ -3396,7 +3397,7 @@ void close_tab_in_pane(HWND, AppState& state, std::size_t pane_index,
         {
             ShellCallScope shell_call(state);
             state.explorers[pane_index].navigate(
-                active_tab(pane).location.parsing_name);
+                active_tab(pane).location);
         }
         if (state.shutdown_deferred || state.closing_) return;
     }
@@ -3417,8 +3418,7 @@ void navigate_tab_history(AppState& state, std::size_t pane_index, bool back) {
     HRESULT hr = E_UNEXPECTED;
     {
         ShellCallScope shell_call(state);
-        hr = state.explorers[pane_index].navigate(
-            tab.location.parsing_name);
+        hr = state.explorers[pane_index].navigate(tab.location);
     }
     if (state.shutdown_deferred || state.closing_) return;
     if (FAILED(hr)) state.suppress_history_record[pane_index] = false;
@@ -3586,7 +3586,7 @@ void submit_address(AppState& state, std::size_t pane_index) {
     text.resize(static_cast<std::size_t>(length));
     {
         ShellCallScope shell_call(state);
-        state.explorers[pane_index].navigate(text);
+        state.explorers[pane_index].navigate(location(std::move(text)));
     }
 }
 
@@ -3843,7 +3843,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
         {
             ShellCallScope shell_call(state);
             state.explorers[drag.pane_index].navigate(
-                active_tab(source).location.parsing_name);
+                active_tab(source).location);
         }
         if (state.shutdown_deferred || state.closing_) return;
     }
@@ -3851,7 +3851,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
         {
             ShellCallScope shell_call(state);
             state.explorers[target_pane].navigate(
-                active_tab(target).location.parsing_name);
+                active_tab(target).location);
         }
         if (state.shutdown_deferred || state.closing_) return;
     }
@@ -4726,7 +4726,8 @@ bool perform_clipboard_paste(HWND window, AppState& state,
         return true;
     if (pane_index >= kExplorerCount || !state.realized[pane_index])
         return false;
-    const std::wstring& parsing_name = state.explorers[pane_index].location();
+    const std::wstring& parsing_name =
+        state.explorers[pane_index].location().parsing_name;
     if (parsing_name.empty()) return false;
 
     state.file_operation_call_active = true;
@@ -5415,8 +5416,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         {
                             ShellCallScope shell_call(*state);
                             (void)state->explorers[pane_index].navigate(
-                                kPinnedFixedParsingNames[
-                                    static_cast<std::size_t>(item)]);
+                                location(std::wstring(kPinnedFixedParsingNames[
+                                    static_cast<std::size_t>(item)])));
                         }
                         return 0;
                     }
@@ -5430,8 +5431,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                 ShellCallScope shell_call(*state);
                                 (void)state->explorers[pane_index].navigate(
                                     state->application
-                                        .pinned_locations[location_index]
-                                        .parsing_name);
+                                        .pinned_locations[location_index]);
                             }
                         }
                         return 0;
