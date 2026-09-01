@@ -17,10 +17,11 @@ function Assert-Source([string] $Pattern, [string] $Name) {
     }
 }
 
-Assert-Source 'unsigned\s+shell_call_depth\{\};' 'Shell call depth exists'
+Assert-Source 'unsigned&\s+shell_call_depth\s*=\s*shutdown_sequence\.state\(\)\.shell_call_depth;' `
+    'Shell call depth is owned by the reducer'
 Assert-Source 'constexpr UINT kDeferredShutdownMessage' `
     'shutdown has a posted continuation message'
-Assert-Source 'if \(state\.shell_call_depth != 0\)\s*\{' `
+Assert-Source 'state\.shell_call_depth != 0' `
     'close defers while a Shell call is active'
 Assert-Source 'PostMessageW\(state\.main_window, kDeferredShutdownMessage' `
     'Shell scope queues deferred shutdown after re-entry'
@@ -40,12 +41,12 @@ Assert-Source 'finish_shell_call\(state\)' `
     'ExplorerHost callback leave uses the shared leave logic'
 Assert-Source 'bool\s+navigate_realized_panes\(\s*AppState& state,\s*const panedock::core::GroupState& group\)\s*noexcept' `
     'Group transitions share realized-pane navigation'
-Assert-Source 'state\.file_operation_in_progress\s*=\s*false;[\s\S]*paste_from_clipboard' `
+Assert-Source 'ShutdownEvent::file_operation_call_started[\s\S]*paste_from_clipboard' `
     'clipboard setup is not reported as an active transfer'
 Assert-Source 'file_operation_setup_aborted[\s\S]*state\.shutdown_deferred\s*\|\|' `
     'clipboard setup observes deferred shutdown'
-Assert-Source 'case WM_CLOSE:[\s\S]*if \(state->file_operation_in_progress\)[\s\S]*begin_shutdown' `
-    'close defers Shell setup but prompts only for an active transfer'
+Assert-Source 'case WM_CLOSE:\s*if \(state != nullptr\)\s*run_shutdown_action\([\s\S]*?ShutdownEvent::close_requested' `
+    'close decisions are routed through the shutdown reducer'
 
 $navigationHelperStart = $source.IndexOf('bool navigate_realized_panes(')
 $navigationHelperEnd = $source.IndexOf(

@@ -140,3 +140,64 @@ if (-not $p.WaitForExit(5000)) { throw 'process survived graceful close' }
 在本檔 `## 交接區` 記錄：reducer 的完整事件／動作對照表、13 個舊旗標各自對應到 reducer 的哪個狀態或事件、兩支 PowerShell 檢查的 pattern 如何更新、以及實機關閉驗證的命令與結果。若某個舊旗標**無法**搬進 reducer，寫出具體的 Win32／COM 依賴理由。
 
 ## 交接區
+
+### 實作結果
+
+- `src/core/shutdown.h/.cpp` 新增 `ShutdownSequence`；`AppState` 的舊名稱現在都是直接 reference 到 `shutdown_sequence.state()`，沒有第二份狀態。
+- `app_shell` 只把 Win32／Shell callback 轉成事件，再執行 reducer 回傳的 action；Shell teardown 仍維持 `save → destroy views → destroy window → message loop` 的順序。
+- `tests/unit/core_shutdown_test.cpp` 覆蓋一般關閉、巢狀 Shell call、三種 transfer 選項、`WM_ENDSESSION` 遇到 file operation／save failure、重複 close 與 save failure 不寫 clean marker。
+
+### Reducer 對照表
+
+| Event | State transition | Action |
+| --- | --- | --- |
+| `close_requested` | 已關閉／延後／提示／存檔時忽略；file operation 中記錄 close-after | `prompt_transfer` 或 `defer` |
+| `end_session` | 記錄 confirmed session-end；file operation 中記錄 cancel；存檔／提示中只記住意圖 | `defer` 或 `none` |
+| `end_session_cancelled` | 清除未開始 teardown 的 session-end 意圖 | `none` |
+| `shell_call_entered` / `shell_call_left` | 維護巢狀 depth；最外層離開才可排程 | `defer` 或 `none` |
+| `deferred_shutdown_queued` / `deferred_shutdown_queue_failed` | 維護 posted-message flag；失敗時清除 deferred 狀態 | `none` |
+| `deferred_shutdown_ready` | 清除 deferred／queued；只允許一次 final save | `save_session` 或 `none` |
+| `file_operation_call_started` / `file_operation_call_finished` | 維護 `PerformOperations` call 邊界並重設 transfer intent | `none` |
+| `file_operation_started` / `file_operation_finished` | 維護實際 transfer 進度 | `none` |
+| `transfer_keep_open` | 清除 close-after／cancel | `none` |
+| `transfer_close_after_transfer` | 設定 close-after、保留 transfer | `none` |
+| `transfer_cancel_and_close` | 設定 close-after 與 cancel | `none` |
+| `save_started` | 記錄 final save 已嘗試 | `none` |
+| `save_succeeded` | arm clean marker | `destroy_views` |
+| `save_failed` | 保持 clean marker 未 armed；system session-end 直接收尾 | `prompt_save_failure` 或 `destroy_views` |
+| `save_prompt_started` / `save_prompt_finished` | 維護 modal prompt re-entry guard | `destroy_views`（confirmed session-end）或 `none` |
+| `save_keep_open` | 清除 prompt、save-attempted 與 clean-marker intent | `none` |
+| `save_discarded` | 結束 prompt 路徑 | `destroy_views` |
+| `teardown_started` | 設定 closing／quit，清除 deferred queue | `destroy_views` |
+| `views_destroyed` | 確認所有 live views 已清除 | `destroy_window` |
+| `window_destroyed` | 記錄主視窗已銷毀 | `write_clean_marker` 或 `request_quit` |
+
+### 舊旗標對應
+
+| `AppState` 舊旗標 | reducer 對應 |
+| --- | --- |
+| `quit_requested` | `State::quit_requested`；`teardown_started`／`window_destroyed` 設定 |
+| `closing_` | `State::closing_`；`teardown_started` 設定 |
+| `shutdown_prompt_active` | `State::shutdown_prompt_active`；prompt start／finish 事件維護 |
+| `shutdown_save_attempted` | `State::shutdown_save_attempted`；save start／keep-open／ready 事件維護 |
+| `shutdown_clean_marker_armed` | `State::shutdown_clean_marker_armed`；save success／failure 事件維護 |
+| `main_window_destroyed` | `State::main_window_destroyed`；`window_destroyed` 設定 |
+| `end_session_pending` | `State::end_session_pending`；end-session 事件維護 |
+| `shell_call_depth` | `State::shell_call_depth`；Shell enter／leave 事件維護 |
+| `shutdown_deferred` | `State::shutdown_deferred`；close／end-session／deferred 事件維護 |
+| `shutdown_message_queued` | `State::shutdown_message_queued`；queue／ready／failure 事件維護 |
+| `file_operation_call_active` | `State::file_operation_call_active`；call start／finish 事件維護 |
+| `file_operation_in_progress` | `State::file_operation_in_progress`；operation start／finish 事件維護 |
+| `close_after_file_operation` | `State::close_after_file_operation`；transfer decision 事件維護 |
+| `cancel_file_operation` | `State::cancel_file_operation`；transfer cancel／keep-open 事件維護 |
+
+沒有旗標因 Win32／COM 依賴而留在 app shell；只有 action 的執行（`save_now`、dialog、`IExplorerBrowser::Destroy`、`DestroyWindow`、marker 寫入）保留在 app shell。
+
+### Checks
+
+- `tests/release/shutdown_state_check.ps1` 改讀 `src/core/shutdown.h/.cpp` 的欄位與 transition，並驗證 app shell reference forwarding、save action 與 `WM_ENDSESSION` event。
+- `tests/release/shell_reentry_gate_check.ps1` 改驗證 `shell_call_depth` forwarding、reducer-routed close、deferred message 與 clipboard call boundary。
+- `cmake --build build`：通過。
+- deterministic CTest（core、shell core、兩支 release gate）：通過。
+- sandbox 內 `panedock_launch_smoke`：失敗，顯示關閉後未退出；無殘留 `PaneDock` process。
+- sandbox 外重跑 `ctest --test-dir build -R panedock_launch_smoke --output-on-failure`：通過（1.75 秒）。這是本機實機關閉驗證的命令與結果；未使用 force-kill。

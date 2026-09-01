@@ -39,6 +39,7 @@
 #include "core/layout.h"
 #include "core/model.h"
 #include "core/session.h"
+#include "core/shutdown.h"
 #include "explorer_host/explorer_host.h"
 #include "file_operations/file_operations.h"
 #include "resource.h"
@@ -459,6 +460,33 @@ struct Splitter {
 };
 
 struct AppState {
+    // The legacy names below are references into the reducer state. Keeping
+    // them avoids a second pane-wide mechanical rewrite while making the
+    // reducer the only owner of shutdown transition data.
+    panedock::core::ShutdownSequence shutdown_sequence;
+    bool& quit_requested = shutdown_sequence.state().quit_requested;
+    bool& closing_ = shutdown_sequence.state().closing_;
+    bool& shutdown_prompt_active =
+        shutdown_sequence.state().shutdown_prompt_active;
+    bool& shutdown_save_attempted =
+        shutdown_sequence.state().shutdown_save_attempted;
+    bool& shutdown_clean_marker_armed =
+        shutdown_sequence.state().shutdown_clean_marker_armed;
+    bool& main_window_destroyed =
+        shutdown_sequence.state().main_window_destroyed;
+    bool& end_session_pending = shutdown_sequence.state().end_session_pending;
+    unsigned& shell_call_depth = shutdown_sequence.state().shell_call_depth;
+    bool& shutdown_deferred = shutdown_sequence.state().shutdown_deferred;
+    bool& shutdown_message_queued =
+        shutdown_sequence.state().shutdown_message_queued;
+    bool& file_operation_call_active =
+        shutdown_sequence.state().file_operation_call_active;
+    bool& file_operation_in_progress =
+        shutdown_sequence.state().file_operation_in_progress;
+    bool& close_after_file_operation =
+        shutdown_sequence.state().close_after_file_operation;
+    bool& cancel_file_operation =
+        shutdown_sequence.state().cancel_file_operation;
     std::array<panedock::explorer_host::ExplorerHost, kExplorerCount> explorers;
     std::array<bool, kExplorerCount> realized{};
     // PD-093: startup shows the active Shell view first; the posted message
@@ -474,40 +502,6 @@ struct AppState {
     HWND main_window{nullptr};
     bool diagnostic_mode{};
     bool session_dirty{};
-    // A nested modal loop (TrackPopupMenu, shell context menu, IFileOperation
-    // progress) may consume the WM_QUIT posted in WM_CLOSE, leaving the outer
-    // GetMessageW loop stuck with the window already destroyed. The outer loop
-    // checks this flag after every dispatch so it exits regardless.
-    bool quit_requested{};
-    // First close request starts teardown; re-entrant WM_CLOSE/WM_ENDSESSION
-    // during IExplorerBrowser::Destroy (the Shell pumps a nested loop there)
-    // must not re-run teardown or destroy the parent HWND while a view is
-    // still mid-teardown (§9.4 order).
-    bool closing_{};
-    bool shutdown_prompt_active{};
-    // A final save is a single close decision. WM_DESTROY is only allowed to
-    // keep its legacy fallback for an unexpected destroy before that decision.
-    bool shutdown_save_attempted{};
-    // The durable clean marker may be written only after the successful false
-    // marker save has survived the complete Shell/COM/window teardown.
-    bool shutdown_clean_marker_armed{};
-    bool main_window_destroyed{};
-    // WM_ENDSESSION(TRUE) can arrive while a save-failure dialog or a Shell
-    // file operation is pumping the STA message loop.
-    bool end_session_pending{};
-    // Shell calls are made on the STA and may dispatch our window messages
-    // before returning. A close during one must wait for the outer call. A
-    // normal close also uses this posted path for one UI turn, so its Closing
-    // caption can be presented before synchronous teardown starts.
-    unsigned shell_call_depth{};
-    bool shutdown_deferred{};
-    bool shutdown_message_queued{};
-    // PD-123: PerformOperations pumps the STA message loop. A close request
-    // records intent and defers the existing teardown until that call returns.
-    bool file_operation_call_active{};
-    bool file_operation_in_progress{};
-    bool close_after_file_operation{};
-    bool cancel_file_operation{};
     HWND transfer_close_dialog{nullptr};
     // Set by WM_CREATE when the Shell view cannot be opened. Never raised as a
     // modal MessageBox from inside WM_CREATE (that nested loop could dispatch a
@@ -611,17 +605,19 @@ struct AppState {
 void begin_shutdown(HWND window, AppState& state, bool allow_keep_open) noexcept;
 
 void finish_shell_call(AppState& state) noexcept {
-    if (state.shell_call_depth == 0 || --state.shell_call_depth != 0 ||
-        !state.shutdown_deferred || state.shutdown_message_queued ||
-        state.main_window == nullptr)
+    const auto action = state.shutdown_sequence.step(
+        panedock::core::ShutdownEvent::shell_call_left);
+    if (action != panedock::core::ShutdownAction::defer ||
+        state.shutdown_message_queued || state.main_window == nullptr)
         return;
-    state.shutdown_message_queued = true;
+    state.shutdown_sequence.step(
+        panedock::core::ShutdownEvent::deferred_shutdown_queued);
     if (PostMessageW(state.main_window, kDeferredShutdownMessage, 0, 0))
         return;
     OutputDebugStringW(
         L"PaneDock: could not queue deferred shutdown\n");
-    state.shutdown_message_queued = false;
-    state.shutdown_deferred = false;
+    state.shutdown_sequence.step(
+        panedock::core::ShutdownEvent::deferred_shutdown_queue_failed);
     if (IsWindow(state.main_window))
         begin_shutdown(state.main_window, state,
                        !state.end_session_pending);
@@ -630,7 +626,8 @@ void finish_shell_call(AppState& state) noexcept {
 class ShellCallScope final {
 public:
     explicit ShellCallScope(AppState& state) noexcept : state_(state) {
-        ++state_.shell_call_depth;
+        state_.shutdown_sequence.step(
+            panedock::core::ShutdownEvent::shell_call_entered);
     }
 
     ~ShellCallScope() noexcept {
@@ -648,7 +645,8 @@ void app_shell_call_state_changed(void* context, bool entering) noexcept {
     if (context == nullptr) return;
     auto& state = *static_cast<AppState*>(context);
     if (entering) {
-        ++state.shell_call_depth;
+        state.shutdown_sequence.step(
+            panedock::core::ShutdownEvent::shell_call_entered);
     } else {
         finish_shell_call(state);
     }
@@ -4589,6 +4587,8 @@ void begin_shutdown(HWND window, AppState& state,
                     bool allow_keep_open = true) noexcept;
 void complete_deferred_close(HWND window, AppState& state) noexcept;
 void finish_shutdown(HWND window, AppState& state) noexcept;
+void run_shutdown_action(HWND window, AppState& state,
+                         panedock::core::ShutdownAction action) noexcept;
 
 void set_main_window_title(HWND window, bool diagnostic_mode,
                            bool closing) noexcept {
@@ -4836,19 +4836,21 @@ LRESULT CALLBACK transfer_close_dialog_proc(HWND window, UINT message,
             if (state == nullptr) break;
             switch (LOWORD(wparam)) {
                 case kTransferCloseKeepOpenId:
-                    state->close_after_file_operation = false;
-                    state->cancel_file_operation = false;
+                    state->shutdown_sequence.step(
+                        panedock::core::ShutdownEvent::transfer_keep_open);
                     DestroyWindow(window);
                     return 0;
                 case kTransferCloseAfterTransferId:
-                    state->close_after_file_operation = true;
-                    state->cancel_file_operation = false;
+                    state->shutdown_sequence.step(
+                        panedock::core::ShutdownEvent::
+                            transfer_close_after_transfer);
                     DestroyWindow(window);
                     complete_deferred_close(state->main_window, *state);
                     return 0;
                 case kTransferCancelAndCloseId:
-                    state->close_after_file_operation = true;
-                    state->cancel_file_operation = true;
+                    state->shutdown_sequence.step(
+                        panedock::core::ShutdownEvent::
+                            transfer_cancel_and_close);
                     SetWindowTextW(
                         GetDlgItem(window, kTransferCloseStatusId),
                         L"Cancelling transfer...");
@@ -4865,10 +4867,9 @@ LRESULT CALLBACK transfer_close_dialog_proc(HWND window, UINT message,
             }
             break;
         case WM_CLOSE:
-            if (state != nullptr) {
-                state->close_after_file_operation = false;
-                state->cancel_file_operation = false;
-            }
+            if (state != nullptr)
+                state->shutdown_sequence.step(
+                    panedock::core::ShutdownEvent::transfer_keep_open);
             DestroyWindow(window);
             return 0;
         case WM_NCDESTROY:
@@ -4920,18 +4921,16 @@ void show_transfer_close_dialog(HWND owner, AppState& state) noexcept {
 }
 
 void finish_shutdown(HWND window, AppState& state) noexcept {
-    if (state.closing_) return;
-    state.closing_ = true;
+    if (state.shutdown_sequence.step(
+            panedock::core::ShutdownEvent::teardown_started) !=
+        panedock::core::ShutdownAction::destroy_views)
+        return;
     // Keep the owner window visible while the synchronous Shell teardown runs.
     // The caption is the smallest truthful progress surface; do not destroy
     // the parent before every initialized ExplorerBrowser has been destroyed.
     set_main_window_title(window, state.diagnostic_mode, true);
-    state.quit_requested = true;
     state.startup_realize_pending = false;
     ++state.startup_realize_generation;
-    state.end_session_pending = false;
-    state.shutdown_deferred = false;
-    state.shutdown_message_queued = false;
     if (state.transfer_close_dialog != nullptr)
         DestroyWindow(state.transfer_close_dialog);
     if (state.startup_notification != nullptr)
@@ -4941,68 +4940,92 @@ void finish_shutdown(HWND window, AppState& state) noexcept {
     cancel_session_save_timer(state);
     destroy_explorers(state);
     assert(panedock::explorer_host::live_view_count() == 0);
-    DestroyWindow(window);
-    PostQuitMessage(0);
+    if (state.shutdown_sequence.step(
+            panedock::core::ShutdownEvent::views_destroyed) ==
+        panedock::core::ShutdownAction::destroy_window) {
+        DestroyWindow(window);
+        PostQuitMessage(0);
+    }
+}
+
+void run_shutdown_action(HWND window, AppState& state,
+                         panedock::core::ShutdownAction action) noexcept {
+    switch (action) {
+        case panedock::core::ShutdownAction::defer:
+            set_main_window_title(window, state.diagnostic_mode, true);
+            if (state.shell_call_depth != 0 || state.shutdown_message_queued ||
+                window == nullptr)
+                return;
+            state.shutdown_sequence.step(
+                panedock::core::ShutdownEvent::deferred_shutdown_queued);
+            if (PostMessageW(window, kDeferredShutdownMessage, 0, 0)) return;
+            OutputDebugStringW(
+                L"PaneDock: could not queue deferred shutdown\n");
+            state.shutdown_sequence.step(
+                panedock::core::ShutdownEvent::deferred_shutdown_queue_failed);
+            if (IsWindow(window))
+                begin_shutdown(window, state, !state.end_session_pending);
+            return;
+
+        case panedock::core::ShutdownAction::prompt_transfer:
+            show_transfer_close_dialog(window, state);
+            return;
+
+        case panedock::core::ShutdownAction::save_session: {
+            capture_window_placement(window, state);
+            const bool save_succeeded = save_now(state, false, true);
+            run_shutdown_action(
+                window, state,
+                state.shutdown_sequence.step(
+                    save_succeeded
+                        ? panedock::core::ShutdownEvent::save_succeeded
+                        : panedock::core::ShutdownEvent::save_failed));
+            return;
+        }
+
+        case panedock::core::ShutdownAction::prompt_save_failure: {
+            state.shutdown_sequence.step(
+                panedock::core::ShutdownEvent::save_prompt_started);
+            const int answer = MessageBoxW(
+                window,
+                L"PaneDock could not save your session. Keep PaneDock open so "
+                L"you can fix the storage problem and try again? Choose No to "
+                L"close without saving recent changes.",
+                L"PaneDock", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON1);
+            const auto prompt_result = state.shutdown_sequence.step(
+                panedock::core::ShutdownEvent::save_prompt_finished);
+            if (prompt_result ==
+                panedock::core::ShutdownAction::destroy_views) {
+                finish_shutdown(window, state);
+                return;
+            }
+            if (answer != IDNO) {
+                state.shutdown_sequence.step(
+                    panedock::core::ShutdownEvent::save_keep_open);
+                set_main_window_title(window, state.diagnostic_mode, false);
+                return;
+            }
+            run_shutdown_action(
+                window, state,
+                state.shutdown_sequence.step(
+                    panedock::core::ShutdownEvent::save_discarded));
+            return;
+        }
+
+        case panedock::core::ShutdownAction::destroy_views:
+            finish_shutdown(window, state);
+            return;
+        default:
+            return;
+    }
 }
 
 void begin_shutdown(HWND window, AppState& state,
                     bool allow_keep_open) noexcept {
-    if (state.closing_) return;
-    if (state.shutdown_deferred) {
-        if (!allow_keep_open) state.end_session_pending = true;
-        return;
-    }
-    if (state.shell_call_depth != 0) {
-        state.shutdown_deferred = true;
-        set_main_window_title(window, state.diagnostic_mode, true);
-        if (!allow_keep_open) state.end_session_pending = true;
-        return;
-    }
-    const bool resumed_after_ui_turn = state.shutdown_message_queued;
-    state.shutdown_message_queued = false;
-    if (!resumed_after_ui_turn) {
-        state.shutdown_deferred = true;
-        state.shutdown_message_queued = true;
-        set_main_window_title(window, state.diagnostic_mode, true);
-        if (PostMessageW(window, kDeferredShutdownMessage, 0, 0)) return;
-        OutputDebugStringW(L"PaneDock: could not queue deferred shutdown\n");
-        state.shutdown_message_queued = false;
-        state.shutdown_deferred = false;
-    }
-    state.shutdown_deferred = false;
-    if (state.shutdown_prompt_active) {
-        if (!allow_keep_open) state.end_session_pending = true;
-        return;
-    }
-    if (state.shutdown_save_attempted) {
-        if (!allow_keep_open) state.end_session_pending = true;
-        return;
-    }
-    state.shutdown_save_attempted = true;
-    capture_window_placement(window, state);
-    const bool save_succeeded = save_now(state, false, true);
-    state.shutdown_clean_marker_armed = save_succeeded;
-    if (!save_succeeded && allow_keep_open) {
-        state.shutdown_prompt_active = true;
-        const int answer = MessageBoxW(
-            window,
-            L"PaneDock could not save your session. Keep PaneDock open so "
-            L"you can fix the storage problem and try again? Choose No to "
-            L"close without saving recent changes.",
-            L"PaneDock", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON1);
-        state.shutdown_prompt_active = false;
-        if (state.end_session_pending) {
-            finish_shutdown(window, state);
-            return;
-        }
-        if (answer != IDNO) {
-            state.shutdown_save_attempted = false;
-            state.shutdown_clean_marker_armed = false;
-            set_main_window_title(window, state.diagnostic_mode, false);
-            return;
-        }
-    }
-    finish_shutdown(window, state);
+    const auto action = state.shutdown_sequence.step(
+        allow_keep_open ? panedock::core::ShutdownEvent::close_requested
+                        : panedock::core::ShutdownEvent::end_session);
+    run_shutdown_action(window, state, action);
 }
 
 void complete_deferred_close(HWND window, AppState& state) noexcept {
@@ -5017,13 +5040,15 @@ void complete_deferred_close(HWND window, AppState& state) noexcept {
 
 void file_operation_started(void* context) noexcept {
     if (context != nullptr)
-        static_cast<AppState*>(context)->file_operation_in_progress = true;
+        static_cast<AppState*>(context)->shutdown_sequence.step(
+            panedock::core::ShutdownEvent::file_operation_started);
 }
 
 void file_operation_finished(void* context) noexcept {
     if (context == nullptr) return;
     auto& state = *static_cast<AppState*>(context);
-    state.file_operation_in_progress = false;
+    state.shutdown_sequence.step(
+        panedock::core::ShutdownEvent::file_operation_finished);
     if (state.main_window != nullptr)
         PostMessageW(state.main_window, kFileOperationFinishedMessage, 0, 0);
 }
@@ -5052,10 +5077,8 @@ bool perform_clipboard_paste(HWND window, AppState& state,
         state.explorers[pane_index].location().parsing_name;
     if (parsing_name.empty()) return false;
 
-    state.file_operation_call_active = true;
-    state.file_operation_in_progress = false;
-    state.close_after_file_operation = false;
-    state.cancel_file_operation = false;
+    state.shutdown_sequence.step(
+        panedock::core::ShutdownEvent::file_operation_call_started);
     panedock::file_operations::PasteResult result;
     {
         ShellCallScope shell_call(state);
@@ -5065,8 +5088,10 @@ bool perform_clipboard_paste(HWND window, AppState& state,
              file_operation_cancel_requested,
              file_operation_setup_aborted});
     }
-    state.file_operation_in_progress = false;
-    state.file_operation_call_active = false;
+    state.shutdown_sequence.step(
+        panedock::core::ShutdownEvent::file_operation_finished);
+    state.shutdown_sequence.step(
+        panedock::core::ShutdownEvent::file_operation_call_finished);
     complete_deferred_close(window, state);
     return state.shutdown_deferred || state.closing_ || result.handled;
 }
@@ -5343,11 +5368,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         }
         case kDeferredShutdownMessage:
-            if (state != nullptr && state->shutdown_deferred) {
-                state->shutdown_deferred = false;
-                begin_shutdown(window, *state,
-                               !state->end_session_pending);
-            }
+            if (state != nullptr)
+                run_shutdown_action(
+                    window, *state,
+                    state->shutdown_sequence.step(
+                        panedock::core::ShutdownEvent::
+                            deferred_shutdown_ready));
             return 0;
         case kDeferredLayoutMessage:
             if (state != nullptr && state->layout_message_queued) {
@@ -6078,27 +6104,26 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 complete_deferred_close(window, *state);
             return 0;
         case WM_CLOSE:
-            if (state != nullptr) {
-                if (state->file_operation_in_progress) {
-                    state->close_after_file_operation = true;
-                    show_transfer_close_dialog(window, *state);
-                    return 0;
-                }
-                begin_shutdown(window, *state,
-                               !state->end_session_pending);
-            }
+            if (state != nullptr)
+                run_shutdown_action(
+                    window, *state,
+                    state->shutdown_sequence.step(
+                        state->end_session_pending
+                            ? panedock::core::ShutdownEvent::end_session
+                            : panedock::core::ShutdownEvent::close_requested));
             return 0;
         case WM_DESTROY:
             if (state != nullptr) {
-                state->main_window_destroyed = true;
-                state->quit_requested = true;
+                (void)state->shutdown_sequence.step(
+                    panedock::core::ShutdownEvent::window_destroyed);
                 state->startup_realize_pending = false;
                 ++state->startup_realize_generation;
                 destroy_pinned_locations_manager(*state);
                 revoke_drag_hover_targets(*state);
                 cancel_session_save_timer(*state);
                 if (state->session_dirty && !state->shutdown_save_attempted) {
-                    state->shutdown_save_attempted = true;
+                    state->shutdown_sequence.step(
+                        panedock::core::ShutdownEvent::save_started);
                     capture_window_placement(window, *state);
                     (void)save_now(*state, false, true);
                 }
@@ -6123,16 +6148,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_ENDSESSION:
             if (state != nullptr) {
                 if (wparam) {
-                    state->end_session_pending = true;
-                    if (state->file_operation_call_active ||
-                        state->file_operation_in_progress) {
-                        state->close_after_file_operation = true;
-                        state->cancel_file_operation = true;
-                    } else {
-                        begin_shutdown(window, *state, false);
-                    }
+                    run_shutdown_action(
+                        window, *state,
+                        state->shutdown_sequence.step(
+                            panedock::core::ShutdownEvent::end_session));
                 } else {
-                    state->end_session_pending = false;
+                    state->shutdown_sequence.step(
+                        panedock::core::ShutdownEvent::end_session_cancelled);
                 }
             }
             return 0;
