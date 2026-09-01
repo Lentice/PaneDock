@@ -302,6 +302,24 @@ void ExplorerHost::remove_context_menu_subclass() noexcept {
 
 bool ExplorerHost::show_background_context_menu(HWND owner,
                                                  LPARAM lparam) noexcept {
+    POINT point{};
+    if (lparam == -1) {
+        if (!GetCursorPos(&point)) return false;
+    } else {
+        point.x = GET_X_LPARAM(lparam);
+        point.y = GET_Y_LPARAM(lparam);
+    }
+    return show_folder_context_menu_at(owner, point, false, false);
+}
+
+bool ExplorerHost::show_folder_context_menu(HWND owner,
+                                             POINT screen_point) noexcept {
+    return show_folder_context_menu_at(owner, screen_point, true, true);
+}
+
+bool ExplorerHost::show_folder_context_menu_at(HWND owner, POINT screen_point,
+                                                bool clear_selection,
+                                                bool align_above) noexcept {
     if (owner == nullptr || current_view_ == nullptr ||
         context_menu_active_ || destroying_) {
         return false;
@@ -312,18 +330,20 @@ bool ExplorerHost::show_background_context_menu(HWND owner,
     if (FAILED(current_view_->QueryInterface(IID_PPV_ARGS(&folder_view)))) {
         return false;
     }
-    int selected = 0;
-    if (FAILED(folder_view->ItemCount(SVGIO_SELECTION, &selected)) ||
-        selected != 0) {
-        return false;
-    }
-
-    POINT point{};
-    if (lparam == -1) {
-        if (!GetCursorPos(&point)) return false;
+    if (clear_selection) {
+        const HRESULT selection_result =
+            current_view_->SelectItem(nullptr, SVSI_DESELECTOTHERS);
+        if (FAILED(selection_result)) {
+            log_hresult(L"IShellView::SelectItem(SVSI_DESELECTOTHERS)",
+                        selection_result);
+            return false;
+        }
     } else {
-        point.x = GET_X_LPARAM(lparam);
-        point.y = GET_Y_LPARAM(lparam);
+        int selected = 0;
+        if (FAILED(folder_view->ItemCount(SVGIO_SELECTION, &selected)) ||
+            selected != 0) {
+            return false;
+        }
     }
 
     Microsoft::WRL::ComPtr<IContextMenu> menu;
@@ -351,9 +371,14 @@ bool ExplorerHost::show_background_context_menu(HWND owner,
     (void)context_menu_.As(&context_menu2_);
     (void)context_menu_.As(&context_menu3_);
     context_menu_active_ = true;
+    const HWND menu_owner = context_menu_view_window_ != nullptr
+                                ? context_menu_view_window_
+                                : owner;
     SetForegroundWindow(owner);
+    const UINT menu_flags = TPM_RETURNCMD | TPM_RIGHTBUTTON |
+                            (align_above ? TPM_BOTTOMALIGN : 0);
     const int command = TrackPopupMenuEx(
-        popup, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, owner,
+        popup, menu_flags, screen_point.x, screen_point.y, menu_owner,
         nullptr);
     context_menu_active_ = false;
 
@@ -396,7 +421,7 @@ bool ExplorerHost::show_background_context_menu(HWND owner,
         log_hresult(L"IContextMenu::InvokeCommand", hr);
     }
     DestroyMenu(popup);
-    PostMessageW(owner, WM_NULL, 0, 0);
+    PostMessageW(menu_owner, WM_NULL, 0, 0);
     context_menu3_.Reset();
     context_menu2_.Reset();
     context_menu_.Reset();

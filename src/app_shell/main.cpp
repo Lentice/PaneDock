@@ -132,14 +132,19 @@ constexpr COLORREF kTabActiveText = RGB(23, 75, 180);
 constexpr COLORREF kTabText = RGB(31, 41, 55);
 constexpr COLORREF kTabActiveBorder = RGB(191, 211, 245);
 constexpr COLORREF kTabBorder = RGB(232, 237, 242);
+constexpr COLORREF kTabAddHoverBackground = RGB(236, 240, 244);
+constexpr COLORREF kTabAddBorder = RGB(226, 232, 240);
+constexpr COLORREF kTabAddGlyph = RGB(31, 41, 55);
 constexpr int kNavigationBarHeight = 28;
 constexpr int kStatusBarHeight = 24;
 constexpr int kNavigationButtonWidth = 32;
 constexpr int kNavigationButtonOffsetX = 0;
 constexpr int kNavigationButtonOffsetY = 2;
 constexpr int kNavigationGlyphSize = 16;
-constexpr std::array<wchar_t, 6> kNavigationGlyphs{
-    L'\uE72B', L'\uE72A', L'\uE74A', L'\uE72C', L'\uE71D', L'\uE734'};
+constexpr COLORREF kStatusBarBackground = RGB(249, 250, 251);
+constexpr std::array<wchar_t, 7> kNavigationGlyphs{
+    L'\uE72B', L'\uE72A', L'\uE74A', L'\uE72C', L'\uE71D', L'\uE734',
+    L'\uE712'};
 // PD-031: rounded light-gray pill drawn behind the address bar EDIT to fake
 // a rounded input box (see docs/tickets/PD-031-*.md decision 2). Radius is
 // smaller than the design mock's 6px .location radius because the fixed
@@ -163,6 +168,8 @@ constexpr std::size_t kViewModeOptionCount = 8;
 constexpr int kViewModeMenuIdCount =
     static_cast<int>(kExplorerCount * kViewModeOptionCount);
 constexpr int kLayoutButtonIdBase = 400;
+// PD-161: one footer action command per pane, after tab context commands.
+constexpr int kFolderContextButtonIdBase = 790;
 // Pinned popup commands: four pane blocks, each with 64 custom locations and
 // four fixed/action slots. The 500-771 range is separate from all controls.
 constexpr int kPinnedMenuIdBase = 500;
@@ -581,6 +588,7 @@ struct AppState {
     std::array<HWND, kExplorerCount> refresh_buttons{};
     std::array<HWND, kExplorerCount> view_mode_buttons{};
     std::array<HWND, kExplorerCount> pinned_buttons{};
+    std::array<HWND, kExplorerCount> folder_context_buttons{};
     HWND pinned_locations_window{nullptr};
     HWND pinned_locations_list{nullptr};
     std::array<HWND, kPinnedLocationsButtonCount>
@@ -1080,9 +1088,12 @@ bool draw_navigation_font_glyph(const DRAWITEMSTRUCT& item, wchar_t glyph,
     const HGDIOBJ old_font = SelectObject(item.hDC, icon_font);
     const int old_bk_mode = SetBkMode(item.hDC, TRANSPARENT);
     const COLORREF old_text_color = SetTextColor(item.hDC, color);
+    // Center the actual glyph in the final owner-draw button rectangle on
+    // both axes, including after footer geometry changes.
     RECT glyph_rect = item.rcItem;
     const int drawn = DrawTextW(item.hDC, &glyph, 1, &glyph_rect,
-                                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                                DT_CENTER | DT_VCENTER | DT_SINGLELINE |
+                                    DT_NOPREFIX);
     SetTextColor(item.hDC, old_text_color);
     SetBkMode(item.hDC, old_bk_mode);
     SelectObject(item.hDC, old_font);
@@ -1158,6 +1169,22 @@ void draw_navigation_fallback_glyph(const DRAWITEMSTRUCT& item,
                 LineTo(item.hDC, star.front().x, star.front().y);
                 break;
             }
+            case 6: {  // fallback folder context menu: three dots
+                HBRUSH brush = CreateSolidBrush(color);
+                if (brush != nullptr) {
+                    const int dot = std::max(1, size / 5);
+                    const int gap = std::max(1, size / 4);
+                    for (int offset = -gap; offset <= gap; offset += gap) {
+                        RECT dot_rect{cx + offset - dot / 2,
+                                      cy - dot / 2,
+                                      cx + offset - dot / 2 + dot,
+                                      cy - dot / 2 + dot};
+                        FillRect(item.hDC, &dot_rect, brush);
+                    }
+                    DeleteObject(brush);
+                }
+                break;
+            }
             default:
                 break;
         }
@@ -1168,19 +1195,49 @@ void draw_navigation_fallback_glyph(const DRAWITEMSTRUCT& item,
 
 void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
                                  std::size_t glyph_kind,
-                                 bool tracked_hovered) noexcept {
+                                 bool tracked_hovered,
+                                 bool blend_with_footer = false) noexcept {
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
     const bool hovered = !disabled &&
                          ((item.itemState & ODS_HOTLIGHT) != 0 ||
                           tracked_hovered);
-    HBRUSH background = CreateSolidBrush(
-        hovered ? RGB(242, 245, 248) : RGB(255, 255, 255));
-    if (background != nullptr) {
-        FillRect(item.hDC, &item.rcItem, background);
-        DeleteObject(background);
+    const bool pressed = (item.itemState & ODS_SELECTED) != 0;
+    const COLORREF normal_background =
+        blend_with_footer ? kStatusBarBackground : RGB(255, 255, 255);
+    if (blend_with_footer && hovered) {
+        HBRUSH background = CreateSolidBrush(kTabAddHoverBackground);
+        HPEN border = CreatePen(PS_SOLID,
+                                scaled_value(item.hwndItem, 1),
+                                kTabAddBorder);
+        if (background != nullptr && border != nullptr) {
+            const HGDIOBJ old_brush = SelectObject(item.hDC, background);
+            const HGDIOBJ old_pen = SelectObject(item.hDC, border);
+            const int radius =
+                scaled_value(item.hwndItem, kTabCornerRadius);
+            RoundRect(item.hDC, item.rcItem.left, item.rcItem.top,
+                      item.rcItem.right, item.rcItem.bottom, radius, radius);
+            SelectObject(item.hDC, old_pen);
+            SelectObject(item.hDC, old_brush);
+        }
+        if (background != nullptr) DeleteObject(background);
+        if (border != nullptr) DeleteObject(border);
+    } else {
+        const COLORREF background_color =
+            disabled ? normal_background
+            : !blend_with_footer && pressed ? RGB(226, 232, 240)
+            : !blend_with_footer && hovered ? RGB(242, 245, 248)
+                                            : normal_background;
+        HBRUSH background = CreateSolidBrush(background_color);
+        if (background != nullptr) {
+            FillRect(item.hDC, &item.rcItem, background);
+            DeleteObject(background);
+        }
     }
 
-    const COLORREF color = disabled ? RGB(190, 197, 209) : RGB(90, 102, 122);
+    const COLORREF color = disabled
+                               ? RGB(190, 197, 209)
+                               : blend_with_footer ? kTabAddGlyph
+                                                   : RGB(90, 102, 122);
     const int size =
         std::max(4, scaled_value(item.hwndItem, kNavigationGlyphSize));
     if (glyph_kind < kNavigationGlyphs.size() &&
@@ -1191,7 +1248,7 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
         return;
     }
 
-    // The font-failure path keeps all six controls visible without the
+    // The font-failure path keeps all navigation controls visible without the
     // platform icon font.
     draw_navigation_fallback_glyph(item, glyph_kind, color, size);
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
@@ -1238,7 +1295,7 @@ void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
 
 void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi) noexcept {
     const RECT rect = item.rcItem;
-    HBRUSH background = CreateSolidBrush(RGB(249, 250, 251));
+    HBRUSH background = CreateSolidBrush(kStatusBarBackground);
     if (background != nullptr) {
         FillRect(item.hDC, &rect, background);
         DeleteObject(background);
@@ -1261,8 +1318,15 @@ void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi) noexcept {
     const int content_top = rect.top + separator_height;
     const int content_bottom = rect.bottom;
     const int text_left = rect.left + text_inset;
+    // Leave the larger inset footer action's area available for the
+    // full-width separator and keep status text from running underneath it.
+    const int footer_action_reserve = scaled_value(
+        item.hwndItem,
+        kStatusBarHeight - 2 * kTabAddButtonVerticalInset +
+            2 * kSpaceTight);
     const int text_right = std::max(
-        text_left, static_cast<int>(rect.right) - text_inset);
+        text_left, static_cast<int>(rect.right) - text_inset -
+                       footer_action_reserve);
     const int text_margin = std::max(
         0, MulDiv(kSpaceSnug, static_cast<int>(dpi), 96));
     const int divider_width = std::max(1, MulDiv(1, static_cast<int>(dpi), 96));
@@ -1471,6 +1535,7 @@ void refresh_navigation_buttons(AppState& state, std::size_t pane_index) {
         EnableWindow(state.back_buttons[pane_index], FALSE);
         EnableWindow(state.forward_buttons[pane_index], FALSE);
         EnableWindow(state.up_buttons[pane_index], FALSE);
+        EnableWindow(state.folder_context_buttons[pane_index], FALSE);
         return;
     }
     const auto& tab = active_tab(active_group(state).panes[pane_index]);
@@ -1481,6 +1546,8 @@ void refresh_navigation_buttons(AppState& state, std::size_t pane_index) {
                  !state.suppress_history_record[pane_index] &&
                      panedock::core::can_navigate_tab_forward(tab));
     EnableWindow(state.up_buttons[pane_index], TRUE);
+    EnableWindow(state.folder_context_buttons[pane_index],
+                 state.realized[pane_index]);
 }
 
 void refresh_navigation_chrome(AppState& state, std::size_t pane_index) {
@@ -2021,6 +2088,7 @@ void apply_ui_font(AppState& state) noexcept {
         set_ui_font(state.up_buttons[index], font);
         set_ui_font(state.refresh_buttons[index], font);
         set_ui_font(state.view_mode_buttons[index], font);
+        set_ui_font(state.folder_context_buttons[index], font);
         set_ui_font(state.address_bars[index], font);
         set_ui_font(state.status_bars[index], font);
     }
@@ -2763,6 +2831,8 @@ HRESULT apply_layout(HWND window, AppState& state,
             ShowWindow(state.refresh_buttons[index], SW_HIDE);
             ShowWindow(state.view_mode_buttons[index], SW_HIDE);
             ShowWindow(state.pinned_buttons[index], SW_HIDE);
+            ShowWindow(state.folder_context_buttons[index], SW_HIDE);
+            EnableWindow(state.folder_context_buttons[index], FALSE);
             ShowWindow(state.address_bars[index], SW_HIDE);
             ShowWindow(state.status_bars[index], SW_HIDE);
         }
@@ -2860,14 +2930,57 @@ HRESULT apply_layout(HWND window, AppState& state,
             const int status_height = std::min(
                 scaled_value(window, kStatusBarHeight),
                 std::max(0, static_cast<int>(rect.bottom - rect.top)));
-            const RECT status_rect{rect.left, rect.bottom - status_height,
-                                   rect.right, rect.bottom};
+            const int footer_top = static_cast<int>(rect.bottom) - status_height;
+            const int pane_width = std::max(
+                0, static_cast<int>(pane_rect.right - pane_rect.left));
+            const int footer_vertical_inset = std::min(
+                scaled_value(window, kTabAddButtonVerticalInset),
+                std::max(0, (status_height - 1) / 2));
+            const int footer_button_top = footer_top + std::max(
+                0, footer_vertical_inset - scaled_value(window, 1));
+            const int footer_button_bottom = std::max(
+                footer_button_top,
+                std::min(static_cast<int>(rect.bottom),
+                         static_cast<int>(rect.bottom) - footer_vertical_inset +
+                             scaled_value(window, 3)));
+            const int footer_horizontal_inset = std::min(
+                scaled_value(window, kSpaceTight),
+                std::max(0, (pane_width - 1) / 2));
+            const int desired_footer_button_width = std::max(
+                1, footer_button_bottom - footer_button_top);
+            const int footer_button_width = std::min(
+                desired_footer_button_width,
+                std::max(1, pane_width - 2 * footer_horizontal_inset));
+            const int footer_button_right =
+                static_cast<int>(pane_rect.right) - footer_horizontal_inset;
+            const int footer_button_left = std::max(
+                static_cast<int>(pane_rect.left) + footer_horizontal_inset,
+                static_cast<int>(footer_button_right - footer_button_width));
+            const RECT status_rect{
+                rect.left, footer_top, rect.right, rect.bottom};
+            // Keep the action inside the footer's visual bounds so its hover
+            // fill cannot cover the separator or pane card border.
+            const RECT footer_button_rect{footer_button_left,
+                                          footer_button_top,
+                                          footer_button_right,
+                                          footer_button_bottom};
             if (pane_geometry_changed) {
                 position_window(&positions, state.status_bars[index],
                                 status_rect,
                                 SWP_NOZORDER | SWP_NOACTIVATE);
+                position_window(&positions,
+                                state.folder_context_buttons[index],
+                                footer_button_rect,
+                                SWP_NOZORDER | SWP_NOACTIVATE);
             }
             ShowWindow(state.status_bars[index], SW_SHOW);
+            ShowWindow(state.folder_context_buttons[index], SW_SHOW);
+            // The status bar spans the full footer for its separator; keep
+            // the inset action above that sibling so it remains drawable.
+            SetWindowPos(state.folder_context_buttons[index], HWND_TOP, 0, 0,
+                         0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            EnableWindow(state.folder_context_buttons[index],
+                         state.realized[index]);
             rect.bottom -= status_height;
             // PD-040: the container is the real parent HWND passed to
             // ExplorerHost::initialize now, positioned/sized at `rect` in
@@ -2905,6 +3018,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                     continue;
                 }
                 state.realized[index] = true;
+                refresh_navigation_buttons(state, index);
                 {
                     ShellCallScope shell_call(state);
                     (void)SHAutoComplete(state.address_bars[index],
@@ -2968,6 +3082,8 @@ HRESULT apply_layout(HWND window, AppState& state,
             ShowWindow(state.up_buttons[index], SW_HIDE);
             ShowWindow(state.refresh_buttons[index], SW_HIDE);
             ShowWindow(state.view_mode_buttons[index], SW_HIDE);
+            ShowWindow(state.folder_context_buttons[index], SW_HIDE);
+            EnableWindow(state.folder_context_buttons[index], FALSE);
             ShowWindow(state.address_bars[index], SW_HIDE);
             ShowWindow(state.status_bars[index], SW_HIDE);
         }
@@ -4094,9 +4210,8 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
     if (state.tab_hover_indices[pane_index].has_value() &&
         *state.tab_hover_indices[pane_index] == pane.tabs.size() &&
         add.right > add.left && add.bottom > add.top) {
-        HBRUSH background = CreateSolidBrush(RGB(236, 240, 244));
-        HPEN border = CreatePen(PS_SOLID, border_width,
-                                RGB(226, 232, 240));
+        HBRUSH background = CreateSolidBrush(kTabAddHoverBackground);
+        HPEN border = CreatePen(PS_SOLID, border_width, kTabAddBorder);
         if (background != nullptr && border != nullptr) {
             const HGDIOBJ old_brush = SelectObject(dc, background);
             const HGDIOBJ old_pen = SelectObject(dc, border);
@@ -4121,7 +4236,7 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
         }
         const HGDIOBJ old_plus_font =
             plus_font != nullptr ? SelectObject(dc, plus_font) : nullptr;
-        SetTextColor(dc, RGB(31, 41, 55));
+        SetTextColor(dc, kTabAddGlyph);
         RECT plus_rect = add;
         OffsetRect(&plus_rect, 0, -scaled_value(window, 2));
         DrawTextW(dc, L"+", 1, &plus_rect,
@@ -4286,6 +4401,21 @@ LRESULT CALLBACK owner_draw_button_proc(HWND window, UINT message,
                 state->owner_draw_hovered_button = nullptr;
                 InvalidateRect(window, nullptr, FALSE);
             }
+        } else if (
+            message == WM_RBUTTONUP &&
+            button_id >= static_cast<UINT_PTR>(kFolderContextButtonIdBase) &&
+            button_id < static_cast<UINT_PTR>(
+                             kFolderContextButtonIdBase +
+                             static_cast<int>(kExplorerCount))) {
+            // Transform right-click activation into the existing BN_CLICKED
+            // route so it opens the same native folder context menu.
+            const HWND parent = GetParent(window);
+            if (parent != nullptr)
+                SendMessageW(
+                    parent, WM_COMMAND,
+                    MAKEWPARAM(static_cast<WORD>(button_id), BN_CLICKED),
+                    reinterpret_cast<LPARAM>(window));
+            return 0;
         } else if (message == WM_NCDESTROY) {
             if (state->owner_draw_hovered_button == window)
                 state->owner_draw_hovered_button = nullptr;
@@ -4960,6 +5090,36 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     0, 0, 0, 0, window, nullptr, GetModuleHandleW(nullptr),
                     nullptr);
                 if (state->status_bars[index] == nullptr) return -1;
+                state->folder_context_buttons[index] = CreateWindowExW(
+                    0, L"BUTTON", L"Folder context menu",
+                    WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP |
+                        BS_PUSHBUTTON | BS_OWNERDRAW,
+                    0, 0, 0, 0, window,
+                    reinterpret_cast<HMENU>(kFolderContextButtonIdBase +
+                                             static_cast<int>(index)),
+                    GetModuleHandleW(nullptr), nullptr);
+                if (state->folder_context_buttons[index] == nullptr)
+                    return -1;
+                if (!SetWindowSubclass(
+                        state->folder_context_buttons[index],
+                        owner_draw_button_proc,
+                        static_cast<UINT_PTR>(kFolderContextButtonIdBase +
+                                              static_cast<int>(index)),
+                        reinterpret_cast<DWORD_PTR>(state)))
+                    return -1;
+                EnableWindow(state->folder_context_buttons[index], FALSE);
+                if (state->layout_tooltip != nullptr) {
+                    TOOLINFOW info{};
+                    info.cbSize = sizeof(info);
+                    info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+                    info.hwnd = window;
+                    info.uId = reinterpret_cast<UINT_PTR>(
+                        state->folder_context_buttons[index]);
+                    info.lpszText = const_cast<wchar_t*>(
+                        L"Folder context menu");
+                    SendMessageW(state->layout_tooltip, TTM_ADDTOOLW, 0,
+                                 reinterpret_cast<LPARAM>(&info));
+                }
             }
             refresh_ui_font(window, *state);
             refresh_sidebar(*state);
@@ -5152,6 +5312,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     draw_navigation_icon_button(
                         *item, 5,
                         state->owner_draw_hovered_button == item->hwndItem);
+                    return TRUE;
+                }
+                if (item != nullptr && item->CtlType == ODT_BUTTON &&
+                    item->CtlID >= kFolderContextButtonIdBase &&
+                    item->CtlID < kFolderContextButtonIdBase +
+                                      static_cast<int>(kExplorerCount)) {
+                    draw_navigation_icon_button(
+                        *item, 6,
+                        state->owner_draw_hovered_button == item->hwndItem,
+                        true);
                     return TRUE;
                 }
                 if (item != nullptr && item->CtlType == ODT_BUTTON) {
@@ -5487,6 +5657,34 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     show_pinned_locations_menu(
                         window, *state,
                         static_cast<std::size_t>(id - kPinnedButtonIdBase));
+                    return 0;
+                }
+                if (id >= kFolderContextButtonIdBase &&
+                    id < kFolderContextButtonIdBase +
+                             static_cast<int>(kExplorerCount)) {
+                    const std::size_t pane_index = static_cast<std::size_t>(
+                        id - kFolderContextButtonIdBase);
+                    if (!has_active_group(*state) ||
+                        pane_index >= active_group(*state).panes.size() ||
+                        !state->realized[pane_index] ||
+                        state->folder_context_buttons[pane_index] == nullptr ||
+                        !IsWindowVisible(
+                            state->folder_context_buttons[pane_index]))
+                        return 0;
+                    set_active_pane(window, *state, pane_index);
+                    if (state->closing_ || state->shutdown_deferred) return 0;
+                    if (active_pane_index(active_group(*state)) != pane_index)
+                        return 0;
+                    RECT button_rect{};
+                    if (!GetWindowRect(
+                            state->folder_context_buttons[pane_index],
+                            &button_rect))
+                        return 0;
+                    const POINT anchor{button_rect.left, button_rect.top};
+                    ShellCallScope shell_call(*state);
+                    state->explorers[pane_index].focus();
+                    (void)state->explorers[pane_index]
+                        .show_folder_context_menu(window, anchor);
                     return 0;
                 }
                 if (id >= kLayoutButtonIdBase &&

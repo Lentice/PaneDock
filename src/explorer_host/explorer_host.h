@@ -76,6 +76,7 @@ public:
     HRESULT translate_accelerator(MSG* message) noexcept;
     void destroy() noexcept;
     const core::ShellLocation& location() const noexcept { return location_; }
+    bool show_folder_context_menu(HWND owner, POINT screen_point) noexcept;
 
     void navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept;
     void navigation_failed() noexcept;
@@ -86,6 +87,9 @@ private:
     void install_context_menu_subclass() noexcept;
     void remove_context_menu_subclass() noexcept;
     bool show_background_context_menu(HWND owner, LPARAM lparam) noexcept;
+    bool show_folder_context_menu_at(HWND owner, POINT screen_point,
+                                     bool clear_selection,
+                                     bool align_above) noexcept;
     LRESULT handle_context_menu_message(HWND window, UINT message,
                                         WPARAM wparam,
                                         LPARAM lparam) noexcept;

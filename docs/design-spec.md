@@ -112,6 +112,11 @@ pane 之間的分隔線可拖曳,比例記錄於該 Group。
 
 pane 內部的一切互動由 Shell view 處理:多選手勢、右鍵選單、拖放、就地重新命名、鍵盤操作。PaneDock 不介入。
 
+每個 pane footer 提供一個 folder background context menu affordance，讓小 pane
+在 Shell view 沒有可用空白處時仍能開啟目前資料夾的原生背景選單。這是有限的
+host-level 入口：PaneDock 只觸發同一個 Shell view 的 background `IContextMenu`，
+不重建、過濾或包裝選單內容。
+
 ### 4.9 錯誤狀態
 
 無法解析的 Shell location 在該 tab 內顯示可復原的錯誤狀態,並保留其設定。重新連線後可重試。

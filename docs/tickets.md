@@ -198,6 +198,7 @@
 | PD-158 | 建立 `file_operations` 並讓 Ctrl+V 正確區分 Cut／Copy | 7 | `done` | PD-023, PD-121, PD-123, PD-140, PD-157 | [PD-158](tickets/PD-158-cut-aware-clipboard-paste.md) |
 | PD-159 | pane 空白處的背景 Shell verb 無法取得目前資料夾 | 7 | `done` | PD-007, PD-014, PD-024 | [PD-159](tickets/PD-159-background-shell-verb-current-folder.md) |
 | PD-160 | 完成 Shell location 三段式 identity 擷取與還原 | 7 | `ready` | PD-006, PD-022, PD-140, PD-157 | [PD-160](tickets/PD-160-shell-location-identity-capture-and-resolution.md) |
+| PD-161 | pane footer 新增目前資料夾背景選單按鈕（含 hover 與 tooltip） | 7 | `done` | PD-060, PD-083, PD-117, PD-159 | [PD-161](tickets/PD-161-pane-footer-folder-context-menu-button.md) |
 
 ## Dependency lanes
 
@@ -280,6 +281,9 @@ Phase 7 — Spec/code alignment,對照 2026-08-31 使用者決策
   PD-006 + PD-022 + PD-140 + PD-146 ─── PD-157(shell_core location/value boundary)
   PD-023 + PD-121 + PD-123 + PD-140 + PD-157 ─── PD-158(file_operations + Cut-aware paste)
   PD-007 + PD-014 + PD-024 ─── PD-159(background Shell verb current-folder contract)
+
+Phase 7 — Pane folder context-menu affordance,對照 2026-09-01 使用者需求
+  PD-060 + PD-083 + PD-117 + PD-159 ─── PD-161(footer button + hover + tooltip + native background menu)
 
 Phase 7 — Layout button focus rendering
   PD-056 + PD-115 ─── PD-149(版型按鈕失焦後殘留虛線 focus border)
