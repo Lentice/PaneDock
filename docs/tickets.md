@@ -199,6 +199,11 @@
 | PD-159 | pane 空白處的背景 Shell verb 無法取得目前資料夾 | 7 | `done` | PD-007, PD-014, PD-024 | [PD-159](tickets/PD-159-background-shell-verb-current-folder.md) |
 | PD-160 | 完成 Shell location 三段式 identity 擷取與還原 | 7 | `ready` | PD-006, PD-022, PD-140, PD-157 | [PD-160](tickets/PD-160-shell-location-identity-capture-and-resolution.md) |
 | PD-161 | pane footer 新增目前資料夾背景選單按鈕（含 hover 與 tooltip） | 7 | `done` | PD-060, PD-083, PD-117, PD-159 | [PD-161](tickets/PD-161-pane-footer-folder-context-menu-button.md) |
+| PD-162 | 把關閉／重入決策抽成 `core` 的 shutdown sequence reducer | 7 | `ready` | PD-123, PD-140, PD-148, PD-155, PD-159 | [PD-162](tickets/PD-162-shutdown-sequence-decision-reducer.md) |
+| PD-163 | 把 pane 的 chrome 子視窗收進單一 `PaneChrome` 型別 | 7 | `ready` | PD-020, PD-040, PD-060, PD-117, PD-151, PD-155 | [PD-163](tickets/PD-163-pane-chrome-child-window-ownership.md) |
+| PD-164 | 把 realize／de-realize 決策抽成 `core` 的純函式 | 7 | `planned` | PD-005, PD-009, PD-093, PD-151, PD-155, PD-163 | [PD-164](tickets/PD-164-realization-plan-pure-function.md) |
+| PD-165 | 把檢視模式字串 codec 移進 `shell_core` | 7 | `ready` | PD-052, PD-079, PD-153, PD-156, PD-157 | [PD-165](tickets/PD-165-view-mode-codec-to-shell-core.md) |
+| PD-166 | startup recoverable warning 改為非同步 `OK` 通知，fatal startup error 維持同步退出 | 7 | `done` | PD-130, PD-135, PD-141, PD-144 | [PD-166](tickets/PD-166-startup-notification-dialog-routing.md) |
 
 ## Dependency lanes
 
@@ -337,6 +342,9 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | 縮圖 pipeline 的快取與尺寸上限 | 待 PD-003 量出縮圖對記憶體的實際貢獻後再開,避免憑估計調參數。PD-003 2026-08-29 的自動化量測跑出差值 0 bytes,但兩個組態都重用同一次 run 內已導覽過的資料夾(縮圖早已快取),不是有效讀數;要開票前需先用全新啟動的 process 分別量測純文字與縮圖資料夾。 |
 | 診斷閒置磁碟 I/O 的來源 | PD-003 2026-08-29 量到閒置 10 分鐘期間有 307294 bytes 磁碟 I/O(NFR-001 磁碟門檻 FAIL,零 bytes 才算過),但本票是量測專用,未診斷來源。觸發條件:已成立——有實測數字,可以開票追查(候選來源:Shell thumbnail cache、USN journal 輪詢、第三方 shell extension)。 |
 | 追查 `panedock_launch_smoke` 間歇性崩潰(0xC0000409) | PD-003 2026-08-29 執行期間偶發一次 `STATUS_STACK_BUFFER_OVERRUN`,發生在關閉一個含 4 個 Group、其中一個 42 個 tab 的真實 `session.json` 之後;立即重跑同一測試與完整 suite 皆通過,無法穩定重現。觸發條件:再次出現(尤其是大量 tab 的 Group)時開票追查,屆時附上本次的復現條件與 session.json 特徵作為起點。 |
+| 把 tab strip 的 hover／drag／paint／`WNDPROC` 收進 `app_shell::TabStrip` 模組 | 2026-09-01 架構審查原本以「paint 與 hit-test 各自重新推導 layout」為理由列為高優先，但 Codex 唯讀核對**推翻**了該理由:layout 由 `layout_tab_strip`(`main.cpp:1798`)計算，tab 與 scroll 命中測試直接委派 `tab_overflow.h` 的純函式(`main.cpp:3817`)，paint(`:4052`)與 `WNDPROC`(`:4238`)消費同一份 `tab_strip_geometry`——PD-085／PD-107 已經把這條共用 seam 建好了。剩下的真實問題只有「這 853 行仍在 `main.cpp`、且 drag／hover／paint 的**呼叫路徑**沒有測試涵蓋」。觸發條件:再出現一個 hit-test／repaint 類的實機回報(PD-107、PD-152、PD-154 之後的下一個)，再開票把狀態機部分抽出來測;目前沒有新證據支持先做。 |
+| `SessionWriter`——把 `session_dirty`、500ms 防抖、clean/crash marker 與 atomic replace 收進單一型別 | 2026-09-01 架構審查列為 Speculative 並自我否決:目前只有一個寫入者，注入的 "write these bytes" adapter 是**假想 seam**(一個 adapter 只是假設，兩個才是真的)。觸發條件:出現第二個持久化寫入者(獨立 settings 檔、匯出功能)，或 PD-162 實作時發現 shutdown reducer 本來就需要透過介面呼叫存檔決策——後者請在 PD-162 交接區記錄，再據以開票。 |
+| 把剩餘 9 個 pane-parallel 陣列搬進 `PaneChrome` | PD-163 刻意只搬 12 個純 HWND／GDI 欄位，留下 `explorers`、`realized`、`tab_visuals`、`tab_strip_geometry`、`tab_hover_indices`、`tab_scroll_hover_indices`、`suppress_history_record`、`tab_drag_targets` 等 9 個——它們牽涉 `ExplorerHost` 生命週期與 tab 互動狀態，一起搬會讓單票超過兩天。觸發條件:PD-163 完成且其交接區已寫出每個未搬欄位的具體阻礙後開票。 |
 | `IShellFolder` 自建清單檢視(fallback) | 僅在 PD-001 判定 No-Go 時開。 |
 | 統一 header 版型按鈕圖示與導覽列圖示的筆畫粗細 | PD-075(2026-08-26)刻意排除:版型按鈕的五個圖示是**版面示意圖**(一格／雙欄／上下／2×2／更多),沒有任何 `Segoe MDL2 Assets` 字符能表達「這個版型長什麼樣」,只能手繪。但 `draw_layout_glyph` 用 `CreatePen(PS_SOLID, 1, ...)` 而 `draw_navigation_icon_button` 是 2px,兩者並列時粗細不同是真的。觸發條件:PD-075 完成後若使用者仍覺得 header 與 pane 的圖示不成套,再開票調整手繪線寬(注意 1px 是 `RoundRect` 版面示意圖能保持清晰的實際上限,加粗可能反而糊掉,屆時需先截圖比對)。 |
 | 側邊欄寬度的全域設定持久化 | 若使用者回報每次啟動都要重拖再開;目前預設值可接受。 |
@@ -674,3 +682,18 @@ Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `
 ### 2026-08-31 — PD-159 根因反證與 scope override
 
 標準 `CDefView::DoBackgroundContextMenu` 的 debugger trace 顯示 `CRegistryVerbsContextMenu::_Execute` 收到的 invoke 結構 `lpDirectory` 為 null，`_GetShellItemArray` 回 `E_INVALIDARG`；先前只補 `ICommDlgBrowser`／`SID_SExplorerBrowserFrame` 沒有改變結果。公開 Shell host 參考（ChromaFiler）證實最小可行 seam 是 `IShellView::GetItemObject(SVGIO_BACKGROUND, IID_IContextMenu)` + view site + `CMINVOKECOMMANDINFO(EX).lpDirectory`，故 PD-159 明確覆寫原先「不攔截、重建或包裝原生 context menu」的方向：`ExplorerHost` 僅對零選取背景 `WM_CONTEXTMENU` 建立同一份原生 `IContextMenu` bridge，保留所有已安裝 extension，並把各 host 的 `location_` 傳給 verb；不加入產品專屬字串、`ShellExecute`、registry 或 `%V` 自行展開。實機已驗證 `E:\GitHub\PaneDock` 的 `以 Code 開啟`、`Open Git Bash here`、`FileLocator Pro...` 與項目右鍵；同一 Group 的 `E:\GitHub\NimbleRun` 也取得正確 Git Bash `--cd`，且 `Misc` 四 pane Group 可正常 realize 後切回原 tab；close-while-menu 的完整矩陣仍待補驗，因此 tracker 維持 `in_progress`。
+
+### 2026-09-01 — Claude 架構審查加 Codex 唯讀反證,開 PD-162/163/164/165
+
+使用者執行 `improve-codebase-architecture`(Claude)產出六個 deepening 候選,再以 Herdr 開背景 Codex(唯讀,未修改任何檔案)逐條核對七組事實聲明。核對結果**四項成立、三項需要修正**,開票內容以修正後的事實為準:
+
+- **PD-162(shutdown reducer)** — 方向成立且證據最強。修正:關閉相關的**布林**旗標是 13 個不是 14 個(`shell_call_depth` 是 `unsigned`);「約 168 sites」在以 distinct operational lines 計算時合理(274 次 identifier 出現、180 個不同 line、扣掉宣告後 166 行);「轉移規則完全沒寫下來」**過度絕對**——`docs/design-spec.md §9.4` 已明列關閉順序,本票是讓那份順序在程式碼裡有可執行對應物,不是發明新規則。Codex 另確認 `src/core` 對 HWND／`windows.h`／COM／HRESULT 是 0 matches,決策部分確實可以搬進去,但實際 action 仍需 HWND／Shell／timer／persistence,因此只搬 reducer、不整體搬移函式。
+- **PD-163(PaneChrome)** — 修正:pane-parallel `std::array<..., 4>` 欄位實際是 **21 個**(HEAD 20),審查報告寫「約 16」偏低;「約 30 個吃裸 `pane_index` 的函式」正確(31 個);`apply_layout` 現為 `main.cpp:2757-3083` 共 327 行。因為 21 個一次搬會遠超兩天上限,本票只搬 12 個純 HWND／GDI 欄位,其餘 9 個列入候選表。本票是 2026-08-27 三方審查記錄裡明確留待後續開票的「`AppState` 拆分」候選之一,不是新方向。
+- **PD-164(realization plan)** — 修正:realize 條件確實內嵌在 `apply_layout:2948`、`:3016-3022`,`realize_startup_panes`(`:3098`)是流程協調不是 policy reducer;但審查報告「只透過 runtime `live_view_count` 檢查」**不正確**——`tests/release/startup_frame_order_check.ps1:25` 也做 source pattern 檢查。因此本票的價值論述改為「把 NFR-002 上界變成可對八種版型全組合斷言的 unit test」,而不是「目前完全沒檢查」。
+- **PD-165(view-mode codec)** — 唯一**完全成立**的一項。補充精確化:`kViewModeOptions`(`main.cpp:250`)是 menu metadata,真正的 codec 是 `view_mode_name`／`parse_view_mode`(`main.cpp:1527-1560`);`shell_core` 目前沒有對應 codec,`ExplorerHost` 只提供 raw `FOLDERVIEWMODE` API。
+
+另兩項未開票,改列候選表:**tab strip 模組化**的核心論據被推翻(paint／hit-test 已共用 `tab_overflow.h`,不存在「重新推導 layout」),剩餘理由不足以現在開票;**`SessionWriter`** 只有一個寫入者,注入 adapter 是假想 seam,等第二個寫入者或 PD-162 實作時的實際需要再開。
+
+同時確認 `tests/release/shutdown_state_check.ps1:6` 與 `shell_reentry_gate_check.ps1:9` 都是 regex 讀原始碼的 source-level 檢查,雖註冊為 CTest(`tests/CMakeLists.txt:37`)但不啟動程式、不驗證 message-loop 行為——這是 PD-162 要用真正的 unit test 取代的對象,但兩支腳本本身不得刪除,只能在字串搬移後更新 pattern。
+
+本次審查與核對均為唯讀,未修改任何產品程式碼。報告檔存於系統 Temp 目錄,不進 repo;所有需要留存的結論已寫入本頁與四張 ticket。
