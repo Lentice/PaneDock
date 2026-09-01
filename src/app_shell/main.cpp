@@ -64,7 +64,8 @@ constexpr UINT kDeferredRealizeMessage = WM_APP + 52;
 // PD-123: keep the main window alive until a PaneDock-owned Shell paste has
 // returned from PerformOperations.
 constexpr UINT kFileOperationFinishedMessage = WM_APP + 53;
-// Defer close until the outermost app-owned Shell call has returned.
+// Defer close until the outermost app-owned Shell call has returned, or until
+// the Closing... caption has had one message-loop turn to become visible.
 constexpr UINT kDeferredShutdownMessage = WM_APP + 54;
 constexpr wchar_t kTransferCloseDialogClassName[] =
     L"PaneDockTransferCloseDialog";
@@ -498,7 +499,9 @@ struct AppState {
     // file operation is pumping the STA message loop.
     bool end_session_pending{};
     // Shell calls are made on the STA and may dispatch our window messages
-    // before returning. A close during one must wait for the outer call.
+    // before returning. A close during one must wait for the outer call. A
+    // normal close also uses this posted path for one UI turn, so its Closing
+    // caption can be presented before synchronous teardown starts.
     unsigned shell_call_depth{};
     bool shutdown_deferred{};
     bool shutdown_message_queued{};
@@ -4612,6 +4615,18 @@ void begin_shutdown(HWND window, AppState& state,
 void complete_deferred_close(HWND window, AppState& state) noexcept;
 void finish_shutdown(HWND window, AppState& state) noexcept;
 
+void set_main_window_title(HWND window, bool diagnostic_mode,
+                           bool closing) noexcept {
+    if (window == nullptr) return;
+    const wchar_t* const title =
+        closing ? L"PaneDock \x2014 Closing..."
+                : (diagnostic_mode ? L"PaneDock \x2014 Diagnostic Mode"
+                                   : L"PaneDock");
+    SetWindowTextW(window, title);
+    RedrawWindow(window, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME);
+}
+
 LRESULT CALLBACK transfer_close_dialog_proc(HWND window, UINT message,
                                             WPARAM wparam, LPARAM lparam) {
     auto* state = reinterpret_cast<AppState*>(
@@ -4752,6 +4767,10 @@ void show_transfer_close_dialog(HWND owner, AppState& state) noexcept {
 void finish_shutdown(HWND window, AppState& state) noexcept {
     if (state.closing_) return;
     state.closing_ = true;
+    // Keep the owner window visible while the synchronous Shell teardown runs.
+    // The caption is the smallest truthful progress surface; do not destroy
+    // the parent before every initialized ExplorerBrowser has been destroyed.
+    set_main_window_title(window, state.diagnostic_mode, true);
     state.quit_requested = true;
     state.startup_realize_pending = false;
     ++state.startup_realize_generation;
@@ -4772,13 +4791,28 @@ void finish_shutdown(HWND window, AppState& state) noexcept {
 void begin_shutdown(HWND window, AppState& state,
                     bool allow_keep_open) noexcept {
     if (state.closing_) return;
-    if (state.shell_call_depth != 0) {
-        state.shutdown_deferred = true;
+    if (state.shutdown_deferred) {
         if (!allow_keep_open) state.end_session_pending = true;
         return;
     }
-    state.shutdown_deferred = false;
+    if (state.shell_call_depth != 0) {
+        state.shutdown_deferred = true;
+        set_main_window_title(window, state.diagnostic_mode, true);
+        if (!allow_keep_open) state.end_session_pending = true;
+        return;
+    }
+    const bool resumed_after_ui_turn = state.shutdown_message_queued;
     state.shutdown_message_queued = false;
+    if (!resumed_after_ui_turn) {
+        state.shutdown_deferred = true;
+        state.shutdown_message_queued = true;
+        set_main_window_title(window, state.diagnostic_mode, true);
+        if (PostMessageW(window, kDeferredShutdownMessage, 0, 0)) return;
+        OutputDebugStringW(L"PaneDock: could not queue deferred shutdown\n");
+        state.shutdown_message_queued = false;
+        state.shutdown_deferred = false;
+    }
+    state.shutdown_deferred = false;
     if (state.shutdown_prompt_active) {
         if (!allow_keep_open) state.end_session_pending = true;
         return;
@@ -4807,6 +4841,7 @@ void begin_shutdown(HWND window, AppState& state,
         if (answer != IDNO) {
             state.shutdown_save_attempted = false;
             state.shutdown_clean_marker_armed = false;
+            set_main_window_title(window, state.diagnostic_mode, false);
             return;
         }
     }
@@ -4898,10 +4933,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         (message == WM_SYSCOMMAND && (wparam & 0xfff0u) == SC_CLOSE) ||
         ((message == WM_NCLBUTTONDOWN || message == WM_NCLBUTTONUP ||
           message == WM_NCLBUTTONDBLCLK) && wparam == HTCLOSE);
+    // Keep caption/frame repaint messages flowing while shutdown gates normal
+    // work. set_main_window_title sends WM_SETTEXT; WM_NCPAINT, WM_PAINT and
+    // WM_ERASEBKGND must then run so "Closing..." can be shown before the
+    // synchronous Shell teardown starts.
     if (state != nullptr && (state->closing_ || state->shutdown_deferred) &&
         !close_request && message != WM_QUERYENDSESSION &&
         message != WM_ENDSESSION && message != WM_DESTROY &&
-        message != WM_NCDESTROY && message != kDeferredShutdownMessage)
+        message != WM_NCDESTROY && message != WM_PAINT &&
+        message != WM_ERASEBKGND && message != WM_SETTEXT &&
+        message != WM_NCPAINT && message != kDeferredShutdownMessage)
         return 0;
 
     switch (message) {
@@ -5147,7 +5188,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case kDeferredShutdownMessage:
             if (state != nullptr && state->shutdown_deferred) {
                 state->shutdown_deferred = false;
-                state->shutdown_message_queued = false;
                 begin_shutdown(window, *state,
                                !state->end_session_pending);
             }
@@ -6237,6 +6277,26 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     // window has been torn down.
     bool proceed = !state.closing_ && !state.shutdown_deferred &&
                    !state.quit_requested;
+    // Queue realization before any startup warning enters a nested modal
+    // loop. The warning remains acknowledgement-only, while its modal loop
+    // can dispatch this message and show the pane content behind it.
+    if (proceed && state.startup_realize_pending) {
+        const UINT_PTR generation = ++state.startup_realize_generation;
+        if (!PostMessageW(window, kDeferredRealizeMessage, 0,
+                          static_cast<LPARAM>(generation))) {
+            OutputDebugStringW(
+                L"PaneDock: could not queue deferred Shell view realization\n");
+            const HRESULT hr = realize_startup_panes(window, state);
+            if (FAILED(hr) && !state.closing_ && !state.shutdown_deferred) {
+                MessageBoxW(
+                    window,
+                    L"PaneDock could not open the Shell view for one or more "
+                    L"panes. Some panes may be empty.",
+                    L"PaneDock", MB_OK | MB_ICONWARNING);
+                proceed = !state.closing_ && !state.quit_requested;
+            }
+        }
+    }
     if (recovered_from_corruption &&
         session_source == panedock::core::SessionSource::backup) {
         MessageBoxW(
@@ -6269,21 +6329,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         MessageBoxW(window, state.startup_warning_message.c_str(),
                     L"PaneDock", MB_OK | MB_ICONWARNING);
         proceed = !state.closing_ && !state.quit_requested;
-    }
-    if (proceed && state.startup_realize_pending) {
-        const UINT_PTR generation = ++state.startup_realize_generation;
-        if (!PostMessageW(window, kDeferredRealizeMessage, 0,
-                          static_cast<LPARAM>(generation))) {
-            OutputDebugStringW(
-                L"PaneDock: could not queue deferred Shell view realization\n");
-            const HRESULT hr = realize_startup_panes(window, state);
-            if (FAILED(hr) && !state.closing_ && !state.shutdown_deferred)
-                MessageBoxW(
-                    window,
-                    L"PaneDock could not open the Shell view for one or more "
-                    L"panes. Some panes may be empty.",
-                    L"PaneDock", MB_OK | MB_ICONWARNING);
-        }
     }
     MSG message{};
     int result = 0;

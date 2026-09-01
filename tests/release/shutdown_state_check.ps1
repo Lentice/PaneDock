@@ -23,6 +23,12 @@ Assert-Source 'state->main_window_destroyed = true;[\s\S]*?save_now\(\*state, fa
     'unexpected destroy fallback keeps marker false'
 Assert-Source 'if \(state\.shutdown_prompt_active\)\s*\{[\s\S]*?if \(!allow_keep_open\) state\.end_session_pending = true;' `
     'nested confirmed shutdown is remembered'
+Assert-Source 'void\s+set_main_window_title\(HWND window, bool diagnostic_mode,\s*bool closing\)[\s\S]*?L"PaneDock.*Closing\.\.\."' `
+    'closing caption has a dedicated update path'
+Assert-Source 'set_main_window_title\(window, state\.diagnostic_mode, true\);[\s\S]*?destroy_explorers\(state\);' `
+    'closing state is visible before Shell teardown'
+Assert-Source 'state\.shutdown_deferred\s*=\s*true;[\s\S]*?set_main_window_title\(window, state\.diagnostic_mode, true\);[\s\S]*?PostMessageW\(window, kDeferredShutdownMessage' `
+    'closing state yields to the message loop before teardown'
 Assert-Source 'if \(answer != IDNO\)\s*\{[\s\S]*?state\.shutdown_save_attempted = false;[\s\S]*?return;' `
     'only explicit No closes after an interactive failure'
 Assert-Source 'begin_shutdown\(window, state, !state\.end_session_pending\);' `

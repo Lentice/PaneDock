@@ -263,6 +263,10 @@ Per-Monitor-V2 DPI awareness。視窗跨越不同 DPI 的螢幕時,全部 pane �
 5. 套用 active Group 的版型,**先 realize active pane 的 active tab**
 6. 其餘 pane 延後 realize,避免被網路或離線路徑阻塞
 
+主視窗顯示後才開啟 Shell realize gate；啟動復原／不乾淨關閉警告仍維持
+單一 `OK` 確認，但 deferred realize 會在這些 modal warning 之前排入訊息佇列，
+因此 warning 顯示時背景 pane 仍可完成顯示，按下 `OK` 後照常繼續啟動序列。
+
 ### 9.4 關閉序列
 
 1. 擷取現行狀態並原子寫入 session document
@@ -273,6 +277,9 @@ Per-Monitor-V2 DPI awareness。視窗跨越不同 DPI 的螢幕時,全部 pane �
 6. `CoUninitialize`
 
 順序不可調換。view 存活期間 destroy parent HWND 是已知的崩潰面。
+`WM_CLOSE` 先讓主視窗顯示 `PaneDock — Closing...` 並回到訊息迴圈一個 turn，
+再開始同步 Shell teardown；
+只有全部 live view destroy 且主視窗 destroy 後才退出程序。
 
 ## 10 資料儲存
 

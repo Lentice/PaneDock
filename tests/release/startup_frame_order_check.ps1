@@ -32,6 +32,15 @@ Assert-Source 'case kDeferredRealizeMessage:[\s\S]*?realize_startup_panes\(windo
 Assert-Source 'void\s+refresh_startup_chrome\(AppState& state\)' 'startup chrome has one deferred helper'
 Assert-Source 'refresh_startup_chrome\(state\);\s*if \(state\.shutdown_deferred \|\| state\.closing_\) return E_ABORT;' 'startup chrome is gated before layout'
 
+$startupRealizeQueue = $source.IndexOf(
+    'PostMessageW(window, kDeferredRealizeMessage', $windowUpdated)
+$uncleanWarning = $source.IndexOf(
+    'L"PaneDock did not shut down cleanly last time.', $windowUpdated)
+if ($startupRealizeQueue -lt 0 -or $uncleanWarning -lt 0 -or
+    $startupRealizeQueue -gt $uncleanWarning) {
+    throw 'startup frame order check failed: deferred realization must be queued before the unclean-shutdown warning'
+}
+
 $chromeStart = $source.IndexOf('void refresh_startup_chrome(AppState& state)')
 $chromeEnd = $source.IndexOf('HRESULT realize_startup_panes(', $chromeStart)
 $realizeEnd = $source.IndexOf('std::string unique_group_id', $chromeEnd)
