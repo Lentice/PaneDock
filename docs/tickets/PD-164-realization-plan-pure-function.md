@@ -128,3 +128,35 @@ Select-String -Path src/app_shell/main.cpp -Pattern 'plan_realization'
 在 `## 交接區` 記錄：最終函式簽章、`apply_layout` 與 `realize_startup_panes` 各自的呼叫點、八種版型的 plan 斷言表、`startup_frame_order_check.ps1` 的 pattern 更新，以及 `--diagnostic` live view 讀數的前後比對。
 
 ## 交接區
+
+### 實作結果
+
+- 最終簽章：`RealizationPlan plan_realization(const GroupState&, LayoutTemplate, std::span<const bool>, RealizationMode)`；`RealizationMode` 為 `normal`、`startup_frame`、`startup_deferred`、`group_switch`。
+- `src/core/layout.cpp` 現在集中計算 `realize`、`derealize`、`navigate`、`keep`；沒有 HWND、COM、`windows.h` 或 HRESULT。
+- `apply_layout`（`src/app_shell/main.cpp:2756`）先取得 plan，再只依 `realize`/`derealize` 執行 initialize/destroy。所有 resize、DPI、版型切換 caller 仍經此路徑。
+- `realize_startup_panes`（`main.cpp:3098`）的 active pass（`:3091`）與 deferred pass（`:3103`）都呼叫 `apply_layout`，由同一個 plan 依序使用 `startup_deferred` 與 `normal`；沒有第二套 realization 判斷。Group 切換的 `navigate_realized_panes`（`:755`）使用 `group_switch` plan，保留 live view 並 re-navigate。
+
+### 八種版型與 focused test 斷言
+
+| 版型 | 可見 pane | 空狀態 plan 的 `realize` | NFR-002 斷言上限 |
+|---|---:|---:|---:|
+| `single` | 1 | 1 | ≤ 1 |
+| `left_right` | 2 | 2 | ≤ 2 |
+| `top_bottom` | 2 | 2 | ≤ 2 |
+| `three_pane` | 3 | 3 | ≤ 3 |
+| `two_over_one` | 3 | 3 | ≤ 3 |
+| `one_over_two` | 3 | 3 | ≤ 3 |
+| `two_beside_one` | 3 | 3 | ≤ 3 |
+| `four_pane_grid` | 4 | 4 | ≤ 4 |
+
+`tests/unit/core_realization_plan_test.cpp` 另斷言 4→1 的 `derealize={1,2,3}`、1→4 的 `realize={1,2,3}`、全 live Group switch 的 `navigate={0,1,2,3}`，以及 active pane 為 2 的 startup deferred 僅 `realize={2}`；未列出的非 active pane 即延後集合。
+
+### 驗證
+
+- `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`：PASS。
+- `cmake --build build`：PASS。
+- `ctest --test-dir build -E panedock_launch_smoke --output-on-failure`：PASS，16/16。
+- 提升權限 `ctest --test-dir build -R panedock_launch_smoke --output-on-failure`：PASS，1/1；沙盒環境曾造成同一 smoke timeout，未視為產品失敗。
+- `startup_frame_order_check.ps1` 已由舊的 inline condition pattern 改為檢查 `RealizationMode::startup_frame`、shared `plan_realization` 與 `plan_contains(realization_plan.realize, index)`，且 CTest PASS。
+- `Select-String -Path src/core/layout.h,src/core/layout.cpp -Pattern 'HWND|windows\.h|HRESULT|ComPtr'`：無輸出；`git diff --check`：PASS。
+- 實機 `--diagnostic` 正常啟動/關閉讀數為 `0 → 1 → 3 → 0 → 0`（本機當時 session 為三 pane）；未在不改動使用者 session 的前提下切換至四宮格，也未取得 PD-164 前的同條件基準，因此四 pane→single 的 live-view 前後比對與直接視覺矩陣留待真實桌面驗收。

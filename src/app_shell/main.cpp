@@ -754,12 +754,12 @@ const panedock::core::TabState& active_tab(
 
 bool navigate_realized_panes(
     AppState& state, const panedock::core::GroupState& group) noexcept {
+    const auto plan = panedock::core::plan_realization(
+        group, group.layout_template, state.realized,
+        panedock::core::RealizationMode::group_switch);
     const bool previous_suppression = state.suppress_location_capture;
     state.suppress_location_capture = true;
-    const std::size_t pane_count =
-        std::min(group.panes.size(), state.explorers.size());
-    for (std::size_t pane = 0; pane < pane_count; ++pane) {
-        if (!state.realized[pane]) continue;
+    for (const std::size_t pane : plan.navigate) {
         {
             ShellCallScope shell_call(state);
             state.explorers[pane].navigate(
@@ -2798,7 +2798,19 @@ HRESULT apply_layout(HWND window, AppState& state,
     ShowWindow(state.empty_message, SW_HIDE);
     auto& group = active_group(state);
     const auto rects = layout_rects(window, state, group);
-    const std::size_t active = active_pane_index(group);
+    const auto realization_mode =
+        state.startup_frame_only
+            ? panedock::core::RealizationMode::startup_frame
+            : (state.startup_realize_pending && !realize_deferred_panes
+                   ? panedock::core::RealizationMode::startup_deferred
+                   : panedock::core::RealizationMode::normal);
+    const auto realization_plan = panedock::core::plan_realization(
+        group, group.layout_template, state.realized, realization_mode);
+    const auto plan_contains = [](const std::vector<std::size_t>& indexes,
+                                  std::size_t index) noexcept {
+        return std::find(indexes.begin(), indexes.end(), index) !=
+               indexes.end();
+    };
     const UINT dpi = GetDpiForWindow(window);
     const int container_radius = pane_card_radius(dpi);
     struct LayoutFailure final {
@@ -2942,9 +2954,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                 container_rects[index] = rect;
             }
             const RECT local_rect{0, 0, container_width, container_height};
-            if (!state.realized[index] && !state.startup_frame_only &&
-                (realize_deferred_panes || !state.startup_realize_pending ||
-                 index == active)) {
+            if (plan_contains(realization_plan.realize, index)) {
                 state.explorers[index].set_shell_call_callback(
                     &state, app_shell_call_state_changed);
                 HRESULT hr = E_UNEXPECTED;
@@ -3011,7 +3021,7 @@ HRESULT apply_layout(HWND window, AppState& state,
             // PaneChrome owns the outer-rect cache; the native child batches
             // are committed below before regions are applied.
         } else {
-            if (state.realized[index]) {
+            if (plan_contains(realization_plan.derealize, index)) {
                 {
                     ShellCallScope shell_call(state);
                     state.explorers[index].destroy();

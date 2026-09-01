@@ -13,6 +13,7 @@ set(PANEDOCK_TESTS
     "window_placement|unit/window_placement_test.cpp|"
     "core_model|unit/core_model_test.cpp|panedock_core"
     "core_layout|unit/core_layout_test.cpp|panedock_core"
+    "core_realization_plan|unit/core_realization_plan_test.cpp|panedock_core"
     "core_session|unit/core_session_test.cpp|panedock_core"
     "core_shutdown|unit/core_shutdown_test.cpp|panedock_core"
     "pane_chrome|unit/pane_chrome_test.cpp|panedock_pane_chrome"

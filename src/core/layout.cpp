@@ -111,4 +111,42 @@ std::vector<PaneRect> compute_layout_rects(
     return {};
 }
 
+RealizationPlan plan_realization(
+    const GroupState& group, LayoutTemplate layout_template,
+    std::span<const bool> currently_realized, RealizationMode mode) {
+    const std::size_t visible_count = std::min(
+        {pane_count(layout_template), group.panes.size(), kMaxPaneCount});
+    const std::size_t realized_count =
+        std::min(currently_realized.size(), kMaxPaneCount);
+    const std::size_t pane_limit = std::max(visible_count, realized_count);
+
+    std::size_t active_pane = 0;
+    const auto active = std::find_if(
+        group.panes.begin(), group.panes.end(), [&](const PaneState& pane) {
+            return pane.id == group.active_pane_id;
+        });
+    if (active != group.panes.end())
+        active_pane = static_cast<std::size_t>(active - group.panes.begin());
+
+    RealizationPlan plan;
+    const bool allow_realize = mode != RealizationMode::startup_frame;
+    const bool defer_non_active = mode == RealizationMode::startup_deferred;
+    const bool navigate_realized = mode == RealizationMode::group_switch;
+    for (std::size_t index = 0; index < pane_limit; ++index) {
+        const bool realized = index < currently_realized.size() &&
+                              currently_realized[index];
+        if (index >= visible_count) {
+            if (realized) plan.derealize.push_back(index);
+            continue;
+        }
+        if (!realized) {
+            if (allow_realize && (!defer_non_active || index == active_pane))
+                plan.realize.push_back(index);
+            continue;
+        }
+        (navigate_realized ? plan.navigate : plan.keep).push_back(index);
+    }
+    return plan;
+}
+
 }  // namespace panedock::core
