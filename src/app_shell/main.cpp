@@ -69,10 +69,19 @@ constexpr UINT kFileOperationFinishedMessage = WM_APP + 53;
 constexpr UINT kDeferredShutdownMessage = WM_APP + 54;
 constexpr wchar_t kTransferCloseDialogClassName[] =
     L"PaneDockTransferCloseDialog";
+constexpr wchar_t kStartupNotificationClassName[] =
+    L"PaneDockStartupNotification";
 constexpr int kTransferCloseKeepOpenId = 1;
 constexpr int kTransferCloseAfterTransferId = 2;
 constexpr int kTransferCancelAndCloseId = 3;
 constexpr int kTransferCloseStatusId = 4;
+constexpr int kStartupNotificationTextId = 1;
+constexpr int kStartupNotificationOkId = 2;
+constexpr int kStartupNotificationWidth = 560;
+constexpr int kStartupNotificationMargin = 20;
+constexpr int kStartupNotificationButtonWidth = 88;
+constexpr int kStartupNotificationButtonHeight = 28;
+constexpr int kStartupNotificationButtonGap = 12;
 // PD-091: coalesce navigation completions without keeping a polling timer.
 constexpr UINT kSessionSaveDelayMilliseconds = 500;
 constexpr UINT_PTR kSessionSaveTimerId = 0xD050;
@@ -519,8 +528,10 @@ struct AppState {
     // A recoverable startup problem the window can still open with (e.g. one
     // pane's Shell view could not be realized, or tab drag-and-drop failed).
     // Shown by wWinMain after the window is created; never an inside-WM_CREATE
-    // modal box.
+    // modal box. It remains pending until the modeless startup notification is
+    // created or until a fatal pre-window path reports it synchronously.
     std::wstring startup_warning_message;
+    HWND startup_notification{nullptr};
     struct SidebarDrag final {
         int start_x{};
         int start_width{};
@@ -2098,6 +2109,14 @@ void apply_ui_font(AppState& state) noexcept {
     set_ui_font(state.pinned_locations_list, font);
     for (HWND button : state.pinned_locations_buttons)
         set_ui_font(button, font);
+    if (state.startup_notification != nullptr) {
+        set_ui_font(GetDlgItem(state.startup_notification,
+                               kStartupNotificationTextId),
+                    font);
+        set_ui_font(GetDlgItem(state.startup_notification,
+                               kStartupNotificationOkId),
+                    font);
+    }
 }
 
 void refresh_ui_font(HWND window, AppState& state) noexcept {
@@ -4627,6 +4646,186 @@ void set_main_window_title(HWND window, bool diagnostic_mode,
                  RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME);
 }
 
+void layout_startup_notification(HWND window) noexcept {
+    if (window == nullptr) return;
+    const UINT dpi = std::max<UINT>(96, GetDpiForWindow(window));
+    const auto scaled = [dpi](int value) {
+        return MulDiv(value, static_cast<int>(dpi), 96);
+    };
+    RECT client{};
+    if (!GetClientRect(window, &client)) return;
+    const int margin = scaled(kStartupNotificationMargin);
+    const int gap = scaled(kStartupNotificationButtonGap);
+    const int button_width = scaled(kStartupNotificationButtonWidth);
+    const int button_height = scaled(kStartupNotificationButtonHeight);
+    const int button_x = std::max(
+        margin, static_cast<int>(client.right) - margin - button_width);
+    const int button_y = std::max(
+        margin, static_cast<int>(client.bottom) - margin - button_height);
+    const int text_width = std::max(
+        1, static_cast<int>(client.right) - 2 * margin);
+    const int text_height = std::max(1, button_y - margin - gap);
+    SetWindowPos(GetDlgItem(window, kStartupNotificationTextId), nullptr,
+                 margin, margin, text_width, text_height,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    SetWindowPos(GetDlgItem(window, kStartupNotificationOkId), nullptr,
+                 button_x, button_y, button_width, button_height,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+int startup_notification_height(HWND owner, const AppState& state,
+                                int width) noexcept {
+    const UINT dpi = std::max<UINT>(96, GetDpiForWindow(owner));
+    const auto scaled = [dpi](int value) {
+        return MulDiv(value, static_cast<int>(dpi), 96);
+    };
+    const int margin = scaled(kStartupNotificationMargin);
+    int text_height = scaled(64);
+    HDC dc = GetDC(owner);
+    if (dc != nullptr) {
+        const HGDIOBJ old_font =
+            state.chrome_font == nullptr
+                ? nullptr
+                : SelectObject(dc, state.chrome_font);
+        RECT text{0, 0, std::max(1, width - 2 * margin), scaled(1000)};
+        if (DrawTextW(dc, state.startup_warning_message.c_str(), -1, &text,
+                      DT_CALCRECT | DT_NOPREFIX | DT_WORDBREAK) != 0)
+            text_height = std::max(text_height, static_cast<int>(text.bottom));
+        if (old_font != nullptr) SelectObject(dc, old_font);
+        ReleaseDC(owner, dc);
+    }
+    return margin + text_height + scaled(kStartupNotificationButtonGap) +
+           scaled(kStartupNotificationButtonHeight) + margin;
+}
+
+LRESULT CALLBACK startup_notification_proc(HWND window, UINT message,
+                                           WPARAM wparam, LPARAM lparam) {
+    auto* state = reinterpret_cast<AppState*>(
+        GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
+        state = create == nullptr
+                    ? nullptr
+                    : static_cast<AppState*>(create->lpCreateParams);
+        if (state == nullptr) return FALSE;
+        SetWindowLongPtrW(window, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(state));
+    }
+
+    switch (message) {
+        case WM_CREATE: {
+            if (state == nullptr) return -1;
+            const HINSTANCE instance = GetModuleHandleW(nullptr);
+            const HWND text = CreateWindowExW(
+                0, L"STATIC", state->startup_warning_message.c_str(),
+                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX, 0, 0, 0, 0,
+                window,
+                reinterpret_cast<HMENU>(
+                    static_cast<INT_PTR>(kStartupNotificationTextId)),
+                instance, nullptr);
+            const HWND ok = CreateWindowExW(
+                0, L"BUTTON", L"OK",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 0, 0,
+                0, 0, window,
+                reinterpret_cast<HMENU>(
+                    static_cast<INT_PTR>(kStartupNotificationOkId)),
+                instance, nullptr);
+            if (text == nullptr || ok == nullptr) return -1;
+            if (state->chrome_font != nullptr) {
+                SendMessageW(text, WM_SETFONT,
+                             reinterpret_cast<WPARAM>(state->chrome_font),
+                             TRUE);
+                SendMessageW(ok, WM_SETFONT,
+                             reinterpret_cast<WPARAM>(state->chrome_font),
+                             TRUE);
+            }
+            layout_startup_notification(window);
+            return 0;
+        }
+        case WM_SIZE:
+            layout_startup_notification(window);
+            return 0;
+        case WM_DPICHANGED: {
+            const auto* suggested = reinterpret_cast<const RECT*>(lparam);
+            if (suggested != nullptr)
+                SetWindowPos(window, nullptr, suggested->left, suggested->top,
+                             suggested->right - suggested->left,
+                             suggested->bottom - suggested->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            layout_startup_notification(window);
+            return 0;
+        }
+        case WM_COMMAND:
+            if (state != nullptr &&
+                LOWORD(wparam) == kStartupNotificationOkId &&
+                HIWORD(wparam) == BN_CLICKED) {
+                state->startup_warning_message.clear();
+                DestroyWindow(window);
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            // The recoverable notification has one explicit acknowledgement;
+            // the main window's close path destroys it during shutdown.
+            return 0;
+        case WM_NCDESTROY:
+            if (state != nullptr && state->startup_notification == window) {
+                state->startup_notification = nullptr;
+                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+            }
+            break;
+        default:
+            break;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+void show_startup_notification(HWND owner, AppState& state) noexcept {
+    if (owner == nullptr || state.startup_warning_message.empty() ||
+        state.closing_ || state.quit_requested)
+        return;
+    if (state.startup_notification != nullptr) {
+        const HWND text =
+            GetDlgItem(state.startup_notification, kStartupNotificationTextId);
+        if (text != nullptr) {
+            SetWindowTextW(text, state.startup_warning_message.c_str());
+            UpdateWindow(text);
+        }
+        return;
+    }
+
+    const UINT dpi = std::max<UINT>(96, GetDpiForWindow(owner));
+    const auto scaled = [dpi](int value) {
+        return MulDiv(value, static_cast<int>(dpi), 96);
+    };
+    const int width = scaled(kStartupNotificationWidth);
+    const int height = startup_notification_height(owner, state, width);
+    // Keep this notification as a child of the root. A visible top-level
+    // warning window can be mistaken for Process.MainWindowHandle, causing a
+    // close request from the smoke test or a second instance to miss the root.
+    HWND dialog = CreateWindowExW(
+        WS_EX_CLIENTEDGE | WS_EX_CONTROLPARENT, kStartupNotificationClassName,
+        nullptr, WS_CHILD | WS_VISIBLE, 0, 0, width, height, owner,
+        nullptr, GetModuleHandleW(nullptr), &state);
+    if (dialog == nullptr) {
+        OutputDebugStringW(
+            L"PaneDock: could not create startup notification\n");
+        return;
+    }
+
+    RECT client_rect{};
+    int x = 0;
+    int y = 0;
+    if (GetClientRect(owner, &client_rect)) {
+        x = std::max(0, (static_cast<int>(client_rect.right) - width) / 2);
+        y = std::max(0, (static_cast<int>(client_rect.bottom) - height) / 2);
+    }
+    state.startup_notification = dialog;
+    SetWindowPos(dialog, HWND_TOP, x, y, width, height,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    UpdateWindow(dialog);
+}
+
 LRESULT CALLBACK transfer_close_dialog_proc(HWND window, UINT message,
                                             WPARAM wparam, LPARAM lparam) {
     auto* state = reinterpret_cast<AppState*>(
@@ -4779,6 +4978,8 @@ void finish_shutdown(HWND window, AppState& state) noexcept {
     state.shutdown_message_queued = false;
     if (state.transfer_close_dialog != nullptr)
         DestroyWindow(state.transfer_close_dialog);
+    if (state.startup_notification != nullptr)
+        DestroyWindow(state.startup_notification);
     destroy_pinned_locations_manager(state);
     revoke_drag_hover_targets(state);
     cancel_session_save_timer(state);
@@ -5208,13 +5409,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             const HRESULT hr = realize_startup_panes(window, *state);
             if (state->shutdown_deferred || state->closing_) return 0;
             if (FAILED(hr)) {
-                // A pane whose Shell view could not be realized stays blank; tell
-                // the user instead of leaving the failure as a silent debug log.
-                MessageBoxW(
-                    window,
+                // A pane whose Shell view could not be realized stays blank;
+                // update the non-blocking startup notification instead of
+                // entering a modal loop after the app is already usable.
+                append_startup_warning(
+                    *state,
                     L"PaneDock could not open the Shell view for one or more "
-                    L"panes. Some panes may be empty.",
-                    L"PaneDock", MB_OK | MB_ICONWARNING);
+                    L"panes. Some panes may be empty.");
+                show_startup_notification(window, *state);
             }
             return 0;
         }
@@ -6003,6 +6205,16 @@ bool register_window_class(HINSTANCE instance) noexcept {
     transfer_class.lpszClassName = kTransferCloseDialogClassName;
     if (RegisterClassExW(&transfer_class) == 0) return false;
 
+    WNDCLASSEXW startup_notification_class{};
+    startup_notification_class.cbSize = sizeof(startup_notification_class);
+    startup_notification_class.hInstance = instance;
+    startup_notification_class.lpfnWndProc = startup_notification_proc;
+    startup_notification_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    startup_notification_class.hbrBackground =
+        reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    startup_notification_class.lpszClassName = kStartupNotificationClassName;
+    if (RegisterClassExW(&startup_notification_class) == 0) return false;
+
     WNDCLASSEXW window_class{};
     window_class.cbSize = sizeof(window_class);
     window_class.style = CS_DBLCLKS;
@@ -6254,14 +6466,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     if (window == nullptr) {
         destroy_explorers(state);
         assert(panedock::explorer_host::live_view_count() == 0);
-        if (!state.startup_error_message.empty()) {
-            MessageBoxW(nullptr, state.startup_error_message.c_str(),
-                        L"PaneDock", MB_ICONERROR | MB_OK);
-        }
+        std::wstring fatal_message = state.startup_error_message;
         if (!state.startup_warning_message.empty()) {
-            MessageBoxW(nullptr, state.startup_warning_message.c_str(),
-                        L"PaneDock", MB_ICONWARNING | MB_OK);
+            if (!fatal_message.empty()) fatal_message += L"\n\n";
+            fatal_message += state.startup_warning_message;
         }
+        if (!fatal_message.empty())
+            MessageBoxW(nullptr, fatal_message.c_str(), L"PaneDock",
+                        MB_ICONERROR | MB_OK);
         OleUninitialize();
         CloseHandle(single_instance_mutex);
         return exit_code;
@@ -6269,12 +6481,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     ShowWindow(window, placement.maximized ? SW_SHOWMAXIMIZED : show_command);
     UpdateWindow(window);
     state.startup_frame_only = false;
-    // PD-135: each startup MessageBox owns a nested modal loop that dispatches
-    // the main window's messages. A WM_CLOSE / WM_ENDSESSION issued there runs
-    // begin_shutdown, which destroys the main HWND; the remaining startup dialogs
-    // and the deferred-realize post must not run against that destroyed (or
-    // reused) HWND. `proceed` short-circuits the rest of the sequence once the
-    // window has been torn down.
+    // PD-135: a close can still arrive before the message loop consumes the
+    // deferred-realize post. `proceed` prevents startup work from continuing
+    // after the main HWND has been torn down; recoverable warnings below are
+    // modeless and therefore do not create another nested modal loop.
     bool proceed = !state.closing_ && !state.shutdown_deferred &&
                    !state.quit_requested;
     // Queue realization before any startup warning enters a nested modal
@@ -6288,47 +6498,37 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 L"PaneDock: could not queue deferred Shell view realization\n");
             const HRESULT hr = realize_startup_panes(window, state);
             if (FAILED(hr) && !state.closing_ && !state.shutdown_deferred) {
-                MessageBoxW(
-                    window,
+                append_startup_warning(
+                    state,
                     L"PaneDock could not open the Shell view for one or more "
-                    L"panes. Some panes may be empty.",
-                    L"PaneDock", MB_OK | MB_ICONWARNING);
-                proceed = !state.closing_ && !state.quit_requested;
+                    L"panes. Some panes may be empty.");
             }
         }
     }
     if (recovered_from_corruption &&
         session_source == panedock::core::SessionSource::backup) {
-        MessageBoxW(
-            window,
+        append_startup_warning(
+            state,
             L"PaneDock could not read its saved session and restored the "
-            L"previous good version. Some recent changes may be missing.",
-            L"PaneDock", MB_OK | MB_ICONWARNING);
-        proceed = !state.closing_ && !state.quit_requested;
+            L"previous good version. Some recent changes may be missing.");
     }
     if (proceed && recovered_from_corruption &&
         session_source == panedock::core::SessionSource::default_state) {
-        MessageBoxW(
-            window,
+        append_startup_warning(
+            state,
             L"PaneDock could not read its saved session or its backup and "
             L"started with a default Group. Your previous Groups could not "
-            L"be recovered.",
-            L"PaneDock", MB_OK | MB_ICONWARNING);
-        proceed = !state.closing_ && !state.quit_requested;
+            L"be recovered.");
     }
     if (proceed && !clean_shutdown) {
-        MessageBoxW(
-            window,
+        append_startup_warning(
+            state,
             L"PaneDock did not shut down cleanly last time. If this keeps "
             L"happening, start it with --diagnostic to run without "
-            L"third-party shell extensions.",
-            L"PaneDock", MB_OK | MB_ICONWARNING);
-        proceed = !state.closing_ && !state.quit_requested;
+            L"third-party shell extensions.");
     }
     if (proceed && !state.startup_warning_message.empty()) {
-        MessageBoxW(window, state.startup_warning_message.c_str(),
-                    L"PaneDock", MB_OK | MB_ICONWARNING);
-        proceed = !state.closing_ && !state.quit_requested;
+        show_startup_notification(window, state);
     }
     MSG message{};
     int result = 0;

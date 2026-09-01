@@ -24,6 +24,9 @@ if ($windowShown -lt 0 -or $windowUpdated -lt 0) {
 
 Assert-Source 'bool\s+startup_frame_only\{\};' 'frame-only state exists'
 Assert-Source 'void\s+append_startup_warning\(AppState& state,\s*std::wstring_view warning\)' 'startup warnings have an append path'
+Assert-Source 'void\s+show_startup_notification\(HWND owner,\s*AppState& state\)' 'recoverable startup warnings have a modeless notification path'
+Assert-Source 'L"BUTTON", L"OK"' 'startup notification has an explicit OK action'
+Assert-Source 'kStartupNotificationClassName,[\s\S]*?nullptr, WS_CHILD \| WS_VISIBLE' 'startup notification remains a root child'
 Assert-Source 'if\s*\(!state\.realized\[index\]\s*&&\s*!state\.startup_frame_only' 'WM_CREATE blocks Shell realization'
 Assert-Source 'ShowWindow\(window,[\s\S]*?UpdateWindow\(window\);\s*state\.startup_frame_only\s*=\s*false;' 'frame is shown before Shell gate opens'
 Assert-Source 'const HRESULT active_result = apply_layout\(window, state\);' 'startup pass realizes active layout first'
@@ -71,9 +74,9 @@ if ($deferredStart -lt 0 -or $deferredEnd -lt 0) {
     throw 'startup frame order check failed: deferred realization case missing'
 }
 $deferredCase = $source.Substring($deferredStart, $deferredEnd - $deferredStart)
-if ($deferredCase -notmatch 'FAILED\(hr\)[\s\S]*MessageBoxW' -or
-    $deferredCase -match 'startup_warning_message\.empty') {
-    throw 'startup frame order check failed: deferred Shell failure is silent'
+if ($deferredCase -notmatch 'FAILED\(hr\)[\s\S]*append_startup_warning[\s\S]*show_startup_notification' -or
+    $deferredCase -match 'MessageBoxW') {
+    throw 'startup frame order check failed: deferred Shell failure blocks the usable window'
 }
 
 $fatalStart = $source.IndexOf('if (window == nullptr) {')
@@ -84,6 +87,20 @@ if ($fatalStart -lt 0 -or $fatalEnd -lt 0) {
 $fatalBranch = $source.Substring($fatalStart, $fatalEnd - $fatalStart)
 if ($fatalBranch -notmatch 'startup_warning_message\.empty\(\)[\s\S]*MessageBoxW') {
     throw 'startup frame order check failed: fatal branch drops warnings'
+}
+
+$postWindowStartup = $source.Substring($windowUpdated, $messageLoopStart - $windowUpdated)
+if ($postWindowStartup -match 'MessageBoxW' -or
+    $postWindowStartup -notmatch 'show_startup_notification\(window, state\)') {
+    throw 'startup frame order check failed: recoverable warning path is modal'
+}
+
+$shutdownStart = $source.IndexOf('void finish_shutdown(HWND window, AppState& state)')
+$explorerDestroy = $source.IndexOf('destroy_explorers(state);', $shutdownStart)
+$notificationDestroy = $source.IndexOf('DestroyWindow(state.startup_notification)', $shutdownStart)
+if ($shutdownStart -lt 0 -or $notificationDestroy -lt 0 -or
+    $explorerDestroy -lt 0 -or $notificationDestroy -gt $explorerDestroy) {
+    throw 'startup frame order check failed: shutdown does not destroy notification before Shell views'
 }
 
 Write-Output 'startup frame order check passed'

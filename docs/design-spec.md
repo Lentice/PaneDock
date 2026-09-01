@@ -263,9 +263,12 @@ Per-Monitor-V2 DPI awareness。視窗跨越不同 DPI 的螢幕時,全部 pane �
 5. 套用 active Group 的版型,**先 realize active pane 的 active tab**
 6. 其餘 pane 延後 realize,避免被網路或離線路徑阻塞
 
-主視窗顯示後才開啟 Shell realize gate；啟動復原／不乾淨關閉警告仍維持
-單一 `OK` 確認，但 deferred realize 會在這些 modal warning 之前排入訊息佇列，
-因此 warning 顯示時背景 pane 仍可完成顯示，按下 `OK` 後照常繼續啟動序列。
+主視窗顯示後才開啟 Shell realize gate；啟動復原、不乾淨關閉、storage 或
+部分 pane／drag-and-drop 失敗屬可復原問題，使用只有 `OK` 的 modeless
+notification，不 disable 主視窗與 pane。deferred realize 可在 notification
+顯示後繼續完成，後續 warning 更新同一通知；使用者按 `OK` 後通知關閉。
+若 COM、data folder、window class 或必要 UI 建立失敗，則不顯示主視窗，改用
+同步 ownerless error dialog，按下後離開 process。
 
 ### 9.4 關閉序列
 
@@ -292,6 +295,10 @@ Per-Monitor-V2 DPI awareness。視窗跨越不同 DPI 的螢幕時,全部 pane �
 
 - 無法解析的 location:tab 內可復原錯誤,保留設定(FR-012)
 - session document 損壞:退回備份並告知(FR-013)
+- startup 的可復原問題:主視窗已可用時以 modeless、只有 `OK` 的英文通知告知，
+  不得以同步 `MessageBoxW` 阻塞主視窗或 pane
+- startup 的致命問題:主視窗尚未可用時以同步 ownerless error dialog 告知，按下
+  按鈕後清理並結束 process
 - COM 失敗:記錄診斷事件,不得靜默忽略,不得使整個視窗不可用
 - 第三方 extension 崩潰:不可預防,但復原路徑必須存在(NFR-006)
 
