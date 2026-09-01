@@ -85,6 +85,16 @@ target_compile_definitions(panedock_sidebar PRIVATE
 target_link_libraries(panedock_sidebar PRIVATE user32 gdi32)
 panedock_set_warnings(panedock_sidebar)
 
+add_library(panedock_pane_chrome STATIC
+    src/app_shell/pane_chrome.cpp
+)
+target_include_directories(panedock_pane_chrome PUBLIC src)
+target_compile_definitions(panedock_pane_chrome PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
+)
+target_link_libraries(panedock_pane_chrome PUBLIC user32)
+panedock_set_warnings(panedock_pane_chrome)
+
 add_executable(PaneDock WIN32
     src/app_shell/main.cpp
     resources/panedock.rc
@@ -95,7 +105,7 @@ target_compile_definitions(PaneDock PRIVATE
 )
 target_link_options(PaneDock PRIVATE -municode)
 target_link_libraries(PaneDock PRIVATE
-    panedock_core panedock_shell_core panedock_explorer_host
+    panedock_core panedock_shell_core panedock_explorer_host panedock_pane_chrome
     panedock_file_operations panedock_sidebar
     shell32 ole32 shlwapi user32 gdi32 comctl32 uuid
 )

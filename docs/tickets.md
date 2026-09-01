@@ -200,7 +200,7 @@
 | PD-160 | 完成 Shell location 三段式 identity 擷取與還原 | 7 | `done` | PD-006, PD-022, PD-140, PD-157 | [PD-160](tickets/PD-160-shell-location-identity-capture-and-resolution.md) |
 | PD-161 | pane footer 新增目前資料夾背景選單按鈕（含 hover 與 tooltip） | 7 | `done` | PD-060, PD-083, PD-117, PD-159 | [PD-161](tickets/PD-161-pane-footer-folder-context-menu-button.md) |
 | PD-162 | 把關閉／重入決策抽成 `core` 的 shutdown sequence reducer | 7 | `done` | PD-123, PD-140, PD-148, PD-155, PD-159 | [PD-162](tickets/PD-162-shutdown-sequence-decision-reducer.md) |
-| PD-163 | 把 pane 的 chrome 子視窗收進單一 `PaneChrome` 型別 | 7 | `ready` | PD-020, PD-040, PD-060, PD-117, PD-151, PD-155 | [PD-163](tickets/PD-163-pane-chrome-child-window-ownership.md) |
+| PD-163 | 把 pane 的 chrome 子視窗收進單一 `PaneChrome` 型別 | 7 | `done` | PD-020, PD-040, PD-060, PD-117, PD-151, PD-155 | [PD-163](tickets/PD-163-pane-chrome-child-window-ownership.md) |
 | PD-164 | 把 realize／de-realize 決策抽成 `core` 的純函式 | 7 | `planned` | PD-005, PD-009, PD-093, PD-151, PD-155, PD-163 | [PD-164](tickets/PD-164-realization-plan-pure-function.md) |
 | PD-165 | 把檢視模式字串 codec 移進 `shell_core` | 7 | `done` | PD-052, PD-079, PD-153, PD-156, PD-157 | [PD-165](tickets/PD-165-view-mode-codec-to-shell-core.md) |
 | PD-166 | startup recoverable warning 改為非同步 `OK` 通知，fatal startup error 維持同步退出 | 7 | `done` | PD-130, PD-135, PD-141, PD-144 | [PD-166](tickets/PD-166-startup-notification-dialog-routing.md) |

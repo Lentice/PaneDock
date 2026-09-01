@@ -114,3 +114,29 @@ if (-not $p.WaitForExit(5000)) { throw 'process survived graceful close' }
 在 `## 交接區` 記錄：搬移前後的 `AppState` pane-parallel 欄位數量、`apply_layout` 行數變化、PD-155／PD-108 語意保留在新程式碼的哪一行、以及實機版型切換與 resize 的驗證方式與結果。留下的 9 個未搬欄位需寫出各自的阻礙，供後續 ticket 直接引用。
 
 ## 交接區
+
+### 實作結果
+
+- `AppState` 的 21 個 pane-parallel 欄位拆成 `std::array<PaneChrome, 4>` 所有的 12 個 HWND/GDI 欄位，以及留在 `AppState` 的 9 個非 chrome 欄位。
+- `apply_layout` 由 327 行縮為 319 行；`PaneChrome::set_rect` 負責 `laid_out_pane_rects` 的 unchanged-pane 判斷，app shell 仍計算各子控制項矩形並保留 PD-155 的 batch。
+- `destroy_explorers(state)` 後才呼叫每個 `PaneChrome::destroy()`，再由 shutdown reducer 進入 view/window destruction，避免 parent HWND 早於 live Explorer view 被摧毀。
+
+### 驗證
+
+- `cmake --build build`：PASS。
+- `ctest --test-dir build -E panedock_launch_smoke --output-on-failure`：PASS，15/15。
+- 舊的 `std::array<HWND, kExplorerCount>` pattern：無結果；`BeginDeferWindowPos|EndDeferWindowPos`：仍存在於既有 batch 路徑。
+- 提升權限執行 `ctest --test-dir build -R panedock_launch_smoke --output-on-failure`：PASS；`%LOCALAPPDATA%\PaneDock\session.json` 的 `clean_shutdown` 為 `true`。
+- `computer-use` GUI helper 重新列舉並啟用視窗後仍連續兩次回報 activation failure，依規則停止 UI automation；因此版型切換、splitter、sidebar 的直接視覺矩陣未由 helper 自動化，生命週期以實際 smoke test 覆蓋。
+
+### 未搬欄位與阻礙
+
+- `explorers`：`ExplorerHost` 的 COM lifetime/identity；與 HWND ownership 混搬會混淆 Shell lifecycle。
+- `realized`：`IExplorerBrowser::Initialize`/`Destroy` 與 NFR-002 狀態耦合。
+- `tab_visuals`：tab paint data，不是 HWND ownership。
+- `tab_strip_geometry`：paint/hit-test 共用的純 geometry，不是 control ownership。
+- `tab_hover_indices`：tab 互動狀態。
+- `tab_scroll_hover_indices`：tab 互動狀態。
+- `suppress_history_record`：navigation callback 狀態。
+- `tab_drag_targets`：`ComPtr`/`RegisterDragDrop` lifetime，必須在 `PaneChrome` destroy 前 revoke。
+- `folder_context_buttons`：PD-161 新增的控制項刻意留在 app shell；本票明確只搬 12 個 chrome 欄位，其 command/subclass/tooltip 行為不影響 ExplorerHost/container ownership。
