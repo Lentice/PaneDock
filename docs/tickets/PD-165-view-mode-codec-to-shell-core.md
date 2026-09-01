@@ -106,3 +106,23 @@ $p.CloseMainWindow() | Out-Null; $p.WaitForExit(5000) | Out-Null
 在 `## 交接區` 記錄：`kViewModeOptions` 的拆或不拆決定與理由、round-trip 測試的八個字串值、以及既有 `session.json` 還原前後的 `view_mode` 欄位比對結果。
 
 ## 交接區
+
+### 2026-09-01 implementation
+
+- `ViewModeSelection`, the four icon-size constants, `view_mode_name`, and
+  `parse_view_mode` now live in `shell_core`; `app_shell` keeps only the eight
+  English menu labels and routes selections through the value API. The table
+  was not split into a second shell-core metadata list because keeping labels
+  beside the menu command wiring avoids duplicate UI metadata.
+- Round-trip values are `FVM_ICON:256`, `FVM_ICON:96`, `FVM_ICON:48`,
+  `FVM_ICON:16`, `FVM_LIST`, `FVM_DETAILS`, `FVM_TILE`, and `FVM_CONTENT`.
+  `nonsense` and the empty string return an empty `optional`; icon sizes 48 and
+  96 encode differently.
+- No session schema or persisted string changed. The new focused test covers
+  the codec; existing session restore remains value-compatible. A real-session
+  before/after launch comparison was not run in the sandbox, so no runtime
+  result is claimed here.
+- Verification: `cmake --build build` passed; focused CTest for the new codec,
+  `shell_core_boundary`, and `shell_reentry_gate` passed (3/3); `git diff
+  --check` passed. The sandbox-sensitive launch smoke is recorded separately
+  from these deterministic checks.

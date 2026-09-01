@@ -9,6 +9,8 @@
 
 #include "shell_core/shell_core.h"
 
+#include <charconv>
+
 #include <shlobj.h>
 #include <utility>
 #include <wrl/client.h>
@@ -41,6 +43,43 @@ Microsoft::WRL::ComPtr<IShellItem> parse(std::wstring_view text) {
 }
 
 }  // namespace
+
+std::string view_mode_name(FOLDERVIEWMODE mode, int image_size) {
+    switch (mode) {
+        case FVM_ICON:
+            return image_size > 0 ? "FVM_ICON:" + std::to_string(image_size)
+                                  : "FVM_ICON";
+        case FVM_SMALLICON:
+            return image_size > 0 ? "FVM_ICON:" + std::to_string(image_size)
+                                  : "FVM_ICON:16";
+        case FVM_LIST: return "FVM_LIST";
+        case FVM_DETAILS: return "FVM_DETAILS";
+        case FVM_TILE: return "FVM_TILE";
+        case FVM_CONTENT: return "FVM_CONTENT";
+        default: return {};
+    }
+}
+
+std::optional<ViewModeSelection> parse_view_mode(std::string_view name) {
+    if (name == "FVM_ICON") return ViewModeSelection{FVM_ICON, kLargeIconSize};
+    if (name == "FVM_SMALLICON")
+        return ViewModeSelection{FVM_ICON, kSmallIconSize};
+    if (name == "FVM_LIST") return ViewModeSelection{FVM_LIST, -1};
+    if (name == "FVM_DETAILS") return ViewModeSelection{FVM_DETAILS, -1};
+    if (name == "FVM_TILE") return ViewModeSelection{FVM_TILE, -1};
+    if (name == "FVM_CONTENT") return ViewModeSelection{FVM_CONTENT, -1};
+
+    constexpr std::string_view prefix = "FVM_ICON:";
+    if (name.starts_with(prefix)) {
+        int image_size{};
+        const auto first = name.data() + prefix.size();
+        const auto last = name.data() + name.size();
+        const auto parsed = std::from_chars(first, last, image_size);
+        if (parsed.ec == std::errc{} && parsed.ptr == last && image_size > 0)
+            return ViewModeSelection{FVM_ICON, image_size};
+    }
+    return std::nullopt;
+}
 
 core::ShellLocation capture_location(std::wstring parsing_name) {
     core::ShellLocation result{std::move(parsing_name), {}, {}};

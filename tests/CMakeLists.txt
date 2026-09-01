@@ -14,6 +14,7 @@ set(PANEDOCK_TESTS
     "core_model|unit/core_model_test.cpp|panedock_core"
     "core_layout|unit/core_layout_test.cpp|panedock_core"
     "core_session|unit/core_session_test.cpp|panedock_core"
+    "shell_core_view_mode|unit/shell_core_view_mode_test.cpp|panedock_shell_core"
     "file_operation_effect|unit/file_operation_effect_test.cpp|panedock_file_operations"
 )
 
