@@ -197,7 +197,7 @@
 | PD-157 | 建立 `shell_core` 並移出 app_shell 的 Shell location/value 操作 | 7 | `done` | PD-006, PD-022, PD-140, PD-146 | [PD-157](tickets/PD-157-shell-core-location-boundary.md) |
 | PD-158 | 建立 `file_operations` 並讓 Ctrl+V 正確區分 Cut／Copy | 7 | `done` | PD-023, PD-121, PD-123, PD-140, PD-157 | [PD-158](tickets/PD-158-cut-aware-clipboard-paste.md) |
 | PD-159 | pane 空白處的背景 Shell verb 無法取得目前資料夾 | 7 | `done` | PD-007, PD-014, PD-024 | [PD-159](tickets/PD-159-background-shell-verb-current-folder.md) |
-| PD-160 | 完成 Shell location 三段式 identity 擷取與還原 | 7 | `ready` | PD-006, PD-022, PD-140, PD-157 | [PD-160](tickets/PD-160-shell-location-identity-capture-and-resolution.md) |
+| PD-160 | 完成 Shell location 三段式 identity 擷取與還原 | 7 | `done` | PD-006, PD-022, PD-140, PD-157 | [PD-160](tickets/PD-160-shell-location-identity-capture-and-resolution.md) |
 | PD-161 | pane footer 新增目前資料夾背景選單按鈕（含 hover 與 tooltip） | 7 | `done` | PD-060, PD-083, PD-117, PD-159 | [PD-161](tickets/PD-161-pane-footer-folder-context-menu-button.md) |
 | PD-162 | 把關閉／重入決策抽成 `core` 的 shutdown sequence reducer | 7 | `ready` | PD-123, PD-140, PD-148, PD-155, PD-159 | [PD-162](tickets/PD-162-shutdown-sequence-decision-reducer.md) |
 | PD-163 | 把 pane 的 chrome 子視窗收進單一 `PaneChrome` 型別 | 7 | `ready` | PD-020, PD-040, PD-060, PD-117, PD-151, PD-155 | [PD-163](tickets/PD-163-pane-chrome-child-window-ownership.md) |

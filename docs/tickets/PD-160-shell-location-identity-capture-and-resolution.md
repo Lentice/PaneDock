@@ -185,3 +185,12 @@ The second command is a caller audit, not a PASS by itself. Run `panedock_launch
 - Release build linked successfully. All 13 CTest tests passed; `panedock_launch_smoke` passed in elevated context with writable real `%LOCALAPPDATA%\PaneDock` storage (1.62 s).
 - `shell_core_boundary_check.ps1`, `shell_reentry_gate_check.ps1`, and `git diff --check` passed. The first restricted smoke attempt was correctly classified as a save-failure MessageBox caused by sandboxed Known Folder storage, not a shutdown regression.
 - The ticket's separate real-desktop Desktop/Documents, local folder, UNC disconnect/reconnect, virtual location, and precedence matrix remains unrun.
+
+### 2026-09-01 tracker close verification
+
+- Re-ran `shell_core_boundary_check.ps1`, `shell_reentry_gate_check.ps1`, and
+  `git diff --check`; all passed. The existing implementation in `7b75528`
+  already supplies the complete value seam and caller routing described above,
+  so no duplicate product code or test double was added.
+- The real-desktop identity matrix remains explicitly unrun; the status records
+  implementation completion, not fabricated runtime evidence.
