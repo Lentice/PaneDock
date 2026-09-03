@@ -6,6 +6,8 @@ enum class ShutdownEvent {
     close_requested,
     end_session,
     end_session_cancelled,
+    drag_started,
+    drag_finished,
     shell_call_entered,
     shell_call_left,
     deferred_shutdown_queued,
@@ -55,6 +57,9 @@ public:
         unsigned shell_call_depth{};
         bool shutdown_deferred{};
         bool shutdown_message_queued{};
+        // Multiple IDropTargets can be active during an OLE target handoff.
+        unsigned drag_target_count{};
+        bool drag_in_progress{};
         bool file_operation_call_active{};
         bool file_operation_in_progress{};
         bool close_after_file_operation{};

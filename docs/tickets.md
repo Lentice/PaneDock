@@ -207,6 +207,7 @@
 | PD-167 | 所有新 tab 的預設 Shell location 統一為 My Computer | 7 | `done` | PD-019, PD-154, PD-160 | [PD-167](tickets/PD-167-default-tab-location-my-computer.md) |
 | PD-171 | `apply_layout` 持有的 Group reference 在 Shell 呼叫重入時可能失效（dangling reference） | 7 | `done` | PD-140 | [PD-171](tickets/PD-171-shell-reentry-invalidates-group-vector-reference.md) |
 | PD-172 | deferred shutdown 訊息在 nested Shell call 內被吃掉，程式可能永遠關不掉 | 7 | `done` | PD-140, PD-162 | [PD-172](tickets/PD-172-deferred-shutdown-message-swallowed-in-nested-shell-call.md) |
+| PD-173 | 拖曳進行中關閉：OLE 拖曳生命週期沒有納入任何 shell-call/shutdown gate | 7 | `done` | PD-090, PD-140, PD-162 | [PD-173](tickets/PD-173-close-during-active-drag-not-gated.md) |
 
 ## Dependency lanes
 

@@ -14,6 +14,10 @@ ShutdownAction ShutdownSequence::step(ShutdownEvent event) noexcept {
                 state_.close_after_file_operation = true;
                 return ShutdownAction::prompt_transfer;
             }
+            if (state_.drag_in_progress) {
+                state_.shutdown_deferred = true;
+                return ShutdownAction::defer;
+            }
             state_.shutdown_deferred = true;
             return ShutdownAction::defer;
 
@@ -26,6 +30,10 @@ ShutdownAction ShutdownSequence::step(ShutdownEvent event) noexcept {
                 state_.cancel_file_operation = true;
                 return ShutdownAction::none;
             }
+            if (state_.drag_in_progress) {
+                state_.shutdown_deferred = true;
+                return ShutdownAction::defer;
+            }
             if (state_.shutdown_prompt_active ||
                 state_.shutdown_save_attempted)
                 return ShutdownAction::none;
@@ -37,6 +45,20 @@ ShutdownAction ShutdownSequence::step(ShutdownEvent event) noexcept {
         case ShutdownEvent::end_session_cancelled:
             if (!state_.closing_) state_.end_session_pending = false;
             return ShutdownAction::none;
+
+        case ShutdownEvent::drag_started:
+            ++state_.drag_target_count;
+            state_.drag_in_progress = true;
+            return ShutdownAction::none;
+
+        case ShutdownEvent::drag_finished:
+            if (state_.drag_target_count == 0) return ShutdownAction::none;
+            --state_.drag_target_count;
+            state_.drag_in_progress = state_.drag_target_count != 0;
+            if (state_.drag_in_progress || state_.closing_ ||
+                !state_.shutdown_deferred || state_.shutdown_message_queued)
+                return ShutdownAction::none;
+            return ShutdownAction::defer;
 
         case ShutdownEvent::shell_call_entered:
             ++state_.shell_call_depth;
@@ -59,6 +81,10 @@ ShutdownAction ShutdownSequence::step(ShutdownEvent event) noexcept {
                 return ShutdownAction::none;
             if (state_.shell_call_depth != 0) {
                 // A nested Shell pump may consume the posted continuation.
+                state_.shutdown_message_queued = false;
+                return ShutdownAction::none;
+            }
+            if (state_.drag_in_progress) {
                 state_.shutdown_message_queued = false;
                 return ShutdownAction::none;
             }

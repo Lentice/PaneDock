@@ -66,8 +66,9 @@ constexpr UINT kDeferredRealizeMessage = WM_APP + 52;
 // PD-123: keep the main window alive until a PaneDock-owned Shell paste has
 // returned from PerformOperations.
 constexpr UINT kFileOperationFinishedMessage = WM_APP + 53;
-// Defer close until the outermost app-owned Shell call has returned, or until
-// the Closing... caption has had one message-loop turn to become visible.
+// Defer close until the outermost app-owned Shell call or active OLE drag has
+// returned, or until the Closing... caption has had one message-loop turn to
+// become visible.
 constexpr UINT kDeferredShutdownMessage = WM_APP + 54;
 constexpr wchar_t kTransferCloseDialogClassName[] =
     L"PaneDockTransferCloseDialog";
@@ -274,13 +275,16 @@ class DragHoverTarget final : public IDropTarget {
 public:
     using HitTest = std::function<std::optional<std::size_t>(POINT)>;
     using HoverCallback = std::function<void(std::size_t)>;
+    using DragStateCallback = std::function<void(bool)>;
 
     DragHoverTarget(HWND timer_window, UINT_PTR timer_id, HitTest hit_test,
-                    HoverCallback hover_callback)
+                    HoverCallback hover_callback,
+                    DragStateCallback drag_state_callback)
         : timer_window_(timer_window),
           timer_id_(timer_id),
           hit_test_(std::move(hit_test)),
-          hover_callback_(std::move(hover_callback)) {}
+          hover_callback_(std::move(hover_callback)),
+          drag_state_callback_(std::move(drag_state_callback)) {}
 
     DragHoverTarget(const DragHoverTarget&) = delete;
     DragHoverTarget& operator=(const DragHoverTarget&) = delete;
@@ -314,8 +318,10 @@ public:
         if (effect == nullptr) return E_INVALIDARG;
         *effect = DROPEFFECT_NONE;
         try {
+            begin_drag();
             update_hover({point.x, point.y});
         } catch (...) {
+            finish_drag();
             cancel_hover();
             return E_OUTOFMEMORY;
         }
@@ -337,12 +343,14 @@ public:
 
     HRESULT STDMETHODCALLTYPE DragLeave() override {
         cancel_hover();
+        finish_drag();
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE Drop(IDataObject*, DWORD, POINTL,
                                     DWORD* effect) override {
         cancel_hover();
+        finish_drag();
         if (effect == nullptr) return E_INVALIDARG;
         *effect = DROPEFFECT_NONE;
         return S_OK;
@@ -376,7 +384,26 @@ public:
     }
 
 private:
-    ~DragHoverTarget() { cancel_hover(); }
+    ~DragHoverTarget() {
+        finish_drag();
+        cancel_hover();
+    }
+
+    void begin_drag() {
+        if (drag_active_) return;
+        drag_active_ = true;
+        drag_state_callback_(true);
+    }
+
+    void finish_drag() noexcept {
+        if (!drag_active_) return;
+        drag_active_ = false;
+        try {
+            drag_state_callback_(false);
+        } catch (...) {
+            OutputDebugStringW(L"PaneDock: drag state callback failed\n");
+        }
+    }
 
     void stop_timer() noexcept {
         if (!timer_running_) return;
@@ -412,9 +439,12 @@ private:
     UINT_PTR timer_id_{};
     HitTest hit_test_;
     HoverCallback hover_callback_;
+    DragStateCallback drag_state_callback_;
     std::atomic<ULONG> references_{1};
     std::optional<std::size_t> hover_index_;
     bool timer_running_{false};
+    // Guard duplicate DragEnter/DragLeave notifications on one target.
+    bool drag_active_{false};
     bool hover_triggered_{false};
     bool invoking_{false};
     UINT_PTR hover_generation_{0};
@@ -423,11 +453,13 @@ private:
 
 Microsoft::WRL::ComPtr<DragHoverTarget> make_drag_hover_target(
     HWND timer_window, UINT_PTR timer_id, DragHoverTarget::HitTest hit_test,
-    DragHoverTarget::HoverCallback hover_callback) {
+    DragHoverTarget::HoverCallback hover_callback,
+    DragHoverTarget::DragStateCallback drag_state_callback) {
     Microsoft::WRL::ComPtr<DragHoverTarget> target;
     auto* raw = new (std::nothrow)
         DragHoverTarget(timer_window, timer_id, std::move(hit_test),
-                        std::move(hover_callback));
+                        std::move(hover_callback),
+                        std::move(drag_state_callback));
     if (raw != nullptr) target.Attach(raw);
     return target;
 }
@@ -592,6 +624,7 @@ struct AppState {
 };
 
 void begin_shutdown(HWND window, AppState& state, bool allow_keep_open) noexcept;
+void drag_state_changed(AppState& state, bool entering) noexcept;
 
 void finish_shell_call(AppState& state) noexcept {
     const auto action = state.shutdown_sequence.step(
@@ -3240,7 +3273,10 @@ Microsoft::WRL::ComPtr<DragHoverTarget> make_sidebar_drag_hover_target(
     };
     return make_drag_hover_target(window, kDragHoverSidebarTimerId,
                                   std::move(hit_test),
-                                  std::move(hover_callback));
+                                  std::move(hover_callback),
+                                  [&state](bool entering) noexcept {
+                                      drag_state_changed(state, entering);
+                                  });
 }
 
 void add_group(HWND window, AppState& state) {
@@ -3411,7 +3447,10 @@ bool register_tab_drag_hover_targets(HWND window, AppState& state) {
         };
         auto target = make_drag_hover_target(
             window, kDragHoverTabTimerIdBase + pane_index,
-            std::move(hit_test), std::move(hover_callback));
+            std::move(hit_test), std::move(hover_callback),
+            [&state](bool entering) noexcept {
+                drag_state_changed(state, entering);
+            });
         if (target == nullptr) return false;
         HRESULT hr = E_UNEXPECTED;
         {
@@ -4591,6 +4630,14 @@ void complete_deferred_close(HWND window, AppState& state) noexcept;
 void finish_shutdown(HWND window, AppState& state) noexcept;
 void run_shutdown_action(HWND window, AppState& state,
                          panedock::core::ShutdownAction action) noexcept;
+
+void drag_state_changed(AppState& state, bool entering) noexcept {
+    const auto action = state.shutdown_sequence.step(
+        entering ? panedock::core::ShutdownEvent::drag_started
+                 : panedock::core::ShutdownEvent::drag_finished);
+    if (action == panedock::core::ShutdownAction::defer)
+        run_shutdown_action(state.main_window, state, action);
+}
 
 void set_main_window_title(HWND window, bool diagnostic_mode,
                            bool closing) noexcept {

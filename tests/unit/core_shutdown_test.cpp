@@ -80,6 +80,45 @@ void test_consumed_deferred_shutdown_message_is_reposted() {
            ShutdownAction::save_session);
 }
 
+void test_drag_defers_close_until_all_targets_finish() {
+    ShutdownSequence close;
+    EXPECT(close.step(ShutdownEvent::drag_started) == ShutdownAction::none);
+    EXPECT(close.step(ShutdownEvent::close_requested) ==
+           ShutdownAction::defer);
+    EXPECT(close.state().drag_in_progress);
+    EXPECT(close.state().shutdown_deferred);
+    EXPECT(close.step(ShutdownEvent::deferred_shutdown_queued) ==
+           ShutdownAction::none);
+    EXPECT(close.step(ShutdownEvent::deferred_shutdown_ready) ==
+           ShutdownAction::none);
+    EXPECT(!close.state().shutdown_message_queued);
+    EXPECT(close.state().drag_in_progress);
+
+    EXPECT(close.step(ShutdownEvent::drag_started) == ShutdownAction::none);
+    EXPECT(close.step(ShutdownEvent::drag_finished) == ShutdownAction::none);
+    EXPECT(close.state().drag_in_progress);
+    EXPECT(close.step(ShutdownEvent::drag_finished) == ShutdownAction::defer);
+    EXPECT(!close.state().drag_in_progress);
+    EXPECT(close.step(ShutdownEvent::deferred_shutdown_queued) ==
+           ShutdownAction::none);
+    EXPECT(close.step(ShutdownEvent::deferred_shutdown_ready) ==
+           ShutdownAction::save_session);
+
+    ShutdownSequence end_session;
+    EXPECT(end_session.step(ShutdownEvent::drag_started) ==
+           ShutdownAction::none);
+    EXPECT(end_session.step(ShutdownEvent::end_session) ==
+           ShutdownAction::defer);
+    EXPECT(end_session.state().end_session_pending);
+    EXPECT(end_session.state().shutdown_deferred);
+    EXPECT(end_session.step(ShutdownEvent::deferred_shutdown_queued) ==
+           ShutdownAction::none);
+    EXPECT(end_session.step(ShutdownEvent::drag_finished) ==
+           ShutdownAction::none);
+    EXPECT(end_session.step(ShutdownEvent::deferred_shutdown_ready) ==
+           ShutdownAction::save_session);
+}
+
 void test_transfer_decisions() {
     ShutdownSequence keep_open;
     keep_open.step(ShutdownEvent::file_operation_call_started);
@@ -154,6 +193,7 @@ int main() {
     test_normal_close_orders_actions();
     test_close_inside_nested_shell_calls_waits_for_outer_call();
     test_consumed_deferred_shutdown_message_is_reposted();
+    test_drag_defers_close_until_all_targets_finish();
     test_transfer_decisions();
     test_end_session_paths_and_save_failure();
     test_repeated_close_does_not_repeat_teardown();
