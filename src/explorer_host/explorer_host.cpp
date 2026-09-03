@@ -15,6 +15,7 @@
 #include <commctrl.h>
 
 #include "shell_core/shell_core.h"
+#include "com_ref_counted.h"
 
 namespace panedock::explorer_host {
 namespace {
@@ -59,7 +60,8 @@ Microsoft::WRL::ComPtr<IBindCtx> navigation_bind_context() noexcept {
     return result;
 }
 
-class ViewCallback final : public IShellFolderViewCB {
+class ViewCallback final
+    : public panedock::ComRefCounted<ViewCallback, IShellFolderViewCB> {
 public:
     explicit ViewCallback(ExplorerHost* host) noexcept : host_(host) {}
 
@@ -76,17 +78,6 @@ public:
             return S_OK;
         }
         return E_NOINTERFACE;
-    }
-
-    ULONG STDMETHODCALLTYPE AddRef() override {
-        return references_.fetch_add(1, std::memory_order_relaxed) + 1;
-    }
-
-    ULONG STDMETHODCALLTYPE Release() override {
-        const ULONG remaining =
-            references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
-        if (remaining == 0) delete this;
-        return remaining;
     }
 
     void set_previous(IShellFolderViewCB* previous) noexcept {
@@ -107,14 +98,13 @@ public:
     }
 
 private:
-    std::atomic<ULONG> references_{1};
     ExplorerHost* host_{};
     Microsoft::WRL::ComPtr<IShellFolderViewCB> previous_;
 };
 
-class Site final : public IServiceProvider,
-                   public ICommDlgBrowser,
-                   public IExplorerBrowserEvents {
+class Site final
+    : public panedock::ComRefCounted<Site, IServiceProvider, ICommDlgBrowser,
+                                     IExplorerBrowserEvents> {
 public:
     explicit Site(ExplorerHost* host) noexcept : host_(host) {}
 
@@ -138,21 +128,8 @@ public:
             return E_NOINTERFACE;
         }
 
-        references_.fetch_add(1, std::memory_order_relaxed);
+        AddRef();
         return S_OK;
-    }
-
-    ULONG STDMETHODCALLTYPE AddRef() override {
-        return references_.fetch_add(1, std::memory_order_relaxed) + 1;
-    }
-
-    ULONG STDMETHODCALLTYPE Release() override {
-        const ULONG remaining =
-            references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
-        if (remaining == 0) {
-            delete this;
-        }
-        return remaining;
     }
 
     HRESULT STDMETHODCALLTYPE QueryService(REFGUID service_id, REFIID iid,
@@ -215,7 +192,6 @@ public:
     }
 
 private:
-    std::atomic<ULONG> references_{1};
     ExplorerHost* host_{nullptr};
 };
 

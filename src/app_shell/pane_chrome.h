@@ -11,16 +11,9 @@
 #include <cstddef>
 #include <optional>
 
-namespace panedock::app_shell {
+#include "app_shell/pane_control_id.h"
 
-inline constexpr int kTabStripIdBase = 200;
-inline constexpr int kBackButtonIdBase = 300;
-inline constexpr int kForwardButtonIdBase = 310;
-inline constexpr int kUpButtonIdBase = 320;
-inline constexpr int kAddressBarIdBase = 330;
-inline constexpr int kRefreshButtonIdBase = 340;
-inline constexpr int kViewModeButtonIdBase = 350;
-inline constexpr int kPinnedButtonIdBase = 392;
+namespace panedock::app_shell {
 
 class PaneChrome final {
 public:

@@ -20,6 +20,8 @@
 #include <shlobj.h>
 #include <wrl/client.h>
 
+#include "com_ref_counted.h"
+
 namespace panedock::file_operations {
 namespace {
 
@@ -37,7 +39,9 @@ void log_hresult(const wchar_t* operation, HRESULT result) noexcept {
     OutputDebugStringW(message);
 }
 
-class ProgressSink final : public IFileOperationProgressSink {
+class ProgressSink final
+    : public panedock::ComRefCounted<ProgressSink,
+                                     IFileOperationProgressSink> {
 public:
     explicit ProgressSink(Callbacks callbacks) noexcept
         : callbacks_(callbacks) {}
@@ -51,17 +55,6 @@ public:
         *object = static_cast<IFileOperationProgressSink*>(this);
         AddRef();
         return S_OK;
-    }
-
-    ULONG STDMETHODCALLTYPE AddRef() override {
-        return references_.fetch_add(1, std::memory_order_relaxed) + 1;
-    }
-
-    ULONG STDMETHODCALLTYPE Release() override {
-        const ULONG remaining =
-            references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
-        if (remaining == 0) delete this;
-        return remaining;
     }
 
     HRESULT STDMETHODCALLTYPE StartOperations() override {
@@ -120,7 +113,6 @@ private:
                    : S_OK;
     }
 
-    std::atomic<ULONG> references_{1};
     Callbacks callbacks_;
 };
 

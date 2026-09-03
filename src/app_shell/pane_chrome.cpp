@@ -33,16 +33,13 @@ bool PaneChrome::create(HWND parent, int pane_index) noexcept {
     tab_strip_ = CreateWindowExW(
         0, L"STATIC", nullptr,
         WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | SS_NOTIFY, 0, 0, 0, 0,
-        parent, reinterpret_cast<HMENU>(kTabStripIdBase + pane_index),
+        parent, reinterpret_cast<HMENU>(encode_pane_control(
+                    PaneControl::tab_strip, static_cast<std::size_t>(pane_index))),
         GetModuleHandleW(nullptr), nullptr);
 
-    const std::array<int, 6> ids{
-        kBackButtonIdBase + pane_index,
-        kForwardButtonIdBase + pane_index,
-        kUpButtonIdBase + pane_index,
-        kRefreshButtonIdBase + pane_index,
-        kViewModeButtonIdBase + pane_index,
-        kPinnedButtonIdBase + pane_index};
+    constexpr std::array controls{
+        PaneControl::back, PaneControl::forward, PaneControl::up,
+        PaneControl::refresh, PaneControl::view_mode, PaneControl::pinned};
     const std::array<HWND*, 6> buttons{
         &back_button_, &forward_button_, &up_button_, &refresh_button_,
         &view_mode_button_, &pinned_button_};
@@ -51,13 +48,17 @@ bool PaneChrome::create(HWND parent, int pane_index) noexcept {
             0, L"BUTTON", kButtonLabels[index],
             WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | BS_PUSHBUTTON |
                 BS_OWNERDRAW,
-            0, 0, 0, 0, parent, reinterpret_cast<HMENU>(ids[index]),
+            0, 0, 0, 0, parent,
+            reinterpret_cast<HMENU>(encode_pane_control(
+                controls[index], static_cast<std::size_t>(pane_index))),
             GetModuleHandleW(nullptr), nullptr);
     }
     address_bar_ = CreateWindowExW(
         0, L"EDIT", nullptr,
         WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0,
-        parent, reinterpret_cast<HMENU>(kAddressBarIdBase + pane_index),
+        parent, reinterpret_cast<HMENU>(encode_pane_control(
+                    PaneControl::address_bar,
+                    static_cast<std::size_t>(pane_index))),
         GetModuleHandleW(nullptr), nullptr);
     status_bar_ = CreateWindowExW(
         0, L"STATIC", L"", WS_CHILD | WS_CLIPSIBLINGS | SS_OWNERDRAW, 0, 0,

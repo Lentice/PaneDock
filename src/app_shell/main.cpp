@@ -35,6 +35,7 @@
 
 #include "app_shell/diagnostic_mode.h"
 #include "app_shell/pane_chrome.h"
+#include "app_shell/pane_control_id.h"
 #include "app_shell/tab_overflow.h"
 #include "app_shell/window_placement.h"
 #include "core/layout.h"
@@ -47,6 +48,7 @@
 #include "resource.h"
 #include "shell_core/shell_core.h"
 #include "sidebar/sidebar.h"
+#include "com_ref_counted.h"
 
 namespace {
 
@@ -173,15 +175,6 @@ constexpr std::array<wchar_t, 7> kNavigationGlyphs{
 // EDIT control tall enough to show text.
 constexpr int kAddressBarBackgroundRadius = 4;
 constexpr int kAddressBarInset = 6;
-constexpr int kBackButtonIdBase = panedock::app_shell::kBackButtonIdBase;
-constexpr int kForwardButtonIdBase =
-    panedock::app_shell::kForwardButtonIdBase;
-constexpr int kUpButtonIdBase = panedock::app_shell::kUpButtonIdBase;
-constexpr int kRefreshButtonIdBase = panedock::app_shell::kRefreshButtonIdBase;
-constexpr int kViewModeButtonIdBase =
-    panedock::app_shell::kViewModeButtonIdBase;
-// Pinned button IDs use the unused 392-395 range after view-mode popup IDs.
-constexpr int kPinnedButtonIdBase = panedock::app_shell::kPinnedButtonIdBase;
 // View-mode popup commands: eight IDs per pane, 360-391, kept separate from
 // the navigation buttons and layout commands above.
 constexpr int kViewModeMenuIdBase = 360;
@@ -189,8 +182,6 @@ constexpr std::size_t kViewModeOptionCount = 8;
 constexpr int kViewModeMenuIdCount =
     static_cast<int>(kExplorerCount * kViewModeOptionCount);
 constexpr int kLayoutButtonIdBase = 400;
-// PD-161: one footer action command per pane, after tab context commands.
-constexpr int kFolderContextButtonIdBase = 790;
 // Pinned popup commands: four pane blocks, each with 64 custom locations and
 // four fixed/action slots. The 500-771 range is separate from all controls.
 constexpr int kPinnedMenuIdBase = 500;
@@ -274,7 +265,8 @@ constexpr UINT kDragHoverDelayMilliseconds = 800;
 constexpr UINT_PTR kDragHoverSidebarTimerId = 0xD034;
 constexpr UINT_PTR kDragHoverTabTimerIdBase = 0xD040;
 
-class DragHoverTarget final : public IDropTarget {
+class DragHoverTarget final
+    : public panedock::ComRefCounted<DragHoverTarget, IDropTarget> {
 public:
     using HitTest = std::function<std::optional<std::size_t>(POINT)>;
     using HoverCallback = std::function<void(std::size_t)>;
@@ -303,17 +295,6 @@ public:
             return S_OK;
         }
         return E_NOINTERFACE;
-    }
-
-    ULONG STDMETHODCALLTYPE AddRef() override {
-        return references_.fetch_add(1, std::memory_order_relaxed) + 1;
-    }
-
-    ULONG STDMETHODCALLTYPE Release() override {
-        const ULONG remaining =
-            references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
-        if (remaining == 0) delete this;
-        return remaining;
     }
 
     HRESULT STDMETHODCALLTYPE DragEnter(IDataObject*, DWORD, POINTL point,
@@ -387,6 +368,8 @@ public:
     }
 
 private:
+    friend class panedock::ComRefCounted<DragHoverTarget, IDropTarget>;
+
     ~DragHoverTarget() {
         finish_drag();
         cancel_hover();
@@ -443,7 +426,6 @@ private:
     HitTest hit_test_;
     HoverCallback hover_callback_;
     DragStateCallback drag_state_callback_;
-    std::atomic<ULONG> references_{1};
     std::optional<std::size_t> hover_index_;
     bool timer_running_{false};
     // Guard duplicate DragEnter/DragLeave notifications on one target.
@@ -587,7 +569,6 @@ struct AppState {
     HWND group_label{nullptr};
     HFONT chrome_font{nullptr};
     std::array<HWND, kLayoutButtonIds.size()> layout_buttons{};
-    std::optional<std::size_t> layout_hover_index;
     HWND owner_draw_hovered_button{nullptr};
     HWND layout_tooltip{nullptr};
     HWND empty_message{nullptr};
@@ -627,6 +608,17 @@ struct AppState {
     std::array<Microsoft::WRL::ComPtr<DragHoverTarget>, kExplorerCount>
         tab_drag_targets{};
 };
+
+template <typename T>
+T* window_state_from_create(HWND window, LPARAM lparam) noexcept {
+    const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
+    auto* state =
+        create == nullptr ? nullptr : static_cast<T*>(create->lpCreateParams);
+    if (state != nullptr)
+        SetWindowLongPtrW(window, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(state));
+    return state;
+}
 
 void begin_shutdown(HWND window, AppState& state, bool allow_keep_open) noexcept;
 void drag_state_changed(AppState& state, bool entering) noexcept;
@@ -895,6 +887,35 @@ int scaled_value(HWND window, int value) noexcept {
                               96));
 }
 
+void add_tooltip(HWND tooltip, HWND owner, UINT_PTR id,
+                 const wchar_t* text) noexcept {
+    TOOLINFOW info{};
+    info.cbSize = sizeof(info);
+    info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    info.hwnd = owner;
+    info.uId = id;
+    info.lpszText = const_cast<wchar_t*>(text);
+    SendMessageW(tooltip, TTM_ADDTOOLW, 0,
+                 reinterpret_cast<LPARAM>(&info));
+}
+
+void fill_rounded_rect(HDC dc, const RECT& rect, int radius, COLORREF fill,
+                       COLORREF border) noexcept {
+    HBRUSH brush = CreateSolidBrush(fill);
+    HPEN pen = border == CLR_NONE ? nullptr : CreatePen(PS_SOLID, 1, border);
+    if (brush != nullptr && (border == CLR_NONE || pen != nullptr)) {
+        const HGDIOBJ old_brush = SelectObject(dc, brush);
+        const HGDIOBJ old_pen =
+            SelectObject(dc, pen != nullptr ? pen : GetStockObject(NULL_PEN));
+        RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius,
+                  radius);
+        SelectObject(dc, old_pen);
+        SelectObject(dc, old_brush);
+    }
+    if (pen != nullptr) DeleteObject(pen);
+    if (brush != nullptr) DeleteObject(brush);
+}
+
 int current_sidebar_width(HWND window, const AppState& state) noexcept {
     const RECT client = client_rect(window);
     return std::min(static_cast<int>(client.right - client.left),
@@ -1131,18 +1152,8 @@ void draw_layout_segment_background(HDC dc, RECT rect, UINT dpi) noexcept {
     if (rect.right <= rect.left || rect.bottom <= rect.top) return;
     const int radius = std::max(
         1, MulDiv(kAddressBarBackgroundRadius, static_cast<int>(dpi), 96));
-    HBRUSH fill = CreateSolidBrush(RGB(251, 252, 253));
-    HPEN border = CreatePen(PS_SOLID, 1, RGB(217, 225, 234));
-    if (fill != nullptr && border != nullptr) {
-        const HGDIOBJ old_brush = SelectObject(dc, fill);
-        const HGDIOBJ old_pen = SelectObject(dc, border);
-        RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius,
-                  radius);
-        SelectObject(dc, old_pen);
-        SelectObject(dc, old_brush);
-    }
-    if (border != nullptr) DeleteObject(border);
-    if (fill != nullptr) DeleteObject(fill);
+    fill_rounded_rect(dc, rect, radius, RGB(251, 252, 253),
+                      RGB(217, 225, 234));
 }
 
 // PD-052 (refresh) and PD-064 (up) both use the platform icon font: hand-drawn
@@ -1353,22 +1364,11 @@ void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
                           tracked_hovered);
     const COLORREF border = disabled ? RGB(232, 235, 239) : RGB(223, 229, 236);
     const COLORREF text_color = disabled ? RGB(180, 188, 199) : RGB(82, 96, 117);
-    HBRUSH fill = CreateSolidBrush(
-        hovered ? RGB(242, 245, 248) : RGB(255, 255, 255));
-    HPEN pen = CreatePen(PS_SOLID, 1, border);
-    if (fill != nullptr && pen != nullptr) {
-        const HGDIOBJ old_brush = SelectObject(item.hDC, fill);
-        const HGDIOBJ old_pen = SelectObject(item.hDC, pen);
-        const int radius =
-            std::max(4, static_cast<int>(item.rcItem.bottom - item.rcItem.top) /
-                            4);
-        RoundRect(item.hDC, item.rcItem.left, item.rcItem.top, item.rcItem.right,
-                  item.rcItem.bottom, radius, radius);
-        SelectObject(item.hDC, old_brush);
-        SelectObject(item.hDC, old_pen);
-    }
-    if (fill != nullptr) DeleteObject(fill);
-    if (pen != nullptr) DeleteObject(pen);
+    const int radius =
+        std::max(4, static_cast<int>(item.rcItem.bottom - item.rcItem.top) / 4);
+    fill_rounded_rect(item.hDC, item.rcItem, radius,
+                      hovered ? RGB(242, 245, 248) : RGB(255, 255, 255),
+                      border);
 
     const HFONT font = reinterpret_cast<HFONT>(
         SendMessageW(item.hwndItem, WM_GETFONT, 0, 0));
@@ -2313,27 +2313,8 @@ void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi) noexcept {
 
     RECT shadow_rect = card;
     OffsetRect(&shadow_rect, shadow_offset, shadow_offset);
-    HBRUSH shadow_brush = CreateSolidBrush(RGB(235, 239, 244));
-    if (shadow_brush != nullptr) {
-        const HGDIOBJ old_brush = SelectObject(dc, shadow_brush);
-        const HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
-        RoundRect(dc, shadow_rect.left, shadow_rect.top, shadow_rect.right,
-                  shadow_rect.bottom, radius, radius);
-        SelectObject(dc, old_pen);
-        SelectObject(dc, old_brush);
-        DeleteObject(shadow_brush);
-    }
-
-    HBRUSH card_brush = CreateSolidBrush(RGB(255, 255, 255));
-    if (card_brush != nullptr) {
-        const HGDIOBJ old_brush = SelectObject(dc, card_brush);
-        const HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
-        RoundRect(dc, card.left, card.top, card.right, card.bottom, radius,
-                  radius);
-        SelectObject(dc, old_pen);
-        SelectObject(dc, old_brush);
-        DeleteObject(card_brush);
-    }
+    fill_rounded_rect(dc, shadow_rect, radius, RGB(235, 239, 244), CLR_NONE);
+    fill_rounded_rect(dc, card, radius, RGB(255, 255, 255), CLR_NONE);
 
     const int border_width = std::max(1, MulDiv(1, static_cast<int>(dpi), 96));
     const COLORREF border_color = RGB(232, 237, 242);
@@ -2375,18 +2356,8 @@ void draw_navigation_bar_background(HDC dc, RECT rect, UINT dpi) noexcept {
     if (rect.right <= rect.left || rect.bottom <= rect.top) return;
     const int radius = std::max(
         1, MulDiv(kAddressBarBackgroundRadius, static_cast<int>(dpi), 96));
-    HBRUSH fill = CreateSolidBrush(RGB(251, 252, 253));
-    HPEN border = CreatePen(PS_SOLID, 1, RGB(217, 225, 234));
-    if (fill != nullptr && border != nullptr) {
-        const HGDIOBJ old_brush = SelectObject(dc, fill);
-        const HGDIOBJ old_pen = SelectObject(dc, border);
-        RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius,
-                  radius);
-        SelectObject(dc, old_brush);
-        SelectObject(dc, old_pen);
-    }
-    if (fill != nullptr) DeleteObject(fill);
-    if (border != nullptr) DeleteObject(border);
+    fill_rounded_rect(dc, rect, radius, RGB(251, 252, 253),
+                      RGB(217, 225, 234));
 }
 
 void paint_client_background(HWND window, HDC dc,
@@ -2588,12 +2559,9 @@ LRESULT CALLBACK pinned_locations_window_proc(HWND window, UINT message,
     auto* state = reinterpret_cast<AppState*>(
         GetWindowLongPtrW(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
-        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
-        state = static_cast<AppState*>(create->lpCreateParams);
+        state = window_state_from_create<AppState>(window, lparam);
         if (state == nullptr) return FALSE;
         state->pinned_locations_window = window;
-        SetWindowLongPtrW(window, GWLP_USERDATA,
-                          reinterpret_cast<LONG_PTR>(state));
     }
 
     if (state != nullptr && (state->closing_ || state->shutdown_deferred) &&
@@ -4446,10 +4414,9 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
     return DefSubclassProc(window, message, wparam, lparam);
 }
 
-LRESULT CALLBACK owner_draw_button_proc(HWND window, UINT message,
-                                        WPARAM wparam, LPARAM lparam,
-                                        UINT_PTR button_id,
-                                        DWORD_PTR reference_data) {
+LRESULT CALLBACK hover_tracking_proc(HWND window, UINT message, WPARAM wparam,
+                                     LPARAM lparam, UINT_PTR button_id,
+                                     DWORD_PTR reference_data) {
     auto* state = reinterpret_cast<AppState*>(reference_data);
     if (state != nullptr) {
         if (message == WM_MOUSEMOVE) {
@@ -4467,12 +4434,13 @@ LRESULT CALLBACK owner_draw_button_proc(HWND window, UINT message,
                 state->owner_draw_hovered_button = nullptr;
                 InvalidateRect(window, nullptr, FALSE);
             }
-        } else if (
-            message == WM_RBUTTONUP &&
-            button_id >= static_cast<UINT_PTR>(kFolderContextButtonIdBase) &&
-            button_id < static_cast<UINT_PTR>(
-                             kFolderContextButtonIdBase +
-                             static_cast<int>(kExplorerCount))) {
+        } else if (message == WM_RBUTTONUP) {
+            const auto control = panedock::app_shell::decode_pane_control(
+                static_cast<int>(button_id));
+            if (!control.has_value() ||
+                control->control !=
+                    panedock::app_shell::PaneControl::folder_context)
+                return DefSubclassProc(window, message, wparam, lparam);
             // Transform right-click activation into the existing BN_CLICKED
             // route so it opens the same native folder context menu.
             const HWND parent = GetParent(window);
@@ -4485,39 +4453,7 @@ LRESULT CALLBACK owner_draw_button_proc(HWND window, UINT message,
         } else if (message == WM_NCDESTROY) {
             if (state->owner_draw_hovered_button == window)
                 state->owner_draw_hovered_button = nullptr;
-            RemoveWindowSubclass(window, owner_draw_button_proc, button_id);
-        }
-    }
-    return DefSubclassProc(window, message, wparam, lparam);
-}
-
-LRESULT CALLBACK layout_button_proc(HWND window, UINT message, WPARAM wparam,
-                                    LPARAM lparam, UINT_PTR button_index,
-                                    DWORD_PTR reference_data) {
-    auto* state = reinterpret_cast<AppState*>(reference_data);
-    if (state != nullptr && button_index < state->layout_buttons.size()) {
-        if (message == WM_MOUSEMOVE) {
-            TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
-            TrackMouseEvent(&tracking);
-            if (state->layout_hover_index != button_index) {
-                if (state->layout_hover_index.has_value()) {
-                    const std::size_t previous = *state->layout_hover_index;
-                    if (previous < state->layout_buttons.size())
-                        InvalidateRect(state->layout_buttons[previous], nullptr,
-                                       FALSE);
-                }
-                state->layout_hover_index = button_index;
-                InvalidateRect(window, nullptr, FALSE);
-            }
-        } else if (message == WM_MOUSELEAVE) {
-            if (state->layout_hover_index == button_index) {
-                state->layout_hover_index.reset();
-                InvalidateRect(window, nullptr, FALSE);
-            }
-        } else if (message == WM_NCDESTROY) {
-            if (state->layout_hover_index == button_index)
-                state->layout_hover_index.reset();
-            RemoveWindowSubclass(window, layout_button_proc, button_index);
+            RemoveWindowSubclass(window, hover_tracking_proc, button_id);
         }
     }
     return DefSubclassProc(window, message, wparam, lparam);
@@ -4761,13 +4697,8 @@ LRESULT CALLBACK startup_notification_proc(HWND window, UINT message,
     auto* state = reinterpret_cast<AppState*>(
         GetWindowLongPtrW(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
-        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
-        state = create == nullptr
-                    ? nullptr
-                    : static_cast<AppState*>(create->lpCreateParams);
+        state = window_state_from_create<AppState>(window, lparam);
         if (state == nullptr) return FALSE;
-        SetWindowLongPtrW(window, GWLP_USERDATA,
-                          reinterpret_cast<LONG_PTR>(state));
     }
 
     switch (message) {
@@ -4889,10 +4820,7 @@ LRESULT CALLBACK transfer_close_dialog_proc(HWND window, UINT message,
     auto* state = reinterpret_cast<AppState*>(
         GetWindowLongPtrW(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
-        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
-        state = static_cast<AppState*>(create->lpCreateParams);
-        SetWindowLongPtrW(window, GWLP_USERDATA,
-                          reinterpret_cast<LONG_PTR>(state));
+        state = window_state_from_create<AppState>(window, lparam);
     }
 
     switch (message) {
@@ -5206,11 +5134,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
     auto* state = reinterpret_cast<AppState*>(
         GetWindowLongPtrW(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
-        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
-        state = static_cast<AppState*>(create->lpCreateParams);
+        state = window_state_from_create<AppState>(window, lparam);
+        if (state == nullptr) return FALSE;
         state->main_window = window;
-        SetWindowLongPtrW(window, GWLP_USERDATA,
-                          reinterpret_cast<LONG_PTR>(state));
     }
 
     const bool close_request =
@@ -5300,7 +5226,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     GetModuleHandleW(nullptr), nullptr);
                 if (state->sidebar_buttons[index] == nullptr) return -1;
                 if (!SetWindowSubclass(
-                        state->sidebar_buttons[index], owner_draw_button_proc,
+                        state->sidebar_buttons[index], hover_tracking_proc,
                         static_cast<UINT_PTR>(kButtonIds[index]),
                         reinterpret_cast<DWORD_PTR>(state)))
                     return -1;
@@ -5316,7 +5242,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     GetModuleHandleW(nullptr), nullptr);
                 if (state->layout_buttons[index] == nullptr) return -1;
                 if (!SetWindowSubclass(state->layout_buttons[index],
-                                       layout_button_proc, index,
+                                       hover_tracking_proc, index,
                                        reinterpret_cast<DWORD_PTR>(state)))
                     return -1;
             }
@@ -5334,15 +5260,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     L"Four panes"};
                 for (std::size_t index = 0;
                      index < state->layout_buttons.size(); ++index) {
-                    TOOLINFOW info{};
-                    info.cbSize = sizeof(info);
-                    info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
-                    info.hwnd = window;
-                    info.uId = reinterpret_cast<UINT_PTR>(
-                        state->layout_buttons[index]);
-                    info.lpszText = const_cast<wchar_t*>(kLayoutTooltips[index]);
-                    SendMessageW(state->layout_tooltip, TTM_ADDTOOLW, 0,
-                                  reinterpret_cast<LPARAM>(&info));
+                    add_tooltip(state->layout_tooltip, window,
+                                reinterpret_cast<UINT_PTR>(
+                                    state->layout_buttons[index]),
+                                kLayoutTooltips[index]);
                 }
             }
             state->empty_message = CreateWindowExW(
@@ -5366,17 +5287,19 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     chrome.back_button(), chrome.forward_button(),
                     chrome.up_button(), chrome.refresh_button(),
                     chrome.view_mode_button(), chrome.pinned_button()};
-                const std::array<int, 6> ids{
-                    kBackButtonIdBase + static_cast<int>(index),
-                    kForwardButtonIdBase + static_cast<int>(index),
-                    kUpButtonIdBase + static_cast<int>(index),
-                    kRefreshButtonIdBase + static_cast<int>(index),
-                    kViewModeButtonIdBase + static_cast<int>(index),
-                    kPinnedButtonIdBase + static_cast<int>(index)};
+                constexpr std::array controls{
+                    panedock::app_shell::PaneControl::back,
+                    panedock::app_shell::PaneControl::forward,
+                    panedock::app_shell::PaneControl::up,
+                    panedock::app_shell::PaneControl::refresh,
+                    panedock::app_shell::PaneControl::view_mode,
+                    panedock::app_shell::PaneControl::pinned};
                 for (std::size_t button = 0; button < buttons.size(); ++button) {
+                    const int id = panedock::app_shell::encode_pane_control(
+                        controls[button], index);
                     if (!SetWindowSubclass(
-                            buttons[button], owner_draw_button_proc,
-                            static_cast<UINT_PTR>(ids[button]),
+                            buttons[button], hover_tracking_proc,
+                            static_cast<UINT_PTR>(id),
                             reinterpret_cast<DWORD_PTR>(state)))
                         return -1;
                 }
@@ -5386,15 +5309,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         L"Pinned locations"};
                     for (std::size_t button = 0; button < buttons.size();
                          ++button) {
-                        TOOLINFOW info{};
-                        info.cbSize = sizeof(info);
-                        info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
-                        info.hwnd = window;
-                        info.uId = reinterpret_cast<UINT_PTR>(
-                            buttons[button]);
-                        info.lpszText = const_cast<wchar_t*>(tooltips[button]);
-                        SendMessageW(state->layout_tooltip, TTM_ADDTOOLW, 0,
-                                     reinterpret_cast<LPARAM>(&info));
+                        add_tooltip(state->layout_tooltip, window,
+                                    reinterpret_cast<UINT_PTR>(buttons[button]),
+                                    tooltips[button]);
                     }
                 }
                 if (!SetWindowSubclass(chrome.address_bar(),
@@ -5406,30 +5323,28 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP |
                         BS_PUSHBUTTON | BS_OWNERDRAW,
                     0, 0, 0, 0, window,
-                    reinterpret_cast<HMENU>(kFolderContextButtonIdBase +
-                                             static_cast<int>(index)),
+                    reinterpret_cast<HMENU>(
+                        panedock::app_shell::encode_pane_control(
+                            panedock::app_shell::PaneControl::folder_context,
+                            index)),
                     GetModuleHandleW(nullptr), nullptr);
                 if (state->folder_context_buttons[index] == nullptr)
                     return -1;
                 if (!SetWindowSubclass(
                         state->folder_context_buttons[index],
-                        owner_draw_button_proc,
-                        static_cast<UINT_PTR>(kFolderContextButtonIdBase +
-                                              static_cast<int>(index)),
+                        hover_tracking_proc,
+                        static_cast<UINT_PTR>(
+                            panedock::app_shell::encode_pane_control(
+                                panedock::app_shell::PaneControl::folder_context,
+                                index)),
                         reinterpret_cast<DWORD_PTR>(state)))
                     return -1;
                 EnableWindow(state->folder_context_buttons[index], FALSE);
                 if (state->layout_tooltip != nullptr) {
-                    TOOLINFOW info{};
-                    info.cbSize = sizeof(info);
-                    info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
-                    info.hwnd = window;
-                    info.uId = reinterpret_cast<UINT_PTR>(
-                        state->folder_context_buttons[index]);
-                    info.lpszText = const_cast<wchar_t*>(
-                        L"Folder context menu");
-                    SendMessageW(state->layout_tooltip, TTM_ADDTOOLW, 0,
-                                 reinterpret_cast<LPARAM>(&info));
+                    add_tooltip(state->layout_tooltip, window,
+                                reinterpret_cast<UINT_PTR>(
+                                    state->folder_context_buttons[index]),
+                                L"Folder context menu");
                 }
             }
             refresh_ui_font(window, *state);
@@ -5596,72 +5511,40 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                 : panedock::core::LayoutTemplate::single;
                     draw_layout_button(*item, index,
                                        kLayoutTemplates[index] == current,
-                                       state->layout_hover_index == index);
+                                       state->owner_draw_hovered_button ==
+                                           item->hwndItem);
                     return TRUE;
                 }
-                if (item != nullptr && item->CtlType == ODT_BUTTON &&
-                    item->CtlID >= kBackButtonIdBase &&
-                    item->CtlID <
-                        kBackButtonIdBase + static_cast<int>(kExplorerCount)) {
-                    draw_navigation_icon_button(
-                        *item, 0,
-                        state->owner_draw_hovered_button == item->hwndItem);
-                    return TRUE;
-                }
-                if (item != nullptr && item->CtlType == ODT_BUTTON &&
-                    item->CtlID >= kForwardButtonIdBase &&
-                    item->CtlID < kForwardButtonIdBase +
-                                      static_cast<int>(kExplorerCount)) {
-                    draw_navigation_icon_button(
-                        *item, 1,
-                        state->owner_draw_hovered_button == item->hwndItem);
-                    return TRUE;
-                }
-                if (item != nullptr && item->CtlType == ODT_BUTTON &&
-                    item->CtlID >= kUpButtonIdBase &&
-                    item->CtlID <
-                        kUpButtonIdBase + static_cast<int>(kExplorerCount)) {
-                    draw_navigation_icon_button(
-                        *item, 2,
-                        state->owner_draw_hovered_button == item->hwndItem);
-                    return TRUE;
-                }
-                if (item != nullptr && item->CtlType == ODT_BUTTON &&
-                    item->CtlID >= kRefreshButtonIdBase &&
-                    item->CtlID < kRefreshButtonIdBase +
-                                      static_cast<int>(kExplorerCount)) {
-                    draw_navigation_icon_button(
-                        *item, 3,
-                        state->owner_draw_hovered_button == item->hwndItem);
-                    return TRUE;
-                }
-                if (item != nullptr && item->CtlType == ODT_BUTTON &&
-                    item->CtlID >= kViewModeButtonIdBase &&
-                    item->CtlID < kViewModeButtonIdBase +
-                                      static_cast<int>(kExplorerCount)) {
-                    draw_navigation_icon_button(
-                        *item, 4,
-                        state->owner_draw_hovered_button == item->hwndItem);
-                    return TRUE;
-                }
-                if (item != nullptr && item->CtlType == ODT_BUTTON &&
-                    item->CtlID >= kPinnedButtonIdBase &&
-                    item->CtlID < kPinnedButtonIdBase +
-                                      static_cast<int>(kExplorerCount)) {
-                    draw_navigation_icon_button(
-                        *item, 5,
-                        state->owner_draw_hovered_button == item->hwndItem);
-                    return TRUE;
-                }
-                if (item != nullptr && item->CtlType == ODT_BUTTON &&
-                    item->CtlID >= kFolderContextButtonIdBase &&
-                    item->CtlID < kFolderContextButtonIdBase +
-                                      static_cast<int>(kExplorerCount)) {
-                    draw_navigation_icon_button(
-                        *item, 6,
-                        state->owner_draw_hovered_button == item->hwndItem,
-                        true);
-                    return TRUE;
+                if (item != nullptr && item->CtlType == ODT_BUTTON) {
+                    struct PaneButtonDrawing final {
+                        panedock::app_shell::PaneControl control;
+                        std::size_t glyph;
+                        bool blend;
+                    };
+                    constexpr std::array pane_button_drawings{
+                        PaneButtonDrawing{panedock::app_shell::PaneControl::back, 0, false},
+                        PaneButtonDrawing{panedock::app_shell::PaneControl::forward, 1, false},
+                        PaneButtonDrawing{panedock::app_shell::PaneControl::up, 2, false},
+                        PaneButtonDrawing{panedock::app_shell::PaneControl::refresh, 3, false},
+                        PaneButtonDrawing{panedock::app_shell::PaneControl::view_mode, 4, false},
+                        PaneButtonDrawing{panedock::app_shell::PaneControl::pinned, 5, false},
+                        PaneButtonDrawing{panedock::app_shell::PaneControl::folder_context, 6, true}};
+                    const auto decoded =
+                        panedock::app_shell::decode_pane_control(item->CtlID);
+                    if (decoded.has_value()) {
+                        const auto drawing = std::find_if(
+                            pane_button_drawings.begin(), pane_button_drawings.end(),
+                            [&](const auto& candidate) {
+                                return candidate.control == decoded->control;
+                            });
+                        if (drawing != pane_button_drawings.end()) {
+                            draw_navigation_icon_button(
+                                *item, drawing->glyph,
+                                state->owner_draw_hovered_button == item->hwndItem,
+                                drawing->blend);
+                            return TRUE;
+                        }
+                    }
                 }
                 if (item != nullptr && item->CtlType == ODT_BUTTON) {
                     const auto found = std::find(
@@ -5962,54 +5845,35 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     }
                     return 0;
                 }
-                if (id >= kBackButtonIdBase &&
-                    id < kBackButtonIdBase + static_cast<int>(kExplorerCount)) {
-                    navigate_tab_history(*state,
-                                         static_cast<std::size_t>(
-                                             id - kBackButtonIdBase),
-                                         true);
-                    return 0;
-                }
-                if (id >= kForwardButtonIdBase &&
-                    id < kForwardButtonIdBase +
-                             static_cast<int>(kExplorerCount)) {
-                    navigate_tab_history(*state,
-                                         static_cast<std::size_t>(
-                                             id - kForwardButtonIdBase),
-                                         false);
-                    return 0;
-                }
-                if (id >= kUpButtonIdBase &&
-                    id < kUpButtonIdBase + static_cast<int>(kExplorerCount)) {
-                    navigate_up(*state,
-                                static_cast<std::size_t>(id - kUpButtonIdBase));
-                    return 0;
-                }
-                if (id >= kRefreshButtonIdBase &&
-                    id < kRefreshButtonIdBase + static_cast<int>(kExplorerCount)) {
-                    refresh_pane(*state, static_cast<std::size_t>(
-                                             id - kRefreshButtonIdBase));
-                    return 0;
-                }
-                if (id >= kViewModeButtonIdBase &&
-                    id < kViewModeButtonIdBase + static_cast<int>(kExplorerCount)) {
-                    show_view_mode_menu(
-                        window, *state,
-                        static_cast<std::size_t>(id - kViewModeButtonIdBase));
-                    return 0;
-                }
-                if (id >= kPinnedButtonIdBase &&
-                    id < kPinnedButtonIdBase + static_cast<int>(kExplorerCount)) {
-                    show_pinned_locations_menu(
-                        window, *state,
-                        static_cast<std::size_t>(id - kPinnedButtonIdBase));
-                    return 0;
-                }
-                if (id >= kFolderContextButtonIdBase &&
-                    id < kFolderContextButtonIdBase +
-                             static_cast<int>(kExplorerCount)) {
-                    const std::size_t pane_index = static_cast<std::size_t>(
-                        id - kFolderContextButtonIdBase);
+                if (const auto pane_control =
+                        panedock::app_shell::decode_pane_control(id);
+                    pane_control.has_value()) {
+                    const std::size_t pane_index = pane_control->pane;
+                    switch (pane_control->control) {
+                        case panedock::app_shell::PaneControl::back:
+                            navigate_tab_history(*state, pane_index, true);
+                            return 0;
+                        case panedock::app_shell::PaneControl::forward:
+                            navigate_tab_history(*state, pane_index, false);
+                            return 0;
+                        case panedock::app_shell::PaneControl::up:
+                            navigate_up(*state, pane_index);
+                            return 0;
+                        case panedock::app_shell::PaneControl::refresh:
+                            refresh_pane(*state, pane_index);
+                            return 0;
+                        case panedock::app_shell::PaneControl::view_mode:
+                            show_view_mode_menu(window, *state, pane_index);
+                            return 0;
+                        case panedock::app_shell::PaneControl::pinned:
+                            show_pinned_locations_menu(window, *state,
+                                                       pane_index);
+                            return 0;
+                        case panedock::app_shell::PaneControl::folder_context:
+                            break;
+                        default:
+                            return 0;
+                    }
                     if (!has_active_group(*state) ||
                         pane_index >= active_group(*state).panes.size() ||
                         !state->realized[pane_index] ||
