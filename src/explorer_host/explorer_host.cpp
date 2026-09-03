@@ -176,6 +176,7 @@ public:
         PCIDLIST_ABSOLUTE) override {
         if (host_ == nullptr) return S_OK;
         log_message(L"ExplorerHost: navigation pending");
+        host_->navigation_pending();
         return S_OK;
     }
 
@@ -260,6 +261,56 @@ void ExplorerHost::set_shell_call_callback(
     void* context, ShellCallCallback callback) noexcept {
     shell_call_context_ = context;
     shell_call_callback_ = callback;
+}
+
+ExplorerHost::NavigationGeneration ExplorerHost::begin_navigation() noexcept {
+    return ++next_navigation_generation_;
+}
+
+bool ExplorerHost::enqueue_navigation(
+    NavigationGeneration generation) noexcept {
+    if (generation == 0) generation = begin_navigation();
+    if (generation > next_navigation_generation_)
+        next_navigation_generation_ = generation;
+    try {
+        navigation_requests_.push_back({generation, false});
+    } catch (...) {
+        log_message(L"ExplorerHost: navigation request allocation failed");
+        return false;
+    }
+    latest_navigation_generation_ =
+        std::max(latest_navigation_generation_, generation);
+    return true;
+}
+
+ExplorerHost::NavigationGeneration
+ExplorerHost::take_navigation_generation() noexcept {
+    if (navigation_requests_.empty()) {
+        const auto generation = begin_navigation();
+        latest_navigation_generation_ =
+            std::max(latest_navigation_generation_, generation);
+        return generation;
+    }
+    const auto generation = navigation_requests_.front().generation;
+    navigation_requests_.pop_front();
+    return generation;
+}
+
+void ExplorerHost::navigation_pending() noexcept {
+    for (auto& request : navigation_requests_) {
+        if (!request.pending_notified) {
+            request.pending_notified = true;
+            return;
+        }
+    }
+
+    const auto generation = begin_navigation();
+    try {
+        navigation_requests_.push_back({generation, true});
+        latest_navigation_generation_ = generation;
+    } catch (...) {
+        log_message(L"ExplorerHost: navigation request allocation failed");
+    }
 }
 
 void ExplorerHost::enter_shell_call() noexcept {
@@ -610,7 +661,10 @@ HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
 }
 
 HRESULT ExplorerHost::navigate(const core::ShellLocation& location) {
+    const auto generation = prepared_navigation_generation_;
+    prepared_navigation_generation_ = 0;
     if (!initialized_ || browser_ == nullptr) return E_UNEXPECTED;
+    if (!enqueue_navigation(generation)) return E_OUTOFMEMORY;
     ShellCallScope shell_call(*this);
 
     // Preserve the requested parsing name while navigation is pending or if
@@ -635,8 +689,18 @@ HRESULT ExplorerHost::navigate(const core::ShellLocation& location) {
     return S_OK;
 }
 
+HRESULT ExplorerHost::navigate(const core::ShellLocation& location,
+                               NavigationGeneration generation) {
+    prepared_navigation_generation_ = generation;
+    return navigate(location);
+}
+
 HRESULT ExplorerHost::refresh() {
     return navigate(location_);
+}
+
+HRESULT ExplorerHost::refresh(NavigationGeneration generation) {
+    return navigate(location_, generation);
 }
 
 HRESULT ExplorerHost::set_view_mode(FOLDERVIEWMODE mode,
@@ -737,7 +801,10 @@ HRESULT ExplorerHost::get_sort(std::string& column,
 }
 
 HRESULT ExplorerHost::navigate_up() noexcept {
+    const auto generation = prepared_navigation_generation_;
+    prepared_navigation_generation_ = 0;
     if (!initialized_ || browser_ == nullptr) return E_UNEXPECTED;
+    if (!enqueue_navigation(generation)) return E_OUTOFMEMORY;
     // BrowseToObject requires a non-null punk; BrowseToIDList is the
     // documented way to pass a null pidl with SBSP_PARENT.
     const HRESULT hr = browser_->BrowseToIDList(nullptr, SBSP_PARENT);
@@ -748,13 +815,19 @@ HRESULT ExplorerHost::navigate_up() noexcept {
     return hr;
 }
 
+HRESULT ExplorerHost::navigate_up(NavigationGeneration generation) noexcept {
+    prepared_navigation_generation_ = generation;
+    return navigate_up();
+}
+
 void ExplorerHost::set_navigation_callback(
-    std::function<void(const core::ShellLocation&)> callback) {
+    std::function<void(NavigationGeneration,
+                       const core::ShellLocation&)> callback) {
     navigation_callback_ = std::move(callback);
 }
 
 void ExplorerHost::set_navigation_failed_callback(
-    std::function<void()> callback) {
+    std::function<void(NavigationGeneration)> callback) {
     navigation_failed_callback_ = std::move(callback);
 }
 
@@ -913,6 +986,7 @@ HRESULT ExplorerHost::translate_accelerator(MSG* message) noexcept {
 }
 
 void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
+    const auto generation = take_navigation_generation();
     ShellCallScope shell_call(*this);
     // PD-038: OnNavigationComplete can fire synchronously inside
     // BrowseToObject -- for the very first navigate() call (from
@@ -957,15 +1031,22 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
     if (FAILED(item->GetDisplayName(SIGDN_DESKTOPABSOLUTEPARSING,
                                     &parsing_name)) ||
         parsing_name == nullptr) return;
+    core::ShellLocation completed_location;
     try {
         const std::wstring completed(parsing_name);
         CoTaskMemFree(parsing_name);
         parsing_name = nullptr;
-        location_ = shell_core::capture_location(completed);
+        completed_location = shell_core::capture_location(completed);
     } catch (...) {
         CoTaskMemFree(parsing_name);
         return;
     }
+
+    // The Shell event has no request identity of its own. Do not let a
+    // completion from an older queued request replace the latest location or
+    // reach the app model.
+    if (generation != latest_navigation_generation_) return;
+    location_ = completed_location;
 
     error_visible_ = false;
     if (error_window_ != nullptr) {
@@ -973,7 +1054,7 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
     }
     if (navigation_callback_) {
         try {
-            navigation_callback_(location_);
+            navigation_callback_(generation, completed_location);
         } catch (...) {
             log_message(L"ExplorerHost: navigation callback failed");
         }
@@ -982,8 +1063,9 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
 }
 
 void ExplorerHost::navigation_failed() noexcept {
+    const auto generation = take_navigation_generation();
     ShellCallScope shell_call(*this);
-    if (parent_ == nullptr) {
+    if (parent_ == nullptr || generation != latest_navigation_generation_) {
         return;
     }
 
@@ -1026,7 +1108,7 @@ void ExplorerHost::navigation_failed() noexcept {
     }
     if (navigation_failed_callback_) {
         try {
-            navigation_failed_callback_();
+            navigation_failed_callback_(generation);
         } catch (...) {
             log_message(L"ExplorerHost: navigation failed callback failed");
         }
@@ -1098,6 +1180,7 @@ void ExplorerHost::destroy() noexcept {
     browser_.Reset();
     parent_ = nullptr;
     location_ = {};
+    navigation_requests_.clear();
     navigation_callback_ = {};
     navigation_failed_callback_ = {};
     selection_changed_callback_ = {};

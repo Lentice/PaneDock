@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <deque>
 #include <functional>
 #include <optional>
 #include <string>
@@ -24,6 +26,7 @@ namespace panedock::explorer_host {
 
 class ExplorerHost final {
 public:
+    using NavigationGeneration = std::uint64_t;
     using ShellCallCallback = void (*)(void* context,
                                        bool entering) noexcept;
 
@@ -54,19 +57,26 @@ public:
 
     void set_shell_call_callback(void* context,
                                  ShellCallCallback callback) noexcept;
+    NavigationGeneration begin_navigation() noexcept;
     HRESULT initialize(HWND parent, const RECT& rect,
                        const core::ShellLocation& location);
     HRESULT navigate(const core::ShellLocation& location);
+    HRESULT navigate(const core::ShellLocation& location,
+                     NavigationGeneration generation);
     HRESULT navigate_up() noexcept;
+    HRESULT navigate_up(NavigationGeneration generation) noexcept;
     HRESULT refresh();
+    HRESULT refresh(NavigationGeneration generation);
     HRESULT set_view_mode(FOLDERVIEWMODE mode, int image_size = -1) noexcept;
     HRESULT get_view_mode(FOLDERVIEWMODE& mode,
                           int* image_size = nullptr) const noexcept;
     HRESULT set_sort(std::string_view column, bool ascending) noexcept;
     HRESULT get_sort(std::string& column, bool& ascending) const noexcept;
     void set_navigation_callback(
-        std::function<void(const core::ShellLocation&)> callback);
-    void set_navigation_failed_callback(std::function<void()> callback);
+        std::function<void(NavigationGeneration,
+                           const core::ShellLocation&)> callback);
+    void set_navigation_failed_callback(
+        std::function<void(NavigationGeneration)> callback);
     void set_selection_changed_callback(std::function<void()> callback);
     HRESULT item_counts(ItemCounts& counts) const noexcept;
     void selection_changed() noexcept;
@@ -80,8 +90,16 @@ public:
 
     void navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept;
     void navigation_failed() noexcept;
+    void navigation_pending() noexcept;
 
 private:
+    struct NavigationRequestRecord final {
+        NavigationGeneration generation{};
+        bool pending_notified{};
+    };
+
+    bool enqueue_navigation(NavigationGeneration generation) noexcept;
+    NavigationGeneration take_navigation_generation() noexcept;
     void enter_shell_call() noexcept;
     void leave_shell_call() noexcept;
     void install_context_menu_subclass() noexcept;
@@ -118,8 +136,9 @@ private:
     HWND retry_button_{nullptr};
     bool error_visible_{false};
     core::ShellLocation location_;
-    std::function<void(const core::ShellLocation&)> navigation_callback_;
-    std::function<void()> navigation_failed_callback_;
+    std::function<void(NavigationGeneration, const core::ShellLocation&)>
+        navigation_callback_;
+    std::function<void(NavigationGeneration)> navigation_failed_callback_;
     std::function<void()> selection_changed_callback_;
     void* shell_call_context_{nullptr};
     ShellCallCallback shell_call_callback_{nullptr};
@@ -127,6 +146,12 @@ private:
     mutable std::optional<ItemCounts> item_counts_cache_;
     Microsoft::WRL::ComPtr<IShellFolderViewCB> previous_view_callback_;
     Microsoft::WRL::ComPtr<IShellFolderViewCB> view_callback_;
+    // IExplorerBrowserEvents has no request token; preserve start order so a
+    // completion can carry the generation assigned when its navigation began.
+    std::deque<NavigationRequestRecord> navigation_requests_;
+    NavigationGeneration next_navigation_generation_{0};
+    NavigationGeneration latest_navigation_generation_{0};
+    NavigationGeneration prepared_navigation_generation_{0};
     HWND context_menu_view_window_{nullptr};
     Microsoft::WRL::ComPtr<IContextMenu> context_menu_;
     Microsoft::WRL::ComPtr<IContextMenu2> context_menu2_;
