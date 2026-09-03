@@ -5129,6 +5129,626 @@ bool perform_clipboard_paste(HWND window, AppState& state,
 
 bool activate_main_window_on_own_thread(HWND window) noexcept;
 
+LRESULT create_main_window_children(HWND window, AppState& state) {
+    state.startup_realize_pending = true;
+    state.startup_frame_only = true;
+    // Every fatal child-construction failure (sidebar, subclass, control
+    // create, drag-drop registration) returns -1 below, which makes
+    // CreateWindowExW return null and wWinMain show this message. Without
+    // this default those paths would exit with no user-facing prompt.
+    state.startup_error_message =
+        L"PaneDock could not create its user interface.";
+    INITCOMMONCONTROLSEX controls{
+        sizeof(controls), ICC_TAB_CLASSES | ICC_WIN95_CLASSES};
+    if (!InitCommonControlsEx(&controls)) return -1;
+    state.sidebar_drag_target = make_sidebar_drag_hover_target(window, state);
+    bool sidebar_created = false;
+    {
+        ShellCallScope shell_call(state);
+        sidebar_created = state.sidebar.create(
+            window, kGroupListId, state.sidebar_drag_target.Get());
+    }
+    if (state.shutdown_deferred || state.closing_) return 0;
+    if (!sidebar_created) {
+        state.sidebar_drag_target.Reset();
+        return -1;
+    }
+    if (!SetWindowSubclass(state.sidebar.window(), group_list_proc, 0,
+                           reinterpret_cast<DWORD_PTR>(&state))) {
+        state.sidebar.revoke_drag_drop();
+        state.sidebar_drag_target.Reset();
+        return -1;
+    }
+    state.group_label = CreateWindowExW(
+        0, L"STATIC", L"GROUPS",
+        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE, 0, 0, 0, 0, window,
+        nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (state.group_label == nullptr) return -1;
+    for (std::size_t index = 0; index < state.sidebar_buttons.size(); ++index) {
+        state.sidebar_buttons[index] = CreateWindowExW(
+            0, L"BUTTON", kButtonLabels[index],
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW,
+            0, 0, 0, 0, window,
+            reinterpret_cast<HMENU>(kButtonIds[index]),
+            GetModuleHandleW(nullptr), nullptr);
+        if (state.sidebar_buttons[index] == nullptr) return -1;
+        if (!SetWindowSubclass(state.sidebar_buttons[index],
+                               hover_tracking_proc,
+                               static_cast<UINT_PTR>(kButtonIds[index]),
+                               reinterpret_cast<DWORD_PTR>(&state)))
+            return -1;
+    }
+    for (std::size_t index = 0; index < state.layout_buttons.size(); ++index) {
+        state.layout_buttons[index] = CreateWindowExW(
+            0, L"BUTTON", kLayoutButtonLabels[index],
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON |
+                BS_OWNERDRAW | (index == 0 ? WS_GROUP : 0),
+            0, 0, 0, 0, window,
+            reinterpret_cast<HMENU>(kLayoutButtonIds[index]),
+            GetModuleHandleW(nullptr), nullptr);
+        if (state.layout_buttons[index] == nullptr) return -1;
+        if (!SetWindowSubclass(state.layout_buttons[index], hover_tracking_proc,
+                               index,
+                               reinterpret_cast<DWORD_PTR>(&state)))
+            return -1;
+    }
+    state.layout_tooltip = CreateWindowExW(
+        WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP,
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, window,
+        nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (state.layout_tooltip != nullptr) {
+        constexpr std::array<const wchar_t*, 8> kLayoutTooltips{
+            L"Single pane", L"Two panes side by side", L"Two panes stacked",
+            L"Three panes", L"Two panes on the left, one on the right",
+            L"One pane over two panes", L"Two panes over one pane",
+            L"Four panes"};
+        for (std::size_t index = 0; index < state.layout_buttons.size();
+             ++index) {
+            add_tooltip(state.layout_tooltip, window,
+                        reinterpret_cast<UINT_PTR>(
+                            state.layout_buttons[index]),
+                        kLayoutTooltips[index]);
+        }
+    }
+    state.empty_message = CreateWindowExW(
+        0, L"STATIC", L"No Group. Click New Group to get started.",
+        WS_CHILD | SS_CENTER | SS_CENTERIMAGE, 0, 0, 0, 0, window, nullptr,
+        GetModuleHandleW(nullptr), nullptr);
+    if (state.empty_message == nullptr) return -1;
+    for (std::size_t index = 0; index < state.pane_chrome.size(); ++index) {
+        auto& chrome = state.pane_chrome[index];
+        // PD-040: plain STATIC child used purely as a clipping container
+        // (SetWindowRgn) and a parent HWND for ExplorerHost::initialize — it
+        // never paints or handles messages of its own, so no custom window
+        // class is needed.
+        if (!chrome.create(window, static_cast<int>(index))) return -1;
+        if (!SetWindowSubclass(chrome.tab_strip(), tab_strip_proc, index,
+                               reinterpret_cast<DWORD_PTR>(&state)))
+            return -1;
+        const std::array<HWND, 6> buttons{
+            chrome.back_button(), chrome.forward_button(), chrome.up_button(),
+            chrome.refresh_button(), chrome.view_mode_button(),
+            chrome.pinned_button()};
+        constexpr std::array pane_controls{
+            panedock::app_shell::PaneControl::back,
+            panedock::app_shell::PaneControl::forward,
+            panedock::app_shell::PaneControl::up,
+            panedock::app_shell::PaneControl::refresh,
+            panedock::app_shell::PaneControl::view_mode,
+            panedock::app_shell::PaneControl::pinned};
+        for (std::size_t button = 0; button < buttons.size(); ++button) {
+            const int id = panedock::app_shell::encode_pane_control(
+                pane_controls[button], index);
+            if (!SetWindowSubclass(buttons[button], hover_tracking_proc,
+                                   static_cast<UINT_PTR>(id),
+                                   reinterpret_cast<DWORD_PTR>(&state)))
+                return -1;
+        }
+        if (state.layout_tooltip != nullptr) {
+            constexpr std::array<const wchar_t*, 6> tooltips{
+                L"Back", L"Forward", L"Up", L"Refresh", L"View",
+                L"Pinned locations"};
+            for (std::size_t button = 0; button < buttons.size(); ++button) {
+                add_tooltip(state.layout_tooltip, window,
+                            reinterpret_cast<UINT_PTR>(buttons[button]),
+                            tooltips[button]);
+            }
+        }
+        if (!SetWindowSubclass(chrome.address_bar(), address_edit_proc, index,
+                               reinterpret_cast<DWORD_PTR>(&state)))
+            return -1;
+        state.folder_context_buttons[index] = CreateWindowExW(
+            0, L"BUTTON", L"Folder context menu",
+            WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | BS_PUSHBUTTON |
+                BS_OWNERDRAW,
+            0, 0, 0, 0, window,
+            reinterpret_cast<HMENU>(
+                panedock::app_shell::encode_pane_control(
+                    panedock::app_shell::PaneControl::folder_context, index)),
+            GetModuleHandleW(nullptr), nullptr);
+        if (state.folder_context_buttons[index] == nullptr) return -1;
+        if (!SetWindowSubclass(
+                state.folder_context_buttons[index], hover_tracking_proc,
+                static_cast<UINT_PTR>(
+                    panedock::app_shell::encode_pane_control(
+                        panedock::app_shell::PaneControl::folder_context,
+                        index)),
+                reinterpret_cast<DWORD_PTR>(&state)))
+            return -1;
+        EnableWindow(state.folder_context_buttons[index], FALSE);
+        if (state.layout_tooltip != nullptr) {
+            add_tooltip(state.layout_tooltip, window,
+                        reinterpret_cast<UINT_PTR>(
+                            state.folder_context_buttons[index]),
+                        L"Folder context menu");
+        }
+    }
+    refresh_ui_font(window, state);
+    refresh_sidebar(state);
+    if (FAILED(apply_layout(window, state))) {
+        // A single unreachable pane (offline drive, permission or AV block,
+        // invalid stored location) must not prevent the app from opening. Keep
+        // the window; the failing pane stays unrealized (blank) and the user is
+        // told after create.
+        append_startup_warning(
+            state,
+            L"PaneDock could not open the Shell view for one or more panes. "
+            L"Some panes may be empty.");
+    }
+    if (state.shutdown_deferred || state.closing_) return 0;
+    if (!register_tab_drag_hover_targets(window, state)) {
+        OutputDebugStringW(
+            L"PaneDock: RegisterDragDrop for tab strip failed\n");
+        revoke_drag_hover_targets(state);
+        append_startup_warning(
+            state, L"PaneDock could not enable tab drag-and-drop.");
+    }
+    if (state.shutdown_deferred || state.closing_) return 0;
+    return 0;
+}
+
+void handle_pane_command(
+    AppState& state, panedock::app_shell::PaneControlId pane_control) {
+    const std::size_t pane_index = pane_control.pane;
+    switch (pane_control.control) {
+        case panedock::app_shell::PaneControl::back:
+            navigate_tab_history(state, pane_index, true);
+            return;
+        case panedock::app_shell::PaneControl::forward:
+            navigate_tab_history(state, pane_index, false);
+            return;
+        case panedock::app_shell::PaneControl::up:
+            navigate_up(state, pane_index);
+            return;
+        case panedock::app_shell::PaneControl::refresh:
+            refresh_pane(state, pane_index);
+            return;
+        case panedock::app_shell::PaneControl::view_mode:
+            show_view_mode_menu(state.main_window, state, pane_index);
+            return;
+        case panedock::app_shell::PaneControl::pinned:
+            show_pinned_locations_menu(state.main_window, state, pane_index);
+            return;
+        case panedock::app_shell::PaneControl::folder_context: break;
+        default: return;
+    }
+    if (!has_active_group(state) ||
+        pane_index >= active_group(state).panes.size() ||
+        !state.realized[pane_index] ||
+        state.folder_context_buttons[pane_index] == nullptr ||
+        !IsWindowVisible(state.folder_context_buttons[pane_index]))
+        return;
+    set_active_pane(state.main_window, state, pane_index);
+    if (state.closing_ || state.shutdown_deferred) return;
+    if (active_pane_index(active_group(state)) != pane_index) return;
+    RECT button_rect{};
+    if (!GetWindowRect(state.folder_context_buttons[pane_index], &button_rect))
+        return;
+    const POINT anchor{button_rect.left, button_rect.top};
+    ShellCallScope shell_call(state);
+    state.explorers[pane_index].focus();
+    (void)state.explorers[pane_index].show_folder_context_menu(
+        state.main_window, anchor);
+}
+
+bool handle_sidebar_command(HWND window, AppState& state, int id) {
+    if (id == kGroupListId) {
+        const auto selected = state.sidebar.selected_index();
+        if (selected.has_value()) activate_group(window, state, *selected);
+        return true;
+    }
+    switch (id) {
+        case kNewGroupId: add_group(window, state); return true;
+        case kDuplicateGroupId: duplicate_group(window, state); return true;
+        case kRenameGroupId: state.sidebar.begin_rename(); return true;
+        case kDeleteGroupId: delete_group(window, state); return true;
+        case kMoveUpId: move_group(state, false); return true;
+        case kMoveDownId: move_group(state, true); return true;
+        default: return false;
+    }
+}
+
+bool handle_global_command(HWND window, AppState& state, int id) {
+    if (id == kCloseTabId || id == kCloseOtherTabsId ||
+        id == kCloseAllTabsId || id == kCloseTabsToRightId) {
+        const auto pane_index = state.tab_context_menu_pane;
+        const std::string tab_id = state.tab_context_menu_tab_id;
+        state.tab_context_menu_pane.reset();
+        state.tab_context_menu_tab_id.clear();
+        if (!pane_index.has_value() || !has_active_group(state) ||
+            *pane_index >= active_group(state).panes.size())
+            return true;
+        if (id == kCloseTabId) {
+            close_tab_in_pane(window, state, *pane_index, tab_id);
+            return true;
+        }
+
+        const auto& tabs = active_group(state).panes[*pane_index].tabs;
+        std::vector<std::string> tab_ids;
+        if (id == kCloseOtherTabsId) {
+            for (const auto& tab : tabs)
+                if (tab.id != tab_id) tab_ids.push_back(tab.id);
+        } else if (id == kCloseAllTabsId) {
+            for (const auto& tab : tabs) tab_ids.push_back(tab.id);
+        } else {
+            const auto target_tab =
+                std::find_if(tabs.begin(), tabs.end(), [&](const auto& tab) {
+                    return tab.id == tab_id;
+                });
+            if (target_tab != tabs.end()) {
+                for (auto tab = target_tab + 1; tab != tabs.end(); ++tab)
+                    tab_ids.push_back(tab->id);
+            }
+        }
+        for (const auto& id_to_close : tab_ids)
+            close_tab_in_pane(window, state, *pane_index, id_to_close);
+        return true;
+    }
+    if (id >= kViewModeMenuIdBase &&
+        id < kViewModeMenuIdBase + kViewModeMenuIdCount) {
+        const int offset = id - kViewModeMenuIdBase;
+        const std::size_t pane_index = static_cast<std::size_t>(
+            offset / static_cast<int>(kViewModeOptions.size()));
+        const std::size_t mode_index = static_cast<std::size_t>(
+            offset % static_cast<int>(kViewModeOptions.size()));
+        set_pane_view_mode(state, pane_index, kViewModeOptions[mode_index]);
+        return true;
+    }
+    if (id >= kPinnedMenuIdBase &&
+        id < kPinnedMenuIdBase + kPinnedMenuIdCount) {
+        const int offset = id - kPinnedMenuIdBase;
+        const std::size_t pane_index =
+            static_cast<std::size_t>(offset / kPinnedMenuSlotsPerPane);
+        const int item = offset % kPinnedMenuSlotsPerPane;
+        if (!has_active_group(state) ||
+            pane_index >= active_group(state).panes.size())
+            return true;
+        if (item == kPinnedMenuDesktopOffset ||
+            item == kPinnedMenuThisPcOffset) {
+            ShellCallScope shell_call(state);
+            (void)navigate_pane(
+                state, pane_index,
+                location(std::wstring(kPinnedFixedParsingNames[
+                    static_cast<std::size_t>(item)])));
+            return true;
+        }
+        if (item >= kPinnedMenuLocationOffset && item < kPinnedMenuAddOffset) {
+            const std::size_t location_index =
+                static_cast<std::size_t>(item - kPinnedMenuLocationOffset);
+            if (location_index < state.application.pinned_locations.size()) {
+                ShellCallScope shell_call(state);
+                (void)navigate_pane(
+                    state, pane_index,
+                    state.application.pinned_locations[location_index]);
+            }
+            return true;
+        }
+        if (item == kPinnedMenuAddOffset) {
+            add_current_folder(state, pane_index);
+            return true;
+        }
+        if (item == kPinnedMenuManageOffset) {
+            show_pinned_locations_manager(window, state);
+            return true;
+        }
+        return true;
+    }
+    if (id >= kLayoutButtonIdBase &&
+        id < kLayoutButtonIdBase + static_cast<int>(kLayoutButtonIds.size())) {
+        const std::size_t layout_index =
+            static_cast<std::size_t>(id - kLayoutButtonIdBase);
+        set_layout(window, state, kLayoutTemplates[layout_index]);
+        return true;
+    }
+    return false;
+}
+
+bool draw_pane_control(
+    const DRAWITEMSTRUCT& item, AppState& state,
+    panedock::app_shell::PaneControlId pane_control) {
+    struct PaneButtonDrawing final {
+        panedock::app_shell::PaneControl control;
+        std::size_t glyph;
+        bool blend;
+    };
+    constexpr std::array pane_button_drawings{
+        PaneButtonDrawing{panedock::app_shell::PaneControl::back, 0, false},
+        PaneButtonDrawing{panedock::app_shell::PaneControl::forward, 1, false},
+        PaneButtonDrawing{panedock::app_shell::PaneControl::up, 2, false},
+        PaneButtonDrawing{panedock::app_shell::PaneControl::refresh, 3, false},
+        PaneButtonDrawing{panedock::app_shell::PaneControl::view_mode, 4,
+                          false},
+        PaneButtonDrawing{panedock::app_shell::PaneControl::pinned, 5, false},
+        PaneButtonDrawing{panedock::app_shell::PaneControl::folder_context, 6,
+                          true}};
+    const auto drawing = std::find_if(
+        pane_button_drawings.begin(), pane_button_drawings.end(),
+        [&](const auto& candidate) {
+            return candidate.control == pane_control.control;
+        });
+    if (drawing == pane_button_drawings.end()) return false;
+    draw_navigation_icon_button(
+        item, drawing->glyph,
+        state.owner_draw_hovered_button == item.hwndItem, drawing->blend);
+    return true;
+}
+
+bool draw_global_control(const DRAWITEMSTRUCT& item, AppState& state) {
+    for (const auto& chrome : state.pane_chrome) {
+        if (chrome.status_bar() == item.hwndItem) {
+            draw_status_bar(item, GetDpiForWindow(item.hwndItem));
+            return true;
+        }
+    }
+    if (item.CtlType == ODT_BUTTON && item.CtlID >= kLayoutButtonIdBase &&
+        item.CtlID < kLayoutButtonIdBase +
+                         static_cast<int>(kLayoutButtonIds.size())) {
+        const std::size_t index =
+            static_cast<std::size_t>(item.CtlID - kLayoutButtonIdBase);
+        const bool enabled = has_active_group(state);
+        const auto current = enabled ? active_group(state).layout_template
+                                     : panedock::core::LayoutTemplate::single;
+        draw_layout_button(item, index, kLayoutTemplates[index] == current,
+                           state.owner_draw_hovered_button == item.hwndItem);
+        return true;
+    }
+    if (item.CtlType == ODT_BUTTON) {
+        const auto found = std::find(kButtonIds.begin(), kButtonIds.end(),
+                                     static_cast<int>(item.CtlID));
+        if (found != kButtonIds.end()) {
+            const auto label_index =
+                static_cast<std::size_t>(found - kButtonIds.begin());
+            draw_sidebar_action_button(
+                item, kButtonLabels[label_index],
+                state.owner_draw_hovered_button == item.hwndItem);
+            return true;
+        }
+    }
+    std::size_t group_index = item.itemID;
+    bool placeholder = false;
+    if (state.group_drag.has_value() && state.group_drag->dragging &&
+        state.group_drag->target_index.has_value()) {
+        const auto projected = panedock::core::reorder_source_index(
+            state.application.groups.size(), state.group_drag->source_index,
+            *state.group_drag->target_index, item.itemID);
+        if (projected.has_value()) group_index = *projected;
+        placeholder = *state.group_drag->target_index == item.itemID;
+    }
+    return state.sidebar.draw_item(
+        const_cast<DRAWITEMSTRUCT*>(&item), group_index, placeholder);
+}
+
+bool handle_context_menu(HWND target, AppState& state, POINT screen) {
+    const HWND window = state.main_window;
+    const auto pane_index = tab_strip_index(state, target);
+    if (pane_index.has_value()) {
+        if (screen.x == -1 && screen.y == -1) return true;
+        if (!has_active_group(state) ||
+            *pane_index >= active_group(state).panes.size())
+            return true;
+
+        POINT client = screen;
+        ScreenToClient(target, &client);
+        const auto item = tab_item_at_point(state, target, client);
+        const auto& tabs = active_group(state).panes[*pane_index].tabs;
+        if (!item.has_value() || *item >= tabs.size()) return true;
+
+        state.tab_context_menu_pane = *pane_index;
+        state.tab_context_menu_tab_id = tabs[*item].id;
+        HMENU menu = CreatePopupMenu();
+        if (menu == nullptr) {
+            state.tab_context_menu_pane.reset();
+            state.tab_context_menu_tab_id.clear();
+            return true;
+        }
+        AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kCloseTabId),
+                    L"Close Tab");
+        AppendMenuW(menu, MF_STRING | (tabs.size() == 1 ? MF_GRAYED : 0),
+                    static_cast<UINT_PTR>(kCloseOtherTabsId),
+                    L"Close Other Tabs");
+        AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kCloseAllTabsId),
+                    L"Close All Tabs");
+        AppendMenuW(menu,
+                    MF_STRING |
+                        (*item + 1 >= tabs.size() ? MF_GRAYED : 0),
+                    static_cast<UINT_PTR>(kCloseTabsToRightId),
+                    L"Close Tabs to the Right");
+        SetForegroundWindow(window);
+        const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                                           screen.x, screen.y, 0, window,
+                                           nullptr);
+        DestroyMenu(menu);
+        if (command != 0) {
+            SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+        } else {
+            state.tab_context_menu_pane.reset();
+            state.tab_context_menu_tab_id.clear();
+        }
+        return true;
+    }
+    if (target != state.sidebar.window()) return false;
+
+    POINT point = screen;
+    if (screen.x == -1 && screen.y == -1) {
+        // Keyboard-invoked (Shift+F10 / menu key): anchor near the currently
+        // selected row instead of a stale cursor position.
+        RECT rect{};
+        GetWindowRect(target, &rect);
+        point = {rect.left + scaled_value(window, 12),
+                 rect.top + scaled_value(window, 12)};
+    }
+    POINT client_point = point;
+    ScreenToClient(target, &client_point);
+    const LRESULT hit = SendMessageW(
+        target, LB_ITEMFROMPOINT, 0,
+        MAKELPARAM(client_point.x, client_point.y));
+    const std::size_t index = static_cast<std::size_t>(LOWORD(hit));
+    if (HIWORD(hit) != 0 || index >= state.application.groups.size())
+        return true;
+
+    state.sidebar.set_selected_index(index);
+    refresh_sidebar(state);
+
+    HMENU menu = CreatePopupMenu();
+    if (menu == nullptr) return true;
+    AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kDuplicateGroupId),
+                L"Duplicate Group");
+    AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kRenameGroupId),
+                L"Rename Group");
+    AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kDeleteGroupId),
+                L"Delete Group");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING | (index == 0 ? MF_GRAYED : 0),
+                static_cast<UINT_PTR>(kMoveUpId), L"Move Up");
+    AppendMenuW(menu,
+                MF_STRING |
+                    (index + 1 >= state.application.groups.size() ? MF_GRAYED
+                                                                  : 0),
+                static_cast<UINT_PTR>(kMoveDownId), L"Move Down");
+    SetForegroundWindow(window);
+    const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                                       point.x, point.y, 0, window, nullptr);
+    DestroyMenu(menu);
+    if (state.closing_ || state.shutdown_deferred) return true;
+    if (command != 0)
+        SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+    return true;
+}
+
+std::optional<LRESULT> handle_global_mouse_message(
+    HWND window, AppState& state, UINT message, WPARAM wparam, LPARAM lparam) {
+    switch (message) {
+        case WM_LBUTTONDOWN: {
+            const POINT point = point_from_lparam(lparam);
+            if (sidebar_boundary_at_point(window, state, point)) {
+                state.sidebar_drag = AppState::SidebarDrag{
+                    point.x,
+                    std::clamp(state.application.sidebar_width,
+                               kSidebarMinimumWidth, kSidebarMaximumWidth)};
+                SetCapture(window);
+                return 0;
+            }
+            if (has_active_group(state)) {
+                state.splitter_drag =
+                    splitter_at_point(window, state, active_group(state), point);
+                if (state.splitter_drag.has_value()) {
+                    SetCapture(window);
+                    return 0;
+                }
+            }
+            break;
+        }
+        case WM_MOUSEMOVE:
+            if ((state.sidebar_drag.has_value() ||
+                 state.splitter_drag.has_value()) &&
+                (wparam & MK_LBUTTON) != 0) {
+                const POINT point = point_from_lparam(lparam);
+                if (state.sidebar_drag.has_value())
+                    update_sidebar_drag(window, state, point, false);
+                if (state.splitter_drag.has_value())
+                    update_splitter_drag(window, state, point, false);
+                return 0;
+            }
+            break;
+        case WM_LBUTTONUP:
+            if (state.sidebar_drag.has_value()) {
+                update_sidebar_drag(window, state, point_from_lparam(lparam),
+                                    true);
+                state.sidebar_drag.reset();
+                schedule_session_save(state);
+                ReleaseCapture();
+                return 0;
+            }
+            if (state.splitter_drag.has_value()) {
+                update_splitter_drag(window, state, point_from_lparam(lparam),
+                                     true);
+                state.splitter_drag.reset();
+                schedule_session_save(state);
+                ReleaseCapture();
+                return 0;
+            }
+            break;
+        case WM_CAPTURECHANGED:
+            state.sidebar_drag.reset();
+            state.splitter_drag.reset();
+            return 0;
+        case WM_LBUTTONDBLCLK:
+            if (has_active_group(state)) {
+                const auto splitter = splitter_at_point(
+                    window, state, active_group(state),
+                    point_from_lparam(lparam));
+                if (splitter.has_value()) {
+                    active_group(state)
+                        .divider_ratios[splitter->ratio_index] = 0.5;
+                    apply_layout(window, state);
+                    schedule_session_save(state);
+                    return 0;
+                }
+            }
+            break;
+        case WM_SETCURSOR:
+            if (LOWORD(lparam) == HTCLIENT) {
+                POINT point{};
+                GetCursorPos(&point);
+                ScreenToClient(window, &point);
+                if (state.sidebar_drag.has_value() ||
+                    sidebar_boundary_at_point(window, state, point)) {
+                    SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
+                    return TRUE;
+                }
+                if (has_active_group(state)) {
+                    const auto splitter = splitter_at_point(
+                        window, state, active_group(state), point);
+                    if (splitter.has_value()) {
+                        SetCursor(LoadCursorW(
+                            nullptr,
+                            splitter->vertical ? IDC_SIZEWE : IDC_SIZENS));
+                        return TRUE;
+                    }
+                }
+            }
+            break;
+        case WM_PARENTNOTIFY:
+            if (has_active_group(state) && LOWORD(wparam) == WM_MBUTTONDOWN) {
+                POINT point{};
+                GetCursorPos(&point);
+                ScreenToClient(window, &point);
+                close_tab_at_point(window, state, point);
+                return 0;
+            }
+            if (LOWORD(wparam) == WM_LBUTTONDOWN) {
+                POINT point{};
+                GetCursorPos(&point);
+                ScreenToClient(window, &point);
+                const std::size_t pane = pane_at_point(window, state, point);
+                if (pane < kExplorerCount) set_active_pane(window, state, pane);
+            }
+            return 0;
+        default: break;
+    }
+    return std::nullopt;
+}
+
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                              LPARAM lparam) {
     auto* state = reinterpret_cast<AppState*>(
@@ -5179,197 +5799,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
     }
 
     switch (message) {
-        case WM_CREATE: {
-            state->startup_realize_pending = true;
-            state->startup_frame_only = true;
-            // Every fatal child-construction failure (sidebar, subclass, control
-            // create, drag-drop registration) returns -1 below, which makes
-            // CreateWindowExW return null and wWinMain show this message. Without
-            // this default those paths would exit with no user-facing prompt.
-            state->startup_error_message =
-                L"PaneDock could not create its user interface.";
-            INITCOMMONCONTROLSEX controls{
-                sizeof(controls), ICC_TAB_CLASSES | ICC_WIN95_CLASSES};
-            if (!InitCommonControlsEx(&controls)) return -1;
-            state->sidebar_drag_target =
-                make_sidebar_drag_hover_target(window, *state);
-            bool sidebar_created = false;
-            {
-                ShellCallScope shell_call(*state);
-                sidebar_created = state->sidebar.create(
-                    window, kGroupListId, state->sidebar_drag_target.Get());
-            }
-            if (state->shutdown_deferred || state->closing_) return 0;
-            if (!sidebar_created) {
-                state->sidebar_drag_target.Reset();
-                return -1;
-            }
-            if (!SetWindowSubclass(state->sidebar.window(), group_list_proc, 0,
-                                   reinterpret_cast<DWORD_PTR>(state))) {
-                state->sidebar.revoke_drag_drop();
-                state->sidebar_drag_target.Reset();
-                return -1;
-            }
-            state->group_label = CreateWindowExW(
-                0, L"STATIC", L"GROUPS",
-                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE, 0, 0, 0, 0,
-                window, nullptr, GetModuleHandleW(nullptr), nullptr);
-            if (state->group_label == nullptr) return -1;
-            for (std::size_t index = 0; index < state->sidebar_buttons.size();
-                 ++index) {
-                state->sidebar_buttons[index] = CreateWindowExW(
-                    0, L"BUTTON", kButtonLabels[index],
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON |
-                        BS_OWNERDRAW,
-                    0, 0, 0, 0, window,
-                    reinterpret_cast<HMENU>(kButtonIds[index]),
-                    GetModuleHandleW(nullptr), nullptr);
-                if (state->sidebar_buttons[index] == nullptr) return -1;
-                if (!SetWindowSubclass(
-                        state->sidebar_buttons[index], hover_tracking_proc,
-                        static_cast<UINT_PTR>(kButtonIds[index]),
-                        reinterpret_cast<DWORD_PTR>(state)))
-                    return -1;
-            }
-            for (std::size_t index = 0; index < state->layout_buttons.size();
-                 ++index) {
-                state->layout_buttons[index] = CreateWindowExW(
-                    0, L"BUTTON", kLayoutButtonLabels[index],
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON |
-                        BS_OWNERDRAW | (index == 0 ? WS_GROUP : 0),
-                    0, 0, 0, 0, window,
-                    reinterpret_cast<HMENU>(kLayoutButtonIds[index]),
-                    GetModuleHandleW(nullptr), nullptr);
-                if (state->layout_buttons[index] == nullptr) return -1;
-                if (!SetWindowSubclass(state->layout_buttons[index],
-                                       hover_tracking_proc, index,
-                                       reinterpret_cast<DWORD_PTR>(state)))
-                    return -1;
-            }
-            state->layout_tooltip = CreateWindowExW(
-                WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
-                WS_POPUP | TTS_ALWAYSTIP, CW_USEDEFAULT, CW_USEDEFAULT,
-                CW_USEDEFAULT, CW_USEDEFAULT, window, nullptr,
-                GetModuleHandleW(nullptr), nullptr);
-            if (state->layout_tooltip != nullptr) {
-                constexpr std::array<const wchar_t*, 8> kLayoutTooltips{
-                    L"Single pane", L"Two panes side by side",
-                    L"Two panes stacked", L"Three panes",
-                    L"Two panes on the left, one on the right",
-                    L"One pane over two panes", L"Two panes over one pane",
-                    L"Four panes"};
-                for (std::size_t index = 0;
-                     index < state->layout_buttons.size(); ++index) {
-                    add_tooltip(state->layout_tooltip, window,
-                                reinterpret_cast<UINT_PTR>(
-                                    state->layout_buttons[index]),
-                                kLayoutTooltips[index]);
-                }
-            }
-            state->empty_message = CreateWindowExW(
-                0, L"STATIC", L"No Group. Click New Group to get started.",
-                WS_CHILD | SS_CENTER | SS_CENTERIMAGE, 0, 0, 0, 0, window,
-                nullptr, GetModuleHandleW(nullptr), nullptr);
-            if (state->empty_message == nullptr) return -1;
-            for (std::size_t index = 0; index < state->pane_chrome.size();
-                 ++index) {
-                auto& chrome = state->pane_chrome[index];
-                // PD-040: plain STATIC child used purely as a clipping
-                // container (SetWindowRgn) and a parent HWND for
-                // ExplorerHost::initialize — it never paints or handles
-                // messages of its own, so no custom window class is needed.
-                if (!chrome.create(window, static_cast<int>(index))) return -1;
-                if (!SetWindowSubclass(chrome.tab_strip(), tab_strip_proc,
-                                       index,
-                                       reinterpret_cast<DWORD_PTR>(state)))
-                    return -1;
-                const std::array<HWND, 6> buttons{
-                    chrome.back_button(), chrome.forward_button(),
-                    chrome.up_button(), chrome.refresh_button(),
-                    chrome.view_mode_button(), chrome.pinned_button()};
-                constexpr std::array controls{
-                    panedock::app_shell::PaneControl::back,
-                    panedock::app_shell::PaneControl::forward,
-                    panedock::app_shell::PaneControl::up,
-                    panedock::app_shell::PaneControl::refresh,
-                    panedock::app_shell::PaneControl::view_mode,
-                    panedock::app_shell::PaneControl::pinned};
-                for (std::size_t button = 0; button < buttons.size(); ++button) {
-                    const int id = panedock::app_shell::encode_pane_control(
-                        controls[button], index);
-                    if (!SetWindowSubclass(
-                            buttons[button], hover_tracking_proc,
-                            static_cast<UINT_PTR>(id),
-                            reinterpret_cast<DWORD_PTR>(state)))
-                        return -1;
-                }
-                if (state->layout_tooltip != nullptr) {
-                    constexpr std::array<const wchar_t*, 6> tooltips{
-                        L"Back", L"Forward", L"Up", L"Refresh", L"View",
-                        L"Pinned locations"};
-                    for (std::size_t button = 0; button < buttons.size();
-                         ++button) {
-                        add_tooltip(state->layout_tooltip, window,
-                                    reinterpret_cast<UINT_PTR>(buttons[button]),
-                                    tooltips[button]);
-                    }
-                }
-                if (!SetWindowSubclass(chrome.address_bar(),
-                                       address_edit_proc, index,
-                                       reinterpret_cast<DWORD_PTR>(state)))
-                    return -1;
-                state->folder_context_buttons[index] = CreateWindowExW(
-                    0, L"BUTTON", L"Folder context menu",
-                    WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP |
-                        BS_PUSHBUTTON | BS_OWNERDRAW,
-                    0, 0, 0, 0, window,
-                    reinterpret_cast<HMENU>(
-                        panedock::app_shell::encode_pane_control(
-                            panedock::app_shell::PaneControl::folder_context,
-                            index)),
-                    GetModuleHandleW(nullptr), nullptr);
-                if (state->folder_context_buttons[index] == nullptr)
-                    return -1;
-                if (!SetWindowSubclass(
-                        state->folder_context_buttons[index],
-                        hover_tracking_proc,
-                        static_cast<UINT_PTR>(
-                            panedock::app_shell::encode_pane_control(
-                                panedock::app_shell::PaneControl::folder_context,
-                                index)),
-                        reinterpret_cast<DWORD_PTR>(state)))
-                    return -1;
-                EnableWindow(state->folder_context_buttons[index], FALSE);
-                if (state->layout_tooltip != nullptr) {
-                    add_tooltip(state->layout_tooltip, window,
-                                reinterpret_cast<UINT_PTR>(
-                                    state->folder_context_buttons[index]),
-                                L"Folder context menu");
-                }
-            }
-            refresh_ui_font(window, *state);
-            refresh_sidebar(*state);
-            if (FAILED(apply_layout(window, *state))) {
-                // A single unreachable pane (offline drive, permission or AV
-                // block, invalid stored location) must not prevent the app from
-                // opening. Keep the window; the failing pane stays unrealized
-                // (blank) and the user is told after create.
-                append_startup_warning(
-                    *state,
-                    L"PaneDock could not open the Shell view for one or more "
-                    L"panes. Some panes may be empty.");
-            }
-            if (state->shutdown_deferred || state->closing_) return 0;
-            if (!register_tab_drag_hover_targets(window, *state)) {
-                OutputDebugStringW(
-                    L"PaneDock: RegisterDragDrop for tab strip failed\n");
-                revoke_drag_hover_targets(*state);
-                append_startup_warning(
-                    *state, L"PaneDock could not enable tab drag-and-drop.");
-            }
-            if (state->shutdown_deferred || state->closing_) return 0;
-            return 0;
-        }
+        case WM_CREATE: return create_main_window_children(window, *state);
         case kDeferredShutdownMessage:
             if (state != nullptr)
                 run_shutdown_action(
@@ -5483,108 +5913,20 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     return TRUE;
             }
             break;
-        case WM_DRAWITEM:
-            if (state != nullptr) {
-                const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
-                bool is_pane_status_bar = false;
-                if (item != nullptr) {
-                    for (const auto& chrome : state->pane_chrome) {
-                        if (chrome.status_bar() == item->hwndItem) {
-                            is_pane_status_bar = true;
-                            break;
-                        }
-                    }
-                }
-                if (is_pane_status_bar) {
-                    draw_status_bar(*item, GetDpiForWindow(item->hwndItem));
+        case WM_DRAWITEM: {
+            if (state == nullptr) break;
+            const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+            if (item == nullptr) break;
+            if (item->CtlType == ODT_BUTTON) {
+                const auto pane_control =
+                    panedock::app_shell::decode_pane_control(item->CtlID);
+                if (pane_control.has_value() &&
+                    draw_pane_control(*item, *state, *pane_control))
                     return TRUE;
-                }
-                if (item != nullptr && item->CtlType == ODT_BUTTON &&
-                    item->CtlID >= kLayoutButtonIdBase &&
-                    item->CtlID < kLayoutButtonIdBase +
-                                      static_cast<int>(kLayoutButtonIds.size())) {
-                    const std::size_t index = static_cast<std::size_t>(
-                        item->CtlID - kLayoutButtonIdBase);
-                    const bool enabled = has_active_group(*state);
-                    const auto current =
-                        enabled ? active_group(*state).layout_template
-                                : panedock::core::LayoutTemplate::single;
-                    draw_layout_button(*item, index,
-                                       kLayoutTemplates[index] == current,
-                                       state->owner_draw_hovered_button ==
-                                           item->hwndItem);
-                    return TRUE;
-                }
-                if (item != nullptr && item->CtlType == ODT_BUTTON) {
-                    struct PaneButtonDrawing final {
-                        panedock::app_shell::PaneControl control;
-                        std::size_t glyph;
-                        bool blend;
-                    };
-                    constexpr std::array pane_button_drawings{
-                        PaneButtonDrawing{panedock::app_shell::PaneControl::back, 0, false},
-                        PaneButtonDrawing{panedock::app_shell::PaneControl::forward, 1, false},
-                        PaneButtonDrawing{panedock::app_shell::PaneControl::up, 2, false},
-                        PaneButtonDrawing{panedock::app_shell::PaneControl::refresh, 3, false},
-                        PaneButtonDrawing{panedock::app_shell::PaneControl::view_mode, 4, false},
-                        PaneButtonDrawing{panedock::app_shell::PaneControl::pinned, 5, false},
-                        PaneButtonDrawing{panedock::app_shell::PaneControl::folder_context, 6, true}};
-                    const auto decoded =
-                        panedock::app_shell::decode_pane_control(item->CtlID);
-                    if (decoded.has_value()) {
-                        const auto drawing = std::find_if(
-                            pane_button_drawings.begin(), pane_button_drawings.end(),
-                            [&](const auto& candidate) {
-                                return candidate.control == decoded->control;
-                            });
-                        if (drawing != pane_button_drawings.end()) {
-                            draw_navigation_icon_button(
-                                *item, drawing->glyph,
-                                state->owner_draw_hovered_button == item->hwndItem,
-                                drawing->blend);
-                            return TRUE;
-                        }
-                    }
-                }
-                if (item != nullptr && item->CtlType == ODT_BUTTON) {
-                    const auto found = std::find(
-                        kButtonIds.begin(), kButtonIds.end(),
-                        static_cast<int>(item->CtlID));
-                    if (found != kButtonIds.end()) {
-                        const auto label_index = static_cast<std::size_t>(
-                            found - kButtonIds.begin());
-                        draw_sidebar_action_button(*item,
-                                                   kButtonLabels[label_index],
-                                                   state->owner_draw_hovered_button ==
-                                                       item->hwndItem);
-                        return TRUE;
-                    }
-                }
-                const auto* list_item =
-                    reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
-                std::size_t group_index =
-                    list_item != nullptr ? list_item->itemID : 0;
-                bool placeholder = false;
-                if (list_item != nullptr && state->group_drag.has_value() &&
-                    state->group_drag->dragging &&
-                    state->group_drag->target_index.has_value()) {
-                    const auto projected =
-                        panedock::core::reorder_source_index(
-                            state->application.groups.size(),
-                            state->group_drag->source_index,
-                            *state->group_drag->target_index,
-                            list_item->itemID);
-                    if (projected.has_value()) group_index = *projected;
-                    placeholder = *state->group_drag->target_index ==
-                                  list_item->itemID;
-                }
-                if (state->sidebar.draw_item(
-                        reinterpret_cast<DRAWITEMSTRUCT*>(lparam),
-                        group_index, placeholder)) {
-                    return TRUE;
-                }
             }
+            if (draw_global_control(*item, *state)) return TRUE;
             break;
+        }
         case WM_CTLCOLORSTATIC:
             if (state != nullptr) {
                 const HWND control = reinterpret_cast<HWND>(lparam);
@@ -5640,282 +5982,28 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_CONTEXTMENU: {
             if (state == nullptr) break;
             const HWND target = reinterpret_cast<HWND>(wparam);
-            const auto pane_index = tab_strip_index(*state, target);
-            if (pane_index.has_value()) {
-                if (lparam == -1) return 0;
-                if (!has_active_group(*state) ||
-                    *pane_index >= active_group(*state).panes.size())
-                    return 0;
-
-                POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-                POINT client = point;
-                ScreenToClient(target, &client);
-                const auto item = tab_item_at_point(*state, target, client);
-                const auto& tabs = active_group(*state).panes[*pane_index].tabs;
-                if (!item.has_value() || *item >= tabs.size()) return 0;
-
-                state->tab_context_menu_pane = *pane_index;
-                state->tab_context_menu_tab_id = tabs[*item].id;
-                HMENU menu = CreatePopupMenu();
-                if (menu == nullptr) {
-                    state->tab_context_menu_pane.reset();
-                    state->tab_context_menu_tab_id.clear();
-                    return 0;
-                }
-                AppendMenuW(menu, MF_STRING,
-                            static_cast<UINT_PTR>(kCloseTabId), L"Close Tab");
-                AppendMenuW(
-                    menu, MF_STRING | (tabs.size() == 1 ? MF_GRAYED : 0),
-                    static_cast<UINT_PTR>(kCloseOtherTabsId),
-                    L"Close Other Tabs");
-                AppendMenuW(menu, MF_STRING,
-                            static_cast<UINT_PTR>(kCloseAllTabsId),
-                            L"Close All Tabs");
-                AppendMenuW(
-                    menu,
-                    MF_STRING | (*item + 1 >= tabs.size() ? MF_GRAYED : 0),
-                    static_cast<UINT_PTR>(kCloseTabsToRightId),
-                    L"Close Tabs to the Right");
-                SetForegroundWindow(window);
-                const int command = TrackPopupMenu(
-                    menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0,
-                    window, nullptr);
-                DestroyMenu(menu);
-                if (command != 0) {
-                    SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
-                } else {
-                    state->tab_context_menu_pane.reset();
-                    state->tab_context_menu_tab_id.clear();
-                }
-                return 0;
-            }
-            if (target != state->sidebar.window()) break;
-
-            POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-            if (lparam == -1) {
-                // Keyboard-invoked (Shift+F10 / menu key): anchor near the
-                // currently selected row instead of a stale cursor position.
-                RECT rect{};
-                GetWindowRect(target, &rect);
-                point = {rect.left + scaled_value(window, 12),
-                         rect.top + scaled_value(window, 12)};
-            }
-            POINT client_point = point;
-            ScreenToClient(target, &client_point);
-            const LRESULT hit = SendMessageW(
-                target, LB_ITEMFROMPOINT, 0,
-                MAKELPARAM(client_point.x, client_point.y));
-            const std::size_t index = static_cast<std::size_t>(LOWORD(hit));
-            if (HIWORD(hit) != 0 || index >= state->application.groups.size())
-                return 0;  // Empty list or click landed outside any row.
-
-            state->sidebar.set_selected_index(index);
-            refresh_sidebar(*state);
-
-            HMENU menu = CreatePopupMenu();
-            if (menu == nullptr) return 0;
-            AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kDuplicateGroupId),
-                        L"Duplicate Group");
-            AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kRenameGroupId),
-                        L"Rename Group");
-            AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kDeleteGroupId),
-                        L"Delete Group");
-            AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(menu,
-                       MF_STRING | (index == 0 ? MF_GRAYED : 0),
-                       static_cast<UINT_PTR>(kMoveUpId), L"Move Up");
-            AppendMenuW(menu,
-                       MF_STRING |
-                           (index + 1 >= state->application.groups.size()
-                                ? MF_GRAYED
-                                : 0),
-                       static_cast<UINT_PTR>(kMoveDownId), L"Move Down");
-            SetForegroundWindow(window);
-            const int command = TrackPopupMenu(
-                menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0,
-                window, nullptr);
-            DestroyMenu(menu);
-            if (state->closing_ || state->shutdown_deferred) return 0;
-            if (command != 0)
-                SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
-            return 0;
-        }
-        case WM_COMMAND:
-            if (state == nullptr) break;
-            if (LOWORD(wparam) == kGroupListId && HIWORD(wparam) == LBN_SELCHANGE) {
-                const auto selected = state->sidebar.selected_index();
-                if (selected.has_value()) activate_group(window, *state, *selected);
-                return 0;
-            }
-            if (HIWORD(wparam) == BN_CLICKED) {
-                const int id = LOWORD(wparam);
-                if (id == kCloseTabId || id == kCloseOtherTabsId ||
-                    id == kCloseAllTabsId || id == kCloseTabsToRightId) {
-                    const auto pane_index = state->tab_context_menu_pane;
-                    const std::string tab_id =
-                        state->tab_context_menu_tab_id;
-                    state->tab_context_menu_pane.reset();
-                    state->tab_context_menu_tab_id.clear();
-                    if (!pane_index.has_value() || !has_active_group(*state) ||
-                        *pane_index >= active_group(*state).panes.size())
-                        return 0;
-                    if (id == kCloseTabId) {
-                        close_tab_in_pane(window, *state, *pane_index, tab_id);
-                        return 0;
-                    }
-
-                    const auto& tabs =
-                        active_group(*state).panes[*pane_index].tabs;
-                    std::vector<std::string> tab_ids;
-                    if (id == kCloseOtherTabsId) {
-                        for (const auto& tab : tabs)
-                            if (tab.id != tab_id) tab_ids.push_back(tab.id);
-                    } else if (id == kCloseAllTabsId) {
-                        for (const auto& tab : tabs) tab_ids.push_back(tab.id);
-                    } else {
-                        const auto target_tab = std::find_if(
-                            tabs.begin(), tabs.end(), [&](const auto& tab) {
-                                return tab.id == tab_id;
-                            });
-                        if (target_tab != tabs.end()) {
-                            for (auto tab = target_tab + 1; tab != tabs.end();
-                                 ++tab)
-                                tab_ids.push_back(tab->id);
-                        }
-                    }
-                    for (const auto& id_to_close : tab_ids)
-                        close_tab_in_pane(window, *state, *pane_index,
-                                          id_to_close);
-                    return 0;
-                }
-                if (id >= kViewModeMenuIdBase &&
-                    id < kViewModeMenuIdBase + kViewModeMenuIdCount) {
-                    const int offset = id - kViewModeMenuIdBase;
-                    const std::size_t pane_index = static_cast<std::size_t>(
-                        offset / static_cast<int>(kViewModeOptions.size()));
-                    const std::size_t mode_index = static_cast<std::size_t>(
-                        offset % static_cast<int>(kViewModeOptions.size()));
-                    set_pane_view_mode(*state, pane_index,
-                                       kViewModeOptions[mode_index]);
-                    return 0;
-                }
-                if (id >= kPinnedMenuIdBase &&
-                    id < kPinnedMenuIdBase + kPinnedMenuIdCount) {
-                    const int offset = id - kPinnedMenuIdBase;
-                    const std::size_t pane_index = static_cast<std::size_t>(
-                        offset / kPinnedMenuSlotsPerPane);
-                    const int item = offset % kPinnedMenuSlotsPerPane;
-                    if (!has_active_group(*state) ||
-                        pane_index >= active_group(*state).panes.size())
-                        return 0;
-                    if (item == kPinnedMenuDesktopOffset ||
-                        item == kPinnedMenuThisPcOffset) {
-                        {
-                            ShellCallScope shell_call(*state);
-                            (void)navigate_pane(
-                                *state, pane_index,
-                                location(std::wstring(kPinnedFixedParsingNames[
-                                    static_cast<std::size_t>(item)])));
-                        }
-                        return 0;
-                    }
-                    if (item >= kPinnedMenuLocationOffset &&
-                        item < kPinnedMenuAddOffset) {
-                        const std::size_t location_index = static_cast<std::size_t>(
-                            item - kPinnedMenuLocationOffset);
-                        if (location_index <
-                            state->application.pinned_locations.size()) {
-                            {
-                                ShellCallScope shell_call(*state);
-                                (void)navigate_pane(
-                                    *state, pane_index,
-                                    state->application
-                                        .pinned_locations[location_index]);
-                            }
-                        }
-                        return 0;
-                    }
-                    if (item == kPinnedMenuAddOffset) {
-                        add_current_folder(*state, pane_index);
-                        return 0;
-                    }
-                    if (item == kPinnedMenuManageOffset) {
-                        show_pinned_locations_manager(window, *state);
-                        return 0;
-                    }
-                    return 0;
-                }
-                if (const auto pane_control =
-                        panedock::app_shell::decode_pane_control(id);
-                    pane_control.has_value()) {
-                    const std::size_t pane_index = pane_control->pane;
-                    switch (pane_control->control) {
-                        case panedock::app_shell::PaneControl::back:
-                            navigate_tab_history(*state, pane_index, true);
-                            return 0;
-                        case panedock::app_shell::PaneControl::forward:
-                            navigate_tab_history(*state, pane_index, false);
-                            return 0;
-                        case panedock::app_shell::PaneControl::up:
-                            navigate_up(*state, pane_index);
-                            return 0;
-                        case panedock::app_shell::PaneControl::refresh:
-                            refresh_pane(*state, pane_index);
-                            return 0;
-                        case panedock::app_shell::PaneControl::view_mode:
-                            show_view_mode_menu(window, *state, pane_index);
-                            return 0;
-                        case panedock::app_shell::PaneControl::pinned:
-                            show_pinned_locations_menu(window, *state,
-                                                       pane_index);
-                            return 0;
-                        case panedock::app_shell::PaneControl::folder_context:
-                            break;
-                        default:
-                            return 0;
-                    }
-                    if (!has_active_group(*state) ||
-                        pane_index >= active_group(*state).panes.size() ||
-                        !state->realized[pane_index] ||
-                        state->folder_context_buttons[pane_index] == nullptr ||
-                        !IsWindowVisible(
-                            state->folder_context_buttons[pane_index]))
-                        return 0;
-                    set_active_pane(window, *state, pane_index);
-                    if (state->closing_ || state->shutdown_deferred) return 0;
-                    if (active_pane_index(active_group(*state)) != pane_index)
-                        return 0;
-                    RECT button_rect{};
-                    if (!GetWindowRect(
-                            state->folder_context_buttons[pane_index],
-                            &button_rect))
-                        return 0;
-                    const POINT anchor{button_rect.left, button_rect.top};
-                    ShellCallScope shell_call(*state);
-                    state->explorers[pane_index].focus();
-                    (void)state->explorers[pane_index]
-                        .show_folder_context_menu(window, anchor);
-                    return 0;
-                }
-                if (id >= kLayoutButtonIdBase &&
-                    id < kLayoutButtonIdBase +
-                             static_cast<int>(kLayoutButtonIds.size())) {
-                    const std::size_t layout_index =
-                        static_cast<std::size_t>(id - kLayoutButtonIdBase);
-                    set_layout(window, *state, kLayoutTemplates[layout_index]);
-                    return 0;
-                }
-                switch (LOWORD(wparam)) {
-                    case kNewGroupId: add_group(window, *state); return 0;
-                    case kDuplicateGroupId: duplicate_group(window, *state); return 0;
-                    case kRenameGroupId: state->sidebar.begin_rename(); return 0;
-                    case kDeleteGroupId: delete_group(window, *state); return 0;
-                    case kMoveUpId: move_group(*state, false); return 0;
-                    case kMoveDownId: move_group(*state, true); return 0;
-                    default: break;
-                }
-            }
+            const POINT screen{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+            if (handle_context_menu(target, *state, screen)) return 0;
             break;
+        }
+        case WM_COMMAND: {
+            if (state == nullptr) break;
+            const int id = LOWORD(wparam);
+            if (id == kGroupListId && HIWORD(wparam) == LBN_SELCHANGE) {
+                (void)handle_sidebar_command(window, *state, id);
+                return 0;
+            }
+            if (HIWORD(wparam) != BN_CLICKED) break;
+            if (handle_global_command(window, *state, id)) return 0;
+            if (const auto pane_control =
+                    panedock::app_shell::decode_pane_control(id);
+                pane_control.has_value()) {
+                handle_pane_command(*state, *pane_control);
+                return 0;
+            }
+            if (handle_sidebar_command(window, *state, id)) return 0;
+            break;
+        }
         case panedock::sidebar::kRenameCommitMessage:
             if (state != nullptr) {
                 const auto selected = state->sidebar.selected_index();
@@ -5950,78 +6038,18 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         }
         case WM_LBUTTONDOWN:
-            if (state != nullptr) {
-                const POINT point = point_from_lparam(lparam);
-                if (sidebar_boundary_at_point(window, *state, point)) {
-                    state->sidebar_drag = AppState::SidebarDrag{
-                        point.x,
-                        std::clamp(state->application.sidebar_width,
-                                   kSidebarMinimumWidth,
-                                   kSidebarMaximumWidth)};
-                    SetCapture(window);
-                    return 0;
-                }
-                if (has_active_group(*state)) {
-                    state->splitter_drag = splitter_at_point(
-                        window, *state, active_group(*state), point);
-                    if (state->splitter_drag.has_value()) {
-                        SetCapture(window);
-                        return 0;
-                    }
-                }
-            }
-            break;
         case WM_MOUSEMOVE:
-            if (state != nullptr &&
-                (state->sidebar_drag.has_value() ||
-                 state->splitter_drag.has_value()) &&
-                (wparam & MK_LBUTTON) != 0) {
-                const POINT point = point_from_lparam(lparam);
-                if (state->sidebar_drag.has_value())
-                    update_sidebar_drag(window, *state, point, false);
-                if (state->splitter_drag.has_value())
-                    update_splitter_drag(window, *state, point, false);
-                return 0;
-            }
-            break;
         case WM_LBUTTONUP:
-            if (state != nullptr && state->sidebar_drag.has_value()) {
-                update_sidebar_drag(window, *state,
-                                    point_from_lparam(lparam), true);
-                state->sidebar_drag.reset();
-                schedule_session_save(*state);
-                ReleaseCapture();
-                return 0;
-            }
-            if (state != nullptr && state->splitter_drag.has_value()) {
-                update_splitter_drag(window, *state,
-                                     point_from_lparam(lparam), true);
-                state->splitter_drag.reset();
-                schedule_session_save(*state);
-                ReleaseCapture();
-                return 0;
-            }
-            break;
         case WM_CAPTURECHANGED:
-            if (state != nullptr) {
-                state->sidebar_drag.reset();
-                state->splitter_drag.reset();
-                return 0;
-            }
-            break;
         case WM_LBUTTONDBLCLK:
-            if (state != nullptr && has_active_group(*state)) {
-                const auto splitter = splitter_at_point(
-                    window, *state, active_group(*state),
-                    point_from_lparam(lparam));
-                if (splitter.has_value()) {
-                    active_group(*state).divider_ratios[splitter->ratio_index] =
-                        0.5;
-                    apply_layout(window, *state);
-                    schedule_session_save(*state);
-                    return 0;
-                }
+        case WM_SETCURSOR:
+        case WM_PARENTNOTIFY:
+            if (state != nullptr) {
+                const auto result = handle_global_mouse_message(
+                    window, *state, message, wparam, lparam);
+                if (result.has_value()) return *result;
             }
+            if (message == WM_PARENTNOTIFY) return 0;
             break;
         case WM_TIMER: {
             if (state == nullptr) break;
@@ -6046,45 +6074,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             break;
         }
-        case WM_SETCURSOR:
-            if (state != nullptr && LOWORD(lparam) == HTCLIENT) {
-                POINT point{};
-                GetCursorPos(&point);
-                ScreenToClient(window, &point);
-                if (state->sidebar_drag.has_value() ||
-                    sidebar_boundary_at_point(window, *state, point)) {
-                    SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
-                    return TRUE;
-                }
-                if (has_active_group(*state)) {
-                    const auto splitter = splitter_at_point(
-                        window, *state, active_group(*state), point);
-                    if (splitter.has_value()) {
-                        SetCursor(LoadCursorW(
-                            nullptr,
-                            splitter->vertical ? IDC_SIZEWE : IDC_SIZENS));
-                        return TRUE;
-                    }
-                }
-            }
-            break;
-        case WM_PARENTNOTIFY:
-            if (state != nullptr && has_active_group(*state) &&
-                LOWORD(wparam) == WM_MBUTTONDOWN) {
-                POINT point{};
-                GetCursorPos(&point);
-                ScreenToClient(window, &point);
-                close_tab_at_point(window, *state, point);
-                return 0;
-            }
-            if (state != nullptr && LOWORD(wparam) == WM_LBUTTONDOWN) {
-                POINT point{};
-                GetCursorPos(&point);
-                ScreenToClient(window, &point);
-                const std::size_t pane = pane_at_point(window, *state, point);
-                if (pane < kExplorerCount) set_active_pane(window, *state, pane);
-            }
-            return 0;
         case kFileOperationFinishedMessage:
             if (state != nullptr)
                 complete_deferred_close(window, *state);

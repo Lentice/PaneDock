@@ -132,3 +132,93 @@ git diff --check
 ## Handoff requirements
 
 在 `## 交接區` 記錄：`window_proc` 前後行數、抽出的函式清單與各自行數、四條反向斷言的「故意破壞會紅」證據（命令與輸出）、以及使用者實機檢查的回報結果。
+
+## 交接區
+
+### 實作與行數
+
+- PD-178 後的實作前基線為 `1021` 行（本票現況表的 `1084` 是 PD-178 前數字）；實作後 `window_proc` 為 `390` 行。
+- switch 前 shutdown／Shell reentry 閘門原地未改；實作前後該段 UTF-8 SHA-256 都是 `65EFD05C0F23CBF53D931A5DB566AC93B2CDAA628477353546EC6A1D6FB95BCB`。
+- 抽出函式與行數（從函式名稱起算至下一個函式名稱前）：
+  - `create_main_window_children`：179 行
+  - `handle_pane_command`：45 行
+  - `handle_sidebar_command`：18 行
+  - `handle_global_command`：96 行
+  - `draw_pane_control`：31 行
+  - `draw_global_control`：46 行
+  - `handle_context_menu`：98 行
+  - `handle_global_mouse_message`：115 行；把剩餘的主視窗滑鼠／splitter／sidebar boundary case 收斂到全域所有權域，使 `window_proc` 達到 `< 400`，未改 subclass proc。
+- `HWND` 版 `handle_context_menu` 的參數解讀為原始訊息的 target HWND；主視窗 HWND 沿用 `AppState::main_window`，因此不增加參數或新狀態。
+- 五支 PowerShell 測試原有的函式切段名稱仍有效，搬移後直接全綠，故沒有放寬或修改 pattern。
+
+### 四條反向斷言 red／green 證據
+
+1. `address_bar_failure_check.ps1:23`：暫時在 `handle_navigation_failed` 加入實際的 `SetWindowTextW(nullptr, L"broken invariant");`。
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/release/address_bar_failure_check.ps1 -SourcePath src/app_shell/main.cpp
+   # exit 1
+   Address-bar failure check failed: failure path rewrites the address bar
+   ```
+
+   還原後同命令：
+
+   ```text
+   PASSED: address_bar_failure_check
+   ```
+
+2. `startup_frame_order_check.ps1:69`：暫時在 `wWinMain` 的正常 startup prologue、`MSG message{}` 前加入實際的 `refresh_startup_chrome(state);`。
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/release/startup_frame_order_check.ps1 -SourcePath src/app_shell/main.cpp
+   # exit 1
+   startup frame order check failed: normal prologue performs startup chrome lookup
+   ```
+
+   還原後同命令：
+
+   ```text
+   startup frame order check passed
+   ```
+
+3. `startup_frame_order_check.ps1:80`：暫時在 `kDeferredRealizeMessage` 的失敗分支加入實際的 modal `MessageBoxW`。
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/release/startup_frame_order_check.ps1 -SourcePath src/app_shell/main.cpp
+   # exit 1
+   startup frame order check failed: deferred Shell failure blocks the usable window
+   ```
+
+   還原後同命令：
+
+   ```text
+   startup frame order check passed
+   ```
+
+4. `startup_frame_order_check.ps1:95`：暫時在 startup notification 處理後、`MSG message{}` 前加入實際的 modal `MessageBoxW`。
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/release/startup_frame_order_check.ps1 -SourcePath src/app_shell/main.cpp
+   # exit 1
+   startup frame order check failed: recoverable warning path is modal
+   ```
+
+   還原後同命令：
+
+   ```text
+   startup frame order check passed
+   ```
+
+四個暫時破壞均已移除；`rg -n "broken invariant" src tests` 無輸出。
+
+### 自動檢查
+
+- CMake configure：PASS。
+- Release build（LLVM-MinGW Clang/LLD + Ninja）：PASS。
+- `ctest --test-dir build --output-on-failure`：提升權限的一般桌面環境 `20/20 PASS`，含 `panedock_launch_smoke`（1.99 秒）。受限 sandbox 內 smoke 曾因關閉後程序未退出而 FAIL；以未修改的 HEAD 基線差分也得到相同 FAIL，且同一份新 build 在 sandbox 外 PASS，確認是 GUI sandbox 限制而非本票回歸。
+- 五支直接掃描 `main.cpp` 的 PowerShell 測試：`shutdown_state_check.ps1`、`shell_reentry_gate_check.ps1`、`single_instance_relay_check.ps1`、`address_bar_failure_check.ps1`、`startup_frame_order_check.ps1` 全部 PASS。
+- 行數檢查：`390`；`git diff --check`：PASS。
+
+### 使用者實機檢查
+
+尚未收到使用者對上列六項實機檢查的回報；目前狀態為待使用者執行。自動 launch smoke 已確認正常啟動與乾淨關閉。
