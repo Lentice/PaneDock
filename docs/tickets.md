@@ -206,6 +206,7 @@
 | PD-166 | startup recoverable warning 改為非同步 `OK` 通知，fatal startup error 維持同步退出 | 7 | `done` | PD-130, PD-135, PD-141, PD-144 | [PD-166](tickets/PD-166-startup-notification-dialog-routing.md) |
 | PD-167 | 所有新 tab 的預設 Shell location 統一為 My Computer | 7 | `done` | PD-019, PD-154, PD-160 | [PD-167](tickets/PD-167-default-tab-location-my-computer.md) |
 | PD-168 | 導覽/Tab/Group 切換在 UI 執行緒同步呼叫 Shell resolve/BrowseTo，慢速路徑凍結整個 app（NFR-003） | 7 | `done` | PD-140, PD-157 | [PD-168](tickets/PD-168-navigate-synchronous-shell-resolution-blocks-ui.md) |
+| PD-169 | Pinned/Tab/Startup 顯示名稱查詢仍在 UI 執行緒同步呼叫 `SHCreateItemFromParsingName` | 7 | `done` | PD-168, PD-100, PD-146 | [PD-169](tickets/PD-169-display-name-lookup-synchronous-shell-call.md) |
 | PD-170 | 導覽完成/失敗回呼沒有 request/tab/Group identity，pending 導覽可能寫進錯的 tab | 7 | `done` | PD-020, PD-086 | [PD-170](tickets/PD-170-navigation-completion-lacks-request-identity.md) |
 | PD-171 | `apply_layout` 持有的 Group reference 在 Shell 呼叫重入時可能失效（dangling reference） | 7 | `done` | PD-140 | [PD-171](tickets/PD-171-shell-reentry-invalidates-group-vector-reference.md) |
 | PD-172 | deferred shutdown 訊息在 nested Shell call 內被吃掉，程式可能永遠關不掉 | 7 | `done` | PD-140, PD-162 | [PD-172](tickets/PD-172-deferred-shutdown-message-swallowed-in-nested-shell-call.md) |

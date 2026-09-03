@@ -18,6 +18,8 @@
 namespace panedock::shell_core {
 namespace {
 
+constexpr DWORD kDisplayNameLookupTimeoutMs = 1000;
+
 std::wstring item_name(IShellItem* item, SIGDN kind) {
     PWSTR text = nullptr;
     if (item == nullptr || FAILED(item->GetDisplayName(kind, &text)) ||
@@ -137,9 +139,18 @@ std::wstring display_text_for_parsing_name(std::wstring_view parsing_name) {
     if (!parsing_name.starts_with(L"::")) return std::wstring(parsing_name);
 
     const std::wstring parsing_text(parsing_name);
+    Microsoft::WRL::ComPtr<IBindCtx> bind_context;
+    if (FAILED(CreateBindCtx(0, &bind_context))) return parsing_text;
+
+    BIND_OPTS options{};
+    options.cbStruct = sizeof(options);
+    options.dwTickCountDeadline =
+        GetTickCount() + kDisplayNameLookupTimeoutMs;
+    if (FAILED(bind_context->SetBindOptions(&options))) return parsing_text;
+
     Microsoft::WRL::ComPtr<IShellItem> item;
     if (FAILED(SHCreateItemFromParsingName(
-            parsing_text.c_str(), nullptr, IID_PPV_ARGS(&item)))) {
+            parsing_text.c_str(), bind_context.Get(), IID_PPV_ARGS(&item)))) {
         return parsing_text;
     }
 

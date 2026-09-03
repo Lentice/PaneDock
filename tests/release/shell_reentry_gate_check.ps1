@@ -167,6 +167,25 @@ if ($helperBody -notmatch 'AppState& state' -or
 if ($shellCoreSource -notmatch 'SHCreateItemFromParsingName[\s\S]*GetDisplayName') {
     throw 'Shell re-entry invariant failed: shell_core display lookup is incomplete'
 }
+$displayStart = $shellCoreSource.IndexOf(
+    'std::wstring display_text_for_parsing_name(')
+$displayEnd = $shellCoreSource.IndexOf(
+    'std::optional<std::filesystem::path> session_directory()', $displayStart)
+if ($displayStart -lt 0 -or $displayEnd -lt 0) {
+    throw 'Shell re-entry invariant failed: shell_core display helper missing'
+}
+$displayBody = $shellCoreSource.Substring(
+    $displayStart, $displayEnd - $displayStart)
+if ($displayBody -notmatch 'CreateBindCtx\(0,\s*&bind_context\)' -or
+    $displayBody -notmatch 'dwTickCountDeadline\s*=\s*GetTickCount\(\)\s*\+\s*kDisplayNameLookupTimeoutMs' -or
+    $displayBody -notmatch 'bind_context->SetBindOptions' -or
+    $displayBody -notmatch 'SHCreateItemFromParsingName\([\s\S]*bind_context\.Get\(\)') {
+    throw 'Shell display lookup invariant failed: binding deadline is missing'
+}
+if ($displayBody -notmatch 'if \(!parsing_name\.starts_with\(L"::"\)\)\s*return\s+std::wstring\(parsing_name\)' -or
+    ([regex]::Matches($displayBody, 'return\s+parsing_text;').Count -lt 3)) {
+    throw 'Shell display lookup invariant failed: fallback behavior is missing'
+}
 $callSiteSource = $source.Remove($helperStart, $helperEnd - $helperStart)
 if ([regex]::Matches($callSiteSource, 'display_text_for_parsing_name\(').Count -ne
     [regex]::Matches($callSiteSource,

@@ -35,11 +35,19 @@ void test_icon_sizes_are_distinguishable() {
     EXPECT(panedock::shell_core::view_mode_name(FVM_ICON, 48) !=
            panedock::shell_core::view_mode_name(FVM_ICON, 96));
 }
+
+void test_unresolvable_virtual_name_falls_back_to_parsing_name() {
+    const std::wstring parsing_name =
+        L"::{00000000-0000-0000-0000-000000000000}";
+    EXPECT(panedock::shell_core::display_text_for_parsing_name(parsing_name) ==
+           parsing_name);
+}
 }  // namespace
 
 int main() {
     test_all_persisted_modes_round_trip();
     test_unknown_modes_are_rejected();
     test_icon_sizes_are_distinguishable();
+    test_unresolvable_virtual_name_falls_back_to_parsing_name();
     return panedock::test::summary("shell_core_view_mode");
 }
