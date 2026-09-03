@@ -213,7 +213,7 @@
 | PD-173 | 拖曳進行中關閉：OLE 拖曳生命週期沒有納入任何 shell-call/shutdown gate | 7 | `done` | PD-090, PD-140, PD-162 | [PD-173](tickets/PD-173-close-during-active-drag-not-gated.md) |
 | PD-174 | 把 session save 的 500ms debounce 擴大到 tab/Group/layout/splitter 等其餘同步 `save_now` 呼叫點 | 7 | `done` | PD-091 | [PD-174](tickets/PD-174-extend-session-save-debounce-to-remaining-call-sites.md) |
 | PD-175 | 位址列在導覽失敗後被還原成舊路徑，使用者剛輸入的內容沒有保留 | 7 | `done` | PD-020, PD-022 | [PD-175](tickets/PD-175-address-bar-reverts-to-stale-path-on-failed-navigation.md) |
-| PD-176 | 追查閒置 10 分鐘仍有 307294 bytes 磁碟 I/O 的來源（NFR-001 磁碟門檻 FAIL） | 7 | `ready` | PD-003, PD-026 | [PD-176](tickets/PD-176-diagnose-idle-disk-io-source.md) |
+| PD-176 | 追查閒置 10 分鐘仍有 307294 bytes 磁碟 I/O 的來源（NFR-001 磁碟門檻 FAIL） | 7 | `done` | PD-003, PD-026 | [PD-176](tickets/PD-176-diagnose-idle-disk-io-source.md) |
 | PD-177 | Shutdown 恢復條件在 shell_call_left/drag_finished 各自只檢查一部分，收斂為共用 predicate | 7 | `done` | PD-172, PD-173 | [PD-177](tickets/PD-177-shutdown-gate-conditions-duplicated-across-call-sites.md) |
 
 ## Dependency lanes

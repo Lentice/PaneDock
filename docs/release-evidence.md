@@ -27,6 +27,21 @@ Generated: 2026-08-29T12:45:00+08:00
 | Idle CPU, 10 min | average < 0.1% | Process.TotalProcessorTime delta / elapsed / logical processors | True | 0.004948% | PASS |
 | Idle disk I/O, 10 min | zero bytes | GetProcessIoCounters transfer-byte delta | True | 307294 bytes | FAIL |
 
+## PD-176 diagnosis addendum
+
+The following controlled repeats use the same Release build, 600-second untouched window, and `GetProcessIoCounters` transfer-byte delta as PD-003. The layout was selected before each window and allowed to settle; `--diagnostic` applies the existing `MicrosoftSignedOnly` per-process policy.
+
+| Mode | Layout / configured live views | Elapsed seconds | Average CPU | I/O bytes | Close seconds | Exit |
+|---|---|---:|---:|---:|---:|---:|
+| normal | Single / 1 | 600.005 | 0.003515596% | 0 | 1.018 | 0 |
+| `--diagnostic` | Single / 1 | 599.996 | 0.004036483% | 0 | 1.523 | 0 |
+| normal | Three / 3 | 600.001 | 0.002343748% | 48 | 1.210 | 0 |
+| `--diagnostic` | Three / 3 | 600.028 | 0.004036272% | 0 | 1.106 | 0 |
+| normal | Four / 4 | 600.013 | 0.004166577% | 0 | 1.088 | 0 |
+| `--diagnostic` | Four / 4 | 599.992 | 0.005338614% | 0 | 1.267 | 0 |
+
+PD-176 conclusion: **third-party Shell extension activity is the most supported source**. The normal-mode Three-pane repeat produced 48 bytes while the matched diagnostic repeat produced zero; all three diagnostic repeats were zero. The earlier PD-003 normal Four-pane reading of 307294 bytes is consistent with intermittent extension activity, although the exact extension cannot be identified from process-total counters alone. The app source still has a blocking `GetMessageW` loop, two event-driven timers, and no idle busy-spin or polling timer. No product change or NFR-001 threshold relaxation is justified by this ticket; retain `--diagnostic` as the owner-controlled attribution run and keep the historic normal-mode gate failure visible.
+
 ## CTest gate
 
 | Registered | Executed | Skipped markers | Verdict |
@@ -164,4 +179,4 @@ Automated soak run: same sequence as soak-1.
 
 ## Result
 
-**FAIL** — the idle disk I/O blocking threshold failed (307294 bytes observed against a zero-byte gate). Idle CPU passed (0.004948% against < 0.1%). CTest evidence is current (6 registered, 6 executed, 0 skipped).
+**FAIL** — the historic idle disk I/O blocking threshold failed (307294 bytes observed against a zero-byte gate). PD-176 controlled repeats attribute the intermittent normal-mode activity to third-party Shell extension activity; matched `--diagnostic` repeats were zero. Idle CPU passed (0.004948% against < 0.1%). CTest evidence is current (6 registered, 6 executed, 0 skipped).

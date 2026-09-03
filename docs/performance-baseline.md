@@ -5,7 +5,7 @@ Rows that still read **Not measured** are estimates or unobserved planning conte
 | Metric | Target | Blocking threshold | Result | Environment / notes |
 |---|---|---|---|---|
 | Idle CPU, 10 min sample | 0% | avg ≥ 0.1% fails | **PASS** — 0.004948% avg | PD-003 2026-08-29: 600.02 s window, 4 panes on local folders (`D:\Documents\Desktop\screenGif`, `D:\downloads`), untouched. `Process.TotalProcessorTime` delta / elapsed / logical processors. See `docs/release-evidence.md`. |
-| Idle disk I/O, 10 min sample | zero bytes | any I/O fails | **FAIL** — 307294 bytes | PD-003 2026-08-29: same idle window as above. `GetProcessIoCounters` transfer-byte delta. Source of the I/O was not diagnosed (out of scope for this measurement-only ticket); candidate follow-up ticket. |
+| Idle disk I/O, 10 min sample | zero bytes | any I/O fails | **FAIL** — 307294 bytes (PD-003 historic reading) | PD-176 2026-09-03 controlled repeats, same `GetProcessIoCounters` transfer-byte delta: normal Single/Three/Four = 0/48/0 bytes; `--diagnostic` Single/Three/Four = 0/0/0 bytes. The intermittent normal-mode-only signal, together with the Microsoft-signed-only control, attributes the activity to third-party Shell extension activity; no PaneDock idle loop was found. The PD-003 307294-byte release-gate failure remains recorded. |
 | Resident memory, 1 pane, local folder | — | — | 62,881,792 bytes (~59.97 MiB), 678 handles | PD-003 2026-08-29: Single layout, `D:\Documents\Desktop\screenGif`, 3 s settle. |
 | Resident memory, 4 panes, local folders | — | — | 72,822,784 bytes (~69.45 MiB), 971 handles | PD-003 2026-08-29: Four Panes, `D:\Documents\Desktop\screenGif` / `D:\downloads` (x2 each), 3 s settle. Supersedes the PD-011 2026-08-24 single reading (54.3 MB) as the formal baseline. |
 | Resident memory, 4 panes, thumbnails + OneDrive + network | — | — | 72,933,376 bytes (~69.56 MiB), 971 handles | PD-003 2026-08-29: panes on `D:\Documents\Desktop\screenGif` (thumbnails), `D:\OneDrive - via.com.tw\附件`, `\\vianextfs06\Tmp\Lentice\test`, `D:\downloads`; 8 s settle. |
@@ -26,7 +26,7 @@ Rows that still read **Not measured** are estimates or unobserved planning conte
 - A skipped test is not evidence. Skipped `ctest` results are reported as INCOMPLETE, not as a pass.
 - Process totals and estimates are context only and never satisfy a gate.
 
-INCOMPLETE is therefore the correct and expected result today: no blocking metric has been measured. `docs/release-evidence.md` does not exist until the script has been run.
+The current `docs/release-evidence.md` contains measured blocking metrics: idle CPU passed, while the historic PD-003 idle disk I/O sample failed and PD-176 attributed its intermittent normal-mode-only signal to third-party Shell extension activity. The fail-closed contract still applies to any future run whose blocking metric is unmeasured.
 
 ## Why the language runtime is not on this table
 
