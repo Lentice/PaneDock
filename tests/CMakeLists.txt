@@ -56,6 +56,11 @@ if(WIN32)
                 "${CMAKE_CURRENT_SOURCE_DIR}/release/shell_reentry_gate_check.ps1"
                 -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp")
     add_test(
+        NAME panedock_address_bar_failure
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/release/address_bar_failure_check.ps1"
+                -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp")
+    add_test(
         NAME panedock_shell_core_boundary
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
                 "${CMAKE_CURRENT_SOURCE_DIR}/release/shell_core_boundary_check.ps1")

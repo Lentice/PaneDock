@@ -2815,7 +2815,7 @@ void handle_navigation_failed(AppState& state, std::size_t pane_index,
     // A pending back/forward navigation that fails asynchronously must still
     // release the suppression flag, or those buttons stay disabled forever.
     state.suppress_history_record[pane_index] = false;
-    refresh_navigation_chrome(state, pane_index);
+    refresh_navigation_buttons(state, pane_index);
 }
 
 void destroy_explorers(AppState& state) noexcept {

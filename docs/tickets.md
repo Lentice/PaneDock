@@ -212,6 +212,8 @@
 | PD-172 | deferred shutdown 訊息在 nested Shell call 內被吃掉，程式可能永遠關不掉 | 7 | `done` | PD-140, PD-162 | [PD-172](tickets/PD-172-deferred-shutdown-message-swallowed-in-nested-shell-call.md) |
 | PD-173 | 拖曳進行中關閉：OLE 拖曳生命週期沒有納入任何 shell-call/shutdown gate | 7 | `done` | PD-090, PD-140, PD-162 | [PD-173](tickets/PD-173-close-during-active-drag-not-gated.md) |
 | PD-174 | 把 session save 的 500ms debounce 擴大到 tab/Group/layout/splitter 等其餘同步 `save_now` 呼叫點 | 7 | `done` | PD-091 | [PD-174](tickets/PD-174-extend-session-save-debounce-to-remaining-call-sites.md) |
+| PD-175 | 位址列在導覽失敗後被還原成舊路徑，使用者剛輸入的內容沒有保留 | 7 | `done` | PD-020, PD-022 | [PD-175](tickets/PD-175-address-bar-reverts-to-stale-path-on-failed-navigation.md) |
+| PD-176 | 追查閒置 10 分鐘仍有 307294 bytes 磁碟 I/O 的來源（NFR-001 磁碟門檻 FAIL） | 7 | `ready` | PD-003, PD-026 | [PD-176](tickets/PD-176-diagnose-idle-disk-io-source.md) |
 
 ## Dependency lanes
 
@@ -348,7 +350,7 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | 產品內的計時儀器(Group 切換／tab realize／cold start 延遲) | PD-026(2026-08-24)刻意排除:三者都沒有 blocking 門檻,加儀器要動產品程式碼。若使用者實際回報切換有感延遲,再開票加 `QueryPerformanceCounter` 量測點,屆時 `docs/performance-baseline.md` 對應列才有數字可填。 |
 | 崩潰迴圈的自動安全模式(連續 N 次不乾淨關閉即自動以 `--diagnostic` 啟動) | PD-025(2026-08-24)刻意排除:沒有真實崩潰資料前 N 是憑空調的,且自動重啟需要 `CreateProcess`,會在單一 process 架構上開一個口子。若使用者實際遇到崩潰迴圈再開票。 |
 | 縮圖 pipeline 的快取與尺寸上限 | 待 PD-003 量出縮圖對記憶體的實際貢獻後再開,避免憑估計調參數。PD-003 2026-08-29 的自動化量測跑出差值 0 bytes,但兩個組態都重用同一次 run 內已導覽過的資料夾(縮圖早已快取),不是有效讀數;要開票前需先用全新啟動的 process 分別量測純文字與縮圖資料夾。 |
-| 診斷閒置磁碟 I/O 的來源 | PD-003 2026-08-29 量到閒置 10 分鐘期間有 307294 bytes 磁碟 I/O(NFR-001 磁碟門檻 FAIL,零 bytes 才算過),但本票是量測專用,未診斷來源。觸發條件:已成立——有實測數字,可以開票追查(候選來源:Shell thumbnail cache、USN journal 輪詢、第三方 shell extension)。 |
+| ~~診斷閒置磁碟 I/O 的來源~~ | **已於 2026-09-03 開票(PD-176),不再是候選。** PD-003 2026-08-29 量到閒置 10 分鐘期間有 307294 bytes 磁碟 I/O(NFR-001 磁碟門檻 FAIL,零 bytes 才算過),觸發條件早已成立;2026-09-03 三方稽核在原始碼層面排除了 app 自身的 busy-spin 與輪詢計時器,把範圍收斂為「歸因到 app 之外的來源」。 |
 | 追查 `panedock_launch_smoke` 間歇性崩潰(0xC0000409) | PD-003 2026-08-29 執行期間偶發一次 `STATUS_STACK_BUFFER_OVERRUN`,發生在關閉一個含 4 個 Group、其中一個 42 個 tab 的真實 `session.json` 之後;立即重跑同一測試與完整 suite 皆通過,無法穩定重現。觸發條件:再次出現(尤其是大量 tab 的 Group)時開票追查,屆時附上本次的復現條件與 session.json 特徵作為起點。 |
 | 把 tab strip 的 hover／drag／paint／`WNDPROC` 收進 `app_shell::TabStrip` 模組 | 2026-09-01 架構審查原本以「paint 與 hit-test 各自重新推導 layout」為理由列為高優先，但 Codex 唯讀核對**推翻**了該理由:layout 由 `layout_tab_strip`(`main.cpp:1798`)計算，tab 與 scroll 命中測試直接委派 `tab_overflow.h` 的純函式(`main.cpp:3817`)，paint(`:4052`)與 `WNDPROC`(`:4238`)消費同一份 `tab_strip_geometry`——PD-085／PD-107 已經把這條共用 seam 建好了。剩下的真實問題只有「這 853 行仍在 `main.cpp`、且 drag／hover／paint 的**呼叫路徑**沒有測試涵蓋」。觸發條件:再出現一個 hit-test／repaint 類的實機回報(PD-107、PD-152、PD-154 之後的下一個)，再開票把狀態機部分抽出來測;目前沒有新證據支持先做。 |
 | `SessionWriter`——把 `session_dirty`、500ms 防抖、clean/crash marker 與 atomic replace 收進單一型別 | 2026-09-01 架構審查列為 Speculative 並自我否決:目前只有一個寫入者，注入的 "write these bytes" adapter 是**假想 seam**(一個 adapter 只是假設，兩個才是真的)。觸發條件:出現第二個持久化寫入者(獨立 settings 檔、匯出功能)，或 PD-162 實作時發現 shutdown reducer 本來就需要透過介面呼叫存檔決策——後者請在 PD-162 交接區記錄，再據以開票。 |
@@ -711,3 +713,16 @@ Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `
 使用者先要求 `+` add tab button 與 tab 條空白區雙擊新增的 tab 預設到 My Computer，查明 `Ctrl+T` 也共用 `add_tab_to_pane` 後，進一步確認所有新增 tab 行為都要統一。使用者另指定 code 應呼叫共用 function：預設使用 My Computer，但允許 caller 額外傳入其他 location。
 
 決策採既有 Pinned Locations 固定項目的 `kPinnedFixedParsingNames[1]`（`::{20D04FE0-3AEA-1069-A2D8-08002B30309D}`）作為唯一 default Shell location，不重複硬編碼、不使用 display name 作 identity。範圍包含初始 application state、新 Group、版型增加 pane、`+`、空白 tab 條雙擊、`Ctrl+T`，以及最後 tab 關閉／跨 pane 搬移最後 tab 時的 default fallback；既有 session 中已保存的 location 不回溯修改。開票為 [PD-167](tickets/PD-167-default-tab-location-my-computer.md)，依賴 PD-019、PD-154、PD-160。
+
+### 2026-09-03 — 三方稽核「空轉／卡住／UI 無回應」，驗證後開 PD-168～PD-176
+
+使用者以 Herdr 開三個背景 agent（Claude / Codex / OpenCode，皆唯讀）稽核「loop 空轉、卡住、UI 無法響應」，並指定追蹤 path 切換（上一層／上一頁／下一頁／位址列直接輸入）、tab 切換、Group 切換等使用者操作觸發的行為。Claude 那個 tab 在約 38 分鐘時自行消失（pane 從 workspace 消失，原因未確認），其報告未取回；Codex（41 分鐘，最深）與 OpenCode（11 分鐘）的報告完整。兩份報告的 9 項候選發現隨後由一個繼承完整脈絡的 fork 逐條對照 HEAD（`ded4355`）原始碼與既有 ticket 交接區重新核對，**只有核對通過的項目才開票**：
+
+- **兩份報告一致、且都成立的核心根因**：導覽路徑（`ExplorerHost::navigate`，`explorer_host.cpp:612-636`）在 UI 執行緒同步做 `resolve_location` + `SHCreateItemFromParsingName` + `BrowseToObject`，五種使用者操作（位址列輸入、上一頁/下一頁、上一層、tab 切換、Group 切換）全部共用它 → **PD-168**；同一根因在顯示名稱查詢上的較小版本 → **PD-169**。
+- **Codex 獨有、核對後成立**：導覽完成/失敗回呼只帶 pane index（`main.cpp:2687-2718`），`PD-020` 交接區第 144／166 行早已記錄此競態並明確「留給後續真正遇到才處理」，從未獨立開票 → **PD-170**；`apply_layout` 在 `main.cpp:2801` 取得 Group vector reference 後跨多個 `ShellCallScope` 呼叫持有它，而 `PD-140` 的 gate 只擋關閉、不擋一般改動 vector 的命令 → **PD-171**；`shutdown.cpp:57-60` 的 `deferred_shutdown_ready` 在 `shell_call_depth != 0` 時回 `none` 卻不清 `shutdown_message_queued`，使 `shell_call_left`（:45-51）永遠不再回 `defer`、`finish_shell_call`（`main.cpp:593-610`）永遠不再重新 post，程式可永久卡在 Closing → **PD-172**；拖曳生命週期完全不在任何 gate 內（`DragHoverTarget` 的 `IDropTarget` 方法不動 `shell_call_depth`，`close_requested` 也沒有拖曳狀態），`PD-090` 只延後懸停動作本身 → **PD-173**。核對時同時修正了 Codex 的一項事實錯誤：專案內**沒有** `DoDragDrop`，拖出完全由原生 `IShellView` 負責。
+- **兩份報告都提到、成立且範圍比原描述更大**：`PD-091` 建立的 500ms debounce 只套用在 `handle_navigation_complete` 一處，tab 切換、Group 刪除/排序、layout 切換、splitter 操作等十餘處仍直接同步 `save_now` → **PD-174**。
+- **Codex 獨有、成立且是既有修正的副作用**：`PD-020` 為修「back/forward 永久停用」而新增的 `handle_navigation_failed → refresh_navigation_chrome` 路徑，副作用是導覽失敗後位址列被 model 舊 location 覆寫，與 `PD-022` 錯誤面板顯示的路徑互相矛盾 → **PD-175**。
+- **明確判定為 FALSE-POSITIVE／不開票**：`item_counts` 每次選取變更同步掃最多 1000 項（`explorer_host.cpp:766-817`）。`PD-095` 已針對這條鏈評估過並刻意決定「只在選取真的變更時才重新查詢」，1000 項上限本身帶有 `ponytail:` 註解記錄的明確天花板與升級條件（`explorer_host.cpp:25-26`）。本次稽核沒有提出足以覆寫該決策的新證據，維持原決定。
+- **順帶促成的既有候選開票**：兩份報告都在原始碼層面確認 app 自身沒有 busy-spin 或輪詢計時器（`GetMessageW` 阻塞式迴圈、僅兩個一次性 `SetTimer`），這把候選表「診斷閒置磁碟 I/O 的來源」（觸發條件早已成立）的範圍從「找我們寫錯的迴圈」收斂為「歸因到 app 之外」 → **PD-176**。
+
+`PD-171` 沒有實機重現，採與 `PD-140` 當初立票相同的證據標準（原始碼推理）；`PD-172` 的失效序列可在狀態機上完整推導，且修正落在 `src/core`，因此該票要求附 reducer 單元測試。本次稽核與核對全程唯讀，未修改任何產品程式碼。
