@@ -22,6 +22,7 @@ namespace {
 constexpr wchar_t kErrorWindowClassName[] = L"PaneDock.ErrorPanel";
 constexpr int kRetryButtonId = 1;
 constexpr UINT_PTR kContextMenuSubclassId = 0x5044;
+constexpr DWORD kNavigationResolutionTimeoutMs = 1000;
 // ponytail: fixed 1000-item UI ceiling; raise only with measured
 // non-blocking Shell enumeration.
 constexpr int kSelectionSizeItemLimit = 1000;
@@ -44,6 +45,18 @@ void log_hresult(const wchar_t* operation, HRESULT result) noexcept {
         OutputDebugStringW(operation);
         OutputDebugStringW(L" failed\n");
     }
+}
+
+Microsoft::WRL::ComPtr<IBindCtx> navigation_bind_context() noexcept {
+    Microsoft::WRL::ComPtr<IBindCtx> result;
+    if (FAILED(CreateBindCtx(0, &result))) return {};
+
+    BIND_OPTS options{};
+    options.cbStruct = sizeof(options);
+    options.dwTickCountDeadline =
+        GetTickCount() + kNavigationResolutionTimeoutMs;
+    if (FAILED(result->SetBindOptions(&options))) return {};
+    return result;
 }
 
 class ViewCallback final : public IShellFolderViewCB {
@@ -672,9 +685,22 @@ HRESULT ExplorerHost::navigate(const core::ShellLocation& location) {
     // a newly selected Group's destination with the previous Group's folder.
     location_ = location;
     const std::wstring location_text = shell_core::resolve_location(location_);
+    const auto bind_context = navigation_bind_context();
+    if (bind_context == nullptr) {
+        log_message(L"ExplorerHost: navigation bind context unavailable");
+        navigation_failed();
+        return S_OK;
+    }
     Microsoft::WRL::ComPtr<IShellItem> item;
-    HRESULT hr = SHCreateItemFromParsingName(location_text.c_str(), nullptr,
+    HRESULT hr = SHCreateItemFromParsingName(location_text.c_str(),
+                                              bind_context.Get(),
                                               IID_PPV_ARGS(&item));
+    if (FAILED(hr) && location_.fallback_path != location_text) {
+        item.Reset();
+        hr = SHCreateItemFromParsingName(location_.fallback_path.c_str(),
+                                          bind_context.Get(),
+                                          IID_PPV_ARGS(&item));
+    }
     if (FAILED(hr)) {
         log_hresult(L"SHCreateItemFromParsingName", hr);
         navigation_failed();

@@ -128,11 +128,8 @@ std::wstring resolve_location(const core::ShellLocation& location) {
             if (!target.empty()) return target;
         }
     }
-    if (parse(location.parsing_name) != nullptr)
-        return location.parsing_name;
-    if (location.fallback_path != location.parsing_name &&
-        parse(location.fallback_path) != nullptr)
-        return location.fallback_path;
+    // Leave parsing to the navigation call, where one bind deadline can cover
+    // both the primary identity and its fallback without probing twice here.
     return location.parsing_name;
 }
 
