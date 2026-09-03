@@ -55,9 +55,13 @@ ShutdownAction ShutdownSequence::step(ShutdownEvent event) noexcept {
             return ShutdownAction::none;
 
         case ShutdownEvent::deferred_shutdown_ready:
-            if (state_.closing_ || state_.shell_call_depth != 0 ||
-                !state_.shutdown_deferred)
+            if (state_.closing_ || !state_.shutdown_deferred)
                 return ShutdownAction::none;
+            if (state_.shell_call_depth != 0) {
+                // A nested Shell pump may consume the posted continuation.
+                state_.shutdown_message_queued = false;
+                return ShutdownAction::none;
+            }
             state_.shutdown_deferred = false;
             state_.shutdown_message_queued = false;
             if (state_.shutdown_prompt_active ||

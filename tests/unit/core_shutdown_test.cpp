@@ -53,6 +53,33 @@ void test_close_inside_nested_shell_calls_waits_for_outer_call() {
     finish_shutdown(sequence);
 }
 
+void test_consumed_deferred_shutdown_message_is_reposted() {
+    ShutdownSequence sequence;
+    EXPECT(sequence.step(ShutdownEvent::close_requested) ==
+           ShutdownAction::defer);
+    EXPECT(sequence.step(ShutdownEvent::shell_call_entered) ==
+           ShutdownAction::none);
+    EXPECT(sequence.step(ShutdownEvent::shell_call_left) ==
+           ShutdownAction::defer);
+    EXPECT(sequence.step(ShutdownEvent::deferred_shutdown_queued) ==
+           ShutdownAction::none);
+
+    EXPECT(sequence.step(ShutdownEvent::shell_call_entered) ==
+           ShutdownAction::none);
+    EXPECT(sequence.step(ShutdownEvent::deferred_shutdown_ready) ==
+           ShutdownAction::none);
+    EXPECT(!sequence.state().shutdown_message_queued);
+    EXPECT(sequence.step(ShutdownEvent::shell_call_left) ==
+           ShutdownAction::defer);
+    EXPECT(sequence.step(ShutdownEvent::shell_call_left) ==
+           ShutdownAction::none);
+
+    EXPECT(sequence.step(ShutdownEvent::deferred_shutdown_queued) ==
+           ShutdownAction::none);
+    EXPECT(sequence.step(ShutdownEvent::deferred_shutdown_ready) ==
+           ShutdownAction::save_session);
+}
+
 void test_transfer_decisions() {
     ShutdownSequence keep_open;
     keep_open.step(ShutdownEvent::file_operation_call_started);
@@ -126,6 +153,7 @@ void test_repeated_close_does_not_repeat_teardown() {
 int main() {
     test_normal_close_orders_actions();
     test_close_inside_nested_shell_calls_waits_for_outer_call();
+    test_consumed_deferred_shutdown_message_is_reposted();
     test_transfer_decisions();
     test_end_session_paths_and_save_failure();
     test_repeated_close_does_not_repeat_teardown();
