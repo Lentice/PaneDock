@@ -21,6 +21,7 @@
 
 #include "core/model.h"
 #include "explorer_host/live_view_count.h"
+#include "explorer_host/pane_error_overlay.h"
 
 namespace panedock::explorer_host {
 
@@ -84,6 +85,7 @@ public:
     void set_visible(bool visible) noexcept;
     void focus() noexcept;
     HRESULT translate_accelerator(MSG* message) noexcept;
+    void process_retry_request() noexcept;
     void destroy() noexcept;
     const core::ShellLocation& location() const noexcept { return location_; }
     bool show_folder_context_menu(HWND owner, POINT screen_point) noexcept;
@@ -114,13 +116,6 @@ private:
     static LRESULT CALLBACK context_menu_subclass_proc(
         HWND window, UINT message, WPARAM wparam, LPARAM lparam,
         UINT_PTR subclass_id, DWORD_PTR ref_data) noexcept;
-    static bool register_error_window_class() noexcept;
-    static LRESULT CALLBACK error_window_proc(HWND window, UINT message,
-                                               WPARAM wparam,
-                                               LPARAM lparam) noexcept;
-    void layout_error_controls() noexcept;
-    void retry_navigation() noexcept;
-
     Microsoft::WRL::ComPtr<IExplorerBrowser> browser_;
     Microsoft::WRL::ComPtr<IServiceProvider> site_;
     Microsoft::WRL::ComPtr<IExplorerBrowserEvents> events_;
@@ -131,10 +126,7 @@ private:
     bool destroying_{false};
     HWND parent_{nullptr};
     RECT rect_{};
-    HWND error_window_{nullptr};
-    HWND error_message_{nullptr};
-    HWND retry_button_{nullptr};
-    bool error_visible_{false};
+    PaneErrorOverlay error_overlay_;
     core::ShellLocation location_;
     std::function<void(NavigationGeneration, const core::ShellLocation&)>
         navigation_callback_;

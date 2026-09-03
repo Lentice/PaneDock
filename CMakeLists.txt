@@ -57,6 +57,8 @@ target_link_libraries(panedock_shell_core PRIVATE shell32 ole32 uuid)
 panedock_set_warnings(panedock_shell_core)
 add_library(panedock_explorer_host STATIC
     src/explorer_host/explorer_host.cpp
+    src/explorer_host/pane_error_overlay.cpp
+    src/app_shell/window_helpers.cpp
 )
 target_include_directories(panedock_explorer_host PUBLIC src)
 target_compile_definitions(panedock_explorer_host PRIVATE
@@ -100,7 +102,6 @@ add_executable(PaneDock WIN32
     src/app_shell/pinned_locations_dialog.cpp
     src/app_shell/startup_notification.cpp
     src/app_shell/transfer_close_dialog.cpp
-    src/app_shell/window_helpers.cpp
     resources/panedock.rc
 )
 target_include_directories(PaneDock PRIVATE resources)

@@ -20,8 +20,6 @@
 namespace panedock::explorer_host {
 namespace {
 
-constexpr wchar_t kErrorWindowClassName[] = L"PaneDock.ErrorPanel";
-constexpr int kRetryButtonId = 1;
 constexpr UINT_PTR kContextMenuSubclassId = 0x5044;
 constexpr DWORD kNavigationResolutionTimeoutMs = 1000;
 // ponytail: fixed 1000-item UI ceiling; raise only with measured
@@ -506,75 +504,6 @@ LRESULT CALLBACK ExplorerHost::context_menu_subclass_proc(
     return host->handle_context_menu_message(window, message, wparam, lparam);
 }
 
-bool ExplorerHost::register_error_window_class() noexcept {
-    WNDCLASSW window_class{};
-    window_class.hInstance = GetModuleHandleW(nullptr);
-    window_class.lpfnWndProc = error_window_proc;
-    window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    window_class.hbrBackground =
-        reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    window_class.lpszClassName = kErrorWindowClassName;
-    return RegisterClassW(&window_class) != 0 ||
-           GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
-}
-
-LRESULT CALLBACK ExplorerHost::error_window_proc(
-    HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept {
-    if (message == WM_NCCREATE) {
-        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
-        SetWindowLongPtrW(window, GWLP_USERDATA,
-                          reinterpret_cast<LONG_PTR>(create->lpCreateParams));
-    } else if (message == WM_SIZE) {
-        auto* host = reinterpret_cast<ExplorerHost*>(
-            GetWindowLongPtrW(window, GWLP_USERDATA));
-        if (host != nullptr) host->layout_error_controls();
-        return 0;
-    } else if (message == WM_COMMAND && LOWORD(wparam) == kRetryButtonId &&
-               HIWORD(wparam) == BN_CLICKED) {
-        auto* host = reinterpret_cast<ExplorerHost*>(
-            GetWindowLongPtrW(window, GWLP_USERDATA));
-        if (host != nullptr) host->retry_navigation();
-        return 0;
-    }
-    return DefWindowProcW(window, message, wparam, lparam);
-}
-
-void ExplorerHost::layout_error_controls() noexcept {
-    if (error_window_ == nullptr) return;
-    RECT client{};
-    GetClientRect(error_window_, &client);
-    const int dpi = static_cast<int>(GetDpiForWindow(error_window_));
-    const int padding = MulDiv(16, dpi, 96);
-    const int width = client.right - client.left;
-    const int height = client.bottom - client.top;
-    const int button_width =
-        std::min(MulDiv(80, dpi, 96), std::max(0, width - padding * 2));
-    const int button_height =
-        std::min(MulDiv(28, dpi, 96), std::max(0, height - padding * 2));
-    const int button_x = std::max(0, (width - button_width) / 2);
-    const int button_y = std::max(0, height - padding - button_height);
-    if (error_message_ != nullptr) {
-        SetWindowPos(error_message_, nullptr, padding, padding,
-                     std::max(0, width - padding * 2),
-                     std::max(0, button_y - padding * 2),
-                     SWP_NOZORDER | SWP_NOACTIVATE);
-    }
-    if (retry_button_ != nullptr) {
-        SetWindowPos(retry_button_, nullptr, button_x, button_y,
-                     button_width, button_height,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
-    }
-}
-
-void ExplorerHost::retry_navigation() noexcept {
-    try {
-        const core::ShellLocation location = location_;
-        (void)navigate(location);
-    } catch (...) {
-        log_message(L"ExplorerHost: retry location copy failed");
-    }
-}
-
 HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
                                  const core::ShellLocation& location) {
     if (parent == nullptr || initialized_ || browser_ != nullptr) {
@@ -911,23 +840,7 @@ void ExplorerHost::set_rect(const RECT& rect, HDWP* deferred) noexcept {
         log_hresult(L"IExplorerBrowser::SetRect",
                     browser_->SetRect(deferred, rect));
     }
-    if (error_window_ != nullptr) {
-        const UINT flags = SWP_NOACTIVATE;
-        if (deferred != nullptr && *deferred != nullptr) {
-            const HDWP next = DeferWindowPos(
-                *deferred, error_window_, HWND_TOP, rect.left, rect.top,
-                rect.right - rect.left, rect.bottom - rect.top, flags);
-            if (next != nullptr) *deferred = next;
-            else {
-                *deferred = nullptr;
-                deferred = nullptr;
-            }
-        }
-        if (deferred == nullptr)
-            SetWindowPos(error_window_, HWND_TOP, rect.left, rect.top,
-                         rect.right - rect.left, rect.bottom - rect.top, flags);
-        layout_error_controls();
-    }
+    error_overlay_.set_rect(rect);
 }
 
 void ExplorerHost::set_visible(bool visible) noexcept {
@@ -951,16 +864,11 @@ void ExplorerHost::set_visible(bool visible) noexcept {
                          RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         }
     }
-    if (error_window_ != nullptr) {
-        ShowWindow(error_window_, visible && error_visible_ ? SW_SHOW : SW_HIDE);
-    }
+    error_overlay_.set_visible(visible);
 }
 
 void ExplorerHost::focus() noexcept {
-    if (error_window_ != nullptr && error_visible_) {
-        SetFocus(retry_button_ != nullptr ? retry_button_ : error_window_);
-        return;
-    }
+    if (error_overlay_.focus()) return;
     if (const HWND window = view_window(browser_.Get()); window != nullptr) {
         SetFocus(window);
     }
@@ -985,6 +893,17 @@ HRESULT ExplorerHost::translate_accelerator(MSG* message) noexcept {
     }
 
     return view->TranslateAcceleratorW(message);
+}
+
+void ExplorerHost::process_retry_request() noexcept {
+    if (!error_overlay_.retry_requested()) return;
+    error_overlay_.clear_retry_request();
+    try {
+        const core::ShellLocation location = location_;
+        (void)navigate(location);
+    } catch (...) {
+        log_message(L"ExplorerHost: retry location copy failed");
+    }
 }
 
 void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
@@ -1050,10 +969,7 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
     if (generation != latest_navigation_generation_) return;
     location_ = completed_location;
 
-    error_visible_ = false;
-    if (error_window_ != nullptr) {
-        ShowWindow(error_window_, SW_HIDE);
-    }
+    error_overlay_.hide();
     if (navigation_callback_) {
         try {
             navigation_callback_(generation, completed_location);
@@ -1071,43 +987,7 @@ void ExplorerHost::navigation_failed() noexcept {
         return;
     }
 
-    error_visible_ = true;
-    if (error_window_ == nullptr && register_error_window_class()) {
-        error_window_ = CreateWindowExW(
-            WS_EX_CLIENTEDGE, kErrorWindowClassName, L"",
-            WS_CHILD | WS_CLIPCHILDREN, rect_.left,
-            rect_.top, rect_.right - rect_.left, rect_.bottom - rect_.top,
-            parent_, nullptr, GetModuleHandleW(nullptr), this);
-    }
-    if (error_window_ != nullptr) {
-        if (error_message_ == nullptr) {
-            error_message_ = CreateWindowExW(
-                0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_CENTER,
-                0, 0, 0, 0, error_window_, nullptr, GetModuleHandleW(nullptr),
-                nullptr);
-        }
-        if (retry_button_ == nullptr) {
-            retry_button_ = CreateWindowExW(
-                0, L"BUTTON", L"Retry",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                0, 0, 0, 0, error_window_,
-                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRetryButtonId)),
-                GetModuleHandleW(nullptr), nullptr);
-        }
-        try {
-            const std::wstring message =
-                L"This location is not available:\n" + location_.parsing_name +
-                L"\n\nReconnect the drive or check the path, then retry.";
-            SetWindowTextW(error_message_, message.c_str());
-        } catch (...) {
-            SetWindowTextW(error_message_, L"This location is not available.");
-        }
-        ShowWindow(error_window_, SW_SHOW);
-        SetWindowPos(error_window_, HWND_TOP, rect_.left, rect_.top,
-                     rect_.right - rect_.left, rect_.bottom - rect_.top,
-                     SWP_NOACTIVATE);
-        layout_error_controls();
-    }
+    (void)error_overlay_.show(parent_, rect_, location_.parsing_name);
     if (navigation_failed_callback_) {
         try {
             navigation_failed_callback_(generation);
@@ -1166,16 +1046,10 @@ void ExplorerHost::destroy() noexcept {
     view_callback_.Reset();
     previous_view_callback_.Reset();
     current_view_.Reset();
-    if (error_window_ != nullptr) {
-        DestroyWindow(error_window_);
-        error_window_ = nullptr;
-        error_message_ = nullptr;
-        retry_button_ = nullptr;
-    }
-    error_visible_ = false;
     item_counts_cache_.reset();
     log_hresult(L"IExplorerBrowser::Destroy", browser_->Destroy());
     live_view_.reset();
+    error_overlay_.destroy();
 
     events_.Reset();
     site_.Reset();

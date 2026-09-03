@@ -18,7 +18,8 @@ bool register_simple_window_class(const wchar_t* name, WNDPROC proc,
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     window_class.hbrBackground = background;
     window_class.lpszClassName = name;
-    return RegisterClassExW(&window_class) != 0;
+    return RegisterClassExW(&window_class) != 0 ||
+           GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
 }
 
 void center_over_owner(HWND dialog, HWND owner, int width, int height,

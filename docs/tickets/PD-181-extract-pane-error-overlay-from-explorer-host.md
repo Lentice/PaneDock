@@ -153,3 +153,77 @@ git diff --check
 ## Handoff requirements
 
 在 `## 交接區` 記錄：`explorer_host.cpp` 前後行數、retry 通知採用哪一種做法及理由、`destroy` 的逐行順序、`register_simple_window_class` 是否適用、以及使用者實機檢查（特別是第 5、6 項）的回報結果。
+
+## 交接區
+
+### 2026-09-04 實作交接
+
+#### 完成內容與行數
+
+- 新增 `PaneErrorOverlay`，完整接手 error window class、window proc、STATIC/BUTTON 子控制項、原有英文文案、DPI 版面、顯示／隱藏、focus、resize、retry request 與 HWND cleanup。`ExplorerHost` 只保留一個 `error_overlay_` 成員。
+- `src/explorer_host/explorer_host.cpp`：本票記錄的基準 1216 行降為 1066 行（-150，符合 AC）；因 PD-180 完成後工作樹在本票實作開始時已是 1192 行，所以相對本次 Git HEAD 的淨下降是 126 行。兩個數字都保留，避免把前票已搬走的 24 行算成本票實際 diff。
+- `ExplorerHost::set_rect`、`set_visible`、`focus`、`destroy` 的 overlay 處理各為一行委派。
+- 沒有新增 dependency、background loop、`IExplorerBrowser` abstraction 或 explorer-host 自動化測試；沿用既有 `panedock_explorer_host_lifetime_check` 與 release smoke。本票明訂 `explorer_host` 無自動化測試 seam，實機錯誤面板檢查仍保留給使用者。
+
+#### Retry 通知
+
+- 採用 Scope 的「既有訊息路徑查詢 `retry_requested()`」方案。按鈕的 window proc 只設 `retry_requested_ = true`，並 `PostMessageW(..., WM_NULL, ...)` 喚醒既有 message loop；`DispatchMessageW` 返回後，app shell 讓每個 `ExplorerHost::process_retry_request()` 查詢並清除旗標，再由 `ExplorerHost` 複製保留中的 `location_` 並呼叫自己的 `navigate()`。
+- 這比 `WM_COMMAND` 路由 diff 小：不需要新增全域 command ID、不需要把 overlay HWND／pane container 反查成 pane index，也不需要改既有 `window_proc` command dispatcher。`PaneErrorOverlay` 不持有 `ExplorerHost*`、callback、`std::function` 或 pane index。
+
+#### Destroy 順序（實作逐行順序）
+
+`ExplorerHost::destroy()` 先解除會回到 host 的 Shell 連結，再依下列順序執行；overlay 在 live browser 的 `Destroy` 完成後才銷毀：
+
+```text
+remove_context_menu_subclass()
+reset active context-menu COM pointers
+Site::detach()
+ViewCallback::detach()
+IExplorerBrowser::Unadvise()
+IUnknown_SetSite(browser, nullptr)
+restore the previous IShellFolderViewCB
+reset view_callback_, previous_view_callback_, current_view_
+browser_->Destroy()
+live_view_.reset()
+error_overlay_.destroy()
+reset events_, site_, browser_
+parent_ = nullptr
+```
+
+外層 shutdown 順序維持：
+
+```text
+destroy_explorers(state)
+assert(live_view_count() == 0)
+destroy every PaneChrome (including each explorer-container parent HWND)
+DestroyWindow(main window)
+PostQuitMessage(0)
+exit message loop
+OleUninitialize()
+```
+
+因此 overlay 不早於 live `IExplorerBrowser::Destroy()`，其 pane-container parent HWND 也不會在 overlay 或 view 存活時被銷毀，符合 `docs/design-spec.md` §9.4。
+
+#### Window class helper 與介面歧義
+
+- PD-180 的 `register_simple_window_class` 簽章可直接使用；`pane_error_overlay.cpp` 也沿用其 `window_state_from_create` prologue。因四個 pane 可能重複要求同一 class，helper 補回原 error registration 的 `ERROR_CLASS_ALREADY_EXISTS` 成功語意。helper implementation 改由 `panedock_explorer_host` static target 編譯，讓 `PaneDock` 與獨立 lifetime-check executable 都能解析同一份實作，沒有複製 registration code。
+- Scope 列出的 `PaneErrorOverlay` API 缺少 `set_visible(bool)`，但 Scope 3 同時要求 `ExplorerHost::set_visible` 單行委派，且既有行為必須在「pane 暫時隱藏」時保留 error-active 狀態。自行採最小一致解法：補一個 `set_visible(bool)`；`hide()` 仍專用於成功導覽後清除 error-active 狀態。若只把 `set_visible(false)` 映射成 `hide()`，再次顯示 pane 時會遺失既有 error overlay，違反零行為變更。
+
+#### Agent checks
+
+- `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`：PASS（LLVM-MinGW Clang/LLD + Ninja）。
+- `cmake --build build`：PASS。
+- `ctest --test-dir build --output-on-failure`：PASS，20/20，含 `panedock_launch_smoke`。
+- `build\panedock_explorer_host_lifetime_check.exe`：PASS；建立真實 `IExplorerBrowser`、觸發既有 unresolvable-location 路徑、呼叫 `ExplorerHost::destroy()`，並確認 live-view count 歸零且 parent HWND 不再有 child。此 executable 未註冊為 CTest，因此另行直接執行並如實分列。
+- 舊成員掃描：PASS，0 matches。
+- `pane_error_overlay.h` 的 `ExplorerHost` 反向指標掃描：PASS，0 matches。
+- `pane_error_overlay.cpp` 中文字串掃描：PASS，0 matches。
+- ticket 原始 graceful-close 指令：PASS，process 在 5 秒內退出，exit code 0。
+- `git diff --check`：PASS。
+- 受限 sandbox 內第一次完整 CTest 為 19/20，唯一 `panedock_launch_smoke` 因 `%LOCALAPPDATA%\PaneDock` 無寫入權而停在既有 save-failure modal；沒有把它當成程式 PASS。改在可寫桌面環境以相同 smoke 單獨重跑 PASS，再以相同環境重跑完整 CTest 得 20/20。
+
+#### 使用者實機檢查
+
+- 清單 1～4：未驗證，需使用者以真實不可解析 USB／網路磁碟與互動操作確認。
+- 清單 5（error overlay 顯示時直接關閉）：未驗證，需真實桌面；自動 graceful-close 只驗證無 overlay 的關閉路徑，不能替代本項。
+- 清單 6（四 pane 同時 error 後關閉）：未驗證，需真實桌面。

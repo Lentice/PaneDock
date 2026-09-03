@@ -5956,6 +5956,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         }
         TranslateMessage(&message);
         DispatchMessageW(&message);
+        for (auto& explorer : state.explorers)
+            explorer.process_retry_request();
         apply_pinned_locations_dialog_result(state);
         handle_transfer_close_dialog_result(window, state);
         // win32: a nested modal loop can consume the WM_QUIT posted in
