@@ -138,3 +138,35 @@ git diff --check
 ## Handoff requirements
 
 在 `## 交接區` 記錄：`main.cpp` 前後行數、三個對話框各自搬出的行數（若有留下的，寫出具體阻礙與需要什麼條件才能搬）、PowerShell 測試 `-SourcePath` 的更新內容、以及使用者實機檢查的回報結果。
+
+## 交接區
+
+### 實作與行數
+
+- `src/app_shell/main.cpp`：6601 行降為 5988 行（-613），超過本票要求的 -600。
+- 從原始 `main.cpp` 搬出的完整區段：pinned locations manager 281 行（2474-2753）、startup notification 175 行（4643-4817）、transfer close dialog 135 行（4818-4952）。三者均已實作於各自的 `.h/.cpp`，沒有留下空殼。
+- `PinnedLocationsDialog` 持有 `core::ApplicationState` draft 與顯示文字資料，以 `take_result()` 回傳 Apply/OK 的結果；主協調層在訊息派送後更新 application 並排程儲存。
+- `StartupNotification` 持有 warning message、子控制項、版面與 DPI 邏輯；`AppState` 僅保留物件與相容的 warning message reference。
+- `TransferCloseDialog` 只持有具體 UI 狀態，以 `Result`/`take_result()` 輸出選項。為保留檔案操作期間取消的即時性，模組用既有 Win32 owner message 通知主視窗立即查詢結果；沒有 `AppState`、`ShutdownSequence` 或 callback interface。Shutdown event 仍只由 `main.cpp` 協調層送入 reducer。
+- `register_simple_window_class` 與 `center_over_owner` 集中在 `src/app_shell/window_helpers.h/.cpp`；四個 class registration 都經由 helper，client/window rect 差異由 `center_over_owner` 的布林參數表達。`src/app_shell/*.cpp` 的 `WNDCLASSEXW` 填寫只剩 helper 一處。
+
+### PowerShell source path
+
+- `tests/CMakeLists.txt` 的 `panedock_shutdown_state` 改掃 `main.cpp,transfer_close_dialog.cpp`。
+- `tests/CMakeLists.txt` 的 `panedock_startup_frame_order` 改掃 `main.cpp,startup_notification.cpp`。
+- 兩支 script 的 `SourcePath` 仍是單一明確參數，內容以逗號分隔後逐檔讀取；既有 pattern 維持具體語意，startup class/cleanup pattern 改為對應新模組，沒有放寬匹配。
+
+### 自動檢查
+
+- Agent configure：PASS（LLVM-MinGW Clang/LLD + Ninja）。
+- Agent build：PASS。
+- `ctest --test-dir build --output-on-failure`：PASS，20/20，含 `panedock_shutdown_state`、`panedock_startup_frame_order`、`panedock_launch_smoke`。
+- `Select-String -Path src/app_shell/*.cpp -Pattern 'WNDCLASSEXW\s+\w+' | Measure-Object`：PASS，Count = 1。
+- 三個新 dialog `.cpp` 的中文字串掃描：PASS，無結果。
+- ticket 的 graceful-close Agent Check（可寫桌面環境）：PASS；launch smoke：PASS。
+- `git diff --check`：PASS，無結果。
+- 受限 sandbox 內第一次 launch smoke 因 `%LOCALAPPDATA%\PaneDock` 拒絕寫入而觸發既有 save-failure MessageBox；以可寫桌面環境重跑後 PASS，並非保留中的程式殘留。
+
+### 使用者實機檢查
+
+尚未收到使用者對 pinned locations、startup notification、transfer close 三個流程及多 DPI 的實機回報；目前標記為待使用者依本票清單驗證。自動 launch smoke 只覆蓋啟動與 graceful close，不能取代上述視覺／互動檢查。

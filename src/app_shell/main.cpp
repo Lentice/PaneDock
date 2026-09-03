@@ -36,7 +36,11 @@
 #include "app_shell/diagnostic_mode.h"
 #include "app_shell/pane_chrome.h"
 #include "app_shell/pane_control_id.h"
+#include "app_shell/pinned_locations_dialog.h"
+#include "app_shell/startup_notification.h"
 #include "app_shell/tab_overflow.h"
+#include "app_shell/transfer_close_dialog.h"
+#include "app_shell/window_helpers.h"
 #include "app_shell/window_placement.h"
 #include "core/layout.h"
 #include "core/model.h"
@@ -53,8 +57,6 @@
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PaneDockMainWindow";
-constexpr wchar_t kPinnedLocationsWindowClassName[] =
-    L"PaneDockPinnedLocationsWindow";
 constexpr wchar_t kSingleInstanceMutexName[] =
     L"PaneDock-SingleInstanceMutex";
 constexpr DWORD kSingleInstanceWindowRetryIntervalMs = 50;
@@ -73,21 +75,6 @@ constexpr UINT kFileOperationFinishedMessage = WM_APP + 53;
 // returned, or until the Closing... caption has had one message-loop turn to
 // become visible.
 constexpr UINT kDeferredShutdownMessage = WM_APP + 54;
-constexpr wchar_t kTransferCloseDialogClassName[] =
-    L"PaneDockTransferCloseDialog";
-constexpr wchar_t kStartupNotificationClassName[] =
-    L"PaneDockStartupNotification";
-constexpr int kTransferCloseKeepOpenId = 1;
-constexpr int kTransferCloseAfterTransferId = 2;
-constexpr int kTransferCancelAndCloseId = 3;
-constexpr int kTransferCloseStatusId = 4;
-constexpr int kStartupNotificationTextId = 1;
-constexpr int kStartupNotificationOkId = 2;
-constexpr int kStartupNotificationWidth = 560;
-constexpr int kStartupNotificationMargin = 20;
-constexpr int kStartupNotificationButtonWidth = 88;
-constexpr int kStartupNotificationButtonHeight = 28;
-constexpr int kStartupNotificationButtonGap = 12;
 // PD-091: coalesce navigation completions without keeping a polling timer.
 constexpr UINT kSessionSaveDelayMilliseconds = 500;
 constexpr UINT_PTR kSessionSaveTimerId = 0xD050;
@@ -195,18 +182,8 @@ constexpr int kPinnedMenuManageOffset = kPinnedMenuAddOffset + 1;
 constexpr int kPinnedMenuSlotsPerPane = kPinnedMenuManageOffset + 1;
 constexpr int kPinnedMenuIdCount =
     static_cast<int>(kExplorerCount) * kPinnedMenuSlotsPerPane;
-constexpr int kPinnedLocationsListId = 1;
-constexpr int kPinnedLocationsRemoveId = 2;
-constexpr int kPinnedLocationsMoveUpId = 3;
-constexpr int kPinnedLocationsMoveDownId = 4;
-constexpr int kPinnedLocationsApplyId = 5;
-constexpr int kPinnedLocationsOkId = 6;
-constexpr int kPinnedLocationsCancelId = 7;
-constexpr std::size_t kPinnedLocationsButtonCount = 6;
 constexpr UINT_PTR kTabAddTooltipIdBase = 1000;
 constexpr UINT_PTR kTabScrollTooltipIdBase = 1010;
-constexpr int kPinnedLocationsWindowWidth = 440;
-constexpr int kPinnedLocationsWindowHeight = 320;
 constexpr std::array<std::wstring_view, 2> kPinnedFixedParsingNames{
     L"::{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}",
     L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"};
@@ -523,7 +500,7 @@ struct AppState {
     HWND main_window{nullptr};
     bool diagnostic_mode{};
     bool session_dirty{};
-    HWND transfer_close_dialog{nullptr};
+    panedock::app_shell::TransferCloseDialog transfer_close_dialog;
     // Set by WM_CREATE when the Shell view cannot be opened. Never raised as a
     // modal MessageBox from inside WM_CREATE (that nested loop could dispatch a
     // WM_CLOSE to a half-created HWND); shown by wWinMain after create returns.
@@ -533,8 +510,9 @@ struct AppState {
     // Shown by wWinMain after the window is created; never an inside-WM_CREATE
     // modal box. It remains pending until the modeless startup notification is
     // created or until a fatal pre-window path reports it synchronously.
-    std::wstring startup_warning_message;
-    HWND startup_notification{nullptr};
+    panedock::app_shell::StartupNotification startup_notification;
+    std::wstring& startup_warning_message =
+        startup_notification.warning_message();
     struct SidebarDrag final {
         int start_x{};
         int start_width{};
@@ -590,12 +568,7 @@ struct AppState {
     std::array<std::optional<std::size_t>, kExplorerCount>
         tab_scroll_hover_indices{};
     PaneWindowArray folder_context_buttons{};
-    HWND pinned_locations_window{nullptr};
-    HWND pinned_locations_list{nullptr};
-    std::array<HWND, kPinnedLocationsButtonCount>
-        pinned_locations_buttons{};
-    std::optional<panedock::core::ApplicationState>
-        pinned_locations_draft;
+    panedock::app_shell::PinnedLocationsDialog pinned_locations_dialog;
     std::array<std::wstring, kPinnedFixedParsingNames.size()>
         pinned_fixed_labels{};
     std::array<bool, kExplorerCount> suppress_history_record{};
@@ -608,17 +581,6 @@ struct AppState {
     std::array<Microsoft::WRL::ComPtr<DragHoverTarget>, kExplorerCount>
         tab_drag_targets{};
 };
-
-template <typename T>
-T* window_state_from_create(HWND window, LPARAM lparam) noexcept {
-    const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
-    auto* state =
-        create == nullptr ? nullptr : static_cast<T*>(create->lpCreateParams);
-    if (state != nullptr)
-        SetWindowLongPtrW(window, GWLP_USERDATA,
-                          reinterpret_cast<LONG_PTR>(state));
-    return state;
-}
 
 void begin_shutdown(HWND window, AppState& state, bool allow_keep_open) noexcept;
 void drag_state_changed(AppState& state, bool entering) noexcept;
@@ -2145,17 +2107,8 @@ void apply_ui_font(AppState& state) noexcept {
         state.pane_chrome[index].apply_font(font);
         set_ui_font(state.folder_context_buttons[index], font);
     }
-    set_ui_font(state.pinned_locations_list, font);
-    for (HWND button : state.pinned_locations_buttons)
-        set_ui_font(button, font);
-    if (state.startup_notification != nullptr) {
-        set_ui_font(GetDlgItem(state.startup_notification,
-                               kStartupNotificationTextId),
-                    font);
-        set_ui_font(GetDlgItem(state.startup_notification,
-                               kStartupNotificationOkId),
-                    font);
-    }
+    state.pinned_locations_dialog.apply_font(font);
+    state.startup_notification.apply_font(font);
 }
 
 void refresh_ui_font(HWND window, AppState& state) noexcept {
@@ -2434,10 +2387,7 @@ void cancel_session_save_timer(const AppState& state) noexcept {
 }
 
 void append_startup_warning(AppState& state, std::wstring_view warning) {
-    if (warning.empty()) return;
-    if (!state.startup_warning_message.empty())
-        state.startup_warning_message += L"\n\n";
-    state.startup_warning_message.append(warning);
+    state.startup_notification.append_warning(warning);
 }
 
 bool save_now(AppState& state, bool clean_shutdown = false,
@@ -2471,285 +2421,24 @@ void schedule_session_save(AppState& state) noexcept {
     }
 }
 
-panedock::core::ApplicationState& pinned_locations_manager_application(
-    AppState& state) noexcept {
-    return state.pinned_locations_draft.has_value()
-               ? *state.pinned_locations_draft
-               : state.application;
-}
-
-void refresh_pinned_locations_manager_buttons(AppState& state) noexcept {
-    if (state.pinned_locations_list == nullptr) return;
-    const auto& application = pinned_locations_manager_application(state);
-    const LRESULT selected = SendMessageW(
-        state.pinned_locations_list, LB_GETCURSEL, 0, 0);
-    const std::size_t index = selected >= 0
-                                  ? static_cast<std::size_t>(selected)
-                                  : application.pinned_locations.size();
-    const bool has_selection = index < application.pinned_locations.size();
-    EnableWindow(state.pinned_locations_buttons[0], has_selection);
-    EnableWindow(state.pinned_locations_buttons[1], has_selection && index > 0);
-    EnableWindow(state.pinned_locations_buttons[2],
-                 has_selection && index + 1 <
-                                      application.pinned_locations.size());
-    EnableWindow(state.pinned_locations_buttons[3],
-                 state.pinned_locations_draft.has_value() &&
-                     state.pinned_locations_draft->pinned_locations !=
-                         state.application.pinned_locations);
-    EnableWindow(state.pinned_locations_buttons[4], TRUE);
-    EnableWindow(state.pinned_locations_buttons[5], TRUE);
-}
-
-void refresh_pinned_locations_manager(
-    AppState& state,
-    std::optional<std::size_t> selected_index = std::nullopt) {
-    if (state.pinned_locations_list == nullptr) return;
-    const auto& application = pinned_locations_manager_application(state);
-    if (!selected_index.has_value()) {
-        const LRESULT selected = SendMessageW(
-            state.pinned_locations_list, LB_GETCURSEL, 0, 0);
-        if (selected >= 0)
-            selected_index = static_cast<std::size_t>(selected);
-    }
-
-    SendMessageW(state.pinned_locations_list, LB_RESETCONTENT, 0, 0);
-    for (const auto& pinned : application.pinned_locations) {
-        const std::wstring label =
-            display_text_for_parsing_name(state, pinned.parsing_name);
-        SendMessageW(state.pinned_locations_list, LB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(label.c_str()));
-    }
-    if (selected_index.has_value() &&
-        *selected_index < application.pinned_locations.size()) {
-        SendMessageW(state.pinned_locations_list, LB_SETCURSEL,
-                     static_cast<WPARAM>(*selected_index), 0);
-    }
-    refresh_pinned_locations_manager_buttons(state);
-}
-
-void layout_pinned_locations_manager(HWND window, AppState& state) noexcept {
-    if (window == nullptr || state.pinned_locations_list == nullptr) return;
-    const RECT client = client_rect(window);
-    const int width = std::max(0, static_cast<int>(client.right - client.left));
-    const int height = std::max(0, static_cast<int>(client.bottom - client.top));
-    const int margin = scaled_value(window, kSpaceBase);
-    const int gap = scaled_value(window, kSpaceSnug);
-    const int button_height = scaled_value(window, 28);
-    const int button_y = std::max(margin, height - margin - button_height);
-    const int list_bottom = std::max(margin, button_y - gap);
-    const int list_width = std::max(0, width - 2 * margin);
-    SetWindowPos(state.pinned_locations_list, nullptr, margin, margin,
-                 list_width, std::max(0, list_bottom - margin),
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-
-    const int button_count = static_cast<int>(kPinnedLocationsButtonCount);
-    const int available = std::max(
-        0, width - 2 * margin - (button_count - 1) * gap);
-    const int button_width = std::max(1, available / button_count);
-    int x = margin;
-    for (HWND button : state.pinned_locations_buttons) {
-        SetWindowPos(button, nullptr, x, button_y, button_width,
-                     button_height, SWP_NOZORDER | SWP_NOACTIVATE);
-        x += button_width + gap;
-    }
-}
-
-LRESULT CALLBACK pinned_locations_window_proc(HWND window, UINT message,
-                                               WPARAM wparam, LPARAM lparam) {
-    auto* state = reinterpret_cast<AppState*>(
-        GetWindowLongPtrW(window, GWLP_USERDATA));
-    if (message == WM_NCCREATE) {
-        state = window_state_from_create<AppState>(window, lparam);
-        if (state == nullptr) return FALSE;
-        state->pinned_locations_window = window;
-    }
-
-    if (state != nullptr && (state->closing_ || state->shutdown_deferred) &&
-        message != WM_PAINT && message != WM_ERASEBKGND &&
-        message != WM_CLOSE && message != WM_NCDESTROY)
-        return 0;
-
-    switch (message) {
-        case WM_CREATE: {
-            if (state == nullptr) return -1;
-            state->pinned_locations_list = CreateWindowExW(
-                WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
-                    LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
-                0, 0, 0, 0, window,
-                reinterpret_cast<HMENU>(kPinnedLocationsListId),
-                GetModuleHandleW(nullptr), nullptr);
-            if (state->pinned_locations_list == nullptr) return -1;
-
-            constexpr std::array<const wchar_t*, kPinnedLocationsButtonCount>
-                labels{L"Remove", L"Move Up", L"Move Down", L"Apply",
-                       L"OK", L"Cancel"};
-            constexpr std::array<int, kPinnedLocationsButtonCount> ids{
-                kPinnedLocationsRemoveId, kPinnedLocationsMoveUpId,
-                kPinnedLocationsMoveDownId, kPinnedLocationsApplyId,
-                kPinnedLocationsOkId, kPinnedLocationsCancelId};
-            for (std::size_t index = 0; index < labels.size(); ++index) {
-                state->pinned_locations_buttons[index] = CreateWindowExW(
-                    0, L"BUTTON", labels[index],
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0,
-                    0, 0, window, reinterpret_cast<HMENU>(ids[index]),
-                    GetModuleHandleW(nullptr), nullptr);
-                if (state->pinned_locations_buttons[index] == nullptr)
-                    return -1;
-            }
-            apply_ui_font(*state);
-            layout_pinned_locations_manager(window, *state);
-            refresh_pinned_locations_manager(*state);
-            return 0;
-        }
-        case WM_SIZE:
-            if (state != nullptr)
-                layout_pinned_locations_manager(window, *state);
-            return 0;
-        case WM_DPICHANGED: {
-            const auto* suggested = reinterpret_cast<const RECT*>(lparam);
-            if (suggested != nullptr) {
-                SetWindowPos(window, nullptr, suggested->left, suggested->top,
-                             suggested->right - suggested->left,
-                             suggested->bottom - suggested->top,
-                             SWP_NOZORDER | SWP_NOACTIVATE);
-            }
-            if (state != nullptr) {
-                apply_ui_font(*state);
-                layout_pinned_locations_manager(window, *state);
-            }
-            return 0;
-        }
-        case WM_COMMAND:
-            if (state == nullptr) break;
-            if (LOWORD(wparam) == kPinnedLocationsListId &&
-                HIWORD(wparam) == LBN_SELCHANGE) {
-                refresh_pinned_locations_manager_buttons(*state);
-                return 0;
-            }
-            if (HIWORD(wparam) != BN_CLICKED) break;
-            if (LOWORD(wparam) == kPinnedLocationsCancelId) {
-                state->pinned_locations_draft.reset();
-                DestroyWindow(window);
-                return 0;
-            }
-            if (LOWORD(wparam) == kPinnedLocationsApplyId ||
-                LOWORD(wparam) == kPinnedLocationsOkId) {
-                if (state->pinned_locations_draft.has_value()) {
-                    if (state->pinned_locations_draft->pinned_locations !=
-                        state->application.pinned_locations) {
-                        state->application.pinned_locations = std::move(
-                            state->pinned_locations_draft->pinned_locations);
-                        schedule_session_save(*state);
-                    }
-                    if (LOWORD(wparam) == kPinnedLocationsApplyId) {
-                        state->pinned_locations_draft = state->application;
-                        refresh_pinned_locations_manager(*state);
-                        return 0;
-                    }
-                    state->pinned_locations_draft.reset();
-                }
-                DestroyWindow(window);
-                return 0;
-            }
-
-            {
-                const LRESULT selected = SendMessageW(
-                    state->pinned_locations_list, LB_GETCURSEL, 0, 0);
-                if (selected == LB_ERR || selected < 0) return 0;
-                const std::size_t index = static_cast<std::size_t>(selected);
-                auto& application =
-                    pinned_locations_manager_application(*state);
-                bool changed = false;
-                std::optional<std::size_t> next_selection;
-                if (LOWORD(wparam) == kPinnedLocationsRemoveId) {
-                    changed = panedock::core::remove_pinned_location(
-                        application, index);
-                    if (changed && !application.pinned_locations.empty())
-                        next_selection = std::min(
-                            index,
-                            application.pinned_locations.size() - 1);
-                } else if (LOWORD(wparam) == kPinnedLocationsMoveUpId &&
-                           index > 0) {
-                    changed = panedock::core::reorder_pinned_location(
-                        application, index, index - 1);
-                    if (changed) next_selection = index - 1;
-                } else if (LOWORD(wparam) == kPinnedLocationsMoveDownId &&
-                           index + 1 < application.pinned_locations.size()) {
-                    changed = panedock::core::reorder_pinned_location(
-                        application, index, index + 1);
-                    if (changed) next_selection = index + 1;
-                }
-                if (changed)
-                    refresh_pinned_locations_manager(*state, next_selection);
-            }
-            return 0;
-        case WM_CLOSE:
-            DestroyWindow(window);
-            return 0;
-        case WM_NCDESTROY:
-            if (state != nullptr && state->pinned_locations_window == window) {
-                state->pinned_locations_window = nullptr;
-                state->pinned_locations_list = nullptr;
-                state->pinned_locations_buttons.fill(nullptr);
-                state->pinned_locations_draft.reset();
-                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-            }
-            break;
-        default:
-            break;
-    }
-    return DefWindowProcW(window, message, wparam, lparam);
-}
-
-void destroy_pinned_locations_manager(AppState& state) noexcept {
-    if (state.pinned_locations_window != nullptr)
-        DestroyWindow(state.pinned_locations_window);
+void apply_pinned_locations_dialog_result(AppState& state) noexcept {
+    auto result = state.pinned_locations_dialog.take_result();
+    if (!result.has_value() ||
+        result->pinned_locations == state.application.pinned_locations)
+        return;
+    state.application.pinned_locations = std::move(result->pinned_locations);
+    schedule_session_save(state);
 }
 
 void show_pinned_locations_manager(HWND owner, AppState& state) {
-    if (state.pinned_locations_window != nullptr) {
-        refresh_pinned_locations_manager(state);
-        ShowWindow(state.pinned_locations_window, SW_SHOWNORMAL);
-        SetForegroundWindow(state.pinned_locations_window);
-        SetFocus(state.pinned_locations_list);
-        return;
-    }
-
-    const UINT owner_dpi = owner == nullptr ? 96 : GetDpiForWindow(owner);
-    const UINT dpi = owner_dpi == 0 ? 96 : owner_dpi;
-    const int width = MulDiv(kPinnedLocationsWindowWidth,
-                             static_cast<int>(dpi), 96);
-    const int height = MulDiv(kPinnedLocationsWindowHeight,
-                              static_cast<int>(dpi), 96);
-    state.pinned_locations_draft = state.application;
-    HWND manager = CreateWindowExW(
-        WS_EX_TOOLWINDOW | WS_EX_CONTROLPARENT,
-        kPinnedLocationsWindowClassName, L"Manage Pinned Locations",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU, 0, 0, width, height, owner,
-        nullptr, GetModuleHandleW(nullptr), &state);
-    if (manager == nullptr) {
-        state.pinned_locations_draft.reset();
-        return;
-    }
-
-    RECT owner_rect{};
-    int x = 0;
-    int y = 0;
-    if (owner != nullptr && GetWindowRect(owner, &owner_rect)) {
-        x = owner_rect.left +
-            std::max(0, (static_cast<int>(owner_rect.right - owner_rect.left) -
-                         width) / 2);
-        y = owner_rect.top +
-            std::max(0, (static_cast<int>(owner_rect.bottom - owner_rect.top) -
-                         height) / 2);
-    }
-    SetWindowPos(manager, HWND_TOP, x, y, width, height,
-                 SWP_NOACTIVATE);
-    ShowWindow(manager, SW_SHOWNORMAL);
-    UpdateWindow(manager);
-    SetForegroundWindow(manager);
-    SetFocus(state.pinned_locations_list);
+    std::vector<std::wstring> display_labels;
+    display_labels.reserve(state.application.pinned_locations.size());
+    for (const auto& pinned : state.application.pinned_locations)
+        display_labels.push_back(
+            display_text_for_parsing_name(state, pinned.parsing_name));
+    state.pinned_locations_dialog.show(owner, state.application,
+                                      std::move(display_labels),
+                                      state.chrome_font);
 }
 
 void handle_navigation_complete(
@@ -3665,11 +3354,12 @@ void add_current_folder(AppState& state, std::size_t pane_index) {
         active_tab(active_group(state).panes[pane_index]).location;
     if (panedock::core::add_pinned_location(state.application,
                                             current_location)) {
-        if (state.pinned_locations_draft.has_value())
-            (void)panedock::core::add_pinned_location(
-                *state.pinned_locations_draft, current_location);
         schedule_session_save(state);
-        refresh_pinned_locations_manager(state);
+        if (state.pinned_locations_dialog.is_open())
+            state.pinned_locations_dialog.add_location(
+                current_location,
+                display_text_for_parsing_name(state,
+                                              current_location.parsing_name));
     }
 }
 
@@ -4640,314 +4330,11 @@ void set_main_window_title(HWND window, bool diagnostic_mode,
                  RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME);
 }
 
-void layout_startup_notification(HWND window) noexcept {
-    if (window == nullptr) return;
-    const UINT dpi = std::max<UINT>(96, GetDpiForWindow(window));
-    const auto scaled = [dpi](int value) {
-        return MulDiv(value, static_cast<int>(dpi), 96);
-    };
-    RECT client{};
-    if (!GetClientRect(window, &client)) return;
-    const int margin = scaled(kStartupNotificationMargin);
-    const int gap = scaled(kStartupNotificationButtonGap);
-    const int button_width = scaled(kStartupNotificationButtonWidth);
-    const int button_height = scaled(kStartupNotificationButtonHeight);
-    const int button_x = std::max(
-        margin, static_cast<int>(client.right) - margin - button_width);
-    const int button_y = std::max(
-        margin, static_cast<int>(client.bottom) - margin - button_height);
-    const int text_width = std::max(
-        1, static_cast<int>(client.right) - 2 * margin);
-    const int text_height = std::max(1, button_y - margin - gap);
-    SetWindowPos(GetDlgItem(window, kStartupNotificationTextId), nullptr,
-                 margin, margin, text_width, text_height,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-    SetWindowPos(GetDlgItem(window, kStartupNotificationOkId), nullptr,
-                 button_x, button_y, button_width, button_height,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-}
-
-int startup_notification_height(HWND owner, const AppState& state,
-                                int width) noexcept {
-    const UINT dpi = std::max<UINT>(96, GetDpiForWindow(owner));
-    const auto scaled = [dpi](int value) {
-        return MulDiv(value, static_cast<int>(dpi), 96);
-    };
-    const int margin = scaled(kStartupNotificationMargin);
-    int text_height = scaled(64);
-    HDC dc = GetDC(owner);
-    if (dc != nullptr) {
-        const HGDIOBJ old_font =
-            state.chrome_font == nullptr
-                ? nullptr
-                : SelectObject(dc, state.chrome_font);
-        RECT text{0, 0, std::max(1, width - 2 * margin), scaled(1000)};
-        if (DrawTextW(dc, state.startup_warning_message.c_str(), -1, &text,
-                      DT_CALCRECT | DT_NOPREFIX | DT_WORDBREAK) != 0)
-            text_height = std::max(text_height, static_cast<int>(text.bottom));
-        if (old_font != nullptr) SelectObject(dc, old_font);
-        ReleaseDC(owner, dc);
-    }
-    return margin + text_height + scaled(kStartupNotificationButtonGap) +
-           scaled(kStartupNotificationButtonHeight) + margin;
-}
-
-LRESULT CALLBACK startup_notification_proc(HWND window, UINT message,
-                                           WPARAM wparam, LPARAM lparam) {
-    auto* state = reinterpret_cast<AppState*>(
-        GetWindowLongPtrW(window, GWLP_USERDATA));
-    if (message == WM_NCCREATE) {
-        state = window_state_from_create<AppState>(window, lparam);
-        if (state == nullptr) return FALSE;
-    }
-
-    switch (message) {
-        case WM_CREATE: {
-            if (state == nullptr) return -1;
-            const HINSTANCE instance = GetModuleHandleW(nullptr);
-            const HWND text = CreateWindowExW(
-                0, L"STATIC", state->startup_warning_message.c_str(),
-                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX, 0, 0, 0, 0,
-                window,
-                reinterpret_cast<HMENU>(
-                    static_cast<INT_PTR>(kStartupNotificationTextId)),
-                instance, nullptr);
-            const HWND ok = CreateWindowExW(
-                0, L"BUTTON", L"OK",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 0, 0,
-                0, 0, window,
-                reinterpret_cast<HMENU>(
-                    static_cast<INT_PTR>(kStartupNotificationOkId)),
-                instance, nullptr);
-            if (text == nullptr || ok == nullptr) return -1;
-            if (state->chrome_font != nullptr) {
-                SendMessageW(text, WM_SETFONT,
-                             reinterpret_cast<WPARAM>(state->chrome_font),
-                             TRUE);
-                SendMessageW(ok, WM_SETFONT,
-                             reinterpret_cast<WPARAM>(state->chrome_font),
-                             TRUE);
-            }
-            layout_startup_notification(window);
-            return 0;
-        }
-        case WM_SIZE:
-            layout_startup_notification(window);
-            return 0;
-        case WM_DPICHANGED: {
-            const auto* suggested = reinterpret_cast<const RECT*>(lparam);
-            if (suggested != nullptr)
-                SetWindowPos(window, nullptr, suggested->left, suggested->top,
-                             suggested->right - suggested->left,
-                             suggested->bottom - suggested->top,
-                             SWP_NOZORDER | SWP_NOACTIVATE);
-            layout_startup_notification(window);
-            return 0;
-        }
-        case WM_COMMAND:
-            if (state != nullptr &&
-                LOWORD(wparam) == kStartupNotificationOkId &&
-                HIWORD(wparam) == BN_CLICKED) {
-                state->startup_warning_message.clear();
-                DestroyWindow(window);
-                return 0;
-            }
-            break;
-        case WM_CLOSE:
-            // The recoverable notification has one explicit acknowledgement;
-            // the main window's close path destroys it during shutdown.
-            return 0;
-        case WM_NCDESTROY:
-            if (state != nullptr && state->startup_notification == window) {
-                state->startup_notification = nullptr;
-                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-            }
-            break;
-        default:
-            break;
-    }
-    return DefWindowProcW(window, message, wparam, lparam);
-}
-
 void show_startup_notification(HWND owner, AppState& state) noexcept {
     if (owner == nullptr || state.startup_warning_message.empty() ||
         state.closing_ || state.quit_requested)
         return;
-    if (state.startup_notification != nullptr) {
-        const HWND text =
-            GetDlgItem(state.startup_notification, kStartupNotificationTextId);
-        if (text != nullptr) {
-            SetWindowTextW(text, state.startup_warning_message.c_str());
-            UpdateWindow(text);
-        }
-        return;
-    }
-
-    const UINT dpi = std::max<UINT>(96, GetDpiForWindow(owner));
-    const auto scaled = [dpi](int value) {
-        return MulDiv(value, static_cast<int>(dpi), 96);
-    };
-    const int width = scaled(kStartupNotificationWidth);
-    const int height = startup_notification_height(owner, state, width);
-    // Keep this notification as a child of the root. A visible top-level
-    // warning window can be mistaken for Process.MainWindowHandle, causing a
-    // close request from the smoke test or a second instance to miss the root.
-    HWND dialog = CreateWindowExW(
-        WS_EX_CLIENTEDGE | WS_EX_CONTROLPARENT, kStartupNotificationClassName,
-        nullptr, WS_CHILD | WS_VISIBLE, 0, 0, width, height, owner,
-        nullptr, GetModuleHandleW(nullptr), &state);
-    if (dialog == nullptr) {
-        OutputDebugStringW(
-            L"PaneDock: could not create startup notification\n");
-        return;
-    }
-
-    RECT client_rect{};
-    int x = 0;
-    int y = 0;
-    if (GetClientRect(owner, &client_rect)) {
-        x = std::max(0, (static_cast<int>(client_rect.right) - width) / 2);
-        y = std::max(0, (static_cast<int>(client_rect.bottom) - height) / 2);
-    }
-    state.startup_notification = dialog;
-    SetWindowPos(dialog, HWND_TOP, x, y, width, height,
-                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    UpdateWindow(dialog);
-}
-
-LRESULT CALLBACK transfer_close_dialog_proc(HWND window, UINT message,
-                                            WPARAM wparam, LPARAM lparam) {
-    auto* state = reinterpret_cast<AppState*>(
-        GetWindowLongPtrW(window, GWLP_USERDATA));
-    if (message == WM_NCCREATE) {
-        state = window_state_from_create<AppState>(window, lparam);
-    }
-
-    switch (message) {
-        case WM_CREATE: {
-            if (state == nullptr) return -1;
-            const UINT dpi = GetDpiForWindow(window);
-            const auto scaled = [dpi](int value) {
-                return MulDiv(value, static_cast<int>(dpi), 96);
-            };
-            HINSTANCE instance = GetModuleHandleW(nullptr);
-            CreateWindowExW(
-                0, L"STATIC", L"A file transfer is still running.",
-                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
-                scaled(16), scaled(18), scaled(480), scaled(28), window,
-                reinterpret_cast<HMENU>(static_cast<INT_PTR>(
-                    kTransferCloseStatusId)),
-                instance, nullptr);
-            CreateWindowExW(
-                0, L"BUTTON", L"Keep PaneDock Open",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                scaled(16), scaled(92), scaled(140), scaled(32), window,
-                reinterpret_cast<HMENU>(static_cast<INT_PTR>(
-                    kTransferCloseKeepOpenId)),
-                instance, nullptr);
-            CreateWindowExW(
-                0, L"BUTTON", L"Close After Transfer",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                scaled(164), scaled(92), scaled(150), scaled(32), window,
-                reinterpret_cast<HMENU>(static_cast<INT_PTR>(
-                    kTransferCloseAfterTransferId)),
-                instance, nullptr);
-            CreateWindowExW(
-                0, L"BUTTON", L"Cancel Transfer and Close",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                scaled(322), scaled(92), scaled(182), scaled(32), window,
-                reinterpret_cast<HMENU>(static_cast<INT_PTR>(
-                    kTransferCancelAndCloseId)),
-                instance, nullptr);
-            SetFocus(GetDlgItem(window, kTransferCloseAfterTransferId));
-            return 0;
-        }
-        case WM_COMMAND:
-            if (state == nullptr) break;
-            switch (LOWORD(wparam)) {
-                case kTransferCloseKeepOpenId:
-                    state->shutdown_sequence.step(
-                        panedock::core::ShutdownEvent::transfer_keep_open);
-                    DestroyWindow(window);
-                    return 0;
-                case kTransferCloseAfterTransferId:
-                    state->shutdown_sequence.step(
-                        panedock::core::ShutdownEvent::
-                            transfer_close_after_transfer);
-                    DestroyWindow(window);
-                    complete_deferred_close(state->main_window, *state);
-                    return 0;
-                case kTransferCancelAndCloseId:
-                    state->shutdown_sequence.step(
-                        panedock::core::ShutdownEvent::
-                            transfer_cancel_and_close);
-                    SetWindowTextW(
-                        GetDlgItem(window, kTransferCloseStatusId),
-                        L"Cancelling transfer...");
-                    EnableWindow(GetDlgItem(window, kTransferCloseKeepOpenId),
-                                 FALSE);
-                    EnableWindow(
-                        GetDlgItem(window, kTransferCloseAfterTransferId),
-                        FALSE);
-                    EnableWindow(GetDlgItem(window, kTransferCancelAndCloseId),
-                                 FALSE);
-                    return 0;
-                default:
-                    break;
-            }
-            break;
-        case WM_CLOSE:
-            if (state != nullptr)
-                state->shutdown_sequence.step(
-                    panedock::core::ShutdownEvent::transfer_keep_open);
-            DestroyWindow(window);
-            return 0;
-        case WM_NCDESTROY:
-            if (state != nullptr && state->transfer_close_dialog == window) {
-                state->transfer_close_dialog = nullptr;
-                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-            }
-            break;
-        default:
-            break;
-    }
-    return DefWindowProcW(window, message, wparam, lparam);
-}
-
-void show_transfer_close_dialog(HWND owner, AppState& state) noexcept {
-    if (state.transfer_close_dialog != nullptr) {
-        SetForegroundWindow(state.transfer_close_dialog);
-        return;
-    }
-    const UINT dpi = GetDpiForWindow(owner);
-    const int width = MulDiv(520, static_cast<int>(dpi), 96);
-    const int height = MulDiv(170, static_cast<int>(dpi), 96);
-    HWND dialog = CreateWindowExW(
-        WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-        kTransferCloseDialogClassName, L"File transfer in progress",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU, 0, 0, width, height, owner,
-        nullptr, GetModuleHandleW(nullptr), &state);
-    if (dialog == nullptr) return;
-
-    RECT owner_rect{};
-    int x = 0;
-    int y = 0;
-    if (GetWindowRect(owner, &owner_rect)) {
-        x = owner_rect.left +
-            std::max(0, (static_cast<int>(owner_rect.right - owner_rect.left) -
-                         width) /
-                        2);
-        y = owner_rect.top +
-            std::max(0, (static_cast<int>(owner_rect.bottom - owner_rect.top) -
-                         height) /
-                        2);
-    }
-    state.transfer_close_dialog = dialog;
-    SetWindowPos(dialog, HWND_TOP, x, y, width, height,
-                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    ShowWindow(dialog, SW_SHOWNORMAL);
-    UpdateWindow(dialog);
-    SetForegroundWindow(dialog);
+    state.startup_notification.show(owner, state.chrome_font);
 }
 
 void finish_shutdown(HWND window, AppState& state) noexcept {
@@ -4961,11 +4348,9 @@ void finish_shutdown(HWND window, AppState& state) noexcept {
     set_main_window_title(window, state.diagnostic_mode, true);
     state.startup_realize_pending = false;
     ++state.startup_realize_generation;
-    if (state.transfer_close_dialog != nullptr)
-        DestroyWindow(state.transfer_close_dialog);
-    if (state.startup_notification != nullptr)
-        DestroyWindow(state.startup_notification);
-    destroy_pinned_locations_manager(state);
+    state.transfer_close_dialog.destroy();
+    state.startup_notification.destroy();
+    state.pinned_locations_dialog.destroy();
     revoke_drag_hover_targets(state);
     cancel_session_save_timer(state);
     destroy_explorers(state);
@@ -4999,7 +4384,7 @@ void run_shutdown_action(HWND window, AppState& state,
             return;
 
         case panedock::core::ShutdownAction::prompt_transfer:
-            show_transfer_close_dialog(window, state);
+            state.transfer_close_dialog.show(window);
             return;
 
         case panedock::core::ShutdownAction::save_session: {
@@ -5064,9 +4449,30 @@ void complete_deferred_close(HWND window, AppState& state) noexcept {
         state.file_operation_call_active || state.file_operation_in_progress ||
         state.closing_ || window == nullptr)
         return;
-    if (state.transfer_close_dialog != nullptr)
-        DestroyWindow(state.transfer_close_dialog);
+    state.transfer_close_dialog.destroy();
     begin_shutdown(window, state, !state.end_session_pending);
+}
+
+void handle_transfer_close_dialog_result(HWND window, AppState& state) noexcept {
+    const auto result = state.transfer_close_dialog.take_result();
+    if (!result.has_value()) return;
+    switch (*result) {
+        case panedock::app_shell::TransferCloseDialog::Result::keep_open:
+            state.shutdown_sequence.step(
+                panedock::core::ShutdownEvent::transfer_keep_open);
+            return;
+        case panedock::app_shell::TransferCloseDialog::Result::
+            close_after_transfer:
+            state.shutdown_sequence.step(
+                panedock::core::ShutdownEvent::transfer_close_after_transfer);
+            complete_deferred_close(window, state);
+            return;
+        case panedock::app_shell::TransferCloseDialog::Result::
+            cancel_and_close:
+            state.shutdown_sequence.step(
+                panedock::core::ShutdownEvent::transfer_cancel_and_close);
+            return;
+    }
 }
 
 void file_operation_started(void* context) noexcept {
@@ -5754,7 +5160,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
     auto* state = reinterpret_cast<AppState*>(
         GetWindowLongPtrW(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
-        state = window_state_from_create<AppState>(window, lparam);
+        state = panedock::app_shell::window_state_from_create<AppState>(
+            window, lparam);
         if (state == nullptr) return FALSE;
         state->main_window = window;
     }
@@ -6078,6 +5485,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state != nullptr)
                 complete_deferred_close(window, *state);
             return 0;
+        case panedock::app_shell::kTransferCloseDialogResultMessage:
+            if (state != nullptr)
+                handle_transfer_close_dialog_result(window, *state);
+            return 0;
         case WM_CLOSE:
             if (state != nullptr)
                 run_shutdown_action(
@@ -6093,7 +5504,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     panedock::core::ShutdownEvent::window_destroyed);
                 state->startup_realize_pending = false;
                 ++state->startup_realize_generation;
-                destroy_pinned_locations_manager(*state);
+                state->pinned_locations_dialog.destroy();
                 revoke_drag_hover_targets(*state);
                 cancel_session_save_timer(*state);
                 if (state->session_dirty && !state->shutdown_save_attempted) {
@@ -6139,46 +5550,20 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
 }
 
 bool register_window_class(HINSTANCE instance) noexcept {
-    WNDCLASSEXW manager_class{};
-    manager_class.cbSize = sizeof(manager_class);
-    manager_class.hInstance = instance;
-    manager_class.lpfnWndProc = pinned_locations_window_proc;
-    manager_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    manager_class.hbrBackground =
-        reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    manager_class.lpszClassName = kPinnedLocationsWindowClassName;
-    if (RegisterClassExW(&manager_class) == 0) return false;
-
-    WNDCLASSEXW transfer_class{};
-    transfer_class.cbSize = sizeof(transfer_class);
-    transfer_class.hInstance = instance;
-    transfer_class.lpfnWndProc = transfer_close_dialog_proc;
-    transfer_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    transfer_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    transfer_class.lpszClassName = kTransferCloseDialogClassName;
-    if (RegisterClassExW(&transfer_class) == 0) return false;
-
-    WNDCLASSEXW startup_notification_class{};
-    startup_notification_class.cbSize = sizeof(startup_notification_class);
-    startup_notification_class.hInstance = instance;
-    startup_notification_class.lpfnWndProc = startup_notification_proc;
-    startup_notification_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    startup_notification_class.hbrBackground =
-        reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    startup_notification_class.lpszClassName = kStartupNotificationClassName;
-    if (RegisterClassExW(&startup_notification_class) == 0) return false;
-
-    WNDCLASSEXW window_class{};
-    window_class.cbSize = sizeof(window_class);
-    window_class.style = CS_DBLCLKS;
-    window_class.hInstance = instance;
-    window_class.lpfnWndProc = window_proc;
-    window_class.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
-    window_class.hIconSm = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
-    window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    window_class.lpszClassName = kWindowClassName;
-    return RegisterClassExW(&window_class) != 0;
+    if (!panedock::app_shell::PinnedLocationsDialog::register_window_class(
+            instance))
+        return false;
+    if (!panedock::app_shell::TransferCloseDialog::register_window_class(
+            instance))
+        return false;
+    if (!panedock::app_shell::StartupNotification::register_window_class(
+            instance))
+        return false;
+    return panedock::app_shell::register_simple_window_class(
+        kWindowClassName, window_proc, instance,
+        reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1), CS_DBLCLKS,
+        LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON)),
+        LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON)));
 }
 
 bool activate_main_window_on_own_thread(HWND window) noexcept {
@@ -6571,6 +5956,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         }
         TranslateMessage(&message);
         DispatchMessageW(&message);
+        apply_pinned_locations_dialog_result(state);
+        handle_transfer_close_dialog_result(window, state);
         // win32: a nested modal loop can consume the WM_QUIT posted in
         // WM_CLOSE/WM_DESTROY. Exit on the flag so a close issued from inside a
         // shell popup / context menu still terminates the process.
@@ -6579,7 +5966,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     exit_code = result < 0 ? 1 : static_cast<int>(message.wParam);
     if (state.quit_requested) exit_code = 0;
 
-    destroy_pinned_locations_manager(state);
+    state.pinned_locations_dialog.destroy();
     destroy_explorers(state);
     assert(panedock::explorer_host::live_view_count() == 0);
     OleUninitialize();

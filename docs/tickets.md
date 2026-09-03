@@ -217,7 +217,7 @@
 | PD-177 | Shutdown 恢復條件在 shell_call_left/drag_finished 各自只檢查一部分，收斂為共用 predicate | 7 | `done` | PD-172, PD-173 | [PD-177](tickets/PD-177-shutdown-gate-conditions-duplicated-across-call-sites.md) |
 | PD-178 | 以 `decode_pane_control` 純函式取代 15 處 control ID 算術，並清掉五組逐字複製 | 7 | `done` | PD-161, PD-163 | [PD-178](tickets/PD-178-pane-control-id-decode-and-mechanical-dedup.md) |
 | PD-179 | 把 `window_proc` 的巨型 case 依所有權域拆成具名函式 | 7 | `done` | PD-178 | [PD-179](tickets/PD-179-split-window-proc-cases-by-ownership-domain.md) |
-| PD-180 | 把三個對話框搬出 `main.cpp`，並收斂 window class 註冊樣板 | 7 | `planned` | PD-179 | [PD-180](tickets/PD-180-extract-dialogs-from-main.md) |
+| PD-180 | 把三個對話框搬出 `main.cpp`，並收斂 window class 註冊樣板 | 7 | `done` | PD-179 | [PD-180](tickets/PD-180-extract-dialogs-from-main.md) |
 | PD-181 | 把 error window 從 `ExplorerHost` 抽成獨立的 `PaneErrorOverlay` | 7 | `planned` | PD-180 | [PD-181](tickets/PD-181-extract-pane-error-overlay-from-explorer-host.md) |
 | PD-182 | `PaneChrome` 升級為 `Pane`，接手六個純 UI 的 pane-parallel 欄位 | 7 | `planned` | PD-163, PD-178, PD-179 | [PD-182](tickets/PD-182-pane-type-owns-ui-state.md) |
 | PD-183 | `Pane` 接手 `ExplorerHost`，把 §9.4 的 destroy 順序變成解構子不變量 | 7 | `planned` | PD-182 | [PD-183](tickets/PD-183-pane-owns-explorer-host-lifetime.md) |

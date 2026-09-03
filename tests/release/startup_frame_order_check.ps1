@@ -4,7 +4,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$source = Get-Content -LiteralPath $SourcePath -Raw
+$source = ($SourcePath -split ',' | ForEach-Object {
+    Get-Content -LiteralPath $_ -Raw
+}) -join "`n"
 
 function Assert-Source([string] $Pattern, [string] $Name) {
     if ($source -notmatch $Pattern) {
@@ -26,7 +28,7 @@ Assert-Source 'bool\s+startup_frame_only\{\};' 'frame-only state exists'
 Assert-Source 'void\s+append_startup_warning\(AppState& state,\s*std::wstring_view warning\)' 'startup warnings have an append path'
 Assert-Source 'void\s+show_startup_notification\(HWND owner,\s*AppState& state\)' 'recoverable startup warnings have a modeless notification path'
 Assert-Source 'L"BUTTON", L"OK"' 'startup notification has an explicit OK action'
-Assert-Source 'kStartupNotificationClassName,[\s\S]*?nullptr, WS_CHILD \| WS_VISIBLE' 'startup notification remains a root child'
+Assert-Source 'constexpr wchar_t kWindowClassName\[\]\s*=\s*L"PaneDockStartupNotification"[\s\S]*?kWindowClassName,\s*nullptr,\s*WS_CHILD\s*\|\s*WS_VISIBLE' 'startup notification remains a root child'
 Assert-Source 'RealizationMode::startup_frame' 'WM_CREATE blocks Shell realization through the core plan'
 Assert-Source 'plan_realization\(\s*group,\s*group\.layout_template,\s*state\.realized,\s*realization_mode\s*\)' 'layout consumes the shared realization plan'
 Assert-Source 'if\s*\(plan_contains\(realization_plan\.realize,\s*index\)\)' 'layout executes planned realization only'
@@ -99,7 +101,7 @@ if ($postWindowStartup -match 'MessageBoxW' -or
 
 $shutdownStart = $source.IndexOf('void finish_shutdown(HWND window, AppState& state)')
 $explorerDestroy = $source.IndexOf('destroy_explorers(state);', $shutdownStart)
-$notificationDestroy = $source.IndexOf('DestroyWindow(state.startup_notification)', $shutdownStart)
+$notificationDestroy = $source.IndexOf('state.startup_notification.destroy();', $shutdownStart)
 if ($shutdownStart -lt 0 -or $notificationDestroy -lt 0 -or
     $explorerDestroy -lt 0 -or $notificationDestroy -gt $explorerDestroy) {
     throw 'startup frame order check failed: shutdown does not destroy notification before Shell views'

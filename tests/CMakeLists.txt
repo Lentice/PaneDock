@@ -45,7 +45,7 @@ if(WIN32)
         NAME panedock_shutdown_state
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
                 "${CMAKE_CURRENT_SOURCE_DIR}/release/shutdown_state_check.ps1"
-                -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp")
+                -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp,${PROJECT_SOURCE_DIR}/src/app_shell/transfer_close_dialog.cpp")
     add_test(
         NAME panedock_single_instance_relay
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
@@ -69,7 +69,7 @@ if(WIN32)
         NAME panedock_startup_frame_order
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
                 "${CMAKE_CURRENT_SOURCE_DIR}/release/startup_frame_order_check.ps1"
-                -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp")
+                -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp,${PROJECT_SOURCE_DIR}/src/app_shell/startup_notification.cpp")
     add_test(
         NAME panedock_launch_smoke
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File

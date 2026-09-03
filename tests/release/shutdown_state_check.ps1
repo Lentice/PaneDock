@@ -5,7 +5,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$source = Get-Content -LiteralPath $SourcePath -Raw
+$source = ($SourcePath -split ',' | ForEach-Object {
+    Get-Content -LiteralPath $_ -Raw
+}) -join "`n"
 $shutdownHeader = Get-Content -LiteralPath $ShutdownHeaderPath -Raw
 $shutdownSource = Get-Content -LiteralPath $ShutdownSourcePath -Raw
 
@@ -49,6 +51,10 @@ Assert-Shutdown 'state_\.shutdown_deferred\s*=\s*true;' `
     'reducer records deferred shutdown'
 Assert-Source 'set_main_window_title\(window, state\.diagnostic_mode, true\);[\s\S]*?PostMessageW\(window, kDeferredShutdownMessage' `
     'closing state yields to the message loop before teardown'
+Assert-Source 'state\.transfer_close_dialog\.show\(window\)' `
+    'transfer prompt is owned by its dialog module'
+Assert-Source 'void\s+handle_transfer_close_dialog_result\(HWND window, AppState& state\)[\s\S]*?take_result\(\)' `
+    'transfer choice is reduced by the app shell coordinator'
 Assert-Source 'if \(answer != IDNO\)\s*\{[\s\S]*?ShutdownEvent::save_keep_open[\s\S]*?return;' `
     'only explicit No closes after an interactive failure'
 Assert-Shutdown 'case ShutdownEvent::save_keep_open:[\s\S]*?state_\.shutdown_save_attempted = false;' `
