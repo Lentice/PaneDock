@@ -66,4 +66,64 @@ if ($source -match 'save_now\(\s*(?:state|\*state),\s*true') {
     throw 'shutdown state invariant failed: save_now writes true before teardown'
 }
 
+function Get-FunctionSource([string] $Start, [string] $Name) {
+    $startIndex = $source.IndexOf($Start)
+    if ($startIndex -lt 0) {
+        throw "session save debounce check failed: $Name is missing"
+    }
+    $bodyStart = $source.IndexOf('{', $startIndex)
+    if ($bodyStart -lt 0) {
+        throw "session save debounce check failed: $Name body is missing"
+    }
+    $end = [regex]::Match($source.Substring($bodyStart), '\r?\n}\r?\n\r?\n')
+    if (-not $end.Success) {
+        throw "session save debounce check failed: $Name body end is missing"
+    }
+    return $source.Substring($startIndex, $bodyStart + $end.Index - $startIndex)
+}
+
+function Assert-DebouncedFunction([string] $Start, [string] $Name) {
+    $body = Get-FunctionSource $Start $Name
+    if ($body -notmatch 'schedule_session_save\(' -or
+        $body -match 'save_now\(') {
+        throw "session save debounce check failed: $Name writes synchronously"
+    }
+}
+
+Assert-DebouncedFunction 'void switch_active_tab(HWND, AppState& state' `
+    'switch_active_tab'
+Assert-DebouncedFunction 'void add_tab_to_pane(' 'add_tab_to_pane'
+Assert-DebouncedFunction 'void close_tab_in_pane(' 'close_tab_in_pane'
+Assert-DebouncedFunction 'void delete_group(' 'delete_group'
+Assert-DebouncedFunction 'void move_group(' 'move_group'
+Assert-DebouncedFunction 'void set_active_pane(' 'set_active_pane'
+Assert-DebouncedFunction 'void set_pane_view_mode(' 'set_pane_view_mode'
+Assert-DebouncedFunction 'void add_current_folder(' 'add_current_folder'
+Assert-DebouncedFunction 'void set_layout(' 'set_layout'
+Assert-DebouncedFunction 'void finish_tab_drag(' 'finish_tab_drag'
+Assert-DebouncedFunction 'void finish_group_drag(' 'finish_group_drag'
+
+$directSaveCalls = [regex]::Matches($source, 'save_now\((?:state|\*state)')
+if ($directSaveCalls.Count -ne 5) {
+    throw "session save debounce check failed: expected 5 synchronous save sites, found $($directSaveCalls.Count)"
+}
+
+$timerStart = $source.IndexOf('if (timer == kSessionSaveTimerId)')
+$timerEnd = $source.IndexOf(
+    'if (timer == kDragHoverSidebarTimerId', $timerStart)
+if ($timerStart -lt 0 -or $timerEnd -lt 0) {
+    throw 'session save debounce check failed: session save timer branch is missing'
+}
+$timerBody = $source.Substring($timerStart, $timerEnd - $timerStart)
+$timerWrites = [regex]::Matches($timerBody, 'save_now\(').Count
+if ($timerWrites -ne 1 -or $timerBody -notmatch 'KillTimer\(window, kSessionSaveTimerId\)') {
+    throw 'session save debounce check failed: timer does not perform one post-debounce write'
+}
+
+$simulatedBurstSize = 5
+if ($timerWrites -ge $simulatedBurstSize) {
+    throw 'session save debounce check failed: a five-operation burst is not coalesced'
+}
+
+Write-Output 'PASSED: session_save_debounce_check'
 Write-Output 'PASSED: shutdown_state_check'

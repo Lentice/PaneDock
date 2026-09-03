@@ -2672,7 +2672,7 @@ LRESULT CALLBACK pinned_locations_window_proc(HWND window, UINT message,
                         state->application.pinned_locations) {
                         state->application.pinned_locations = std::move(
                             state->pinned_locations_draft->pinned_locations);
-                        save_now(*state);
+                        schedule_session_save(*state);
                     }
                     if (LOWORD(wparam) == kPinnedLocationsApplyId) {
                         state->pinned_locations_draft = state->application;
@@ -3296,7 +3296,7 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
     refresh_sidebar(state);
     // Group switches can be triggered from the OLE drag-hover message. Keep
     // the session flush out of that interaction path; shutdown still forces
-    // the dirty state through save_now().
+    // the dirty state through a synchronous save.
     schedule_session_save(state);
 }
 
@@ -3343,7 +3343,7 @@ void add_group(HWND window, AppState& state) {
         }
         if (state.shutdown_deferred || state.closing_) return;
         refresh_sidebar(state);
-        save_now(state);
+        schedule_session_save(state);
         return;
     }
     activate_group(window, state, state.application.groups.size() - 1);
@@ -3388,7 +3388,7 @@ void delete_group(HWND window, AppState& state) {
     }
     if (state.shutdown_deferred || state.closing_) return;
     refresh_sidebar(state);
-    save_now(state);
+    schedule_session_save(state);
 }
 
 void move_group(AppState& state, bool down) {
@@ -3400,7 +3400,7 @@ void move_group(AppState& state, bool down) {
     const std::size_t target = down ? *selected + 1 : *selected - 1;
     if (!panedock::core::reorder_group(state.application, id, target)) return;
     refresh_sidebar(state);
-    save_now(state);
+    schedule_session_save(state);
 }
 
 void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
@@ -3419,7 +3419,7 @@ void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
     InvalidateRect(state.pane_chrome[previous].tab_strip(), nullptr, FALSE);
     InvalidateRect(state.pane_chrome[pane].tab_strip(), nullptr, FALSE);
     InvalidateRect(window, nullptr, TRUE);
-    save_now(state);
+    schedule_session_save(state);
 }
 
 std::string unique_tab_id(const panedock::core::GroupState& group,
@@ -3465,7 +3465,7 @@ void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
         if (state.shutdown_deferred || state.closing_) return;
     }
     refresh_tab_strip(state, pane_index);
-    save_now(state);
+    schedule_session_save(state);
 }
 
 std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
@@ -3553,7 +3553,7 @@ void add_tab_to_pane(
         if (state.shutdown_deferred || state.closing_) return;
     }
     refresh_tab_strip(state, pane_index);
-    save_now(state);
+    schedule_session_save(state);
 }
 
 void close_tab_in_pane(HWND, AppState& state, std::size_t pane_index,
@@ -3577,7 +3577,7 @@ void close_tab_in_pane(HWND, AppState& state, std::size_t pane_index,
         if (state.shutdown_deferred || state.closing_) return;
     }
     refresh_tab_strip(state, pane_index);
-    save_now(state);
+    schedule_session_save(state);
 }
 
 void navigate_tab_history(AppState& state, std::size_t pane_index, bool back) {
@@ -3637,7 +3637,7 @@ void set_pane_view_mode(AppState& state, std::size_t pane_index,
         active_tab(active_group(state).panes[pane_index]).view_mode =
             panedock::shell_core::view_mode_name(option.selection.mode,
                                                  option.selection.image_size);
-        save_now(state);
+        schedule_session_save(state);
     }
 }
 
@@ -3700,7 +3700,7 @@ void add_current_folder(AppState& state, std::size_t pane_index) {
         if (state.pinned_locations_draft.has_value())
             (void)panedock::core::add_pinned_location(
                 *state.pinned_locations_draft, current_location);
-        save_now(state);
+        schedule_session_save(state);
         refresh_pinned_locations_manager(state);
     }
 }
@@ -3819,7 +3819,7 @@ void set_layout(HWND window, AppState& state,
         state.explorers[active].focus();
     }
     if (state.shutdown_deferred || state.closing_) return;
-    save_now(state);
+    schedule_session_save(state);
 }
 
 void update_sidebar_drag(HWND window, AppState& state, POINT point,
@@ -4004,7 +4004,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
                                          drag.tab_id, *drag.target_index))
             return;
         refresh_tab_strip(state, drag.pane_index);
-        save_now(state);
+        schedule_session_save(state);
         return;
     }
 
@@ -4036,7 +4036,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
     }
     refresh_tab_strip(state, drag.pane_index);
     refresh_tab_strip(state, target_pane);
-    save_now(state);
+    schedule_session_save(state);
 }
 
 void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
@@ -4557,7 +4557,7 @@ void finish_group_drag(AppState& state, HWND list) {
     if (panedock::core::reorder_group(state.application, drag.group_id,
                                       *drag.target_index)) {
         refresh_sidebar(state);
-        save_now(state);
+        schedule_session_save(state);
     }
 }
 
@@ -6062,7 +6062,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     if (panedock::core::rename_group(state->application, id,
                                                      std::move(*name))) {
                         refresh_sidebar(*state);
-                        save_now(*state);
+                        schedule_session_save(*state);
                     }
                 }
             }
@@ -6125,7 +6125,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 update_sidebar_drag(window, *state,
                                     point_from_lparam(lparam), true);
                 state->sidebar_drag.reset();
-                save_now(*state);
+                schedule_session_save(*state);
                 ReleaseCapture();
                 return 0;
             }
@@ -6133,7 +6133,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 update_splitter_drag(window, *state,
                                      point_from_lparam(lparam), true);
                 state->splitter_drag.reset();
-                save_now(*state);
+                schedule_session_save(*state);
                 ReleaseCapture();
                 return 0;
             }
@@ -6154,7 +6154,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     active_group(*state).divider_ratios[splitter->ratio_index] =
                         0.5;
                     apply_layout(window, *state);
-                    save_now(*state);
+                    schedule_session_save(*state);
                     return 0;
                 }
             }

@@ -211,6 +211,7 @@
 | PD-171 | `apply_layout` 持有的 Group reference 在 Shell 呼叫重入時可能失效（dangling reference） | 7 | `done` | PD-140 | [PD-171](tickets/PD-171-shell-reentry-invalidates-group-vector-reference.md) |
 | PD-172 | deferred shutdown 訊息在 nested Shell call 內被吃掉，程式可能永遠關不掉 | 7 | `done` | PD-140, PD-162 | [PD-172](tickets/PD-172-deferred-shutdown-message-swallowed-in-nested-shell-call.md) |
 | PD-173 | 拖曳進行中關閉：OLE 拖曳生命週期沒有納入任何 shell-call/shutdown gate | 7 | `done` | PD-090, PD-140, PD-162 | [PD-173](tickets/PD-173-close-during-active-drag-not-gated.md) |
+| PD-174 | 把 session save 的 500ms debounce 擴大到 tab/Group/layout/splitter 等其餘同步 `save_now` 呼叫點 | 7 | `done` | PD-091 | [PD-174](tickets/PD-174-extend-session-save-debounce-to-remaining-call-sites.md) |
 
 ## Dependency lanes
 
