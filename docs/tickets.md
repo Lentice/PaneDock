@@ -205,6 +205,7 @@
 | PD-165 | 把檢視模式字串 codec 移進 `shell_core` | 7 | `done` | PD-052, PD-079, PD-153, PD-156, PD-157 | [PD-165](tickets/PD-165-view-mode-codec-to-shell-core.md) |
 | PD-166 | startup recoverable warning 改為非同步 `OK` 通知，fatal startup error 維持同步退出 | 7 | `done` | PD-130, PD-135, PD-141, PD-144 | [PD-166](tickets/PD-166-startup-notification-dialog-routing.md) |
 | PD-167 | 所有新 tab 的預設 Shell location 統一為 My Computer | 7 | `done` | PD-019, PD-154, PD-160 | [PD-167](tickets/PD-167-default-tab-location-my-computer.md) |
+| PD-171 | `apply_layout` 持有的 Group reference 在 Shell 呼叫重入時可能失效（dangling reference） | 7 | `done` | PD-140 | [PD-171](tickets/PD-171-shell-reentry-invalidates-group-vector-reference.md) |
 
 ## Dependency lanes
 

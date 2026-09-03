@@ -29,6 +29,25 @@ Assert-Source 'state->closing_ \|\| state->shutdown_deferred' `
     'main-window work is blocked during deferred teardown'
 Assert-Source 'case kDeferredShutdownMessage:' `
     'deferred teardown is resumed by the message loop'
+Assert-Source 'constexpr UINT kDeferredCommandMessage' `
+    'Shell re-entry commands have a deferred message'
+Assert-Source 'case kDeferredCommandMessage:' `
+    'deferred commands return through the message loop'
+Assert-Source 'message == WM_COMMAND[\s\S]*kDeferredCommandMessage' `
+    'model-changing commands are deferred during Shell re-entry'
+Assert-Source 'message == kTabStripSelectionMessage[\s\S]*kDeferredTabSelectionMessage' `
+    'tab mutations are deferred during Shell re-entry'
+Assert-Source 'defer_shell_reentry_mouse_message' `
+    'Group/tab drag completion is deferred during Shell re-entry'
+
+$windowProcStart = $source.IndexOf('LRESULT CALLBACK window_proc(')
+$windowSwitch = $source.IndexOf('switch (message)', $windowProcStart)
+$windowReentryGate = $source.IndexOf(
+    'if (state != nullptr && state->shell_call_depth != 0)', $windowProcStart)
+if ($windowProcStart -lt 0 -or $windowSwitch -lt 0 -or
+    $windowReentryGate -lt 0 -or $windowReentryGate -gt $windowSwitch) {
+    throw 'Shell re-entry invariant failed: interaction gate must precede main dispatch'
+}
 Assert-Source 'ShellCallScope shell_call\(state\)' `
     'ExplorerHost callers use the shared Shell-call gate'
 Assert-Source 'set_shell_call_callback\(\s*&state,\s*app_shell_call_state_changed\)' `

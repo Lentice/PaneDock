@@ -90,6 +90,9 @@ constexpr UINT_PTR kSessionSaveTimerId = 0xD050;
 // PD-155: coalesce a geometry request that arrives while Shell is pumping the
 // message loop during the current layout pass.
 constexpr UINT kDeferredLayoutMessage = WM_APP + 55;
+// PD-171: replay model-changing commands after an app-owned Shell call.
+constexpr UINT kDeferredCommandMessage = WM_APP + 56;
+constexpr UINT kDeferredTabSelectionMessage = WM_APP + 57;
 constexpr int kSidebarMinimumWidth = 160;
 constexpr int kSidebarMaximumWidth = 420;
 constexpr std::size_t kExplorerCount = 4;
@@ -626,6 +629,24 @@ public:
 private:
     AppState& state_;
 };
+
+void defer_shell_reentry_message(HWND window, UINT message, WPARAM wparam,
+                                 LPARAM lparam) noexcept {
+    if (PostMessageW(window, message, wparam, lparam)) return;
+    OutputDebugStringW(
+        L"PaneDock: could not queue Shell re-entry interaction\n");
+}
+
+bool defer_shell_reentry_mouse_message(HWND window, AppState& state,
+                                       UINT message, WPARAM wparam,
+                                       LPARAM lparam) noexcept {
+    if (state.shell_call_depth == 0 ||
+        (message != WM_LBUTTONDOWN && message != WM_LBUTTONDBLCLK &&
+         message != WM_LBUTTONUP))
+        return false;
+    defer_shell_reentry_message(window, message, wparam, lparam);
+    return true;
+}
 
 void app_shell_call_state_changed(void* context, bool entering) noexcept {
     if (context == nullptr) return;
@@ -4220,6 +4241,9 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
             message != WM_PAINT && message != WM_ERASEBKGND &&
             message != WM_NCDESTROY)
             return 0;
+        if (defer_shell_reentry_mouse_message(window, *state, message,
+                                              wparam, lparam))
+            return 0;
         if (message == WM_PAINT) {
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(window, &paint);
@@ -4490,6 +4514,10 @@ LRESULT CALLBACK group_list_proc(HWND window, UINT message, WPARAM wparam,
     if (state != nullptr && (state->closing_ || state->shutdown_deferred) &&
         message != WM_PAINT && message != WM_ERASEBKGND &&
         message != WM_NCDESTROY)
+        return 0;
+    if (state != nullptr &&
+        defer_shell_reentry_mouse_message(window, *state, message, wparam,
+                                          lparam))
         return 0;
     if (message == WM_LBUTTONDOWN && state != nullptr) {
         const POINT point = point_from_lparam(lparam);
@@ -5102,6 +5130,28 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         message != WM_NCPAINT && message != kDeferredShutdownMessage)
         return 0;
 
+    if (state != nullptr && state->shell_call_depth != 0) {
+        if (message == WM_COMMAND) {
+            defer_shell_reentry_message(window, kDeferredCommandMessage,
+                                        wparam, lparam);
+            return 0;
+        }
+        if (message == kTabStripSelectionMessage) {
+            defer_shell_reentry_message(window, kDeferredTabSelectionMessage,
+                                        wparam, lparam);
+            return 0;
+        }
+        if (message == kDragHoverMessage) {
+            defer_shell_reentry_message(window, message, wparam, lparam);
+            return 0;
+        }
+        if (message == WM_PARENTNOTIFY || message == WM_LBUTTONDOWN ||
+            message == WM_LBUTTONDBLCLK || message == WM_LBUTTONUP) {
+            defer_shell_reentry_message(window, message, wparam, lparam);
+            return 0;
+        }
+    }
+
     switch (message) {
         case WM_CREATE: {
             state->startup_realize_pending = true;
@@ -5312,6 +5362,27 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     state->shutdown_sequence.step(
                         panedock::core::ShutdownEvent::
                             deferred_shutdown_ready));
+            return 0;
+        case kDeferredCommandMessage:
+            if (state != nullptr) {
+                if (state->shell_call_depth != 0) {
+                    defer_shell_reentry_message(
+                        window, kDeferredCommandMessage, wparam, lparam);
+                } else if (!state->closing_ && !state->shutdown_deferred) {
+                    SendMessageW(window, WM_COMMAND, wparam, lparam);
+                }
+            }
+            return 0;
+        case kDeferredTabSelectionMessage:
+            if (state != nullptr) {
+                if (state->shell_call_depth != 0) {
+                    defer_shell_reentry_message(
+                        window, kDeferredTabSelectionMessage, wparam, lparam);
+                } else if (!state->closing_ && !state->shutdown_deferred) {
+                    SendMessageW(window, kTabStripSelectionMessage, wparam,
+                                 lparam);
+                }
+            }
             return 0;
         case kDeferredLayoutMessage:
             if (state != nullptr && state->layout_message_queued) {
