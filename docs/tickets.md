@@ -204,6 +204,7 @@
 | PD-164 | 把 realize／de-realize 決策抽成 `core` 的純函式 | 7 | `done` | PD-005, PD-009, PD-093, PD-151, PD-155, PD-163 | [PD-164](tickets/PD-164-realization-plan-pure-function.md) |
 | PD-165 | 把檢視模式字串 codec 移進 `shell_core` | 7 | `done` | PD-052, PD-079, PD-153, PD-156, PD-157 | [PD-165](tickets/PD-165-view-mode-codec-to-shell-core.md) |
 | PD-166 | startup recoverable warning 改為非同步 `OK` 通知，fatal startup error 維持同步退出 | 7 | `done` | PD-130, PD-135, PD-141, PD-144 | [PD-166](tickets/PD-166-startup-notification-dialog-routing.md) |
+| PD-167 | 所有新 tab 的預設 Shell location 統一為 My Computer | 7 | `done` | PD-019, PD-154, PD-160 | [PD-167](tickets/PD-167-default-tab-location-my-computer.md) |
 
 ## Dependency lanes
 
@@ -697,3 +698,9 @@ Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `
 同時確認 `tests/release/shutdown_state_check.ps1:6` 與 `shell_reentry_gate_check.ps1:9` 都是 regex 讀原始碼的 source-level 檢查,雖註冊為 CTest(`tests/CMakeLists.txt:37`)但不啟動程式、不驗證 message-loop 行為——這是 PD-162 要用真正的 unit test 取代的對象,但兩支腳本本身不得刪除,只能在字串搬移後更新 pattern。
 
 本次審查與核對均為唯讀,未修改任何產品程式碼。報告檔存於系統 Temp 目錄,不進 repo;所有需要留存的結論已寫入本頁與四張 ticket。
+
+### 2026-09-03 — 統一所有新 tab 的預設 Shell location,開 PD-167
+
+使用者先要求 `+` add tab button 與 tab 條空白區雙擊新增的 tab 預設到 My Computer，查明 `Ctrl+T` 也共用 `add_tab_to_pane` 後，進一步確認所有新增 tab 行為都要統一。使用者另指定 code 應呼叫共用 function：預設使用 My Computer，但允許 caller 額外傳入其他 location。
+
+決策採既有 Pinned Locations 固定項目的 `kPinnedFixedParsingNames[1]`（`::{20D04FE0-3AEA-1069-A2D8-08002B30309D}`）作為唯一 default Shell location，不重複硬編碼、不使用 display name 作 identity。範圍包含初始 application state、新 Group、版型增加 pane、`+`、空白 tab 條雙擊、`Ctrl+T`，以及最後 tab 關閉／跨 pane 搬移最後 tab 時的 default fallback；既有 session 中已保存的 location 不回溯修改。開票為 [PD-167](tickets/PD-167-default-tab-location-my-computer.md)，依賴 PD-019、PD-154、PD-160。

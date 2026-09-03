@@ -9,7 +9,7 @@
 | 文件狀態 | Phase 0 可行性基準 |
 | 目標平台 | Windows 10 22H2／Windows 11，x64 |
 | 技術基準 | C++20、原生 Win32、Shell COM（WRL ComPtr） |
-| 最後更新 | 2026-08-31 |
+| 最後更新 | 2026-09-03 |
 
 ## 1 文件目的
 
@@ -155,7 +155,7 @@ pane 分隔線可拖曳,比例以 0.0–1.0 的相對值儲存於該 Group,視�
 
 ### FR-005 tab 管理
 
-每個 pane 至少一個 tab。可新增、關閉、切換 tab；在 tab 條未被 tab、`+` 或捲動按鈕占用的空白區雙擊會新增 tab。關閉 pane 的最後一個 tab 時,該 tab 導覽至預設 location 而非留下空 pane。
+每個 pane 至少一個 tab。可新增、關閉、切換 tab；在 tab 條未被 tab、`+` 或捲動按鈕占用的空白區雙擊會新增 tab。新 tab 的預設 Shell location 是 My Computer（persisted parsing name 為 `::{20D04FE0-3AEA-1069-A2D8-08002B30309D}`），且初始 application state、新 Group 與版型增加 pane 都遵循此預設；需要特殊目的地的流程可以明確傳入另一個 `ShellLocation`。關閉 pane 的最後一個 tab 或跨 pane 搬走來源 pane 的最後一個 tab 時,留下的 tab 也導覽至同一個預設 location,而非留下空 pane。已保存的既有 tab location 不因這項預設變更而修改。
 
 ### FR-006 原生 Shell 檔案檢視
 

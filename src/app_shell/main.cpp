@@ -263,8 +263,6 @@ constexpr std::array<ViewModeOption, kViewModeOptionCount> kViewModeOptions{{
     {{FVM_TILE, -1}, L"Tiles"},
     {{FVM_CONTENT, -1}, L"Content"},
 }};
-const std::array<std::wstring, kExplorerCount> kDefaultLocations{
-    L"C:\\", L"C:\\Windows", L"C:\\Users", L"C:\\Program Files"};
 constexpr UINT kDragHoverDelayMilliseconds = 800;
 constexpr UINT_PTR kDragHoverSidebarTimerId = 0xD034;
 constexpr UINT_PTR kDragHoverTabTimerIdBase = 0xD040;
@@ -666,6 +664,10 @@ panedock::core::ShellLocation location(std::wstring parsing_name) {
     return {std::move(parsing_name), {}, {}};
 }
 
+panedock::core::ShellLocation default_shell_location() {
+    return location(std::wstring(kPinnedFixedParsingNames[1]));
+}
+
 std::wstring display_text_for_parsing_name(
     AppState& state, std::wstring_view parsing_name) {
     if (!parsing_name.starts_with(L"::")) return std::wstring(parsing_name);
@@ -685,7 +687,7 @@ panedock::core::ApplicationState default_application_state() {
         const std::string suffix = std::to_string(index);
         group.panes.push_back({"pane-" + suffix,
                                {{"tab-" + suffix,
-                                 location(kDefaultLocations[index]), {}, {},
+                                 default_shell_location(), {}, {},
                                  true, {}, 0}},
                                "tab-" + suffix});
     }
@@ -3160,10 +3162,10 @@ panedock::core::GroupState new_group_state(const AppState& state,
                             : group.layout_template;
     if (target != group.layout_template) {
         panedock::core::switch_layout(group, target,
-                                      location(kDefaultLocations.front()));
+                                      default_shell_location());
     }
     for (std::size_t index = 0; index < group.panes.size(); ++index)
-        active_tab(group.panes[index]).location = location(kDefaultLocations[index]);
+        active_tab(group.panes[index]).location = default_shell_location();
     return group;
 }
 
@@ -3418,7 +3420,9 @@ void cycle_active_tab(HWND window, AppState& state, std::size_t pane_index,
     switch_active_tab(window, state, pane_index, pane.tabs[next].id);
 }
 
-void add_tab_to_pane(HWND, AppState& state, std::size_t pane_index) {
+void add_tab_to_pane(
+    HWND, AppState& state, std::size_t pane_index,
+    panedock::core::ShellLocation initial_location = default_shell_location()) {
     if (state.closing_ || state.shutdown_deferred) return;
     if (!has_active_group(state)) return;
     auto& group = active_group(state);
@@ -3428,7 +3432,7 @@ void add_tab_to_pane(HWND, AppState& state, std::size_t pane_index) {
     const std::string id = unique_tab_id(group, candidate);
     auto& pane = group.panes[pane_index];
     if (!panedock::core::add_tab(
-            pane, {id, location(kDefaultLocations[pane_index]), {}, {}, true,
+            pane, {id, std::move(initial_location), {}, {}, true,
                    {}, 0}) ||
         !panedock::core::set_active_tab(pane, id)) return;
     if (state.realized[pane_index]) {
@@ -3453,7 +3457,7 @@ void close_tab_in_pane(HWND, AppState& state, std::size_t pane_index,
     capture_pane_location(state, pane_index);
     const bool closed_active = pane.active_tab_id == tab_id;
     if (!panedock::core::close_tab(
-            pane, tab_id, location(kDefaultLocations[pane_index]))) return;
+            pane, tab_id, default_shell_location())) return;
     if (closed_active && state.realized[pane_index]) {
         {
             ShellCallScope shell_call(state);
@@ -3690,13 +3694,8 @@ void set_layout(HWND window, AppState& state,
         tab_ids.push_back(unique_tab_id(group, tab_candidate));
     }
     if (!panedock::core::switch_layout(group, target,
-                                       location(kDefaultLocations.front()),
+                                       default_shell_location(),
                                        pane_ids, tab_ids)) return;
-    for (std::size_t index = target_count - pane_ids.size();
-         index < target_count; ++index) {
-        active_tab(group.panes[index]).location =
-            location(kDefaultLocations[index]);
-    }
     refresh_tab_strips(state);
     if (FAILED(apply_layout(window, state))) {
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
@@ -3905,7 +3904,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
     const bool source_active = source.active_tab_id == drag.tab_id;
     if (!panedock::core::move_tab(
             source, target, drag.tab_id, *drag.target_index,
-            location(kDefaultLocations[drag.pane_index]))) return;
+            default_shell_location())) return;
     if (source_active && state.realized[drag.pane_index]) {
         {
             ShellCallScope shell_call(state);
