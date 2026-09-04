@@ -165,4 +165,63 @@ git diff --check
 
 ## 交接區
 
-（實作者填寫）
+### 2026-09-04 實作交接
+
+- `paint_client_background` 現只畫主視窗 canvas、sidebar、brand bar、header、
+  layout segment 與 divider；簽章收窄為 sidebar width 與 layout-button
+  `span`，不再取得 `AppState`，函式內無 pane layout 或 pane paint。
+- `apply_layout` 仍以唯一的 `navigation_geometry` 算出主視窗座標；
+  `Pane::set_paint_geometry` 以 `pane_window_rect.left/top` 轉成 pane-local
+  座標並快取。`WM_ERASEBKGND` 只讀 pane client rect、快取的導覽列矩形與
+  DPI，不做 Shell 呼叫、location 解析、item count 或幾何重算。
+- `pane_card_radius(dpi)` 移至 `pane.h`，是 `Pane::paint_background` 卡片
+  `RoundRect` 與 `apply_pane_container_region` explorer clip 的單一共用來源。
+  視覺參數未改：10px radius、2px outset、2px shadow、既有白底／陰影／
+  border／navigation 色票。為讓 pane 真正擁有舊主視窗畫在相鄰 gap 的
+  shadow footprint，pane HWND 的 right/bottom 同時納入 shadow offset；card
+  rect 扣回該 offset，子控制項仍以舊 `pane_rect` 原點定位。這是 0-pixel
+  比對所需的座標修正。
+- 閃爍處理採每個 `Pane` 可重用的 memory DC／bitmap：bitmap 只在首次或
+  client size 改變時建立，card border pen 只在首次或 DPI 改變時建立；
+  brush 使用 `DC_BRUSH`／`DC_PEN` stock object。陰影、卡片、外框與導覽列
+  先完整畫到離屏表面，最後單次 `BitBlt` 到 `WM_ERASEBKGND` 的 target DC；
+  未使用 `AlphaBlend`／`GradientFill`，也未在每則 paint 重建 GDI 資源。
+- PD-077 回歸：四 pane 下連續 30 次 window resize、20 次 splitter drag，
+  再以 `PrintWindow(PW_RENDERFULLCONTENT)` 比較固定 1300x900 前後畫面。
+  pane/card/gap 邊界差異 0 pixels；全圖僅 56 pixels 位於兩個原生 Shell
+  scrollbar thumb（x=717–718/y=697–719、x=1267–1268/y=588–592），不是
+  pane/gap stale repaint。changed pane 另以 `RDW_ERASE | RDW_NOCHILDREN`
+  invalidate 自身，主視窗既有 invalidation 負責相鄰 gap。
+- 防回歸檢查位於 `tests/release/pane_paint_ownership_check.ps1`，並以
+  `panedock_pane_paint_ownership` 接入 ctest；它截出
+  `paint_client_background` 函式並拒絕 `draw_pane_card`／`layout_rects`。
+- 逐像素比較：committed `HEAD` baseline 與本票 build 使用同一份
+  `session.json`、同一 desktop session、固定 1300x900，全部以
+  `PrintWindow(PW_RENDERFULLCONTENT)`（非 `CopyFromScreen`）擷取。96 DPI
+  的 1-pane active、2-pane active/inactive、3-pane active/inactive、4-pane
+  active/inactive 共 7 組皆為 0/1,170,000 different pixels。環境有兩個
+  monitor，但 `GetDpiForMonitor` 均為 96x96；沒有可達的 150 DPI 環境，
+  因此 150 DPI 未執行並留待實機檢查。
+- 60 秒完全閒置量測：CPU delta 0.000000 seconds（0.0000%），process I/O
+  delta為 0 read ops、0 write ops、0 read bytes、0 write bytes；無 polling
+  或額外 idle repaint 路徑。
+- Agent Checks：LLVM-MinGW configure/build PASS；
+  `ctest --test-dir build --output-on-failure` 23/23 PASS、0 failed、6.59 秒
+  （`panedock_launch_smoke` 2.09 秒、`panedock_explorer_host_lifetime`
+  0.45 秒）；兩組 `Select-String` 禁止 pattern 均無結果；
+  `git diff --check` PASS。
+
+### 使用者實機檢查清單回報
+
+1. 四種 pane-count 卡片視覺：96 DPI PrintWindow 逐像素 PASS；仍建議肉眼
+   確認實際互動畫面。
+2. active pane 切換：自動切換 active/non-active 並逐像素 PASS；accent bar
+   程式碼未動。
+3. resize 30 次／splitter drag 20 次：自動壓力檢查 pane/gap 0 pixels
+   difference；實際拖曳的主觀閃爍仍建議肉眼確認。
+4. mixed DPI：未驗證；目前兩個 monitor 都是 96 DPI，無 150 DPI 環境。
+5. Shell view 捲動／context menu／view mode：未做完整人工互動；本票未動
+   command/notification route，launch smoke 與全量測試通過。
+6. 閒置一分鐘：PASS，CPU 0.0000%，process I/O 無增量。
+7. 殘留 process：各 PrintWindow、resize、idle 與 launch-smoke 輪次皆正常
+   關閉，最後無殘留 `PaneDock.exe`。

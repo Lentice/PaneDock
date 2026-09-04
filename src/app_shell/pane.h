@@ -24,9 +24,20 @@
 namespace panedock::app_shell {
 
 constexpr int kPaneCardOutset = 2;
+constexpr int kPaneCardShadowOffset = 2;
 
 inline int pane_card_outset(UINT dpi) noexcept {
     return (std::max)(1, MulDiv(kPaneCardOutset, static_cast<int>(dpi), 96));
+}
+
+// Shared by the pane card and the PD-040 explorer-container clip.
+inline int pane_card_radius(UINT dpi) noexcept {
+    return (std::max)(1, MulDiv(10, static_cast<int>(dpi), 96));
+}
+
+inline int pane_card_shadow_offset(UINT dpi) noexcept {
+    return (std::max)(1,
+                      MulDiv(kPaneCardShadowOffset, static_cast<int>(dpi), 96));
 }
 
 // Dispatch surface for the drag-hover delay timer. `Pane` stores a drag
@@ -78,6 +89,9 @@ class Pane final {
         return bound_state_;
     }
     bool set_rect(const RECT &rect) noexcept;
+    void set_paint_geometry(const RECT &navigation_background,
+                            const RECT &pane_window_rect, UINT dpi) noexcept;
+    void paint_background(HDC target) noexcept;
     void set_visible(bool visible) noexcept;
     void apply_font(HFONT font) noexcept;
 
@@ -222,6 +236,14 @@ class Pane final {
     panedock::explorer_host::ExplorerHost explorer_host_;
     bool realized_{};
     bool suppress_history_record_{};
+    RECT navigation_background_{};
+    UINT paint_dpi_{96};
+    HDC paint_dc_{nullptr};
+    HBITMAP paint_bitmap_{nullptr};
+    HBITMAP paint_old_bitmap_{nullptr};
+    SIZE paint_size_{};
+    HPEN card_border_pen_{nullptr};
+    UINT card_border_pen_dpi_{};
 };
 
 } // namespace panedock::app_shell

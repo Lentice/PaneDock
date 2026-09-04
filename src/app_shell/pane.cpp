@@ -11,6 +11,19 @@ constexpr std::array<const wchar_t *, 6> kButtonLabels{
     L"<", L">", L"Up", L"Refresh", L"View", L"Pinned"};
 constexpr wchar_t kWindowClassName[] = L"PaneDock.Pane";
 
+void fill_rounded_rect(HDC dc, const RECT &rect, int radius, COLORREF fill,
+                       COLORREF border) noexcept {
+    const HGDIOBJ old_brush = SelectObject(dc, GetStockObject(DC_BRUSH));
+    const HGDIOBJ old_pen = SelectObject(
+        dc, border == CLR_NONE ? GetStockObject(NULL_PEN)
+                               : GetStockObject(DC_PEN));
+    SetDCBrushColor(dc, fill);
+    if (border != CLR_NONE) SetDCPenColor(dc, border);
+    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_brush);
+}
+
 void set_font(HWND window, HFONT font) noexcept {
     if (window != nullptr && font != nullptr)
         SendMessageW(window, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -35,25 +48,8 @@ LRESULT CALLBACK pane_window_proc(HWND window, UINT message, WPARAM wparam,
 
     switch (message) {
     case WM_ERASEBKGND: {
-        const HDC dc = reinterpret_cast<HDC>(wparam);
-        RECT client{};
-        GetClientRect(window, &client);
-        HBRUSH brush = CreateSolidBrush(RGB(243, 246, 249));
-        if (brush != nullptr) {
-            FillRect(dc, &client, brush);
-            DeleteObject(brush);
-        }
-        // PD-188 will move the card paint here. Until then, ask the main
-        // window to render its unchanged client background into this DC.
-        POINT origin{};
-        const HWND parent = GetParent(window);
-        if (parent != nullptr && MapWindowPoints(window, parent, &origin, 1)) {
-            const int saved = SaveDC(dc);
-            SetViewportOrgEx(dc, -origin.x, -origin.y, nullptr);
-            SendMessageW(parent, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc),
-                         PRF_CLIENT);
-            RestoreDC(dc, saved);
-        }
+        if (pane != nullptr)
+            pane->paint_background(reinterpret_cast<HDC>(wparam));
         return 1;
     }
     case WM_COMMAND:
@@ -204,6 +200,17 @@ void Pane::destroy() noexcept {
     destroy_window(tab_strip_);
     destroy_window(explorer_container_);
     destroy_window(window_);
+    if (paint_dc_ != nullptr && paint_old_bitmap_ != nullptr)
+        SelectObject(paint_dc_, paint_old_bitmap_);
+    if (paint_bitmap_ != nullptr) DeleteObject(paint_bitmap_);
+    if (paint_dc_ != nullptr) DeleteDC(paint_dc_);
+    if (card_border_pen_ != nullptr) DeleteObject(card_border_pen_);
+    paint_dc_ = nullptr;
+    paint_bitmap_ = nullptr;
+    paint_old_bitmap_ = nullptr;
+    paint_size_ = {};
+    card_border_pen_ = nullptr;
+    card_border_pen_dpi_ = 0;
     laid_out_pane_rect_.reset();
     tab_tooltips_registered_ = false;
     tab_visuals_.clear();
@@ -235,6 +242,85 @@ bool Pane::set_rect(const RECT &rect) noexcept {
                          !EqualRect(&laid_out_pane_rect_.value(), &rect);
     laid_out_pane_rect_ = rect;
     return changed;
+}
+
+void Pane::set_paint_geometry(const RECT &navigation_background,
+                              const RECT &pane_window_rect, UINT dpi) noexcept {
+    navigation_background_ = navigation_background;
+    OffsetRect(&navigation_background_, -pane_window_rect.left,
+               -pane_window_rect.top);
+    paint_dpi_ = dpi;
+}
+
+void Pane::paint_background(HDC target) noexcept {
+    if (target == nullptr || window_ == nullptr) return;
+    RECT client{};
+    GetClientRect(window_, &client);
+    const int width = client.right - client.left;
+    const int height = client.bottom - client.top;
+    if (width <= 0 || height <= 0) return;
+
+    const int shadow_offset = pane_card_shadow_offset(paint_dpi_);
+    const int surface_margin = pane_card_outset(paint_dpi_) + shadow_offset;
+    const int surface_width = width + surface_margin;
+    const int surface_height = height + surface_margin;
+
+    if (paint_dc_ == nullptr) paint_dc_ = CreateCompatibleDC(target);
+    if (paint_dc_ == nullptr) return;
+    if (paint_bitmap_ == nullptr || paint_size_.cx != surface_width ||
+        paint_size_.cy != surface_height) {
+        HBITMAP bitmap =
+            CreateCompatibleBitmap(target, surface_width, surface_height);
+        if (bitmap == nullptr) return;
+        if (paint_old_bitmap_ == nullptr)
+            paint_old_bitmap_ = static_cast<HBITMAP>(
+                SelectObject(paint_dc_, bitmap));
+        else
+            SelectObject(paint_dc_, bitmap);
+        if (paint_bitmap_ != nullptr) DeleteObject(paint_bitmap_);
+        paint_bitmap_ = bitmap;
+        paint_size_ = {surface_width, surface_height};
+    }
+
+    const RECT surface{0, 0, surface_width, surface_height};
+    SetDCBrushColor(paint_dc_, RGB(243, 246, 249));
+    FillRect(paint_dc_, &surface,
+             static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+    const int radius = pane_card_radius(paint_dpi_);
+    const RECT card{client.left, client.top,
+                    client.right - shadow_offset,
+                    client.bottom - shadow_offset};
+    RECT shadow = card;
+    OffsetRect(&shadow, shadow_offset, shadow_offset);
+    fill_rounded_rect(paint_dc_, shadow, radius, RGB(235, 239, 244), CLR_NONE);
+    fill_rounded_rect(paint_dc_, card, radius, RGB(255, 255, 255), CLR_NONE);
+
+    if (card_border_pen_ == nullptr || card_border_pen_dpi_ != paint_dpi_) {
+        if (card_border_pen_ != nullptr) DeleteObject(card_border_pen_);
+        card_border_pen_ = CreatePen(
+            PS_SOLID,
+            (std::max)(1, MulDiv(1, static_cast<int>(paint_dpi_), 96)),
+            RGB(232, 237, 242));
+        card_border_pen_dpi_ = paint_dpi_;
+    }
+    if (card_border_pen_ != nullptr) {
+        const HGDIOBJ old_pen = SelectObject(paint_dc_, card_border_pen_);
+        const HGDIOBJ old_brush =
+            SelectObject(paint_dc_, GetStockObject(NULL_BRUSH));
+        RoundRect(paint_dc_, card.left, card.top, card.right, card.bottom,
+                  radius, radius);
+        SelectObject(paint_dc_, old_brush);
+        SelectObject(paint_dc_, old_pen);
+    }
+
+    if (navigation_background_.right > navigation_background_.left &&
+        navigation_background_.bottom > navigation_background_.top) {
+        const int navigation_radius = (std::max)(
+            1, MulDiv(4, static_cast<int>(paint_dpi_), 96));
+        fill_rounded_rect(paint_dc_, navigation_background_, navigation_radius,
+                          RGB(251, 252, 253), RGB(217, 225, 234));
+    }
+    BitBlt(target, 0, 0, width, height, paint_dc_, 0, 0, SRCCOPY);
 }
 
 void Pane::set_visible(bool visible) noexcept {

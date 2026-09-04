@@ -971,10 +971,8 @@ void position_window(WindowPositionBatch* batch, HWND window,
 
 // PD-031: the navigation row's geometry (tab-strip height, back/forward/up
 // button width, and the rect the address bar background/EDIT occupy) is
-// needed both by apply_layout (to SetWindowPos the real child windows) and
-// by paint_client_background (to draw the rounded background behind the
-// EDIT). Factored into one function so the two call sites cannot drift out
-// of sync with each other (see PD-031 scope item 3).
+// used by apply_layout to position the controls and to give the pane its
+// pane-local address-background paint rectangle.
 struct NavigationGeometry {
     int navigation_top;
     int navigation_height;
@@ -2228,13 +2226,6 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
     if (old_font != nullptr) SelectObject(dc, old_font);
 }
 
-// Shared by draw_pane_card's background/border RoundRects and the PD-040
-// explorer container's SetWindowRgn clip, so the drawn corner and the
-// clipped corner are always the same radius and never show a mismatch seam.
-int pane_card_radius(UINT dpi) noexcept {
-    return std::max(1, MulDiv(10, static_cast<int>(dpi), 96));
-}
-
 // PD-042: clip a pane's explorer container child window with rounded bottom
 // corners while keeping the internal top edge square. Called whenever the
 // container's rect changes (creation, WM_SIZE, WM_DPICHANGED — every
@@ -2271,49 +2262,6 @@ void apply_pane_container_region(HWND container, int width, int height,
     }
 }
 
-void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi) noexcept {
-    // Card visuals: white body, shadow one step darker (product decision 3).
-    // Radius 10px@96dpi matches the design mock's .pane { border-radius:
-    // 10px }. Shadow is a flat offset RoundRect, not a real blur (product
-    // decision 1 — no AlphaBlend/GradientFill). The active-pane indicator is
-    // the straight accent bar painted by paint_tab_strip; every card keeps
-    // the same quiet-gray border so no active rounded outline is drawn here.
-    const int radius = pane_card_radius(dpi);
-    const int shadow_offset = std::max(1, MulDiv(2, static_cast<int>(dpi), 96));
-    // The card is drawn a couple of pixels outside pane_rect on the left/
-    // top/right so its rounded top corners and border are visible in the
-    // padding/divider gap that already surrounds every pane rect, rather
-    // than being fully hidden under the opaque tab-strip control that sits
-    // flush at pane_rect's top edge (tab strip/nav row/Shell view are drawn
-    // on top of this, per PD-030's architecture decision). The bottom edge
-    // stays exactly at pane_rect.bottom, flush with the real Shell view
-    // content — all four corners are rounded (PD-040 overrides PD-030's
-    // square-bottom decision; the PD-040 explorer container clips the real
-    // Shell view to the same radius so there is no seam at the bottom
-    // corners).
-    const int outset = panedock::app_shell::pane_card_outset(dpi);
-    const RECT card{pane_rect.left - outset, pane_rect.top - outset,
-                    pane_rect.right + outset, pane_rect.bottom + outset};
-
-    RECT shadow_rect = card;
-    OffsetRect(&shadow_rect, shadow_offset, shadow_offset);
-    fill_rounded_rect(dc, shadow_rect, radius, RGB(235, 239, 244), CLR_NONE);
-    fill_rounded_rect(dc, card, radius, RGB(255, 255, 255), CLR_NONE);
-
-    const int border_width = std::max(1, MulDiv(1, static_cast<int>(dpi), 96));
-    const COLORREF border_color = RGB(232, 237, 242);
-    HPEN border_pen = CreatePen(PS_SOLID, border_width, border_color);
-    if (border_pen != nullptr) {
-        const HGDIOBJ old_pen = SelectObject(dc, border_pen);
-        const HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-        RoundRect(dc, card.left, card.top, card.right, card.bottom, radius,
-                  radius);
-        SelectObject(dc, old_brush);
-        SelectObject(dc, old_pen);
-        DeleteObject(border_pen);
-    }
-}
-
 // Same fill color as draw_navigation_bar_background's RoundRect, returned as
 // a cached HBRUSH for WM_CTLCOLOREDIT so the address bar's native background
 // matches the rounded pill painted underneath it (PD-031 decision 2). Kept
@@ -2332,20 +2280,8 @@ void release_address_bar_background_brush() noexcept {
     if (brush != nullptr) DeleteObject(brush);
 }
 
-void draw_navigation_bar_background(HDC dc, RECT rect, UINT dpi) noexcept {
-    // Rounded light-gray pill drawn behind the address bar EDIT (PD-031
-    // decision 2). Colors/radius taken from the design mock's .location
-    // rule (background #fbfcfd, border #d9e1ea); radius reduced from the
-    // mock's 6px — see kAddressBarBackgroundRadius comment for why.
-    if (rect.right <= rect.left || rect.bottom <= rect.top) return;
-    const int radius = std::max(
-        1, MulDiv(kAddressBarBackgroundRadius, static_cast<int>(dpi), 96));
-    fill_rounded_rect(dc, rect, radius, RGB(251, 252, 253),
-                      RGB(217, 225, 234));
-}
-
-void paint_client_background(HWND window, HDC dc,
-                             const AppState& state) noexcept {
+void paint_client_background(HWND window, HDC dc, int sidebar_width,
+                             std::span<const HWND> layout_buttons) noexcept {
     const RECT client = client_rect(window);
     HBRUSH canvas = CreateSolidBrush(RGB(243, 246, 249));
     if (canvas != nullptr) {
@@ -2353,7 +2289,6 @@ void paint_client_background(HWND window, HDC dc,
         DeleteObject(canvas);
     }
 
-    const int sidebar_width = current_sidebar_width(window, state);
     RECT sidebar{client.left, client.top, client.left + sidebar_width,
                  client.bottom};
     HBRUSH sidebar_brush = CreateSolidBrush(RGB(251, 252, 254));
@@ -2375,9 +2310,9 @@ void paint_client_background(HWND window, HDC dc,
 
     RECT layout_group{};
     RECT last_layout_button{};
-    if (!state.layout_buttons.empty() &&
-        GetWindowRect(state.layout_buttons.front(), &layout_group) &&
-        GetWindowRect(state.layout_buttons.back(), &last_layout_button)) {
+    if (!layout_buttons.empty() &&
+        GetWindowRect(layout_buttons.front(), &layout_group) &&
+        GetWindowRect(layout_buttons.back(), &last_layout_button)) {
         MapWindowPoints(nullptr, window,
                         reinterpret_cast<POINT*>(&layout_group), 2);
         MapWindowPoints(nullptr, window,
@@ -2395,21 +2330,6 @@ void paint_client_background(HWND window, HDC dc,
         DeleteObject(divider_brush);
     }
 
-    if (has_active_group(state)) {
-        const auto& group = active_group(state);
-        const auto rects = layout_rects(window, state, group);
-        const UINT dpi = GetDpiForWindow(window);
-        const std::size_t visible =
-            std::min(group.panes.size(), rects.size());
-        for (std::size_t index = 0; index < visible; ++index) {
-            const RECT pane_rect = to_win32_rect(rects[index]);
-            draw_pane_card(dc, pane_rect, dpi);
-            const NavigationGeometry geometry =
-                navigation_geometry(window, pane_rect);
-            draw_navigation_bar_background(dc, geometry.address_background,
-                                           dpi);
-        }
-    }
 }
 
 void cancel_session_save_timer(const AppState& state) noexcept {
@@ -2609,7 +2529,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                indexes.end();
     };
     const UINT dpi = GetDpiForWindow(window);
-    const int container_radius = pane_card_radius(dpi);
+    const int container_radius = panedock::app_shell::pane_card_radius(dpi);
     struct LayoutFailure final {
         HRESULT result;
         std::size_t pane_index;
@@ -2630,9 +2550,12 @@ HRESULT apply_layout(HWND window, AppState& state,
             pane_geometry_changed = chrome.set_rect(pane_rect);
             changed_panes[index] = pane_geometry_changed;
             const int pane_outset = panedock::app_shell::pane_card_outset(dpi);
+            const int shadow_offset =
+                panedock::app_shell::pane_card_shadow_offset(dpi);
             const RECT pane_window_rect{
                 pane_rect.left - pane_outset, pane_rect.top - pane_outset,
-                pane_rect.right + pane_outset, pane_rect.bottom};
+                pane_rect.right + pane_outset + shadow_offset,
+                pane_rect.bottom + pane_outset + shadow_offset};
             const auto pane_local = [pane_window_rect](RECT rect) noexcept {
                 OffsetRect(&rect, -pane_window_rect.left,
                            -pane_window_rect.top);
@@ -2658,6 +2581,8 @@ HRESULT apply_layout(HWND window, AppState& state,
             }
             const NavigationGeometry geometry =
                 navigation_geometry(window, pane_rect);
+            chrome.set_paint_geometry(geometry.address_background,
+                                      pane_window_rect, dpi);
             const int navigation_top = geometry.navigation_top;
             const int navigation_height = geometry.navigation_height;
             const std::array<HWND, 6> buttons{
@@ -2887,6 +2812,8 @@ HRESULT apply_layout(HWND window, AppState& state,
             RedrawWindow(state.panes[index].explorer_container(),
                          nullptr, nullptr,
                          RDW_INVALIDATE | RDW_NOERASE | RDW_ALLCHILDREN);
+            RedrawWindow(state.panes[index].window(), nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_ERASE | RDW_NOCHILDREN);
         }
         if (index >= panedock::core::pane_count(group.layout_template))
             state.panes[index].laid_out_pane_rect().reset();
@@ -5429,7 +5356,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     IntersectClipRect(dc, paint.rcPaint.left,
                                       paint.rcPaint.top, paint.rcPaint.right,
                                       paint.rcPaint.bottom);
-                    paint_client_background(window, dc, *state);
+                    paint_client_background(
+                        window, dc, current_sidebar_width(window, *state),
+                        state->layout_buttons);
                     RestoreDC(dc, saved);
                     EndPaint(window, &paint);
                     return 0;
@@ -5438,8 +5367,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             break;
         case WM_PRINTCLIENT:
             if (state != nullptr && (lparam & PRF_CLIENT) != 0) {
-                paint_client_background(window, reinterpret_cast<HDC>(wparam),
-                                        *state);
+                paint_client_background(
+                    window, reinterpret_cast<HDC>(wparam),
+                    current_sidebar_width(window, *state),
+                    state->layout_buttons);
                 return 0;
             }
             break;
