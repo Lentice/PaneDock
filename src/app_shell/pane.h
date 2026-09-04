@@ -57,6 +57,17 @@ public:
 
     bool create(HWND parent, int pane_index) noexcept;
     void destroy() noexcept;
+    // The PaneState this slot currently displays. Not owned: it lives in
+    // core::ApplicationState and outlives every rebind (PD-184 guarantees its
+    // address is stable for the group's lifetime). Null when this slot is not
+    // showing anything (no active Group, or a layout with fewer panes).
+    void bind(panedock::core::PaneState* state) noexcept {
+        bound_state_ = state;
+    }
+    void unbind() noexcept { bound_state_ = nullptr; }
+    panedock::core::PaneState* pane_state() const noexcept {
+        return bound_state_;
+    }
     bool set_rect(const RECT& rect, HDWP* deferred = nullptr) noexcept;
     void set_visible(bool visible) noexcept;
     void apply_font(HFONT font) noexcept;
@@ -179,6 +190,7 @@ public:
     }
 
 private:
+    panedock::core::PaneState* bound_state_{nullptr};
     HWND explorer_container_{nullptr};
     HWND tab_strip_{nullptr};
     HWND address_bar_{nullptr};

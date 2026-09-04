@@ -112,6 +112,7 @@ void Pane::destroy() noexcept {
     tab_hover_index_.reset();
     tab_scroll_hover_index_.reset();
     suppress_history_record_ = false;
+    unbind();
 }
 
 HRESULT Pane::realize(const RECT& local_rect,

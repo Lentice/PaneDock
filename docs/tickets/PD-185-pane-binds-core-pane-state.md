@@ -231,4 +231,56 @@ git diff --check
 
 ## 交接區
 
-（實作者填寫）
+**綁定與呼叫點**：`rebind_panes` 定義於 `src/app_shell/main.cpp:724`，只做
+`PaneState*` 指派／清空與 debug assertion；唯一的 `.bind(` 呼叫位於
+`:729`。呼叫位置為：`activate_group` 的 same-id 路徑 `:2950`、改寫
+`active_group_id` 後 `:2957`、`delete_group` 成功後 `:3054`、
+`set_layout` 的 `core::switch_layout` 成功後 `:3492`，以及 `WM_CREATE`
+建立完四個 `Pane` 後 `:4715`。後三者都位於相應 core／create 變動之後。
+
+**add／duplicate 覆蓋**：`duplicate_group` 尾端仍由 `activate_group`
+涵蓋。`add_group` 原有的非空路徑也由尾端 `activate_group` 涵蓋；原本為空
+時，core 新增第一個 Group 已同步把它設為 active，因此該既有專用分支在
+`:3009` 呼叫 `activate_group` 的 same-id 路徑，仍由同一維護點完成 rebind，
+沒有新增直接 `rebind_panes` 呼叫。
+
+**刪除與排序**：`delete_group` 在呼叫 `core::delete_group` 前先對四個
+`Pane` 全部 `unbind()`（`:3051`），成功後才 `rebind_panes`（`:3054`）。
+註解最終措辭為：`core::delete_group destroys PaneState objects. Drop every
+borrowed pointer before that erase; rebind only after the surviving Group is
+known.` `move_group` 上方註解為：`No rebind: PD-184 guarantees group reorder
+preserves PaneState addresses.` `finish_group_drag`／`reorder_group` 未加入
+rebind。
+
+**NFR-003／PD-170 追蹤**：`rebind_panes` 不讀寫 `pending_navigation`、
+generation 或 location，也沒有 Shell／async 呼叫。Group 切換先在
+`activate_group` 改 active id 並 rebind；舊導覽若在新導覽送出前完成，
+`navigation_request_is_current`（`:789-805`）以舊 request 的 `group_id` 對
+目前 Group，`navigation_request_matches` 會拒絕。新導覽送出後，
+`begin_navigation`（`:768-775`）以新 generation、group id、tab id 更新同一
+pane 的 request；之後舊結果會先被 `generation < request.generation` 擋掉。
+因此飛行中結果仍完全由 PD-170 的 generation + group id + tab id 身分驗證
+保護，不依賴新綁定指標。
+
+**測試與耦合指標**：`pane_test` 新增兩個案例：
+`test_pane_state_binding_uses_the_original_object` 覆蓋 bind 同址、透過指標
+修改原物件與 unbind；`test_destroy_unbinds_pane_state` 覆蓋 destroy 後為
+null。`panedock_pane` 通過。此票沒有可安全收窄的既有 `AppState&` 簽章，
+收窄數為 **0**；新增規格要求的協調函式 `rebind_panes(AppState&)` 一支，
+因此 PD-183 的函式簽章基準 **118 → 119**。既有 22 個
+`active_group(state).panes[...]` 字面呼叫完全未改；新增的第 23 個只位於
+`rebind_panes`。
+
+**Agent Checks（2026-09-04）**：Release configure 與 build 通過；完整
+`ctest --test-dir build --output-on-failure` 為 **22/22 passed，0 failed，
+4.98 sec**，含 `panedock_launch_smoke`（1.49 sec）與
+`panedock_explorer_host_lifetime`（0.38 sec）。票面三個 Pane header
+`Select-String` 均 0 結果；`.bind(` 只有 `rebind_panes` 內一處；獨立
+launch/close smoke 在可寫 `%LOCALAPPDATA%` 的一般使用者環境 exit 0；
+`git diff --check` 無輸出。受限 sandbox 的第一次全量執行曾因無法正常
+使用 `%LOCALAPPDATA%` 使 launch smoke 逾時；依 AGENTS.md 指示改在可寫
+使用者環境重跑後通過，產品測試無失敗。
+
+**使用者實機檢查**：票面第 1–10 項屬互動／硬體情境，本次 Agent Checks
+未代替使用者執行，全部待使用者實機回報；其中第 7、8 項（離線位置與大型
+資料夾飛行中切 Group）是 NFR-003／PD-170 的關鍵人工驗證。

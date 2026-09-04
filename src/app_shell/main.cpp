@@ -721,6 +721,22 @@ bool has_active_group(const AppState& state) noexcept {
     return !state.application.groups.empty();
 }
 
+void rebind_panes(AppState& state) noexcept {
+    const std::size_t pane_count =
+        has_active_group(state) ? active_group(state).panes.size() : 0;
+    for (std::size_t index = 0; index < state.panes.size(); ++index) {
+        if (index < pane_count)
+            state.panes[index].bind(&active_group(state).panes[index]);
+        else
+            state.panes[index].unbind();
+    }
+#ifndef NDEBUG
+    for (std::size_t index = 0; index < state.panes.size(); ++index)
+        assert((state.panes[index].pane_state() != nullptr) ==
+               (index < pane_count));
+#endif
+}
+
 std::size_t active_pane_index(const panedock::core::GroupState& group) {
     const auto pane = std::find_if(
         group.panes.begin(), group.panes.end(), [&](const auto& candidate) {
@@ -2931,12 +2947,14 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
     if (index >= state.application.groups.size()) return;
     const std::string target_id = state.application.groups[index].id;
     if (target_id == state.application.active_group_id) {
+        rebind_panes(state);
         refresh_sidebar(state);
         return;
     }
 
     capture_locations(state);
     state.application.active_group_id = target_id;
+    rebind_panes(state);
     refresh_tab_strips(state);
     auto& group = active_group(state);
     if (!navigate_realized_panes(state, group)) return;
@@ -2988,6 +3006,9 @@ void add_group(HWND window, AppState& state) {
     if (!panedock::core::add_group(state.application,
                                    new_group_state(state, id))) return;
     if (was_empty) {
+        // The first Group is already active when core adds it; route through
+        // activate_group's same-id path so binding still has one owner.
+        activate_group(window, state, state.application.groups.size() - 1);
         refresh_tab_strips(state);
         if (FAILED(apply_layout(window, state)))
             OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
@@ -3026,7 +3047,11 @@ void delete_group(HWND window, AppState& state) {
     capture_locations(state);
     const std::string id = state.application.groups[*selected].id;
     const bool deleted_active = id == state.application.active_group_id;
+    // core::delete_group destroys PaneState objects. Drop every borrowed
+    // pointer before that erase; rebind only after the surviving Group is known.
+    for (auto& pane : state.panes) pane.unbind();
     if (!panedock::core::delete_group(state.application, id)) return;
+    rebind_panes(state);
     refresh_tab_strips(state);
     if (deleted_active && has_active_group(state)) {
         auto& group = active_group(state);
@@ -3046,6 +3071,7 @@ void delete_group(HWND window, AppState& state) {
     schedule_session_save(state);
 }
 
+// No rebind: PD-184 guarantees group reorder preserves PaneState addresses.
 void move_group(AppState& state, bool down) {
     const auto selected = state.sidebar.selected_index();
     if (!selected.has_value() || *selected >= state.application.groups.size()) return;
@@ -3463,6 +3489,7 @@ void set_layout(HWND window, AppState& state,
     if (!panedock::core::switch_layout(group, target,
                                        default_shell_location(),
                                        pane_ids, tab_ids)) return;
+    rebind_panes(state);
     refresh_tab_strips(state);
     if (FAILED(apply_layout(window, state))) {
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
@@ -4685,6 +4712,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
                         L"Folder context menu");
         }
     }
+    rebind_panes(state);
     refresh_ui_font(window, state);
     refresh_sidebar(state);
     if (FAILED(apply_layout(window, state))) {
