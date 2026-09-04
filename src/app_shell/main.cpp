@@ -3427,6 +3427,14 @@ LRESULT CALLBACK address_edit_proc(HWND window, UINT message, WPARAM wparam,
     if (state != nullptr && (state->closing_ || state->shutdown_deferred) &&
         message != WM_NCDESTROY)
         return 0;
+    // First click into an unfocused address bar selects everything so the user
+    // can paste over the path. The EDIT places its caret in WM_LBUTTONDOWN,
+    // after WM_SETFOCUS, so selecting there would be cleared immediately.
+    if (message == WM_LBUTTONDOWN && GetFocus() != window) {
+        SetFocus(window);
+        SendMessageW(window, EM_SETSEL, 0, -1);
+        return 0;
+    }
     if (message == WM_KEYDOWN && wparam == VK_RETURN && state != nullptr) {
         submit_address(*state, static_cast<std::size_t>(pane_index));
         return 0;
