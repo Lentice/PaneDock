@@ -45,7 +45,7 @@ Assert-Shutdown 'case ShutdownEvent::save_prompt_finished:[\s\S]*?state_\.end_se
     'nested confirmed shutdown is remembered'
 Assert-Source 'void\s+set_main_window_title\(HWND window, bool diagnostic_mode,\s*bool closing\)[\s\S]*?L"PaneDock.*Closing\.\.\."' `
     'closing caption has a dedicated update path'
-Assert-Source 'set_main_window_title\(window, state\.diagnostic_mode, true\);[\s\S]*?destroy_explorers\(state\);' `
+Assert-Source 'set_main_window_title\(window, state\.diagnostic_mode, true\);[\s\S]*?destroy_panes\(state\);' `
     'closing state is visible before Shell teardown'
 Assert-Shutdown 'state_\.shutdown_deferred\s*=\s*true;' `
     'reducer records deferred shutdown'

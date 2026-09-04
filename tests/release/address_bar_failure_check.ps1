@@ -6,14 +6,14 @@ $ErrorActionPreference = 'Stop'
 $source = Get-Content -LiteralPath $SourcePath -Raw
 
 $failedStart = $source.IndexOf('void handle_navigation_failed(')
-$failedEnd = $source.IndexOf('void destroy_explorers(', $failedStart)
+$failedEnd = $source.IndexOf('void destroy_panes(', $failedStart)
 if ($failedStart -lt 0 -or $failedEnd -lt 0) {
     throw 'Address-bar failure check failed: navigation failure handler missing'
 }
 
 $failedBody = $source.Substring($failedStart, $failedEnd - $failedStart)
 if ($failedBody -notmatch
-    'state\.suppress_history_record\[pane_index\]\s*=\s*false') {
+    'state\.panes\[pane_index\]\.set_suppress_history\(false\)') {
     throw 'Address-bar failure check failed: history suppression is not released'
 }
 if ($failedBody -notmatch

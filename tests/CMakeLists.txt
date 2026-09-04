@@ -17,7 +17,7 @@ set(PANEDOCK_TESTS
     "core_session|unit/core_session_test.cpp|panedock_core"
     "core_navigation|unit/core_navigation_test.cpp|panedock_core"
     "core_shutdown|unit/core_shutdown_test.cpp|panedock_core"
-    "pane|unit/pane_test.cpp|panedock_pane"
+    "pane|unit/pane_test.cpp|panedock_pane panedock_explorer_host panedock_core"
     "pane_control_id|unit/pane_control_id_test.cpp|"
     "shell_core_view_mode|unit/shell_core_view_mode_test.cpp|panedock_shell_core"
     "file_operation_effect|unit/file_operation_effect_test.cpp|panedock_file_operations"
@@ -76,4 +76,9 @@ if(WIN32)
                 "${CMAKE_CURRENT_SOURCE_DIR}/release/launch_smoke.ps1"
                 -AppPath "$<TARGET_FILE:PaneDock>")
     set_tests_properties(panedock_launch_smoke PROPERTIES TIMEOUT 70)
+
+    # PD-183: this executable already existed (built by the root
+    # CMakeLists.txt) but was never registered with ctest.
+    add_test(NAME panedock_explorer_host_lifetime
+             COMMAND panedock_explorer_host_lifetime_check)
 endif()

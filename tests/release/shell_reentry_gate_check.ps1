@@ -77,7 +77,7 @@ $navigationHelperBody = $source.Substring(
     $navigationHelperStart, $navigationHelperEnd - $navigationHelperStart)
 if ($navigationHelperBody -notmatch 'state\.suppress_location_capture\s*=\s*true' -or
     $navigationHelperBody -notmatch 'ShellCallScope shell_call\(state\)' -or
-    $navigationHelperBody -notmatch 'state\.explorers\[pane\]\.navigate') {
+    $navigationHelperBody -notmatch 'state\.panes\[pane\]\.host\(\)\.navigate') {
     throw 'Shell re-entry invariant failed: realized-pane navigation helper is incomplete'
 }
 $navigationCallSiteSource = $source.Remove(

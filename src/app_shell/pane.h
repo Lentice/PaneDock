@@ -17,6 +17,8 @@
 
 #include "app_shell/pane_control_id.h"
 #include "app_shell/tab_overflow.h"
+#include "core/model.h"
+#include "explorer_host/explorer_host.h"
 
 namespace panedock::app_shell {
 
@@ -140,6 +142,42 @@ public:
         return tab_drag_target_.Get();
     }
 
+    // --- Shell view lifetime (PD-183) --------------------------------
+    //
+    // Pane holds the ExplorerHost and its parent container HWND, so
+    // realize()/derealize() can only be called through Pane's own
+    // destroy() ordering (see pane.cpp) — the coordinator decides *when*
+    // to realize/derealize via core::plan_realization, Pane just carries
+    // that decision out. Pane never calls plan_realization itself.
+
+    // Wraps ExplorerHost::initialize() against this pane's own
+    // explorer_container(). Returns the initialize() HRESULT (not `bool`
+    // per the ticket's literal signature) because callers need the exact
+    // HRESULT to report first-failure diagnostics; see PD-183 交接區.
+    HRESULT realize(const RECT& local_rect,
+                    const panedock::core::ShellLocation& location) noexcept;
+    void derealize() noexcept;
+    bool realized() const noexcept { return realized_; }
+    HRESULT navigate(const panedock::core::ShellLocation& location) {
+        return explorer_host_.navigate(location);
+    }
+
+    void set_suppress_history(bool suppress) noexcept {
+        suppress_history_record_ = suppress;
+    }
+    bool suppress_history() const noexcept { return suppress_history_record_; }
+
+    // Transitional direct access for ExplorerHost members that PD-183
+    // does not promote to a Pane-level command/query (navigation
+    // notification setup, view mode, sort, item counts, focus, ...). See
+    // PD-183 交接區 for the call-site list still using this.
+    panedock::explorer_host::ExplorerHost& host() noexcept {
+        return explorer_host_;
+    }
+    const panedock::explorer_host::ExplorerHost& host() const noexcept {
+        return explorer_host_;
+    }
+
 private:
     HWND explorer_container_{nullptr};
     HWND tab_strip_{nullptr};
@@ -160,6 +198,10 @@ private:
     std::optional<std::size_t> tab_hover_index_;
     std::optional<std::size_t> tab_scroll_hover_index_;
     Microsoft::WRL::ComPtr<IDropTarget> tab_drag_target_;
+
+    panedock::explorer_host::ExplorerHost explorer_host_;
+    bool realized_{};
+    bool suppress_history_record_{};
 };
 
 }  // namespace panedock::app_shell

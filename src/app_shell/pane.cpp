@@ -79,10 +79,22 @@ bool Pane::create(HWND parent, int pane_index) noexcept {
 }
 
 void Pane::destroy() noexcept {
-    // RevokeDragDrop must happen before the tab strip HWND it was
-    // registered on is destroyed (AGENTS.md: never destroy a parent HWND
-    // while a view/registration tied to it is still alive).
+    // Fixed order, per design-spec.md §9.4 ("順序不可調換。view 存活期間
+    // destroy parent HWND 是已知的崩潰面") and AGENTS.md ("Never destroy a
+    // parent HWND while a view is alive"):
+    //   1. RevokeDragDrop — the tab strip HWND it was registered on must
+    //      outlive the revoke call.
+    //   2. explorer_host_.destroy() — the live IExplorerBrowser (if any)
+    //      must be torn down while its parent (explorer_container_) is
+    //      still alive; ExplorerHost::destroy() is a no-op if never
+    //      initialized.
+    //   3. The remaining chrome child windows.
+    //   4. explorer_container_ last, because the Shell view lived inside
+    //      it — destroying it earlier is exactly the crash §9.4 warns
+    //      about.
     revoke_drag_hover_target();
+    explorer_host_.destroy();
+    realized_ = false;
     destroy_window(status_bar_);
     destroy_window(address_bar_);
     destroy_window(pinned_button_);
@@ -99,6 +111,20 @@ void Pane::destroy() noexcept {
     tab_strip_geometry_ = TabStripGeometry{};
     tab_hover_index_.reset();
     tab_scroll_hover_index_.reset();
+    suppress_history_record_ = false;
+}
+
+HRESULT Pane::realize(const RECT& local_rect,
+                      const panedock::core::ShellLocation& location) noexcept {
+    const HRESULT hr = explorer_host_.initialize(
+        explorer_container_, local_rect, location);
+    realized_ = SUCCEEDED(hr);
+    return hr;
+}
+
+void Pane::derealize() noexcept {
+    explorer_host_.destroy();
+    realized_ = false;
 }
 
 bool Pane::set_rect(const RECT& rect, HDWP* deferred) noexcept {

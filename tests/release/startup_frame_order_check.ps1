@@ -30,7 +30,7 @@ Assert-Source 'void\s+show_startup_notification\(HWND owner,\s*AppState& state\)
 Assert-Source 'L"BUTTON", L"OK"' 'startup notification has an explicit OK action'
 Assert-Source 'constexpr wchar_t kWindowClassName\[\]\s*=\s*L"PaneDockStartupNotification"[\s\S]*?kWindowClassName,\s*nullptr,\s*WS_CHILD\s*\|\s*WS_VISIBLE' 'startup notification remains a root child'
 Assert-Source 'RealizationMode::startup_frame' 'WM_CREATE blocks Shell realization through the core plan'
-Assert-Source 'plan_realization\(\s*group,\s*group\.layout_template,\s*state\.realized,\s*realization_mode\s*\)' 'layout consumes the shared realization plan'
+Assert-Source 'plan_realization\(\s*group,\s*group\.layout_template,\s*realized_flags\(state\),\s*realization_mode\s*\)' 'layout consumes the shared realization plan'
 Assert-Source 'if\s*\(plan_contains\(realization_plan\.realize,\s*index\)\)' 'layout executes planned realization only'
 Assert-Source 'ShowWindow\(window,[\s\S]*?UpdateWindow\(window\);\s*state\.startup_frame_only\s*=\s*false;' 'frame is shown before Shell gate opens'
 Assert-Source 'const HRESULT active_result = apply_layout\(window, state\);' 'startup pass realizes active layout first'
@@ -100,7 +100,7 @@ if ($postWindowStartup -match 'MessageBoxW' -or
 }
 
 $shutdownStart = $source.IndexOf('void finish_shutdown(HWND window, AppState& state)')
-$explorerDestroy = $source.IndexOf('destroy_explorers(state);', $shutdownStart)
+$explorerDestroy = $source.IndexOf('destroy_panes(state);', $shutdownStart)
 $notificationDestroy = $source.IndexOf('state.startup_notification.destroy();', $shutdownStart)
 if ($shutdownStart -lt 0 -or $notificationDestroy -lt 0 -or
     $explorerDestroy -lt 0 -or $notificationDestroy -gt $explorerDestroy) {

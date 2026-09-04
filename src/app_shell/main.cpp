@@ -484,8 +484,6 @@ struct AppState {
         shutdown_sequence.state().close_after_file_operation;
     bool& cancel_file_operation =
         shutdown_sequence.state().cancel_file_operation;
-    std::array<panedock::explorer_host::ExplorerHost, kExplorerCount> explorers;
-    std::array<bool, kExplorerCount> realized{};
     // PD-093: startup shows the active Shell view first; the posted message
     // realizes the remaining visible panes after the window is interactive.
     bool startup_realize_pending{};
@@ -552,15 +550,16 @@ struct AppState {
     // PD-182: tab_visuals, tab_strip_geometry, tab_hover/scroll-hover
     // indices, folder_context_buttons and the per-pane drag hover target
     // moved into panedock::app_shell::Pane (pure UI state, never
-    // persisted). explorers/realized/suppress_history_record stay here —
-    // they are Shell view lifetime, left for PD-183.
+    // persisted). PD-183: explorers/realized/suppress_history_record
+    // (Shell view lifetime) moved into Pane too — Pane now owns both the
+    // view and its parent HWND, so PD-183 can make destroy ordering a
+    // constructor/destructor invariant instead of a call-site convention.
     std::array<panedock::app_shell::Pane, kExplorerCount> panes{};
     std::optional<std::size_t> tab_context_menu_pane;
     std::string tab_context_menu_tab_id;
     panedock::app_shell::PinnedLocationsDialog pinned_locations_dialog;
     std::array<std::wstring, kPinnedFixedParsingNames.size()>
         pinned_fixed_labels{};
-    std::array<bool, kExplorerCount> suppress_history_record{};
     std::array<panedock::core::NavigationRequest, kExplorerCount>
         pending_navigation{};
     // BrowseToObject may synchronously re-enter navigation_complete while the
@@ -753,7 +752,7 @@ NavigationGeneration begin_navigation(AppState& state, std::size_t pane_index) {
     auto& request = state.pending_navigation[pane_index];
     auto& group = active_group(state);
     auto& tab = active_tab(group.panes[pane_index]);
-    request.generation = state.explorers[pane_index].begin_navigation();
+    request.generation = state.panes[pane_index].host().begin_navigation();
     request.group_id = group.id;
     request.tab_id = tab.id;
     return request.generation;
@@ -761,12 +760,12 @@ NavigationGeneration begin_navigation(AppState& state, std::size_t pane_index) {
 
 HRESULT navigate_pane(AppState& state, std::size_t pane_index,
                       const panedock::core::ShellLocation& location) {
-    return state.explorers[pane_index].navigate(
+    return state.panes[pane_index].host().navigate(
         location, begin_navigation(state, pane_index));
 }
 
 HRESULT navigate_up_pane(AppState& state, std::size_t pane_index) {
-    return state.explorers[pane_index].navigate_up(
+    return state.panes[pane_index].host().navigate_up(
         begin_navigation(state, pane_index));
 }
 
@@ -789,17 +788,27 @@ bool navigation_request_is_current(AppState& state, std::size_t pane_index,
         request, generation, group.id, tab.id);
 }
 
+// plan_realization takes a snapshot of which panes currently hold a live
+// view; Pane owns that flag now (PD-183), so callers collect it here rather
+// than plan_realization reaching into Pane itself.
+std::array<bool, kExplorerCount> realized_flags(const AppState& state) noexcept {
+    std::array<bool, kExplorerCount> flags{};
+    for (std::size_t index = 0; index < kExplorerCount; ++index)
+        flags[index] = state.panes[index].realized();
+    return flags;
+}
+
 bool navigate_realized_panes(
     AppState& state, const panedock::core::GroupState& group) noexcept {
     const auto plan = panedock::core::plan_realization(
-        group, group.layout_template, state.realized,
+        group, group.layout_template, realized_flags(state),
         panedock::core::RealizationMode::group_switch);
     const bool previous_suppression = state.suppress_location_capture;
     state.suppress_location_capture = true;
     for (const std::size_t pane : plan.navigate) {
         {
             ShellCallScope shell_call(state);
-            state.explorers[pane].navigate(
+            state.panes[pane].host().navigate(
                 active_tab(group.panes[pane]).location,
                 begin_navigation(state, pane));
         }
@@ -1575,14 +1584,13 @@ void refresh_navigation_buttons(AppState& state, std::size_t pane_index) {
     }
     const auto& tab = active_tab(active_group(state).panes[pane_index]);
     EnableWindow(chrome.back_button(),
-                 !state.suppress_history_record[pane_index] &&
+                 !chrome.suppress_history() &&
                      panedock::core::can_navigate_tab_back(tab));
     EnableWindow(chrome.forward_button(),
-                 !state.suppress_history_record[pane_index] &&
+                 !chrome.suppress_history() &&
                      panedock::core::can_navigate_tab_forward(tab));
     EnableWindow(chrome.up_button(), TRUE);
-    EnableWindow(chrome.folder_context_button(),
-                 state.realized[pane_index]);
+    EnableWindow(chrome.folder_context_button(), chrome.realized());
 }
 
 void refresh_navigation_chrome(AppState& state, std::size_t pane_index) {
@@ -1601,13 +1609,13 @@ void refresh_navigation_chrome(AppState& state, std::size_t pane_index) {
 
 void capture_pane_view_mode(AppState& state, std::size_t pane_index) {
     if (!has_active_group(state) || pane_index >= active_group(state).panes.size() ||
-        !state.realized[pane_index]) return;
+        !state.panes[pane_index].realized()) return;
     FOLDERVIEWMODE mode{};
     int image_size = -1;
     HRESULT hr = E_UNEXPECTED;
     {
         ShellCallScope shell_call(state);
-        hr = state.explorers[pane_index].get_view_mode(mode, &image_size);
+        hr = state.panes[pane_index].host().get_view_mode(mode, &image_size);
     }
     if (state.shutdown_deferred || state.closing_) return;
     if (SUCCEEDED(hr)) {
@@ -1620,13 +1628,13 @@ void capture_pane_view_mode(AppState& state, std::size_t pane_index) {
 
 void capture_pane_sort(AppState& state, std::size_t pane_index) {
     if (!has_active_group(state) || pane_index >= active_group(state).panes.size() ||
-        !state.realized[pane_index]) return;
+        !state.panes[pane_index].realized()) return;
     std::string column;
     bool ascending{};
     HRESULT hr = E_UNEXPECTED;
     {
         ShellCallScope shell_call(state);
-        hr = state.explorers[pane_index].get_sort(column, ascending);
+        hr = state.panes[pane_index].host().get_sort(column, ascending);
     }
     if (state.shutdown_deferred || state.closing_) return;
     if (SUCCEEDED(hr)) {
@@ -1638,20 +1646,20 @@ void capture_pane_sort(AppState& state, std::size_t pane_index) {
 
 void apply_pane_view_mode(AppState& state, std::size_t pane_index) {
     if (!has_active_group(state) || pane_index >= active_group(state).panes.size() ||
-        !state.realized[pane_index]) return;
+        !state.panes[pane_index].realized()) return;
     auto& tab = active_tab(active_group(state).panes[pane_index]);
     if (const auto selection = panedock::shell_core::parse_view_mode(
             tab.view_mode);
         selection.has_value()) {
         {
             ShellCallScope shell_call(state);
-            (void)state.explorers[pane_index].set_view_mode(
+            (void)state.panes[pane_index].host().set_view_mode(
                 selection->mode, selection->image_size);
         }
     } else if (tab.view_mode.empty()) {
         {
             ShellCallScope shell_call(state);
-            (void)state.explorers[pane_index].set_view_mode(FVM_DETAILS);
+            (void)state.panes[pane_index].host().set_view_mode(FVM_DETAILS);
         }
     }
     if (state.shutdown_deferred || state.closing_) return;
@@ -1660,14 +1668,14 @@ void apply_pane_view_mode(AppState& state, std::size_t pane_index) {
 
 void apply_pane_sort(AppState& state, std::size_t pane_index) {
     if (!has_active_group(state) || pane_index >= active_group(state).panes.size() ||
-        !state.realized[pane_index]) return;
+        !state.panes[pane_index].realized()) return;
     const auto& tab = active_tab(active_group(state).panes[pane_index]);
     if (tab.sort_column.empty()) return;
     HRESULT hr = E_UNEXPECTED;
     {
         ShellCallScope shell_call(state);
-        hr = state.explorers[pane_index].set_sort(tab.sort_column,
-                                                  tab.sort_ascending);
+        hr = state.panes[pane_index].host().set_sort(tab.sort_column,
+                                                      tab.sort_ascending);
     }
     if (state.shutdown_deferred || state.closing_ || FAILED(hr)) return;
     capture_pane_sort(state, pane_index);
@@ -1681,7 +1689,7 @@ void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
     HRESULT hr = E_UNEXPECTED;
     {
         ShellCallScope shell_call(state);
-        hr = state.explorers[pane_index].item_counts(counts);
+        hr = state.panes[pane_index].host().item_counts(counts);
     }
     if (state.shutdown_deferred || state.closing_) return;
     if (FAILED(hr)) {
@@ -1894,10 +1902,12 @@ void refresh_tab_strips(AppState& state) {
 void capture_pane_location(AppState& state, std::size_t pane_index) {
     if (state.suppress_location_capture || !has_active_group(state)) return;
     auto& group = active_group(state);
-    if (pane_index >= group.panes.size() || !state.realized[pane_index] ||
-        state.explorers[pane_index].location().parsing_name.empty()) return;
+    if (pane_index >= group.panes.size() ||
+        !state.panes[pane_index].realized() ||
+        state.panes[pane_index].host().location().parsing_name.empty())
+        return;
     auto& tab = active_tab(group.panes[pane_index]);
-    tab.location = state.explorers[pane_index].location();
+    tab.location = state.panes[pane_index].host().location();
     capture_pane_view_mode(state, pane_index);
     if (state.shutdown_deferred || state.closing_) return;
     capture_pane_sort(state, pane_index);
@@ -2436,8 +2446,8 @@ void handle_navigation_complete(
     if (!navigation_request_is_current(state, pane_index, generation)) return;
     auto& tab = active_tab(active_group(state).panes[pane_index]);
     auto completed_location = new_location;
-    if (state.suppress_history_record[pane_index]) {
-        state.suppress_history_record[pane_index] = false;
+    if (state.panes[pane_index].suppress_history()) {
+        state.panes[pane_index].set_suppress_history(false);
         tab.location = std::move(completed_location);
         if (!tab.history.empty() && tab.history_index < tab.history.size()) {
             tab.history[tab.history_index] = tab.location;
@@ -2458,16 +2468,20 @@ void handle_navigation_failed(AppState& state, std::size_t pane_index,
     if (!navigation_request_is_current(state, pane_index, generation)) return;
     // A pending back/forward navigation that fails asynchronously must still
     // release the suppression flag, or those buttons stay disabled forever.
-    state.suppress_history_record[pane_index] = false;
+    state.panes[pane_index].set_suppress_history(false);
     refresh_navigation_buttons(state, pane_index);
 }
 
-void destroy_explorers(AppState& state) noexcept {
-    for (auto& explorer : state.explorers) {
+// PD-183: Pane::destroy() now folds ExplorerHost::destroy() into its own
+// fixed destroy order (see pane.cpp), so tearing down every pane's chrome
+// and Shell view is this one loop everywhere shutdown needs it — each
+// destroy() call is still wrapped in its own ShellCallScope since it may
+// perform a Shell call (ExplorerHost::destroy()).
+void destroy_panes(AppState& state) noexcept {
+    for (auto& chrome : state.panes) {
         ShellCallScope shell_call(state);
-        explorer.destroy();
+        chrome.destroy();
     }
-    state.realized.fill(false);
     write_live_view_count(state.diagnostic_mode);
 }
 
@@ -2523,10 +2537,10 @@ HRESULT apply_layout(HWND window, AppState& state,
     layout_sidebar(window, state, &positions, &sidebar_list_rect);
     layout_header(window, state, &positions, recompute_content);
     if (!has_active_group(state)) {
-        for (std::size_t index = 0; index < state.explorers.size(); ++index) {
+        for (std::size_t index = 0; index < state.panes.size(); ++index) {
             {
                 ShellCallScope shell_call(state);
-                state.explorers[index].set_visible(false);
+                state.panes[index].host().set_visible(false);
             }
             if (state.shutdown_deferred || state.closing_) return E_ABORT;
             state.panes[index].set_visible(false);
@@ -2552,7 +2566,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                    ? panedock::core::RealizationMode::startup_deferred
                    : panedock::core::RealizationMode::normal);
     const auto realization_plan = panedock::core::plan_realization(
-        group, group.layout_template, state.realized, realization_mode);
+        group, group.layout_template, realized_flags(state), realization_mode);
     const auto plan_contains = [](const std::vector<std::size_t>& indexes,
                                   std::size_t index) noexcept {
         return std::find(indexes.begin(), indexes.end(), index) !=
@@ -2569,7 +2583,7 @@ HRESULT apply_layout(HWND window, AppState& state,
     std::array<std::optional<RECT>, kExplorerCount> pending_shell_rects{};
     std::array<bool, kExplorerCount> shell_positions_deferred{};
     std::array<RECT, kExplorerCount> container_rects{};
-    for (std::size_t index = 0; index < state.explorers.size(); ++index) {
+    for (std::size_t index = 0; index < state.panes.size(); ++index) {
         auto& chrome = state.panes[index];
         const bool visible =
             index < panedock::core::pane_count(group.layout_template);
@@ -2682,8 +2696,7 @@ HRESULT apply_layout(HWND window, AppState& state,
             // the inset action above that sibling so it remains drawable.
             SetWindowPos(chrome.folder_context_button(), HWND_TOP, 0, 0,
                          0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            EnableWindow(chrome.folder_context_button(),
-                         state.realized[index]);
+            EnableWindow(chrome.folder_context_button(), chrome.realized());
             rect.bottom -= status_height;
             // PD-040: the container is the real parent HWND passed to
             // ExplorerHost::initialize now, positioned/sized at `rect` in
@@ -2702,14 +2715,13 @@ HRESULT apply_layout(HWND window, AppState& state,
             }
             const RECT local_rect{0, 0, container_width, container_height};
             if (plan_contains(realization_plan.realize, index)) {
-                state.explorers[index].set_shell_call_callback(
+                chrome.host().set_shell_call_callback(
                     &state, app_shell_call_state_changed);
                 HRESULT hr = E_UNEXPECTED;
                 {
                     ShellCallScope shell_call(state);
-                    hr = state.explorers[index].initialize(
-                        chrome.explorer_container(), local_rect,
-                        active_tab(group.panes[index]).location);
+                    hr = chrome.realize(
+                        local_rect, active_tab(group.panes[index]).location);
                 }
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
                 if (FAILED(hr)) {
@@ -2717,7 +2729,6 @@ HRESULT apply_layout(HWND window, AppState& state,
                         first_failure = LayoutFailure{hr, index};
                     continue;
                 }
-                state.realized[index] = true;
                 refresh_navigation_buttons(state, index);
                 {
                     ShellCallScope shell_call(state);
@@ -2726,17 +2737,17 @@ HRESULT apply_layout(HWND window, AppState& state,
                 }
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
                 try {
-                    state.explorers[index].set_navigation_callback(
+                    chrome.host().set_navigation_callback(
                         [&state, index](NavigationGeneration generation,
                             const panedock::core::ShellLocation& new_location) {
                             handle_navigation_complete(state, index, generation,
                                                        new_location);
                         });
-                    state.explorers[index].set_navigation_failed_callback(
+                    chrome.host().set_navigation_failed_callback(
                         [&state, index](NavigationGeneration generation) {
                             handle_navigation_failed(state, index, generation);
                         });
-                    state.explorers[index].set_selection_changed_callback(
+                    chrome.host().set_selection_changed_callback(
                         [&state, index]() { refresh_status_bar(state, index); });
                     apply_pane_view_mode(state, index);
                     if (state.shutdown_deferred || state.closing_)
@@ -2753,11 +2764,11 @@ HRESULT apply_layout(HWND window, AppState& state,
                 if (explorer_positions[index]->active()) {
                     shell_positions_deferred[index] = true;
                     ShellCallScope shell_call(state);
-                    state.explorers[index].set_rect(
+                    chrome.host().set_rect(
                         local_rect, explorer_positions[index]->handle());
                 } else {
                     ShellCallScope shell_call(state);
-                    state.explorers[index].set_rect(local_rect, nullptr);
+                    chrome.host().set_rect(local_rect, nullptr);
                 }
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
             }
@@ -2771,10 +2782,9 @@ HRESULT apply_layout(HWND window, AppState& state,
             if (plan_contains(realization_plan.derealize, index)) {
                 {
                     ShellCallScope shell_call(state);
-                    state.explorers[index].destroy();
+                    chrome.derealize();
                 }
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
-                state.realized[index] = false;
             }
             chrome.set_visible(false);
             ShowWindow(chrome.folder_context_button(), SW_HIDE);
@@ -2782,7 +2792,7 @@ HRESULT apply_layout(HWND window, AppState& state,
         }
         {
             ShellCallScope shell_call(state);
-            state.explorers[index].set_visible(visible);
+            chrome.host().set_visible(visible);
         }
         if (state.shutdown_deferred || state.closing_) return E_ABORT;
     }
@@ -2800,17 +2810,17 @@ HRESULT apply_layout(HWND window, AppState& state,
             (changed_panes[index] || recompute_content))
             apply_tab_item_size(state, index);
     }
-    for (std::size_t index = 0; index < state.explorers.size(); ++index) {
+    for (std::size_t index = 0; index < state.panes.size(); ++index) {
         if (!explorer_positions[index].has_value()) continue;
         const bool explorer_committed = explorer_positions[index]->commit();
         if (!explorer_committed && shell_positions_deferred[index]) {
             ShellCallScope shell_call(state);
-            state.explorers[index].set_rect(
+            state.panes[index].host().set_rect(
                 *pending_shell_rects[index], nullptr);
             if (state.shutdown_deferred || state.closing_) return E_ABORT;
         }
     }
-    for (std::size_t index = 0; index < state.explorers.size(); ++index) {
+    for (std::size_t index = 0; index < state.panes.size(); ++index) {
         if (changed_panes[index]) {
             apply_pane_container_region(
                 state.panes[index].explorer_container(),
@@ -2851,7 +2861,7 @@ HRESULT realize_startup_panes(HWND window, AppState& state) {
         const std::size_t active = active_pane_index(active_group(state));
         {
             ShellCallScope shell_call(state);
-            state.explorers[active].focus();
+            state.panes[active].host().focus();
         }
         if (state.shutdown_deferred || state.closing_) return E_ABORT;
     }
@@ -2934,7 +2944,7 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
     if (state.shutdown_deferred || state.closing_) return;
     {
         ShellCallScope shell_call(state);
-        state.explorers[active_pane_index(group)].focus();
+        state.panes[active_pane_index(group)].host().focus();
     }
     if (state.shutdown_deferred || state.closing_) return;
     refresh_sidebar(state);
@@ -2983,7 +2993,7 @@ void add_group(HWND window, AppState& state) {
         if (state.shutdown_deferred || state.closing_) return;
         {
             ShellCallScope shell_call(state);
-            state.explorers[active_pane_index(active_group(state))].focus();
+            state.panes[active_pane_index(active_group(state))].host().focus();
         }
         if (state.shutdown_deferred || state.closing_) return;
         refresh_sidebar(state);
@@ -3028,7 +3038,7 @@ void delete_group(HWND window, AppState& state) {
     if (has_active_group(state)) {
         const std::size_t active = active_pane_index(active_group(state));
         ShellCallScope shell_call(state);
-        state.explorers[active].focus();
+        state.panes[active].host().focus();
     }
     if (state.shutdown_deferred || state.closing_) return;
     refresh_sidebar(state);
@@ -3057,7 +3067,7 @@ void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
         !panedock::core::set_active_pane(group, group.panes[pane].id)) return;
     {
         ShellCallScope shell_call(state);
-        state.explorers[pane].focus();
+        state.panes[pane].host().focus();
     }
     if (state.shutdown_deferred || state.closing_) return;
     InvalidateRect(state.panes[previous].tab_strip(), nullptr, FALSE);
@@ -3099,7 +3109,7 @@ void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
         refresh_tab_strip(state, pane_index);
         return;
     }
-    if (state.realized[pane_index]) {
+    if (state.panes[pane_index].realized()) {
         {
             ShellCallScope shell_call(state);
             navigate_pane(
@@ -3187,7 +3197,7 @@ void add_tab_to_pane(
             pane, {id, std::move(initial_location), {}, {}, true,
                    {}, 0}) ||
         !panedock::core::set_active_tab(pane, id)) return;
-    if (state.realized[pane_index]) {
+    if (state.panes[pane_index].realized()) {
         {
             ShellCallScope shell_call(state);
             navigate_pane(
@@ -3211,7 +3221,7 @@ void close_tab_in_pane(HWND, AppState& state, std::size_t pane_index,
     const bool closed_active = pane.active_tab_id == tab_id;
     if (!panedock::core::close_tab(
             pane, tab_id, default_shell_location())) return;
-    if (closed_active && state.realized[pane_index]) {
+    if (closed_active && state.panes[pane_index].realized()) {
         {
             ShellCallScope shell_call(state);
             navigate_pane(
@@ -3228,19 +3238,19 @@ void navigate_tab_history(AppState& state, std::size_t pane_index, bool back) {
     if (state.closing_ || state.shutdown_deferred) return;
     if (!has_active_group(state) ||
         pane_index >= active_group(state).panes.size() ||
-        state.suppress_history_record[pane_index]) return;
+        state.panes[pane_index].suppress_history()) return;
     auto& tab = active_tab(active_group(state).panes[pane_index]);
     const bool moved = back ? panedock::core::navigate_tab_back(tab)
                             : panedock::core::navigate_tab_forward(tab);
     if (!moved) return;
-    state.suppress_history_record[pane_index] = true;
+    state.panes[pane_index].set_suppress_history(true);
     HRESULT hr = E_UNEXPECTED;
     {
         ShellCallScope shell_call(state);
         hr = navigate_pane(state, pane_index, tab.location);
     }
     if (state.shutdown_deferred || state.closing_) return;
-    if (FAILED(hr)) state.suppress_history_record[pane_index] = false;
+    if (FAILED(hr)) state.panes[pane_index].set_suppress_history(false);
     refresh_navigation_chrome(state, pane_index);
 }
 
@@ -3260,7 +3270,7 @@ void refresh_pane(AppState& state, std::size_t pane_index) {
         return;
     {
         ShellCallScope shell_call(state);
-        (void)state.explorers[pane_index].refresh(
+        (void)state.panes[pane_index].host().refresh(
             begin_navigation(state, pane_index));
     }
 }
@@ -3273,7 +3283,7 @@ void set_pane_view_mode(AppState& state, std::size_t pane_index,
     HRESULT hr = E_UNEXPECTED;
     {
         ShellCallScope shell_call(state);
-        hr = state.explorers[pane_index].set_view_mode(option.selection.mode,
+        hr = state.panes[pane_index].host().set_view_mode(option.selection.mode,
                                                         option.selection.image_size);
     }
     if (state.shutdown_deferred || state.closing_) return;
@@ -3461,7 +3471,7 @@ void set_layout(HWND window, AppState& state,
     const std::size_t active = active_pane_index(group);
     {
         ShellCallScope shell_call(state);
-        state.explorers[active].focus();
+        state.panes[active].host().focus();
     }
     if (state.shutdown_deferred || state.closing_) return;
     schedule_session_save(state);
@@ -3662,7 +3672,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
     if (!panedock::core::move_tab(
             source, target, drag.tab_id, *drag.target_index,
             default_shell_location())) return;
-    if (source_active && state.realized[drag.pane_index]) {
+    if (source_active && state.panes[drag.pane_index].realized()) {
         {
             ShellCallScope shell_call(state);
             navigate_pane(
@@ -3671,7 +3681,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
         }
         if (state.shutdown_deferred || state.closing_) return;
     }
-    if (state.realized[target_pane]) {
+    if (state.panes[target_pane].realized()) {
         {
             ShellCallScope shell_call(state);
             navigate_pane(
@@ -4339,9 +4349,8 @@ void finish_shutdown(HWND window, AppState& state) noexcept {
     state.pinned_locations_dialog.destroy();
     revoke_drag_hover_targets(state);
     cancel_session_save_timer(state);
-    destroy_explorers(state);
+    destroy_panes(state);
     assert(panedock::explorer_host::live_view_count() == 0);
-    for (auto& chrome : state.panes) chrome.destroy();
     if (state.shutdown_sequence.step(
             panedock::core::ShutdownEvent::views_destroyed) ==
         panedock::core::ShutdownAction::destroy_window) {
@@ -4494,10 +4503,10 @@ bool perform_clipboard_paste(HWND window, AppState& state,
     if (state.file_operation_call_active || state.closing_ ||
         state.shutdown_deferred)
         return true;
-    if (pane_index >= kExplorerCount || !state.realized[pane_index])
+    if (pane_index >= kExplorerCount || !state.panes[pane_index].realized())
         return false;
     const std::wstring& parsing_name =
-        state.explorers[pane_index].location().parsing_name;
+        state.panes[pane_index].host().location().parsing_name;
     if (parsing_name.empty()) return false;
 
     state.shutdown_sequence.step(
@@ -4728,7 +4737,7 @@ void handle_pane_command(
         state.panes[pane_index].folder_context_button();
     if (!has_active_group(state) ||
         pane_index >= active_group(state).panes.size() ||
-        !state.realized[pane_index] ||
+        !state.panes[pane_index].realized() ||
         folder_context_button == nullptr ||
         !IsWindowVisible(folder_context_button))
         return;
@@ -4740,8 +4749,8 @@ void handle_pane_command(
         return;
     const POINT anchor{button_rect.left, button_rect.top};
     ShellCallScope shell_call(state);
-    state.explorers[pane_index].focus();
-    (void)state.explorers[pane_index].show_folder_context_menu(
+    state.panes[pane_index].host().focus();
+    (void)state.panes[pane_index].host().show_folder_context_menu(
         state.main_window, anchor);
 }
 
@@ -5791,7 +5800,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         placement.y, placement.width, placement.height, nullptr, nullptr,
         instance, &state);
     if (window == nullptr) {
-        destroy_explorers(state);
+        destroy_panes(state);
         assert(panedock::explorer_host::live_view_count() == 0);
         std::wstring fatal_message = state.startup_error_message;
         if (!state.startup_warning_message.empty()) {
@@ -5891,7 +5900,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 {
                     ShellCallScope shell_call(state);
                     accelerator =
-                        state.explorers[active].translate_accelerator(&message);
+                        state.panes[active].host().translate_accelerator(&message);
                 }
                 if (state.closing_ || state.shutdown_deferred) continue;
                 if (accelerator == S_OK) continue;
@@ -5945,8 +5954,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         }
         TranslateMessage(&message);
         DispatchMessageW(&message);
-        for (auto& explorer : state.explorers)
-            explorer.process_retry_request();
+        for (auto& chrome : state.panes)
+            chrome.host().process_retry_request();
         apply_pinned_locations_dialog_result(state);
         handle_transfer_close_dialog_result(window, state);
         // win32: a nested modal loop can consume the WM_QUIT posted in
@@ -5958,7 +5967,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     if (state.quit_requested) exit_code = 0;
 
     state.pinned_locations_dialog.destroy();
-    destroy_explorers(state);
+    destroy_panes(state);
     assert(panedock::explorer_host::live_view_count() == 0);
     OleUninitialize();
     if (state.shutdown_clean_marker_armed && state.main_window_destroyed) {
