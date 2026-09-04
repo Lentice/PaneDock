@@ -221,7 +221,7 @@
 | PD-181 | 把 error window 從 `ExplorerHost` 抽成獨立的 `PaneErrorOverlay` | 7 | `done` | PD-180 | [PD-181](tickets/PD-181-extract-pane-error-overlay-from-explorer-host.md) |
 | PD-182 | `PaneChrome` 升級為 `Pane`，接手六個純 UI 的 pane-parallel 欄位 | 7 | `done` | PD-163, PD-178, PD-179 | [PD-182](tickets/PD-182-pane-type-owns-ui-state.md) |
 | PD-183 | `Pane` 接手 `ExplorerHost`，把 §9.4 的 destroy 順序變成解構子不變量 | 7 | `done` | PD-182 | [PD-183](tickets/PD-183-pane-owns-explorer-host-lifetime.md) |
-| PD-184 | `core` 保證 `PaneState` 位址穩定性，讓 UI 層可長期持有 `PaneState*` | 7 | `ready` | PD-004, PD-006 | [PD-184](tickets/PD-184-panestate-address-stability-invariant.md) |
+| PD-184 | `core` 保證 `PaneState` 位址穩定性，讓 UI 層可長期持有 `PaneState*` | 7 | `done` | PD-004, PD-006 | [PD-184](tickets/PD-184-panestate-address-stability-invariant.md) |
 | PD-185 | `Pane` 綁定 `core::PaneState*`，Group 切換改為重新綁定而非複製 | 7 | `planned` | PD-182, PD-183, PD-184 | [PD-185](tickets/PD-185-pane-binds-core-pane-state.md) |
 | PD-186 | 以 `Pane` 綁定指標取代約 85 處 `active_group(state).panes[i]` 與重複 guard | 7 | `planned` | PD-185 | [PD-186](tickets/PD-186-pane-scoped-state-access-through-binding.md) |
 | PD-187 | 為每個 pane 註冊 `PaneDock.Pane` window class，子控制項改掛 pane HWND | 7 | `planned` | PD-183, PD-185 | [PD-187](tickets/PD-187-per-pane-window-class-and-hwnd.md) |

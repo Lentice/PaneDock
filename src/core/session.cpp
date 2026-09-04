@@ -507,6 +507,7 @@ std::optional<ApplicationState> decode(const Json& root) {
         const auto* active_pane = as<std::string>(*group_object, "active_pane_id");
         if (!id || !name || !template_value || !ratios || !panes || !active_pane) return std::nullopt;
         GroupState group{*id, *name, *template_value, {}, {}, *active_pane};
+        reserve_panes(group);
         for (const auto& ratio : *ratios) {
             const auto* number = std::get_if<double>(&ratio.value);
             if (!number) return std::nullopt;

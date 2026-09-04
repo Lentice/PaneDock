@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace panedock::core {
@@ -49,6 +50,9 @@ struct PaneState final {
     bool operator==(const PaneState&) const = default;
 };
 
+// core's contract is that a PaneState address stays stable for the lifetime
+// of the GroupState that owns it. TabState addresses are not covered because
+// PaneState::tabs may reallocate.
 struct GroupState final {
     std::string id;
     std::wstring name;
@@ -59,6 +63,22 @@ struct GroupState final {
 
     bool operator==(const GroupState&) const = default;
 };
+
+// app_shell::Pane holds a raw core::PaneState* for the lifetime of the
+// group it displays (PD-185). Reserving the fixed maximum up front is what
+// makes that pointer safe: switch_layout only ever push_backs (model.cpp
+// "Panes are stable identities and are never discarded ... on a shrink"),
+// so with capacity kMaxPaneCount the vector never reallocates and no
+// PaneState is ever relocated.
+inline void reserve_panes(GroupState& group) {
+    group.panes.reserve(kMaxPaneCount);
+}
+
+// std::vector relocates elements with move-if-noexcept. If GroupState ever
+// gains a member whose move can throw, the groups vector silently falls
+// back to copying, which relocates every PaneState and dangles every
+// pointer app_shell::Pane holds. Keep this assertion true.
+static_assert(std::is_nothrow_move_constructible_v<GroupState>);
 
 struct ApplicationState final {
     struct WindowPlacement final {

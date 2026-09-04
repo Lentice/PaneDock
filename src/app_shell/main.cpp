@@ -677,6 +677,7 @@ panedock::core::ApplicationState default_application_state() {
     group.layout_template = panedock::core::LayoutTemplate::four_pane_grid;
     group.divider_ratios = panedock::core::default_divider_ratios(
         group.layout_template);
+    panedock::core::reserve_panes(group);
     for (std::size_t index = 0; index < kExplorerCount; ++index) {
         const std::string suffix = std::to_string(index);
         group.panes.push_back({"pane-" + suffix,

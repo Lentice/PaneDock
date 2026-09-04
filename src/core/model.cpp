@@ -1,6 +1,7 @@
 #include "core/model.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <iterator>
 #include <unordered_set>
@@ -149,6 +150,7 @@ bool add_group(ApplicationState& application, GroupState group) {
         find_id(application.groups, group.id) != application.groups.end()) {
         return false;
     }
+    reserve_panes(group);
     application.groups.push_back(std::move(group));
     if (application.active_group_id.empty()) {
         application.active_group_id = application.groups.back().id;
@@ -177,6 +179,7 @@ bool duplicate_group(ApplicationState& application,
     GroupState copy = *source;
     copy.id = std::move(new_group_id);
     copy.name = std::move(new_name);
+    reserve_panes(copy);
     application.groups.push_back(std::move(copy));
     return true;
 }
@@ -241,16 +244,24 @@ bool switch_layout(GroupState& group, LayoutTemplate layout_template,
     }
 
     GroupState candidate = group;
+    reserve_panes(candidate);
 
     // Panes are stable identities and are never discarded or merged on a
     // shrink: the template only changes which of them are visible. Growth
     // appends the new identities (each seeded with a default-location tab).
+#ifndef NDEBUG
+    const auto* const panes_data = candidate.panes.data();
+#endif
     for (std::size_t index = 0; index < added; ++index) {
         candidate.panes.push_back(PaneState{
             new_pane_ids[index],
             {TabState{new_tab_ids[index], default_location, {}, {}, true}},
             new_tab_ids[index]});
     }
+#ifndef NDEBUG
+    assert(candidate.panes.data() == panes_data);
+    assert(new_count <= kMaxPaneCount);
+#endif
 
     candidate.layout_template = layout_template;
     candidate.divider_ratios = default_divider_ratios(layout_template);
@@ -266,7 +277,16 @@ bool switch_layout(GroupState& group, LayoutTemplate layout_template,
     if (!is_valid(candidate)) {
         return false;
     }
-    group = std::move(candidate);
+    group.layout_template = candidate.layout_template;
+    group.divider_ratios = std::move(candidate.divider_ratios);
+    group.active_pane_id = std::move(candidate.active_pane_id);
+    for (std::size_t index = 0; index < candidate.panes.size(); ++index) {
+        if (index < group.panes.size()) {
+            group.panes[index] = std::move(candidate.panes[index]);
+        } else {
+            group.panes.push_back(std::move(candidate.panes[index]));
+        }
+    }
     return true;
 }
 
