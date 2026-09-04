@@ -34,7 +34,7 @@
 #include <wrl/client.h>
 
 #include "app_shell/diagnostic_mode.h"
-#include "app_shell/pane_chrome.h"
+#include "app_shell/pane.h"
 #include "app_shell/pane_control_id.h"
 #include "app_shell/pinned_locations_dialog.h"
 #include "app_shell/startup_notification.h"
@@ -89,8 +89,6 @@ constexpr int kSidebarMaximumWidth = 420;
 constexpr std::size_t kExplorerCount = 4;
 using NavigationGeneration =
     panedock::explorer_host::ExplorerHost::NavigationGeneration;
-using PaneWindowArray =
-    std::array<HWND, static_cast<std::size_t>(kExplorerCount)>;
 constexpr int kLayoutBarHeight = 44;
 constexpr int kLayoutButtonHeight = 30;
 constexpr int kLayoutButtonWidth = 30;
@@ -243,7 +241,8 @@ constexpr UINT_PTR kDragHoverSidebarTimerId = 0xD034;
 constexpr UINT_PTR kDragHoverTabTimerIdBase = 0xD040;
 
 class DragHoverTarget final
-    : public panedock::ComRefCounted<DragHoverTarget, IDropTarget> {
+    : public panedock::ComRefCounted<DragHoverTarget, IDropTarget>,
+      public panedock::app_shell::DragHoverTimer {
 public:
     using HitTest = std::function<std::optional<std::size_t>(POINT)>;
     using HoverCallback = std::function<void(std::size_t)>;
@@ -317,7 +316,7 @@ public:
         return S_OK;
     }
 
-    void timer_expired() noexcept {
+    void timer_expired() noexcept override {
         if (!hover_index_.has_value() || hover_triggered_ || invoking_)
             return;
         hover_triggered_ = true;
@@ -330,7 +329,7 @@ public:
         }
     }
 
-    void invoke_hover(UINT_PTR generation) noexcept {
+    void invoke_hover(UINT_PTR generation) noexcept override {
         if (!hover_index_.has_value() || !hover_triggered_ ||
             pending_generation_ != generation || invoking_)
             return;
@@ -550,24 +549,14 @@ struct AppState {
     HWND owner_draw_hovered_button{nullptr};
     HWND layout_tooltip{nullptr};
     HWND empty_message{nullptr};
-    std::array<panedock::app_shell::PaneChrome, kExplorerCount>
-        pane_chrome{};
-    struct TabVisual final {
-        std::wstring text;
-    };
-    std::array<std::vector<TabVisual>, kExplorerCount> tab_visuals{};
-    // PD-073: UI-only tab geometry and scroll state; never persisted with the
-    // session. Paint and hit-test consume the same computed result.
-    std::array<panedock::app_shell::TabStripGeometry, kExplorerCount>
-        tab_strip_geometry{};
+    // PD-182: tab_visuals, tab_strip_geometry, tab_hover/scroll-hover
+    // indices, folder_context_buttons and the per-pane drag hover target
+    // moved into panedock::app_shell::Pane (pure UI state, never
+    // persisted). explorers/realized/suppress_history_record stay here —
+    // they are Shell view lifetime, left for PD-183.
+    std::array<panedock::app_shell::Pane, kExplorerCount> panes{};
     std::optional<std::size_t> tab_context_menu_pane;
     std::string tab_context_menu_tab_id;
-    // A tab index is stored here; pane.tabs.size() represents the add button.
-    std::array<std::optional<std::size_t>, kExplorerCount> tab_hover_indices{};
-    // 0/1 identifies the left/right scroll button when it is hovered.
-    std::array<std::optional<std::size_t>, kExplorerCount>
-        tab_scroll_hover_indices{};
-    PaneWindowArray folder_context_buttons{};
     panedock::app_shell::PinnedLocationsDialog pinned_locations_dialog;
     std::array<std::wstring, kPinnedFixedParsingNames.size()>
         pinned_fixed_labels{};
@@ -578,8 +567,6 @@ struct AppState {
     // remaining panes still display the outgoing Group's folders.
     bool suppress_location_capture{};
     Microsoft::WRL::ComPtr<DragHoverTarget> sidebar_drag_target;
-    std::array<Microsoft::WRL::ComPtr<DragHoverTarget>, kExplorerCount>
-        tab_drag_targets{};
 };
 
 void begin_shutdown(HWND window, AppState& state, bool allow_keep_open) noexcept;
@@ -654,12 +641,7 @@ void app_shell_call_state_changed(void* context, bool entering) noexcept {
 void revoke_drag_hover_targets(AppState& state) noexcept {
     state.sidebar.revoke_drag_drop();
     state.sidebar_drag_target.Reset();
-    for (std::size_t index = 0; index < state.tab_drag_targets.size();
-         ++index) {
-        if (state.tab_drag_targets[index] != nullptr)
-            RevokeDragDrop(state.pane_chrome[index].tab_strip());
-        state.tab_drag_targets[index].Reset();
-    }
+    for (auto& pane : state.panes) pane.revoke_drag_hover_target();
 }
 
 bool flush_session_file(const std::filesystem::path& path) noexcept {
@@ -1583,12 +1565,12 @@ void refresh_navigation_buttons(AppState& state, std::size_t pane_index) {
     if (pane_index >= kExplorerCount) return;
     const bool visible = has_active_group(state) &&
                          pane_index < active_group(state).panes.size();
-    auto& chrome = state.pane_chrome[pane_index];
+    auto& chrome = state.panes[pane_index];
     if (!visible) {
         EnableWindow(chrome.back_button(), FALSE);
         EnableWindow(chrome.forward_button(), FALSE);
         EnableWindow(chrome.up_button(), FALSE);
-        EnableWindow(state.folder_context_buttons[pane_index], FALSE);
+        EnableWindow(chrome.folder_context_button(), FALSE);
         return;
     }
     const auto& tab = active_tab(active_group(state).panes[pane_index]);
@@ -1599,7 +1581,7 @@ void refresh_navigation_buttons(AppState& state, std::size_t pane_index) {
                  !state.suppress_history_record[pane_index] &&
                      panedock::core::can_navigate_tab_forward(tab));
     EnableWindow(chrome.up_button(), TRUE);
-    EnableWindow(state.folder_context_buttons[pane_index],
+    EnableWindow(chrome.folder_context_button(),
                  state.realized[pane_index]);
 }
 
@@ -1614,7 +1596,7 @@ void refresh_navigation_chrome(AppState& state, std::size_t pane_index) {
             active_tab(active_group(state).panes[pane_index])
                 .location.parsing_name);
     }
-    SetWindowTextW(state.pane_chrome[pane_index].address_bar(), text.c_str());
+    SetWindowTextW(state.panes[pane_index].address_bar(), text.c_str());
 }
 
 void capture_pane_view_mode(AppState& state, std::size_t pane_index) {
@@ -1692,8 +1674,8 @@ void apply_pane_sort(AppState& state, std::size_t pane_index) {
 }
 
 void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
-    if (pane_index >= state.pane_chrome.size() ||
-        state.pane_chrome[pane_index].status_bar() == nullptr)
+    if (pane_index >= state.panes.size() ||
+        state.panes[pane_index].status_bar() == nullptr)
         return;
     panedock::explorer_host::ExplorerHost::ItemCounts counts;
     HRESULT hr = E_UNEXPECTED;
@@ -1703,7 +1685,7 @@ void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
     }
     if (state.shutdown_deferred || state.closing_) return;
     if (FAILED(hr)) {
-        SetWindowTextW(state.pane_chrome[pane_index].status_bar(), L"");
+        SetWindowTextW(state.panes[pane_index].status_bar(), L"");
         return;
     }
     std::wstring text = std::to_wstring(counts.total) + L" items";
@@ -1726,7 +1708,7 @@ void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
             }
         }
     }
-    SetWindowTextW(state.pane_chrome[pane_index].status_bar(), text.c_str());
+    SetWindowTextW(state.panes[pane_index].status_bar(), text.c_str());
 }
 
 std::wstring tab_display_text(AppState& state,
@@ -1741,13 +1723,13 @@ std::wstring tab_display_text(AppState& state,
 void update_tab_strip_tooltips(AppState& state,
                                std::size_t pane_index) noexcept {
     if (state.layout_tooltip == nullptr ||
-        pane_index >= state.pane_chrome.size())
+        pane_index >= state.panes.size())
         return;
-    const auto& chrome = state.pane_chrome[pane_index];
+    auto& chrome = state.panes[pane_index];
     const HWND strip = chrome.tab_strip();
     if (strip == nullptr) return;
 
-    const auto& geometry = state.tab_strip_geometry[pane_index];
+    const auto& geometry = chrome.tab_geometry();
     const std::array<RECT, 3> rects{
         to_win32_rect(geometry.add_rect),
         to_win32_rect(geometry.scroll_button_rects[0]),
@@ -1772,19 +1754,20 @@ void update_tab_strip_tooltips(AppState& state,
         SendMessageW(state.layout_tooltip, message, 0,
                      reinterpret_cast<LPARAM>(&info));
     }
-    state.pane_chrome[pane_index].tab_tooltips_registered() = true;
+    chrome.tab_tooltips_registered() = true;
 }
 
 void apply_tab_item_size(AppState& state, std::size_t pane_index,
                          bool reveal_active = false) {
-    if (pane_index >= state.pane_chrome.size()) return;
-    const HWND strip = state.pane_chrome[pane_index].tab_strip();
+    if (pane_index >= state.panes.size()) return;
+    auto& chrome = state.panes[pane_index];
+    const HWND strip = chrome.tab_strip();
     RECT client{};
     GetClientRect(strip, &client);
     const int min_width = scaled_value(strip, kTabMinWidth);
     const int max_width = scaled_value(strip, kTabMaxWidth);
     const int add_width = scaled_value(strip, kTabAddButtonWidth);
-    auto& visuals = state.tab_visuals[pane_index];
+    const auto& visuals = chrome.tab_visuals();
     const int text_reserve = scaled_value(
         strip, 2 * kTabTextHorizontalPadding + kTabCloseButtonSpace);
     std::vector<int> preferred_widths;
@@ -1812,11 +1795,13 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
         state.tab_drag->target_index.has_value();
     if (foreign_placeholder) {
         int placeholder_width = min_width;
-        if (state.tab_drag->pane_index < state.tab_visuals.size() &&
+        if (state.tab_drag->pane_index < state.panes.size() &&
             state.tab_drag->source_index <
-                state.tab_visuals[state.tab_drag->pane_index].size()) {
-            const auto& source = state.tab_visuals[state.tab_drag->pane_index]
-                                             [state.tab_drag->source_index];
+                state.panes[state.tab_drag->pane_index]
+                    .tab_visuals().size()) {
+            const auto& source =
+                state.panes[state.tab_drag->pane_index]
+                    .tab_visuals()[state.tab_drag->source_index];
             SIZE size{};
             HDC measure = GetDC(strip);
             const HGDIOBJ old =
@@ -1870,37 +1855,39 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
         scaled_value(strip, kTabScrollButtonVisualHeight),
         scaled_value(strip, kTabScrollButtonVisualOffsetX),
         scaled_value(strip, kTabScrollButtonVisualOffsetY),
-        state.tab_strip_geometry[pane_index].scroll_offset,
+        chrome.tab_geometry().scroll_offset,
         drag_layout,
         active_index};
-    state.tab_strip_geometry[pane_index] =
-        panedock::app_shell::layout_tab_strip(layout_input);
+    chrome.set_geometry(panedock::app_shell::layout_tab_strip(layout_input));
     InvalidateRect(strip, nullptr, FALSE);
     update_tab_strip_tooltips(state, pane_index);
 }
 
 void refresh_tab_strip(AppState& state, std::size_t pane_index) {
-    if (pane_index >= state.pane_chrome.size()) return;
-    state.tab_hover_indices[pane_index].reset();
-    state.tab_scroll_hover_indices[pane_index].reset();
-    state.tab_visuals[pane_index].clear();
+    if (pane_index >= state.panes.size()) return;
+    auto& chrome = state.panes[pane_index];
+    chrome.set_tab_hover(std::nullopt);
+    chrome.set_scroll_hover(std::nullopt);
     if (!has_active_group(state) ||
         pane_index >= active_group(state).panes.size()) {
+        chrome.set_tabs({});
         apply_tab_item_size(state, pane_index);
         refresh_navigation_chrome(state, pane_index);
         return;
     }
 
     const auto& pane = active_group(state).panes[pane_index];
+    std::vector<std::wstring> labels;
+    labels.reserve(pane.tabs.size());
     for (const auto& tab : pane.tabs)
-        state.tab_visuals[pane_index].push_back(
-            {tab_display_text(state, tab)});
+        labels.push_back(tab_display_text(state, tab));
+    chrome.set_tabs(labels);
     apply_tab_item_size(state, pane_index, true);
     refresh_navigation_chrome(state, pane_index);
 }
 
 void refresh_tab_strips(AppState& state) {
-    for (std::size_t index = 0; index < state.pane_chrome.size(); ++index)
+    for (std::size_t index = 0; index < state.panes.size(); ++index)
         refresh_tab_strip(state, index);
 }
 
@@ -2103,9 +2090,9 @@ void apply_ui_font(AppState& state) noexcept {
     for (HWND button : state.sidebar_buttons) set_ui_font(button, font);
     for (HWND button : state.layout_buttons) set_ui_font(button, font);
     set_ui_font(state.empty_message, font);
-    for (std::size_t index = 0; index < state.pane_chrome.size(); ++index) {
-        state.pane_chrome[index].apply_font(font);
-        set_ui_font(state.folder_context_buttons[index], font);
+    for (auto& chrome : state.panes) {
+        chrome.apply_font(font);
+        set_ui_font(chrome.folder_context_button(), font);
     }
     state.pinned_locations_dialog.apply_font(font);
     state.startup_notification.apply_font(font);
@@ -2542,12 +2529,12 @@ HRESULT apply_layout(HWND window, AppState& state,
                 state.explorers[index].set_visible(false);
             }
             if (state.shutdown_deferred || state.closing_) return E_ABORT;
-            state.pane_chrome[index].set_visible(false);
-            ShowWindow(state.folder_context_buttons[index], SW_HIDE);
-            EnableWindow(state.folder_context_buttons[index], FALSE);
+            state.panes[index].set_visible(false);
+            ShowWindow(state.panes[index].folder_context_button(), SW_HIDE);
+            EnableWindow(state.panes[index].folder_context_button(), FALSE);
         }
         ShowWindow(state.empty_message, SW_SHOW);
-        for (auto& chrome : state.pane_chrome)
+        for (auto& chrome : state.panes)
             chrome.laid_out_pane_rect().reset();
         if (!positions.commit())
             state.sidebar.set_rect(sidebar_list_rect, GetDpiForWindow(window));
@@ -2583,7 +2570,7 @@ HRESULT apply_layout(HWND window, AppState& state,
     std::array<bool, kExplorerCount> shell_positions_deferred{};
     std::array<RECT, kExplorerCount> container_rects{};
     for (std::size_t index = 0; index < state.explorers.size(); ++index) {
-        auto& chrome = state.pane_chrome[index];
+        auto& chrome = state.panes[index];
         const bool visible =
             index < panedock::core::pane_count(group.layout_template);
         RECT pane_rect{};
@@ -2685,17 +2672,17 @@ HRESULT apply_layout(HWND window, AppState& state,
                                 status_rect,
                                 SWP_NOZORDER | SWP_NOACTIVATE);
                 position_window(&positions,
-                                state.folder_context_buttons[index],
+                                chrome.folder_context_button(),
                                 footer_button_rect,
                                 SWP_NOZORDER | SWP_NOACTIVATE);
             }
             chrome.set_visible(true);
-            ShowWindow(state.folder_context_buttons[index], SW_SHOW);
+            ShowWindow(chrome.folder_context_button(), SW_SHOW);
             // The status bar spans the full footer for its separator; keep
             // the inset action above that sibling so it remains drawable.
-            SetWindowPos(state.folder_context_buttons[index], HWND_TOP, 0, 0,
+            SetWindowPos(chrome.folder_context_button(), HWND_TOP, 0, 0,
                          0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            EnableWindow(state.folder_context_buttons[index],
+            EnableWindow(chrome.folder_context_button(),
                          state.realized[index]);
             rect.bottom -= status_height;
             // PD-040: the container is the real parent HWND passed to
@@ -2778,7 +2765,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                 refresh_status_bar(state, index);
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
             }
-            // PaneChrome owns the outer-rect cache; the native child batches
+            // Pane owns the outer-rect cache; the native child batches
             // are committed below before regions are applied.
         } else {
             if (plan_contains(realization_plan.derealize, index)) {
@@ -2790,8 +2777,8 @@ HRESULT apply_layout(HWND window, AppState& state,
                 state.realized[index] = false;
             }
             chrome.set_visible(false);
-            ShowWindow(state.folder_context_buttons[index], SW_HIDE);
-            EnableWindow(state.folder_context_buttons[index], FALSE);
+            ShowWindow(chrome.folder_context_button(), SW_HIDE);
+            EnableWindow(chrome.folder_context_button(), FALSE);
         }
         {
             ShellCallScope shell_call(state);
@@ -2808,7 +2795,7 @@ HRESULT apply_layout(HWND window, AppState& state,
     // then GetClientRect still describes the previous live-resize frame.
     const std::size_t visible_panes =
         panedock::core::pane_count(group.layout_template);
-    for (std::size_t index = 0; index < state.pane_chrome.size(); ++index) {
+    for (std::size_t index = 0; index < state.panes.size(); ++index) {
         if (index < visible_panes &&
             (changed_panes[index] || recompute_content))
             apply_tab_item_size(state, index);
@@ -2826,16 +2813,16 @@ HRESULT apply_layout(HWND window, AppState& state,
     for (std::size_t index = 0; index < state.explorers.size(); ++index) {
         if (changed_panes[index]) {
             apply_pane_container_region(
-                state.pane_chrome[index].explorer_container(),
+                state.panes[index].explorer_container(),
                 container_rects[index].right - container_rects[index].left,
                 container_rects[index].bottom - container_rects[index].top,
                 container_radius);
-            RedrawWindow(state.pane_chrome[index].explorer_container(),
+            RedrawWindow(state.panes[index].explorer_container(),
                          nullptr, nullptr,
                          RDW_INVALIDATE | RDW_NOERASE | RDW_ALLCHILDREN);
         }
         if (index >= panedock::core::pane_count(group.layout_template))
-            state.pane_chrome[index].laid_out_pane_rect().reset();
+            state.panes[index].laid_out_pane_rect().reset();
     }
     InvalidateRect(window, nullptr, FALSE);
     if (recompute_content) write_live_view_count(state.diagnostic_mode);
@@ -3073,8 +3060,8 @@ void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
         state.explorers[pane].focus();
     }
     if (state.shutdown_deferred || state.closing_) return;
-    InvalidateRect(state.pane_chrome[previous].tab_strip(), nullptr, FALSE);
-    InvalidateRect(state.pane_chrome[pane].tab_strip(), nullptr, FALSE);
+    InvalidateRect(state.panes[previous].tab_strip(), nullptr, FALSE);
+    InvalidateRect(state.panes[pane].tab_strip(), nullptr, FALSE);
     InvalidateRect(window, nullptr, TRUE);
     schedule_session_save(state);
 }
@@ -3130,8 +3117,8 @@ std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
 
 bool register_tab_drag_hover_targets(HWND window, AppState& state) {
     for (std::size_t pane_index = 0;
-         pane_index < state.pane_chrome.size(); ++pane_index) {
-        const HWND strip = state.pane_chrome[pane_index].tab_strip();
+         pane_index < state.panes.size(); ++pane_index) {
+        const HWND strip = state.panes[pane_index].tab_strip();
         auto hit_test = [&state, strip,
                          pane_index](POINT screen) -> std::optional<std::size_t> {
             if (!has_active_group(state) ||
@@ -3157,14 +3144,14 @@ bool register_tab_drag_hover_targets(HWND window, AppState& state) {
                 drag_state_changed(state, entering);
             });
         if (target == nullptr) return false;
-        HRESULT hr = E_UNEXPECTED;
+        bool registered = false;
         {
             ShellCallScope shell_call(state);
-            hr = RegisterDragDrop(strip, target.Get());
+            registered =
+                state.panes[pane_index].register_drag_hover_target(target.Get());
         }
-        if (state.shutdown_deferred || state.closing_ || FAILED(hr))
+        if (state.shutdown_deferred || state.closing_ || !registered)
             return false;
-        state.tab_drag_targets[pane_index] = std::move(target);
     }
     return true;
 }
@@ -3304,7 +3291,7 @@ void show_view_mode_menu(HWND window, AppState& state,
         return;
 
     RECT button_rect{};
-    if (!GetWindowRect(state.pane_chrome[pane_index].view_mode_button(),
+    if (!GetWindowRect(state.panes[pane_index].view_mode_button(),
                        &button_rect))
         return;
 
@@ -3369,7 +3356,7 @@ void show_pinned_locations_menu(HWND window, AppState& state,
         return;
 
     RECT button_rect{};
-    if (!GetWindowRect(state.pane_chrome[pane_index].pinned_button(),
+    if (!GetWindowRect(state.panes[pane_index].pinned_button(),
                        &button_rect))
         return;
 
@@ -3418,7 +3405,7 @@ void submit_address(AppState& state, std::size_t pane_index) {
     if (state.closing_ || state.shutdown_deferred) return;
     if (!has_active_group(state) ||
         pane_index >= active_group(state).panes.size()) return;
-    const HWND edit = state.pane_chrome[pane_index].address_bar();
+    const HWND edit = state.panes[pane_index].address_bar();
     const int length = GetWindowTextLengthW(edit);
     std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
     GetWindowTextW(edit, text.data(), length + 1);
@@ -3556,24 +3543,24 @@ POINT point_from_lparam(LPARAM lparam) noexcept {
 
 std::optional<std::size_t> tab_strip_index(const AppState& state,
                                             HWND strip) noexcept {
-    for (std::size_t index = 0; index < state.pane_chrome.size(); ++index)
-        if (state.pane_chrome[index].tab_strip() == strip) return index;
+    for (std::size_t index = 0; index < state.panes.size(); ++index)
+        if (state.panes[index].tab_strip() == strip) return index;
     return std::nullopt;
 }
 
 bool address_bar_has_focus(const AppState& state) noexcept {
     const HWND focused = GetFocus();
-    for (const auto& chrome : state.pane_chrome)
+    for (const auto& chrome : state.panes)
         if (chrome.address_bar() == focused) return true;
     return false;
 }
 
 void close_tab_at_point(HWND window, AppState& state, POINT point) {
     const std::size_t pane_index = pane_at_point(window, state, point);
-    if (pane_index >= state.pane_chrome.size() ||
+    if (pane_index >= state.panes.size() ||
         pane_index >= active_group(state).panes.size()) return;
     POINT client = point;
-    const HWND strip = state.pane_chrome[pane_index].tab_strip();
+    const HWND strip = state.panes[pane_index].tab_strip();
     MapWindowPoints(window, strip, &client, 1);
     const auto item = tab_item_at_point(
         state, strip, client);
@@ -3584,7 +3571,7 @@ void close_tab_at_point(HWND window, AppState& state, POINT point) {
 }
 
 RECT tab_viewport_rect(const AppState& state, std::size_t pane_index) noexcept {
-    return to_win32_rect(state.tab_strip_geometry[pane_index].viewport);
+    return to_win32_rect(state.panes[pane_index].tab_geometry().viewport);
 }
 
 std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
@@ -3594,28 +3581,28 @@ std::optional<std::size_t> tab_item_at_point(const AppState& state, HWND strip,
         *pane_index >= active_group(state).panes.size()) {
         return std::nullopt;
     }
-    return panedock::app_shell::tab_strip_hit_test(
-        state.tab_strip_geometry[*pane_index], point.x, point.y);
+    return state.panes[*pane_index].tab_at(point);
 }
 
 std::optional<std::size_t> tab_scroll_button_at_point(
     const AppState& state, std::size_t pane_index, POINT point) noexcept {
-    if (pane_index >= state.tab_strip_geometry.size())
+    if (pane_index >= state.panes.size())
         return std::nullopt;
     return panedock::app_shell::tab_scroll_button_hit_test(
-        state.tab_strip_geometry[pane_index], point.x, point.y);
+        state.panes[pane_index].tab_geometry(), point.x, point.y);
 }
 
 int tab_scroll_step(const AppState& state, std::size_t pane_index,
                     bool forward) noexcept {
-    if (pane_index >= state.tab_strip_geometry.size()) return 0;
+    if (pane_index >= state.panes.size()) return 0;
     return panedock::app_shell::tab_scroll_step(
-        state.tab_strip_geometry[pane_index], forward);
+        state.panes[pane_index].tab_geometry(), forward);
 }
 
 void scroll_tab_strip(AppState& state, std::size_t pane_index, bool forward) {
-    if (pane_index >= state.tab_strip_geometry.size()) return;
-    auto& geometry = state.tab_strip_geometry[pane_index];
+    if (pane_index >= state.panes.size()) return;
+    auto& chrome = state.panes[pane_index];
+    panedock::app_shell::TabStripGeometry geometry = chrome.tab_geometry();
     if (geometry.max_scroll_offset <= 0) return;
     const int offset = geometry.scroll_offset;
     const int maximum = geometry.max_scroll_offset;
@@ -3623,6 +3610,7 @@ void scroll_tab_strip(AppState& state, std::size_t pane_index, bool forward) {
     const int step = tab_scroll_step(state, pane_index, forward);
     if (step <= 0) return;
     geometry.scroll_offset = offset + (forward ? step : -step);
+    chrome.set_geometry(std::move(geometry));
     apply_tab_item_size(state, pane_index);
 }
 
@@ -3726,7 +3714,7 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
                                        ? active_group(state).panes.size()
                                        : 0;
     for (std::size_t index = 0; index < pane_count; ++index) {
-        const HWND candidate = state.pane_chrome[index].tab_strip();
+        const HWND candidate = state.panes[index].tab_strip();
         if (!IsWindowVisible(candidate)) continue;
         POINT client_point = screen;
         ScreenToClient(candidate, &client_point);
@@ -3736,9 +3724,9 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
         target_pane = index == state.tab_drag->pane_index
                           ? std::nullopt
                           : std::optional<std::size_t>{index};
-        target = tab_item_at_point(state, candidate, client_point);
+        target = state.panes[index].tab_at_screen(screen);
         const RECT viewport =
-            to_win32_rect(state.tab_strip_geometry[index].viewport);
+            to_win32_rect(state.panes[index].tab_geometry().viewport);
         if (!target.has_value() && index != state.tab_drag->pane_index &&
             PtInRect(&viewport, client_point)) {
             target = active_group(state).panes[index].tabs.size();
@@ -3811,7 +3799,7 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
     if (!has_active_group(state) ||
         pane_index >= active_group(state).panes.size()) return;
     const auto& pane = active_group(state).panes[pane_index];
-    const auto& visuals = state.tab_visuals[pane_index];
+    const auto& visuals = state.panes[pane_index].tab_visuals();
     const int horizontal_gap = scaled_value(window, kTabHorizontalGap);
     const int left_gap = horizontal_gap / 2;
     const int right_gap = horizontal_gap - left_gap;
@@ -3833,14 +3821,14 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
             state.tab_drag->pane_index == pane_index &&
             index == state.tab_drag->source_index) continue;
         RECT rect = to_win32_rect(
-            state.tab_strip_geometry[pane_index].tab_rects[index]);
+            state.panes[pane_index].tab_geometry().tab_rects[index]);
         rect.left = std::min(rect.right, rect.left + left_gap);
         rect.right = std::max(rect.left, rect.right - right_gap);
         rect.top = std::min(rect.bottom, rect.top + vertical_padding);
         rect.bottom = std::max(rect.top, rect.bottom - vertical_padding);
         const bool active = pane.tabs[index].id == pane.active_tab_id;
         const bool hovered = !active &&
-                             state.tab_hover_indices[pane_index] == index;
+                             state.panes[pane_index].tab_hover_index() == index;
         if (rect.right > rect.left && rect.bottom > rect.top) {
             const COLORREF fill_color =
                 active ? kTabActiveBackground
@@ -3869,7 +3857,7 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
         DrawTextW(dc, visuals[index].text.c_str(), -1, &text_rect,
                   DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
-    const auto& geometry = state.tab_strip_geometry[pane_index];
+    const auto& geometry = state.panes[pane_index].tab_geometry();
     if (geometry.placeholder_rect.has_value()) {
         RECT rect = to_win32_rect(*geometry.placeholder_rect);
         rect.left = std::min(rect.right, rect.left + left_gap);
@@ -3921,15 +3909,15 @@ void paint_tab_strip(HWND window, AppState& state, std::size_t pane_index,
         draw_tab_scroll_button(
             window, dc, to_win32_rect(scroll_buttons[0]), false,
             geometry.scroll_offset <= 0,
-            state.tab_scroll_hover_indices[pane_index] == 0);
+            state.panes[pane_index].scroll_hover_index() == 0);
         draw_tab_scroll_button(
             window, dc, to_win32_rect(scroll_buttons[1]), true,
             geometry.scroll_offset >= geometry.max_scroll_offset,
-            state.tab_scroll_hover_indices[pane_index] == 1);
+            state.panes[pane_index].scroll_hover_index() == 1);
     }
     const RECT add = to_win32_rect(geometry.add_rect);
-    if (state.tab_hover_indices[pane_index].has_value() &&
-        *state.tab_hover_indices[pane_index] == pane.tabs.size() &&
+    if (state.panes[pane_index].tab_hover_index().has_value() &&
+        *state.panes[pane_index].tab_hover_index() == pane.tabs.size() &&
         add.right > add.left && add.bottom > add.top) {
         HBRUSH background = CreateSolidBrush(kTabAddHoverBackground);
         HPEN border = CreatePen(PS_SOLID, border_width, kTabAddBorder);
@@ -3986,7 +3974,7 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                                 LPARAM lparam, UINT_PTR pane_index,
                                 DWORD_PTR reference_data) {
     auto* state = reinterpret_cast<AppState*>(reference_data);
-    if (state != nullptr && pane_index < state->pane_chrome.size()) {
+    if (state != nullptr && pane_index < state->panes.size()) {
         if ((state->closing_ || state->shutdown_deferred) &&
             message != WM_PAINT && message != WM_ERASEBKGND &&
             message != WM_NCDESTROY)
@@ -4019,8 +4007,8 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                 return 0;
             }
             const auto item = tab_item_at_point(*state, window, point);
-            const RECT add =
-                to_win32_rect(state->tab_strip_geometry[pane_index].add_rect);
+            const RECT add = to_win32_rect(
+                state->panes[pane_index].tab_geometry().add_rect);
             if (item.has_value()) {
                 const auto& tabs = active_group(*state).panes[pane_index].tabs;
                 if (*item >= tabs.size()) return 0;
@@ -4042,8 +4030,8 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
         if (message == WM_LBUTTONDBLCLK && has_active_group(*state) &&
             pane_index < active_group(*state).panes.size()) {
             const POINT point = point_from_lparam(lparam);
-            const RECT add =
-                to_win32_rect(state->tab_strip_geometry[pane_index].add_rect);
+            const RECT add = to_win32_rect(
+                state->panes[pane_index].tab_geometry().add_rect);
             if (!tab_scroll_button_at_point(*state, pane_index, point) &&
                 !tab_item_at_point(*state, window, point) &&
                 !PtInRect(&add, point)) {
@@ -4058,34 +4046,32 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
             TrackMouseEvent(&tracking);
             std::optional<std::size_t> hover =
                 tab_item_at_point(*state, window, point);
-            const RECT add =
-                to_win32_rect(state->tab_strip_geometry[pane_index].add_rect);
+            const RECT add = to_win32_rect(
+                state->panes[pane_index].tab_geometry().add_rect);
             if (!hover.has_value() && has_active_group(*state) &&
                 pane_index < active_group(*state).panes.size() &&
                 PtInRect(&add, point)) {
                 hover = active_group(*state).panes[pane_index].tabs.size();
             }
-            const bool tab_hover_changed =
-                state->tab_hover_indices[pane_index] != hover;
-            if (tab_hover_changed)
-                state->tab_hover_indices[pane_index] = hover;
+            auto& chrome = state->panes[pane_index];
+            const bool tab_hover_changed = chrome.tab_hover_index() != hover;
+            if (tab_hover_changed) chrome.set_tab_hover(hover);
             const auto scroll_hover = tab_scroll_button_at_point(
                 *state, pane_index, point);
             const bool scroll_hover_changed =
-                state->tab_scroll_hover_indices[pane_index] != scroll_hover;
-            if (scroll_hover_changed)
-                state->tab_scroll_hover_indices[pane_index] = scroll_hover;
+                chrome.scroll_hover_index() != scroll_hover;
+            if (scroll_hover_changed) chrome.set_scroll_hover(scroll_hover);
             if (tab_hover_changed || scroll_hover_changed)
                 InvalidateRect(window, nullptr, FALSE);
             update_tab_drag(*state, window, wparam, lparam);
             return 0;
         }
         if (message == WM_MOUSELEAVE) {
-            const bool hover_changed =
-                state->tab_hover_indices[pane_index].has_value() ||
-                state->tab_scroll_hover_indices[pane_index].has_value();
-            state->tab_hover_indices[pane_index].reset();
-            state->tab_scroll_hover_indices[pane_index].reset();
+            auto& chrome = state->panes[pane_index];
+            const bool hover_changed = chrome.tab_hover_index().has_value() ||
+                                       chrome.scroll_hover_index().has_value();
+            chrome.set_tab_hover(std::nullopt);
+            chrome.set_scroll_hover(std::nullopt);
             if (hover_changed)
                 InvalidateRect(window, nullptr, FALSE);
             return 0;
@@ -4355,7 +4341,7 @@ void finish_shutdown(HWND window, AppState& state) noexcept {
     cancel_session_save_timer(state);
     destroy_explorers(state);
     assert(panedock::explorer_host::live_view_count() == 0);
-    for (auto& chrome : state.pane_chrome) chrome.destroy();
+    for (auto& chrome : state.panes) chrome.destroy();
     if (state.shutdown_sequence.step(
             panedock::core::ShutdownEvent::views_destroyed) ==
         panedock::core::ShutdownAction::destroy_window) {
@@ -4621,8 +4607,8 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
         WS_CHILD | SS_CENTER | SS_CENTERIMAGE, 0, 0, 0, 0, window, nullptr,
         GetModuleHandleW(nullptr), nullptr);
     if (state.empty_message == nullptr) return -1;
-    for (std::size_t index = 0; index < state.pane_chrome.size(); ++index) {
-        auto& chrome = state.pane_chrome[index];
+    for (std::size_t index = 0; index < state.panes.size(); ++index) {
+        auto& chrome = state.panes[index];
         // PD-040: plain STATIC child used purely as a clipping container
         // (SetWindowRgn) and a parent HWND for ExplorerHost::initialize — it
         // never paints or handles messages of its own, so no custom window
@@ -4663,7 +4649,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
         if (!SetWindowSubclass(chrome.address_bar(), address_edit_proc, index,
                                reinterpret_cast<DWORD_PTR>(&state)))
             return -1;
-        state.folder_context_buttons[index] = CreateWindowExW(
+        chrome.set_folder_context_button(CreateWindowExW(
             0, L"BUTTON", L"Folder context menu",
             WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | BS_PUSHBUTTON |
                 BS_OWNERDRAW,
@@ -4671,21 +4657,21 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
             reinterpret_cast<HMENU>(
                 panedock::app_shell::encode_pane_control(
                     panedock::app_shell::PaneControl::folder_context, index)),
-            GetModuleHandleW(nullptr), nullptr);
-        if (state.folder_context_buttons[index] == nullptr) return -1;
+            GetModuleHandleW(nullptr), nullptr));
+        if (chrome.folder_context_button() == nullptr) return -1;
         if (!SetWindowSubclass(
-                state.folder_context_buttons[index], hover_tracking_proc,
+                chrome.folder_context_button(), hover_tracking_proc,
                 static_cast<UINT_PTR>(
                     panedock::app_shell::encode_pane_control(
                         panedock::app_shell::PaneControl::folder_context,
                         index)),
                 reinterpret_cast<DWORD_PTR>(&state)))
             return -1;
-        EnableWindow(state.folder_context_buttons[index], FALSE);
+        EnableWindow(chrome.folder_context_button(), FALSE);
         if (state.layout_tooltip != nullptr) {
             add_tooltip(state.layout_tooltip, window,
                         reinterpret_cast<UINT_PTR>(
-                            state.folder_context_buttons[index]),
+                            chrome.folder_context_button()),
                         L"Folder context menu");
         }
     }
@@ -4738,17 +4724,19 @@ void handle_pane_command(
         case panedock::app_shell::PaneControl::folder_context: break;
         default: return;
     }
+    const HWND folder_context_button =
+        state.panes[pane_index].folder_context_button();
     if (!has_active_group(state) ||
         pane_index >= active_group(state).panes.size() ||
         !state.realized[pane_index] ||
-        state.folder_context_buttons[pane_index] == nullptr ||
-        !IsWindowVisible(state.folder_context_buttons[pane_index]))
+        folder_context_button == nullptr ||
+        !IsWindowVisible(folder_context_button))
         return;
     set_active_pane(state.main_window, state, pane_index);
     if (state.closing_ || state.shutdown_deferred) return;
     if (active_pane_index(active_group(state)) != pane_index) return;
     RECT button_rect{};
-    if (!GetWindowRect(state.folder_context_buttons[pane_index], &button_rect))
+    if (!GetWindowRect(folder_context_button, &button_rect))
         return;
     const POINT anchor{button_rect.left, button_rect.top};
     ShellCallScope shell_call(state);
@@ -4900,7 +4888,7 @@ bool draw_pane_control(
 }
 
 bool draw_global_control(const DRAWITEMSTRUCT& item, AppState& state) {
-    for (const auto& chrome : state.pane_chrome) {
+    for (const auto& chrome : state.panes) {
         if (chrome.status_bar() == item.hwndItem) {
             draw_status_bar(item, GetDpiForWindow(item.hwndItem));
             return true;
@@ -5265,7 +5253,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         }
         case kTabStripSelectionMessage:
             if (state != nullptr && has_active_group(*state) &&
-                wparam < state->pane_chrome.size() &&
+                wparam < state->panes.size() &&
                 wparam < active_group(*state).panes.size()) {
                 auto& pane = active_group(*state).panes[wparam];
                 if (lparam == -1) {
@@ -5292,9 +5280,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 timer < kDragHoverTabTimerIdBase + kExplorerCount) {
                 const std::size_t pane_index = static_cast<std::size_t>(
                     timer - kDragHoverTabTimerIdBase);
-                if (state->tab_drag_targets[pane_index] != nullptr)
-                    state->tab_drag_targets[pane_index]->invoke_hover(
-                        generation);
+                if (auto* hover = dynamic_cast<panedock::app_shell::DragHoverTimer*>(
+                        state->panes[pane_index].drag_hover_target()))
+                    hover->invoke_hover(generation);
                 return 0;
             }
             return 0;
@@ -5351,7 +5339,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state != nullptr) {
                 const HWND control = reinterpret_cast<HWND>(lparam);
                 bool is_pane_address_bar = false;
-                for (const auto& chrome : state->pane_chrome) {
+                for (const auto& chrome : state->panes) {
                     if (chrome.address_bar() == control) {
                         is_pane_address_bar = true;
                         break;
@@ -5475,8 +5463,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 timer < kDragHoverTabTimerIdBase + kExplorerCount) {
                 const std::size_t pane_index = static_cast<std::size_t>(
                     timer - kDragHoverTabTimerIdBase);
-                if (state->tab_drag_targets[pane_index] != nullptr)
-                    state->tab_drag_targets[pane_index]->timer_expired();
+                if (auto* hover = dynamic_cast<panedock::app_shell::DragHoverTimer*>(
+                        state->panes[pane_index].drag_hover_target()))
+                    hover->timer_expired();
                 return 0;
             }
             break;

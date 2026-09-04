@@ -189,6 +189,41 @@ git diff --check
 
 **必填**：逐一列出實作後 `Pane` 需要「向上」通知協調層的呼叫點及其形狀。這份清單是下一條候選的觸發依據。
 
+## 交接區
+
+**欄位數量**：`AppState` 的 pane-parallel 欄位從搬移前的 9 個降到 3 個（`explorers`、`realized`、`suppress_history_record`），符合 AC1。`pane_chrome` 重新命名為 `panes`；`PaneChrome` 更名為 `panedock::app_shell::Pane`（`src/app_shell/pane.h/.cpp`，取代 `pane_chrome.h/.cpp`）。`tests/unit/pane_chrome_test.cpp` 更名為 `tests/unit/pane_test.cpp`，`CMakeLists.txt`／`tests/CMakeLists.txt` 對應更新（`panedock_pane_chrome` → `panedock_pane`，並新增 `ole32` link 給 `RegisterDragDrop`/`RevokeDragDrop`）。
+
+**`Pane` 公開介面清單**（新增部分）：
+- `set_tabs(std::span<const std::wstring> labels)` — 清空並重建 `tab_visuals_`
+- `tab_visuals() const` — 唯讀查詢，型別是 `std::vector<StripLabel>`（純 UI 文字，不是 `core::TabState`）
+- `tab_geometry() const` / `set_geometry(TabStripGeometry)` — 純查詢／純命令
+- `tab_at(POINT client) const` / `tab_at_screen(POINT screen) const`
+- `tab_hover_index() const` / `set_tab_hover(...)`、`scroll_hover_index() const` / `set_scroll_hover(...)`
+- `register_drag_hover_target(IDropTarget*)` / `revoke_drag_hover_target()` / `drag_hover_target() const`
+- `folder_context_button() const` / `set_folder_context_button(HWND)`
+
+沒有任何成員持有 `AppState*`、回呼介面或 `std::function`；`grep -n 'AppState|std::function|Host\*|callback' pane.h` 與 `grep -n 'TabState|std::vector<.*Tab' pane.h` 皆為空（見下方 Agent Checks 結果）。
+
+**與 ticket 原始方法清單的差異（誠實記錄，理由如下）**：
+- 原提案 `set_tabs(labels, active_index)`：拿掉了 `active_index` 參數。`active_index` 只在完整版面重算（`apply_tab_item_size`）裡有意義，而後者仍是協調層的自由函式（見下一點），所以 `set_tabs` 只單純替換文字。
+- 原提案要求 `apply_tab_item_size`／`paint_tab_strip`／`scroll_tab_strip` 等「改為 Pane 的成員或改走 Pane 的 accessor」——**本票選擇「改走 accessor」而非「搬進 Pane 成為成員」**。原因：這些函式的版面計算需要 `state.chrome_font`、`state.tab_drag`（跨 pane 拖曳的協調層狀態）與一組 DPI-scaled 常數；把整段算法搬進 `Pane` 需要 `Pane` 認識這些協調層概念（違反契約第 1 條），或是把常數/字型複製一份進 `pane.cpp`（造成兩份真相）。維持它們是 `main.cpp` 裡的自由函式、只透過 `Pane` 的 `set_tabs`/`tab_visuals`/`tab_geometry`/`set_geometry` 存取資料，同時滿足 ticket Scope 第 6 點明文允許的「或改走 accessor」，且是本次變更範圍裡風險最低的選項。
+- 原提案 `set_drag_placeholder(optional<size_t>)`：沒有實作為獨立方法。它需要的 `foreign_placeholder`／`foreign_placeholder_width` 只有協調層的 `AppState::TabDrag` 知道，最終還是要呼叫完整版面重算；`apply_tab_item_size` 已經把這條路徑走完，另開一個方法只是重複入口。
+- 原提案 `scroll_tabs(bool forward)`：沒有實作為獨立方法，理由同上——捲動後仍需呼叫協調層的 `apply_tab_item_size` 做完整重算（因為必須考慮同時存在的跨 pane 拖曳 placeholder）。`scroll_tab_strip`（協調層自由函式）改為：取 `chrome.tab_geometry()` 的複本、算新 `scroll_offset`、用 `chrome.set_geometry(...)` 寫回、再呼叫 `apply_tab_item_size`。
+- `tab_drag_targets`：`register_drag_hover_target` 依 ticket 簽章只收 `IDropTarget*`，但原本的 `WM_TIMER`/`kDragHoverMessage` 處理需要呼叫 `DragHoverTarget` 專屬的 `invoke_hover`/`timer_expired`（不在 `IDropTarget` 介面上）。解法：在 `pane.h` 新增一個小的 `DragHoverTimer` 抽象介面（`invoke_hover`/`timer_expired` 兩個虛擬函式），`main.cpp` 的 `DragHoverTarget` 多重繼承它；協調層對 `pane.drag_hover_target()` 回傳的 `IDropTarget*` 做 `dynamic_cast<DragHoverTimer*>` 取得那兩個方法。`Pane` 本身完全不知道 `DragHoverTarget` 這個型別，只認得抽象介面，契約第 1 條（單向依賴）未破壞。
+
+**PD-155／PD-108 語意保留位置**：`apply_layout` 中 `WindowPositionBatch`／`BeginDeferWindowPos`／`EndDeferWindowPos` 的兩層批次結構未被觸碰，仍在 `main.cpp` 的 `WindowPositionBatch`（約 862-915 行）與 `apply_layout` 內的 `positions`／`explorer_positions[index]` 兩組批次（約 2500-2820 行）；`changed_panes[index]` 的 unchanged-pane skip 邏輯（PD-108）保留在同一段落，只是欄位存取改成 `state.panes[index].set_rect(...)` 等 `Pane` accessor，判斷邏輯一行未動。`Select-String 'BeginDeferWindowPos|EndDeferWindowPos'` 有結果，符合 AC4。
+
+**`Pane::destroy()` 順序**：`revoke_drag_hover_target()`（RevokeDragDrop）→ `status_bar_`→`address_bar_`→`pinned_button_`→`view_mode_button_`→`refresh_button_`→`up_button_`→`forward_button_`→`back_button_`→`tab_strip_`→`explorer_container_`（逐一 `DestroyWindow`）→ 清空 `laid_out_pane_rect_`/`tab_tooltips_registered_`/`tab_visuals_`/`tab_strip_geometry_`/hover 索引。`RevokeDragDrop` 在 `DestroyWindow(tab_strip_)` 之前執行，符合 AC5 與 §9.4。
+
+**收窄 `AppState&` 簽章**：本票沒有把任何既有函式簽章從 `AppState&` 改窄成 `Pane&`——被本票碰到的自由函式（`apply_tab_item_size`、`paint_tab_strip`、`scroll_tab_strip`、`update_tab_drag`、`cancel_tab_drag`、`finish_tab_drag`、`tab_item_at_point` 等）全部仍需要 `AppState&`（用於 `active_group`、`state.tab_drag`、`state.chrome_font`、`state.explorers` 等），這是上一點解釋過的「accessor 而非搬遷演算法」設計的直接結果。收窄數：**0**。這點誠實記錄，供日後決定是否要為 `PaneOutcome`（見下方候選）重新評估。
+
+**編譯與測試**：`cmake --build build` 全綠；`ctest --test-dir build --output-on-failure` 20/20 全綠（含 `panedock_launch_smoke`）。四條 Select-String 檢查結果符合要求（前三條空、第四條非空）。`git diff --check` 無空白錯誤。`Start-Process build\PaneDock.exe` + `CloseMainWindow()` 驗證乾淨關閉，連續執行三次皆在 8 秒內結束（第一次因為啟動仍在進行中而假性逾時，補足啟動等待後穩定通過）。
+
+**必填：`Pane` 向上呼叫點清單**（供 `PaneOutcome` 候選觸發條件判斷）：
+`Pane` 本身沒有任何回呼機制，「向上通知」全部改寫成協調層直接呼叫 `Pane` 的純查詢/純命令方法，而不是 `Pane` 主動通知協調層。也就是說在本票完成後，`Pane` 完全沒有「向上」的呼叫路徑——資料流一律是協調層讀 `Pane` 的查詢方法、算完後寫回 `Pane` 的命令方法。**呼叫點數：0**，遠低於候選表訂的「超過 3 處」門檻，因此 `PaneOutcome` **不開票**，維持候選狀態；此判斷已回寫 `docs/tickets.md` §候選。
+
+**使用者實機檢查清單（第 1–8 項）**：尚未執行，需要使用者在真實硬體上驗證（特別是第 3–6 項的拖曳行為與第 8 項的拖曳中關閉）。程式碼邏輯本身在本次重構中一行未改（只換了資料的存取路徑），但實機驗證仍是本票未完成的部分，留給使用者回報。
+
 ## 後續候選（本票不做）
 
 若上述「向上呼叫點」清單**超過 3 處且讀起來確實糾纏**，才開票引入 `PaneOutcome` 回報協定（`Pane` 回傳意圖 enum、由協調層執行副作用，比照 `core::ShutdownSequence` 的 event→action reducer）。少於等於 3 處則不開，並把這個判斷寫進 `docs/tickets.md` §候選。

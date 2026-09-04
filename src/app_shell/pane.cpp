@@ -1,4 +1,4 @@
-#include "app_shell/pane_chrome.h"
+#include "app_shell/pane.h"
 
 #include <array>
 
@@ -22,7 +22,7 @@ void destroy_window(HWND& window) noexcept {
 
 }  // namespace
 
-bool PaneChrome::create(HWND parent, int pane_index) noexcept {
+bool Pane::create(HWND parent, int pane_index) noexcept {
     if (parent == nullptr || pane_index < 0) return false;
     destroy();
 
@@ -78,7 +78,11 @@ bool PaneChrome::create(HWND parent, int pane_index) noexcept {
     return true;
 }
 
-void PaneChrome::destroy() noexcept {
+void Pane::destroy() noexcept {
+    // RevokeDragDrop must happen before the tab strip HWND it was
+    // registered on is destroyed (AGENTS.md: never destroy a parent HWND
+    // while a view/registration tied to it is still alive).
+    revoke_drag_hover_target();
     destroy_window(status_bar_);
     destroy_window(address_bar_);
     destroy_window(pinned_button_);
@@ -91,9 +95,13 @@ void PaneChrome::destroy() noexcept {
     destroy_window(explorer_container_);
     laid_out_pane_rect_.reset();
     tab_tooltips_registered_ = false;
+    tab_visuals_.clear();
+    tab_strip_geometry_ = TabStripGeometry{};
+    tab_hover_index_.reset();
+    tab_scroll_hover_index_.reset();
 }
 
-bool PaneChrome::set_rect(const RECT& rect, HDWP* deferred) noexcept {
+bool Pane::set_rect(const RECT& rect, HDWP* deferred) noexcept {
     // The pane's children have different sub-rectangles (tab, navigation,
     // footer and Shell container), so the app-shell layout pass owns their
     // parent-scoped batch. This method owns the committed outer-rect cache.
@@ -104,7 +112,7 @@ bool PaneChrome::set_rect(const RECT& rect, HDWP* deferred) noexcept {
     return changed;
 }
 
-void PaneChrome::set_visible(bool visible) noexcept {
+void Pane::set_visible(bool visible) noexcept {
     const int command = visible ? SW_SHOW : SW_HIDE;
     ShowWindow(explorer_container_, command);
     ShowWindow(tab_strip_, command);
@@ -118,7 +126,7 @@ void PaneChrome::set_visible(bool visible) noexcept {
     ShowWindow(status_bar_, command);
 }
 
-void PaneChrome::apply_font(HFONT font) noexcept {
+void Pane::apply_font(HFONT font) noexcept {
     set_font(tab_strip_, font);
     set_font(back_button_, font);
     set_font(forward_button_, font);
@@ -128,6 +136,32 @@ void PaneChrome::apply_font(HFONT font) noexcept {
     set_font(pinned_button_, font);
     set_font(address_bar_, font);
     set_font(status_bar_, font);
+}
+
+void Pane::set_tabs(std::span<const std::wstring> labels) noexcept {
+    tab_visuals_.clear();
+    tab_visuals_.reserve(labels.size());
+    for (const auto& label : labels) tab_visuals_.push_back({label});
+}
+
+std::optional<std::size_t> Pane::tab_at_screen(POINT screen) const noexcept {
+    if (tab_strip_ == nullptr) return std::nullopt;
+    POINT client = screen;
+    ScreenToClient(tab_strip_, &client);
+    return tab_at(client);
+}
+
+bool Pane::register_drag_hover_target(IDropTarget* target) noexcept {
+    if (tab_strip_ == nullptr || target == nullptr) return false;
+    if (FAILED(RegisterDragDrop(tab_strip_, target))) return false;
+    tab_drag_target_ = target;
+    return true;
+}
+
+void Pane::revoke_drag_hover_target() noexcept {
+    if (tab_drag_target_ == nullptr) return;
+    if (tab_strip_ != nullptr) RevokeDragDrop(tab_strip_);
+    tab_drag_target_.Reset();
 }
 
 }  // namespace panedock::app_shell
