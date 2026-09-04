@@ -5123,7 +5123,24 @@ std::optional<LRESULT> handle_global_mouse_message(
                 }
             }
             break;
+        case WM_XBUTTONDOWN:
         case WM_PARENTNOTIFY:
+            if (message == WM_XBUTTONDOWN ||
+                LOWORD(wparam) == WM_XBUTTONDOWN) {
+                const WORD button = message == WM_XBUTTONDOWN
+                                        ? GET_XBUTTON_WPARAM(wparam)
+                                        : HIWORD(wparam);
+                if (button == XBUTTON1 || button == XBUTTON2) {
+                    POINT point{};
+                    GetCursorPos(&point);
+                    ScreenToClient(window, &point);
+                    const std::size_t pane = pane_at_point(window, state, point);
+                    if (pane < kExplorerCount)
+                        navigate_tab_history(state, pane, button == XBUTTON1);
+                    return message == WM_XBUTTONDOWN ? std::optional<LRESULT>(TRUE)
+                                                     : std::optional<LRESULT>(0);
+                }
+            }
             if (has_active_group(state) && LOWORD(wparam) == WM_MBUTTONDOWN) {
                 POINT point{};
                 GetCursorPos(&point);
@@ -5453,6 +5470,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_CAPTURECHANGED:
         case WM_LBUTTONDBLCLK:
         case WM_SETCURSOR:
+        case WM_XBUTTONDOWN:
         case WM_PARENTNOTIFY:
             if (state != nullptr) {
                 const auto result = handle_global_mouse_message(
