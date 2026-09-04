@@ -7,8 +7,6 @@
 
 namespace panedock::app_shell {
 
-inline constexpr std::size_t kPaneControlCount = 4;
-
 enum class PaneControl {
     tab_strip,
     back,
@@ -21,12 +19,8 @@ enum class PaneControl {
     folder_context,
 };
 
-struct PaneControlId final {
-    std::size_t pane;
-    PaneControl control;
-    bool operator==(const PaneControlId&) const = default;
-};
-
+// PD-189: the id encodes only the kind of control. Every pane's proc knows
+// which pane it is, so the pane index no longer needs a place in the id.
 inline constexpr std::array<std::pair<PaneControl, int>, 9>
     kPaneControlIdBases{{
         {PaneControl::tab_strip, 200},
@@ -40,19 +34,15 @@ inline constexpr std::array<std::pair<PaneControl, int>, 9>
         {PaneControl::folder_context, 790},
     }};
 
-inline std::optional<PaneControlId> decode_pane_control(int id) noexcept {
-    for (const auto& [control, base] : kPaneControlIdBases) {
-        const int pane = id - base;
-        if (pane >= 0 && pane < static_cast<int>(kPaneControlCount))
-            return PaneControlId{static_cast<std::size_t>(pane), control};
-    }
+inline std::optional<PaneControl> decode_pane_control(int id) noexcept {
+    for (const auto& [control, base] : kPaneControlIdBases)
+        if (id == base) return control;
     return std::nullopt;
 }
 
-inline int encode_pane_control(PaneControl control,
-                               std::size_t pane) noexcept {
+inline int encode_pane_control(PaneControl control) noexcept {
     for (const auto& [candidate, base] : kPaneControlIdBases)
-        if (candidate == control) return base + static_cast<int>(pane);
+        if (candidate == control) return base;
     return -1;
 }
 

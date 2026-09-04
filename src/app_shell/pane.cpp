@@ -1,5 +1,6 @@
 #include "app_shell/pane.h"
 
+#include "app_shell/pane_message_dispatch.h"
 #include "app_shell/window_helpers.h"
 
 #include <commctrl.h>
@@ -61,7 +62,6 @@ LRESULT CALLBACK pane_window_proc(HWND window, UINT message, WPARAM wparam,
     }
     case WM_COMMAND:
     case WM_DRAWITEM:
-    case WM_NOTIFY:
     case WM_CTLCOLORBTN:
     case WM_CTLCOLORDLG:
     case WM_CTLCOLOREDIT:
@@ -69,7 +69,15 @@ LRESULT CALLBACK pane_window_proc(HWND window, UINT message, WPARAM wparam,
     case WM_CTLCOLORMSGBOX:
     case WM_CTLCOLORSCROLLBAR:
     case WM_CTLCOLORSTATIC:
-    case WM_MEASUREITEM:
+    case WM_MEASUREITEM: {
+        // PD-189: this pane's controls are handled here, not forwarded.
+        if (pane == nullptr) break;
+        const auto handled = handle_pane_control_message(
+            window, pane->index(), message, wparam, lparam);
+        if (handled.has_value()) return *handled;
+        break;
+    }
+    case WM_NOTIFY:
         return SendMessageW(GetParent(window), message, wparam, lparam);
     case WM_DESTROY:
         if (pane != nullptr) {
@@ -124,8 +132,7 @@ bool Pane::create(HWND parent, int pane_index) noexcept {
         0, L"STATIC", nullptr,
         WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | SS_NOTIFY, 0, 0, 0, 0,
         window_,
-        reinterpret_cast<HMENU>(encode_pane_control(
-            PaneControl::tab_strip, static_cast<std::size_t>(pane_index))),
+        reinterpret_cast<HMENU>(encode_pane_control(PaneControl::tab_strip)),
         GetModuleHandleW(nullptr), nullptr);
 
     constexpr std::array controls{PaneControl::back,      PaneControl::forward,
@@ -140,16 +147,15 @@ bool Pane::create(HWND parent, int pane_index) noexcept {
             WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | BS_PUSHBUTTON |
                 BS_OWNERDRAW,
             0, 0, 0, 0, window_,
-            reinterpret_cast<HMENU>(encode_pane_control(
-                controls[index], static_cast<std::size_t>(pane_index))),
+            reinterpret_cast<HMENU>(encode_pane_control(controls[index])),
             GetModuleHandleW(nullptr), nullptr);
     }
     address_bar_ = CreateWindowExW(
         0, L"EDIT", nullptr,
         WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0,
         window_,
-        reinterpret_cast<HMENU>(encode_pane_control(
-            PaneControl::address_bar, static_cast<std::size_t>(pane_index))),
+        reinterpret_cast<HMENU>(
+            encode_pane_control(PaneControl::address_bar)),
         GetModuleHandleW(nullptr), nullptr);
     status_bar_ = CreateWindowExW(
         0, L"STATIC", L"", WS_CHILD | WS_CLIPSIBLINGS | SS_OWNERDRAW, 0, 0, 0,
@@ -158,8 +164,8 @@ bool Pane::create(HWND parent, int pane_index) noexcept {
         0, L"BUTTON", L"Folder context menu",
         WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW,
         0, 0, 0, 0, window_,
-        reinterpret_cast<HMENU>(encode_pane_control(
-            PaneControl::folder_context, static_cast<std::size_t>(pane_index))),
+        reinterpret_cast<HMENU>(
+            encode_pane_control(PaneControl::folder_context)),
         GetModuleHandleW(nullptr), nullptr);
 
     const bool complete =

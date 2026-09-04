@@ -36,6 +36,7 @@
 #include "app_shell/diagnostic_mode.h"
 #include "app_shell/pane.h"
 #include "app_shell/pane_control_id.h"
+#include "app_shell/pane_message_dispatch.h"
 #include "app_shell/pinned_locations_dialog.h"
 #include "app_shell/startup_notification.h"
 #include "app_shell/tab_overflow.h"
@@ -4067,9 +4068,7 @@ LRESULT CALLBACK hover_tracking_proc(HWND window, UINT message, WPARAM wparam,
         } else if (message == WM_RBUTTONUP) {
             const auto control = panedock::app_shell::decode_pane_control(
                 static_cast<int>(button_id));
-            if (!control.has_value() ||
-                control->control !=
-                    panedock::app_shell::PaneControl::folder_context)
+            if (control != panedock::app_shell::PaneControl::folder_context)
                 return DefSubclassProc(window, message, wparam, lparam);
             // Transform right-click activation into the existing BN_CLICKED
             // route so it opens the same native folder context menu.
@@ -4580,8 +4579,8 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
             panedock::app_shell::PaneControl::view_mode,
             panedock::app_shell::PaneControl::pinned};
         for (std::size_t button = 0; button < buttons.size(); ++button) {
-            const int id = panedock::app_shell::encode_pane_control(
-                pane_controls[button], index);
+            const int id =
+                panedock::app_shell::encode_pane_control(pane_controls[button]);
             if (!SetWindowSubclass(buttons[button], hover_tracking_proc,
                                    static_cast<UINT_PTR>(id),
                                    reinterpret_cast<DWORD_PTR>(&state)))
@@ -4604,8 +4603,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
                 chrome.folder_context_button(), hover_tracking_proc,
                 static_cast<UINT_PTR>(
                     panedock::app_shell::encode_pane_control(
-                        panedock::app_shell::PaneControl::folder_context,
-                        index)),
+                        panedock::app_shell::PaneControl::folder_context)),
                 reinterpret_cast<DWORD_PTR>(&state)))
             return -1;
         EnableWindow(chrome.folder_context_button(), FALSE);
@@ -4641,10 +4639,9 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
     return 0;
 }
 
-void handle_pane_command(
-    AppState& state, panedock::app_shell::PaneControlId pane_control) {
-    const std::size_t pane_index = pane_control.pane;
-    switch (pane_control.control) {
+void handle_pane_command(AppState& state, std::size_t pane_index,
+                         panedock::app_shell::PaneControl control) {
+    switch (control) {
         case panedock::app_shell::PaneControl::back:
             navigate_tab_history(state, pane_index, true);
             return;
@@ -4797,9 +4794,8 @@ bool handle_global_command(HWND window, AppState& state, int id) {
     return false;
 }
 
-bool draw_pane_control(
-    const DRAWITEMSTRUCT& item, AppState& state,
-    panedock::app_shell::PaneControlId pane_control) {
+bool draw_pane_control(const DRAWITEMSTRUCT& item, AppState& state,
+                       panedock::app_shell::PaneControl control) {
     struct PaneButtonDrawing final {
         panedock::app_shell::PaneControl control;
         std::size_t glyph;
@@ -4818,7 +4814,7 @@ bool draw_pane_control(
     const auto drawing = std::find_if(
         pane_button_drawings.begin(), pane_button_drawings.end(),
         [&](const auto& candidate) {
-            return candidate.control == pane_control.control;
+            return candidate.control == control;
         });
     if (drawing == pane_button_drawings.end()) return false;
     draw_navigation_icon_button(
@@ -4828,12 +4824,6 @@ bool draw_pane_control(
 }
 
 bool draw_global_control(const DRAWITEMSTRUCT& item, AppState& state) {
-    for (const auto& chrome : state.panes) {
-        if (chrome.status_bar() == item.hwndItem) {
-            draw_status_bar(item, GetDpiForWindow(item.hwndItem));
-            return true;
-        }
-    }
     if (item.CtlType == ODT_BUTTON && item.CtlID >= kLayoutButtonIdBase &&
         item.CtlID < kLayoutButtonIdBase +
                          static_cast<int>(kLayoutButtonIds.size())) {
@@ -5267,13 +5257,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state == nullptr) break;
             const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
             if (item == nullptr) break;
-            if (item->CtlType == ODT_BUTTON) {
-                const auto pane_control =
-                    panedock::app_shell::decode_pane_control(item->CtlID);
-                if (pane_control.has_value() &&
-                    draw_pane_control(*item, *state, *pane_control))
-                    return TRUE;
-            }
             if (draw_global_control(*item, *state)) return TRUE;
             break;
         }
@@ -5287,26 +5270,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     SetTextCharacterExtra(dc, scaled_value(window, 1));
                     return reinterpret_cast<LRESULT>(
                         GetSysColorBrush(COLOR_WINDOW));
-                }
-            }
-            break;
-        case WM_CTLCOLOREDIT:
-            if (state != nullptr) {
-                const HWND control = reinterpret_cast<HWND>(lparam);
-                bool is_pane_address_bar = false;
-                for (const auto& chrome : state->panes) {
-                    if (chrome.address_bar() == control) {
-                        is_pane_address_bar = true;
-                        break;
-                    }
-                }
-                if (is_pane_address_bar) {
-                    const HDC dc = reinterpret_cast<HDC>(wparam);
-                    SetBkMode(dc, OPAQUE);
-                    SetBkColor(dc, RGB(251, 252, 253));
-                    SetTextColor(dc, RGB(76, 89, 107));
-                    return reinterpret_cast<LRESULT>(
-                        address_bar_background_brush());
                 }
             }
             break;
@@ -5356,12 +5319,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             if (HIWORD(wparam) != BN_CLICKED) break;
             if (handle_global_command(window, *state, id)) return 0;
-            if (const auto pane_control =
-                    panedock::app_shell::decode_pane_control(id);
-                pane_control.has_value()) {
-                handle_pane_command(*state, *pane_control);
-                return 0;
-            }
             if (handle_sidebar_command(window, *state, id)) return 0;
             break;
         }
@@ -5951,3 +5908,68 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     CloseHandle(single_instance_mutex);
     return exit_code;
 }
+
+namespace panedock::app_shell {
+
+// PD-189: the pane proc's handler for its own children's notifications. Lives
+// in the coordinator (main.cpp) so it can reach AppState; Pane only calls it.
+// The two entry guards mirror tab_strip_proc's: nothing is handled while the
+// window is closing, and mouse messages raised during a Shell re-entry are
+// deferred (PD-172 / PD-173).
+std::optional<LRESULT> handle_pane_control_message(HWND pane_window,
+                                                   std::size_t pane_index,
+                                                   UINT message, WPARAM wparam,
+                                                   LPARAM lparam) {
+    auto* state = reinterpret_cast<AppState*>(
+        GetWindowLongPtrW(GetParent(pane_window), GWLP_USERDATA));
+    if (state == nullptr || pane_index >= state->panes.size())
+        return std::nullopt;
+    if ((state->closing_ || state->shutdown_deferred) &&
+        message != WM_PAINT && message != WM_ERASEBKGND &&
+        message != WM_NCDESTROY)
+        return LRESULT{0};
+    if (defer_shell_reentry_mouse_message(pane_window, *state, message, wparam,
+                                          lparam))
+        return LRESULT{0};
+
+    auto& chrome = state->panes[pane_index];
+    switch (message) {
+        case WM_COMMAND: {
+            if (HIWORD(wparam) != BN_CLICKED) return std::nullopt;
+            const auto control =
+                decode_pane_control(static_cast<int>(LOWORD(wparam)));
+            if (!control.has_value()) return std::nullopt;
+            handle_pane_command(*state, pane_index, *control);
+            return LRESULT{0};
+        }
+        case WM_DRAWITEM: {
+            const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+            if (item == nullptr) return std::nullopt;
+            if (item->CtlType == ODT_BUTTON) {
+                const auto control = decode_pane_control(item->CtlID);
+                if (control.has_value() &&
+                    draw_pane_control(*item, *state, *control))
+                    return LRESULT{TRUE};
+            }
+            // The status bar is an SS_OWNERDRAW STATIC with no control id.
+            if (item->hwndItem == chrome.status_bar()) {
+                draw_status_bar(*item, GetDpiForWindow(item->hwndItem));
+                return LRESULT{TRUE};
+            }
+            return std::nullopt;
+        }
+        case WM_CTLCOLOREDIT: {
+            if (reinterpret_cast<HWND>(lparam) != chrome.address_bar())
+                return std::nullopt;
+            const HDC dc = reinterpret_cast<HDC>(wparam);
+            SetBkMode(dc, OPAQUE);
+            SetBkColor(dc, RGB(251, 252, 253));
+            SetTextColor(dc, RGB(76, 89, 107));
+            return reinterpret_cast<LRESULT>(address_bar_background_brush());
+        }
+        default:
+            return std::nullopt;
+    }
+}
+
+}  // namespace panedock::app_shell

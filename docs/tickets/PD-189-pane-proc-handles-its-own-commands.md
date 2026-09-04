@@ -156,4 +156,58 @@ git diff --check
 
 ## 交接區
 
-（實作者填寫）
+### pane proc 就地處理的訊息
+
+`pane_window_proc`（`src/app_shell/pane.cpp:63-79`）對 `WM_COMMAND`／`WM_DRAWITEM`／`WM_CTLCOLORBTN`／`WM_CTLCOLORDLG`／`WM_CTLCOLOREDIT`／`WM_CTLCOLORLISTBOX`／`WM_CTLCOLORMSGBOX`／`WM_CTLCOLORSCROLLBAR`／`WM_CTLCOLORSTATIC`／`WM_MEASUREITEM` 不再轉發，改呼叫 `handle_pane_control_message(window, pane->index(), …)`；回傳 `std::nullopt` 時落到 `DefWindowProcW`（原本轉發後主視窗也是落到 `DefWindowProcW`，行為等價）。`WM_NOTIFY` **仍轉發**（本票 Scope 未列入；主視窗目前沒有 `WM_NOTIFY` case，tooltip 通知的 parent 是主視窗而非 pane，改動它沒有收益也沒有涵蓋範圍）。
+
+實際被就地處理的三類：
+- `WM_COMMAND` + `BN_CLICKED` + `decode_pane_control` 命中 → `handle_pane_command(state, pane_index, control)`
+- `WM_DRAWITEM`：`ODT_BUTTON` 且 id 命中 → `draw_pane_control`；`hwndItem == chrome.status_bar()`（`SS_OWNERDRAW` 無 id）→ `draw_status_bar`
+- `WM_CTLCOLOREDIT`：`lparam == chrome.address_bar()` → 位址列配色 + `address_bar_background_brush()`
+
+`WM_MEASUREITEM` 目前沒有 pane 專屬分支（只有版型按鈕與側邊欄，兩者都是全域），故一律回 `std::nullopt`。
+
+### 協調層 seam 與契約 (1)
+
+新增 `src/app_shell/pane_message_dispatch.h`：只宣告 `handle_pane_control_message(HWND, std::size_t, UINT, WPARAM, LPARAM) -> std::optional<LRESULT>`，簽章不含 `AppState`。定義在 `main.cpp` 檔尾 `namespace panedock::app_shell`（`main.cpp:5906` 起），從 `GetParent(pane_window)` 的 `GWLP_USERDATA` 取得 `AppState*`——與 `window_proc` 存放 `AppState*` 的方式相同。`Pane` 型別沒有 `AppState*`／回呼／`std::function` 成員（`grep 'AppState|std::function|callback' pane.h` 無結果）。
+
+`tests/unit/pane_test.cpp` 連結 `libpanedock_pane` 但不含協調層，因此在測試檔內提供一個回傳 `std::nullopt` 的樁函式（該測試不 pump pane 訊息）。
+
+### 兩道防線
+
+`handle_pane_control_message` 開頭（`main.cpp:5919-5933`），與 `tab_strip_proc`（`main.cpp:3929-3934`）一字對應：
+1. `(state->closing_ || state->shutdown_deferred)` 且訊息不是 `WM_PAINT`／`WM_ERASEBKGND`／`WM_NCDESTROY` → 回 `0`
+2. `defer_shell_reentry_mouse_message(pane_window, *state, message, wparam, lparam)` → 回 `0`
+
+`grep defer_shell_reentry_mouse_message src/app_shell/main.cpp` → 617（定義）、3933（`tab_strip_proc`）、4176（`address_edit_proc`）、5931（本票新增）。
+
+### 主視窗已移除的 pane 分支
+
+`window_proc` 內移除：`WM_DRAWITEM` 的 `decode_pane_control`／`draw_pane_control` 分支、`WM_COMMAND` 的 `decode_pane_control`／`handle_pane_command` 分支、`WM_CTLCOLOREDIT` 的整個 case（其內容只有 pane 位址列）。`draw_global_control` 開頭掃 4 個 pane 找 `status_bar()` 的迴圈也移除（改由 pane proc 直接比對自己的 status bar）。`handle_global_command`／`handle_sidebar_command`／版型按鈕／側邊欄路徑一行未動。
+
+`grep 'handle_pane_command|draw_pane_control' main.cpp` → 4642、4797（定義）、5942、5951（呼叫，位於 `handle_pane_control_message` 內，皆在 `window_proc` 之外）。
+
+### `decode_pane_control` 收斂
+
+| | 改動前 | 改動後 |
+|---|---|---|
+| decode | `int -> std::optional<PaneControlId{pane, control}>`（`id - base` 落在 `[0,4)`） | `int -> std::optional<PaneControl>`（`id == base` 精確比對） |
+| encode | `(PaneControl, std::size_t pane) -> int` | `(PaneControl) -> int` |
+| 其他 | `struct PaneControlId`、`kPaneControlCount` | 兩者移除（無其他使用者） |
+
+base 值（200/300/310/320/330/340/350/392/790）刻意不動，避免與全域 id 撞號。
+
+**「舊斷言改動前確實會過」的證據**：`git stash` 回到 HEAD（舊 header + 舊測試）後 `cmake --build build && ctest -R pane_control_id` → `100% tests passed out of 1`；`git stash pop` 回到新版本後同一測試仍綠。新測試保留 round-trip 與「非 pane id 一律拒絕」兩項強度，並新增 `test_ids_are_distinct`（舊版由 pane 位移隱含保證，新版需明寫）；沒有放寬任何斷言。
+
+### `AppState&` 計數
+
+`grep -o 'AppState&' src/app_shell/main.cpp | wc -l`：HEAD **113** → 本票後 **113**（未下降）。誠實回報：本票碰到的兩支函式 `handle_pane_command`（`ShellCallScope`、`set_active_pane`、`show_*_menu`、`state.closing_` 閘門）與 `draw_pane_control`（`state.owner_draw_hovered_button`）都真的需要協調層服務，收窄成 `Pane&` 會反過來要求 `Pane` 取得協調層服務，違反契約 (1)。新增的 `handle_pane_control_message` 簽章本身不含 `AppState`（它自己去視窗資料取），所以計數沒有上升。AC 5 的「下降」在本票的範圍內做不到且不應該強做。
+
+### 測試
+
+`ctest --test-dir build --output-on-failure` → **100% tests passed out of 23**，含 `panedock_launch_smoke`、`panedock_shell_reentry_gate`、`panedock_pane_paint_ownership`、`panedock_pane_control_id`、`panedock_pane`。
+graceful close 檢查（`CloseMainWindow` + `WaitForExit(5000)`）通過，工作管理員無殘留。`git diff --check` 無輸出。
+
+### 32 條控制項路徑與使用者實機檢查
+
+**待使用者逐項回報**（本票風險正是「某個控制項訊息落空而沒人發現」，而 UI 自動化是本專案已否決方向）。程式碼層面的覆蓋率推導：8 種 `PaneControl` 中 `tab_strip`／`address_bar` 不走 `WM_COMMAND`（各自有 subclass proc），其餘 6 顆按鈕 + `folder_context` 共 7 種都在 `handle_pane_command` 的 switch 內，且 4 個 pane 走同一支 `pane_window_proc`，因此 pane 間不存在「只有某個 pane 落空」的分歧路徑。

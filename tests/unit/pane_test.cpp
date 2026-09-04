@@ -1,5 +1,16 @@
 #include "app_shell/pane.h"
+#include "app_shell/pane_message_dispatch.h"
 #include "unit/test_util.h"
+
+// PD-189: pane_window_proc asks the coordinator (main.cpp) to handle its
+// children's notifications. This test links Pane without the coordinator, so
+// it stands in with a "not mine" answer; no test here pumps pane messages.
+namespace panedock::app_shell {
+std::optional<LRESULT> handle_pane_control_message(HWND, std::size_t, UINT,
+                                                   WPARAM, LPARAM) {
+    return std::nullopt;
+}
+}  // namespace panedock::app_shell
 
 namespace {
 

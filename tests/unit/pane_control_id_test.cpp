@@ -6,7 +6,6 @@
 namespace {
 
 using panedock::app_shell::PaneControl;
-using panedock::app_shell::PaneControlId;
 using panedock::app_shell::decode_pane_control;
 using panedock::app_shell::encode_pane_control;
 
@@ -17,17 +16,22 @@ constexpr std::array kControls{
 
 void test_pane_control_ids_round_trip() {
     for (const auto control : kControls) {
-        for (const std::size_t pane : {std::size_t{0}, std::size_t{3}}) {
-            const auto decoded =
-                decode_pane_control(encode_pane_control(control, pane));
-            EXPECT((decoded == PaneControlId{pane, control}));
-        }
+        const auto decoded = decode_pane_control(encode_pane_control(control));
+        EXPECT((decoded == control));
     }
 }
 
-void test_out_of_range_and_non_pane_ids_are_rejected() {
+void test_ids_are_distinct() {
+    for (const auto control : kControls)
+        for (const auto other : kControls)
+            if (control != other)
+                EXPECT(encode_pane_control(control) !=
+                       encode_pane_control(other));
+}
+
+void test_non_pane_ids_are_rejected() {
     for (const auto control : kControls) {
-        const int base = encode_pane_control(control, 0);
+        const int base = encode_pane_control(control);
         EXPECT(!decode_pane_control(base - 1).has_value());
         EXPECT(!decode_pane_control(base + 4).has_value());
     }
@@ -39,6 +43,7 @@ void test_out_of_range_and_non_pane_ids_are_rejected() {
 
 int main() {
     test_pane_control_ids_round_trip();
-    test_out_of_range_and_non_pane_ids_are_rejected();
+    test_ids_are_distinct();
+    test_non_pane_ids_are_rejected();
     return panedock::test::summary("pane_control_id");
 }
