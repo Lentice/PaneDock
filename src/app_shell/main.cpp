@@ -2291,7 +2291,7 @@ void draw_pane_card(HDC dc, RECT pane_rect, UINT dpi) noexcept {
     // square-bottom decision; the PD-040 explorer container clips the real
     // Shell view to the same radius so there is no seam at the bottom
     // corners).
-    const int outset = std::max(1, MulDiv(2, static_cast<int>(dpi), 96));
+    const int outset = panedock::app_shell::pane_card_outset(dpi);
     const RECT card{pane_rect.left - outset, pane_rect.top - outset,
                     pane_rect.right + outset, pane_rect.bottom + outset};
 
@@ -2561,15 +2561,17 @@ HRESULT apply_layout(HWND window, AppState& state,
         return S_OK;
     }
     LayoutPassScope layout_scope(window, state);
-    WindowPositionBatch positions;
-    // DeferWindowPos requires every window in a batch to share one parent.
-    // The app chrome and each ExplorerBrowser therefore get separate native
-    // batches, committed by this one layout pass.
+    WindowPositionBatch main_positions;
+    // DeferWindowPos requires every window in a batch to share one parent:
+    // main-window chrome/pane HWNDs, each pane's children, and each
+    // ExplorerBrowser therefore use separate batches committed in this pass.
+    std::array<std::optional<WindowPositionBatch>, kExplorerCount>
+        pane_positions;
     std::array<std::optional<WindowPositionBatch>, kExplorerCount>
         explorer_positions;
     RECT sidebar_list_rect{};
-    layout_sidebar(window, state, &positions, &sidebar_list_rect);
-    layout_header(window, state, &positions, recompute_content);
+    layout_sidebar(window, state, &main_positions, &sidebar_list_rect);
+    layout_header(window, state, &main_positions, recompute_content);
     if (!has_active_group(state)) {
         for (std::size_t index = 0; index < state.panes.size(); ++index) {
             {
@@ -2584,7 +2586,7 @@ HRESULT apply_layout(HWND window, AppState& state,
         ShowWindow(state.empty_message, SW_SHOW);
         for (auto& chrome : state.panes)
             chrome.laid_out_pane_rect().reset();
-        if (!positions.commit())
+        if (!main_positions.commit())
             state.sidebar.set_rect(sidebar_list_rect, GetDpiForWindow(window));
         InvalidateRect(window, nullptr, FALSE);
         if (recompute_content) write_live_view_count(state.diagnostic_mode);
@@ -2625,17 +2627,33 @@ HRESULT apply_layout(HWND window, AppState& state,
         bool pane_geometry_changed = false;
         if (visible) {
             pane_rect = to_win32_rect(rects[index]);
-            pane_geometry_changed = chrome.set_rect(pane_rect, nullptr);
+            pane_geometry_changed = chrome.set_rect(pane_rect);
             changed_panes[index] = pane_geometry_changed;
+            const int pane_outset = panedock::app_shell::pane_card_outset(dpi);
+            const RECT pane_window_rect{
+                pane_rect.left - pane_outset, pane_rect.top - pane_outset,
+                pane_rect.right + pane_outset, pane_rect.bottom};
+            const auto pane_local = [pane_window_rect](RECT rect) noexcept {
+                OffsetRect(&rect, -pane_window_rect.left,
+                           -pane_window_rect.top);
+                return rect;
+            };
+            if (pane_geometry_changed) {
+                position_window(&main_positions, chrome.window(),
+                                pane_window_rect,
+                                SWP_NOZORDER | SWP_NOACTIVATE);
+                pane_positions[index].emplace();
+            }
             const int strip_height = scaled_value(window, kTabStripHeight);
             const int actual_strip_height =
                 std::min(strip_height, static_cast<int>(pane_rect.bottom -
                                                         pane_rect.top));
             if (pane_geometry_changed) {
                 position_window(
-                    &positions, chrome.tab_strip(),
-                    RECT{pane_rect.left, pane_rect.top, pane_rect.right,
-                         pane_rect.top + actual_strip_height},
+                    &*pane_positions[index], chrome.tab_strip(),
+                    pane_local(RECT{pane_rect.left, pane_rect.top,
+                                    pane_rect.right,
+                                    pane_rect.top + actual_strip_height}),
                     SWP_NOZORDER | SWP_NOACTIVATE);
             }
             const NavigationGeometry geometry =
@@ -2655,10 +2673,11 @@ HRESULT apply_layout(HWND window, AppState& state,
             for (HWND button : buttons) {
                 if (pane_geometry_changed) {
                     position_window(
-                        &positions, button,
-                        RECT{x, navigation_top + button_offset_y,
-                             x + geometry.button_width,
-                             navigation_top + button_offset_y + button_height},
+                        &*pane_positions[index], button,
+                        pane_local(RECT{
+                            x, navigation_top + button_offset_y,
+                            x + geometry.button_width,
+                            navigation_top + button_offset_y + button_height}),
                         SWP_NOZORDER | SWP_NOACTIVATE);
                 }
                 x += geometry.button_width;
@@ -2672,8 +2691,8 @@ HRESULT apply_layout(HWND window, AppState& state,
                 geometry.address_background,
                 scaled_value(window, kAddressBarInset));
             if (pane_geometry_changed) {
-                position_window(&positions, chrome.address_bar(),
-                                address_rect,
+                position_window(&*pane_positions[index], chrome.address_bar(),
+                                pane_local(address_rect),
                                 SWP_NOZORDER | SWP_NOACTIVATE);
             }
             RECT rect = pane_rect;
@@ -2716,12 +2735,12 @@ HRESULT apply_layout(HWND window, AppState& state,
                                           footer_button_right,
                                           footer_button_bottom};
             if (pane_geometry_changed) {
-                position_window(&positions, chrome.status_bar(),
-                                status_rect,
+                position_window(&*pane_positions[index], chrome.status_bar(),
+                                pane_local(status_rect),
                                 SWP_NOZORDER | SWP_NOACTIVATE);
-                position_window(&positions,
+                position_window(&*pane_positions[index],
                                 chrome.folder_context_button(),
-                                footer_button_rect,
+                                pane_local(footer_button_rect),
                                 SWP_NOZORDER | SWP_NOACTIVATE);
             }
             chrome.set_visible(true);
@@ -2743,9 +2762,10 @@ HRESULT apply_layout(HWND window, AppState& state,
             const int container_width = rect.right - rect.left;
             const int container_height = rect.bottom - rect.top;
             if (pane_geometry_changed) {
-                position_window(&positions, chrome.explorer_container(),
-                                rect, SWP_NOZORDER | SWP_NOACTIVATE);
-                container_rects[index] = rect;
+                position_window(&*pane_positions[index],
+                                chrome.explorer_container(), pane_local(rect),
+                                SWP_NOZORDER | SWP_NOACTIVATE);
+                container_rects[index] = pane_local(rect);
             }
             const RECT local_rect{0, 0, container_width, container_height};
             if (plan_contains(realization_plan.realize, index)) {
@@ -2830,9 +2850,12 @@ HRESULT apply_layout(HWND window, AppState& state,
         }
         if (state.shutdown_deferred || state.closing_) return E_ABORT;
     }
-    const bool committed = positions.commit();
+    const bool committed = main_positions.commit();
     if (!committed) {
         state.sidebar.set_rect(sidebar_list_rect, GetDpiForWindow(window));
+    }
+    for (auto& pane_position : pane_positions) {
+        if (pane_position.has_value()) (void)pane_position->commit();
     }
     // The tab strip's custom add/scroll-button geometry depends on its new
     // client width. Recompute only after the app batch has committed; before
@@ -4073,11 +4096,13 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                     window, pane_index, *item, tabs[*item].id, point, false,
                     std::nullopt, std::nullopt};
                 SetCapture(window);
-                SendMessageW(GetParent(window), kTabStripSelectionMessage,
+                SendMessageW(GetParent(GetParent(window)),
+                             kTabStripSelectionMessage,
                              static_cast<WPARAM>(pane_index),
                              static_cast<LPARAM>(*item));
             } else if (PtInRect(&add, point)) {
-                SendMessageW(GetParent(window), kTabStripSelectionMessage,
+                SendMessageW(GetParent(GetParent(window)),
+                             kTabStripSelectionMessage,
                              static_cast<WPARAM>(pane_index), -1);
             }
             return 0;
@@ -4090,7 +4115,8 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
             if (!tab_scroll_button_at_point(state->panes[pane_index], point) &&
                 !tab_item_at_point(state->panes, window, point) &&
                 !PtInRect(&add, point)) {
-                SendMessageW(GetParent(window), kTabStripSelectionMessage,
+                SendMessageW(GetParent(GetParent(window)),
+                             kTabStripSelectionMessage,
                              static_cast<WPARAM>(pane_index), -1);
                 return 0;
             }
@@ -4663,10 +4689,8 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
     if (state.empty_message == nullptr) return -1;
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
         auto& chrome = state.panes[index];
-        // PD-040: plain STATIC child used purely as a clipping container
-        // (SetWindowRgn) and a parent HWND for ExplorerHost::initialize — it
-        // never paints or handles messages of its own, so no custom window
-        // class is needed.
+        // PaneDock.Pane owns this pane's chrome. Its explorer container stays
+        // a plain STATIC used only for clipping and ExplorerHost parenting.
         if (!chrome.create(window, static_cast<int>(index))) return -1;
         if (!SetWindowSubclass(chrome.tab_strip(), tab_strip_proc, index,
                                reinterpret_cast<DWORD_PTR>(&state)))
@@ -4703,16 +4727,6 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
         if (!SetWindowSubclass(chrome.address_bar(), address_edit_proc, index,
                                reinterpret_cast<DWORD_PTR>(&state)))
             return -1;
-        chrome.set_folder_context_button(CreateWindowExW(
-            0, L"BUTTON", L"Folder context menu",
-            WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | BS_PUSHBUTTON |
-                BS_OWNERDRAW,
-            0, 0, 0, 0, window,
-            reinterpret_cast<HMENU>(
-                panedock::app_shell::encode_pane_control(
-                    panedock::app_shell::PaneControl::folder_context, index)),
-            GetModuleHandleW(nullptr), nullptr));
-        if (chrome.folder_context_button() == nullptr) return -1;
         if (!SetWindowSubclass(
                 chrome.folder_context_button(), hover_tracking_proc,
                 static_cast<UINT_PTR>(
@@ -5422,6 +5436,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 }
             }
             break;
+        case WM_PRINTCLIENT:
+            if (state != nullptr && (lparam & PRF_CLIENT) != 0) {
+                paint_client_background(window, reinterpret_cast<HDC>(wparam),
+                                        *state);
+                return 0;
+            }
+            break;
         case WM_ERASEBKGND:
             if (state != nullptr) return 1;
             break;
@@ -5478,6 +5499,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                          suggested->right - suggested->left,
                          suggested->bottom - suggested->top,
                          SWP_NOZORDER | SWP_NOACTIVATE);
+            if (state != nullptr) {
+                for (auto& pane : state->panes)
+                    pane.laid_out_pane_rect().reset();
+            }
             if (state != nullptr) refresh_ui_font(window, *state);
             if (state != nullptr && FAILED(apply_layout(window, *state)))
                 OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
@@ -5590,6 +5615,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
 }
 
 bool register_window_class(HINSTANCE instance) noexcept {
+    if (!panedock::app_shell::Pane::register_window_class(instance))
+        return false;
     if (!panedock::app_shell::PinnedLocationsDialog::register_window_class(
             instance))
         return false;

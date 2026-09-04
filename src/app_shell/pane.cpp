@@ -1,54 +1,141 @@
 #include "app_shell/pane.h"
 
+#include "app_shell/window_helpers.h"
+
 #include <array>
 
 namespace panedock::app_shell {
 namespace {
 
-constexpr std::array<const wchar_t*, 6> kButtonLabels{
+constexpr std::array<const wchar_t *, 6> kButtonLabels{
     L"<", L">", L"Up", L"Refresh", L"View", L"Pinned"};
+constexpr wchar_t kWindowClassName[] = L"PaneDock.Pane";
 
 void set_font(HWND window, HFONT font) noexcept {
     if (window != nullptr && font != nullptr)
         SendMessageW(window, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 }
 
-void destroy_window(HWND& window) noexcept {
+void destroy_window(HWND &window) noexcept {
     if (window != nullptr) {
         DestroyWindow(window);
         window = nullptr;
     }
 }
 
-}  // namespace
+LRESULT CALLBACK pane_window_proc(HWND window, UINT message, WPARAM wparam,
+                                  LPARAM lparam) {
+    auto *pane =
+        reinterpret_cast<Pane *>(GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        pane = window_state_from_create<Pane>(window, lparam);
+        if (pane == nullptr)
+            return FALSE;
+    }
+
+    switch (message) {
+    case WM_ERASEBKGND: {
+        const HDC dc = reinterpret_cast<HDC>(wparam);
+        RECT client{};
+        GetClientRect(window, &client);
+        HBRUSH brush = CreateSolidBrush(RGB(243, 246, 249));
+        if (brush != nullptr) {
+            FillRect(dc, &client, brush);
+            DeleteObject(brush);
+        }
+        // PD-188 will move the card paint here. Until then, ask the main
+        // window to render its unchanged client background into this DC.
+        POINT origin{};
+        const HWND parent = GetParent(window);
+        if (parent != nullptr && MapWindowPoints(window, parent, &origin, 1)) {
+            const int saved = SaveDC(dc);
+            SetViewportOrgEx(dc, -origin.x, -origin.y, nullptr);
+            SendMessageW(parent, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc),
+                         PRF_CLIENT);
+            RestoreDC(dc, saved);
+        }
+        return 1;
+    }
+    case WM_COMMAND:
+    case WM_DRAWITEM:
+    case WM_NOTIFY:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+    case WM_CTLCOLORMSGBOX:
+    case WM_CTLCOLORSCROLLBAR:
+    case WM_CTLCOLORSTATIC:
+    case WM_MEASUREITEM:
+        return SendMessageW(GetParent(window), message, wparam, lparam);
+    case WM_DESTROY:
+        if (pane != nullptr) {
+            // Fail-safe for parent-chain destruction. The normal §9.4
+            // path is still destroy_panes() before the main HWND dies.
+            pane->derealize();
+        }
+        break;
+    case WM_NCDESTROY:
+        if (pane != nullptr)
+            pane->window_destroyed(window);
+        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+        break;
+    default:
+        break;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+} // namespace
+
+bool Pane::register_window_class(HINSTANCE instance) noexcept {
+    return register_simple_window_class(kWindowClassName, pane_window_proc,
+                                        instance, nullptr,
+                                        CS_HREDRAW | CS_VREDRAW);
+}
+
+void Pane::window_destroyed(HWND window) noexcept {
+    if (window_ == window)
+        window_ = nullptr;
+}
 
 bool Pane::create(HWND parent, int pane_index) noexcept {
-    if (parent == nullptr || pane_index < 0) return false;
+    if (parent == nullptr || pane_index < 0)
+        return false;
     destroy();
 
+    window_ =
+        CreateWindowExW(0, kWindowClassName, nullptr,
+                        WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 0,
+                        0, parent, nullptr, GetModuleHandleW(nullptr), this);
+    if (window_ == nullptr) {
+        destroy();
+        return false;
+    }
+
     explorer_container_ = CreateWindowExW(
-        0, L"STATIC", nullptr,
-        WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 0, 0, parent,
-        nullptr, GetModuleHandleW(nullptr), nullptr);
+        0, L"STATIC", nullptr, WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0,
+        0, 0, 0, window_, nullptr, GetModuleHandleW(nullptr), nullptr);
     tab_strip_ = CreateWindowExW(
         0, L"STATIC", nullptr,
         WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | SS_NOTIFY, 0, 0, 0, 0,
-        parent, reinterpret_cast<HMENU>(encode_pane_control(
-                    PaneControl::tab_strip, static_cast<std::size_t>(pane_index))),
+        window_,
+        reinterpret_cast<HMENU>(encode_pane_control(
+            PaneControl::tab_strip, static_cast<std::size_t>(pane_index))),
         GetModuleHandleW(nullptr), nullptr);
 
-    constexpr std::array controls{
-        PaneControl::back, PaneControl::forward, PaneControl::up,
-        PaneControl::refresh, PaneControl::view_mode, PaneControl::pinned};
-    const std::array<HWND*, 6> buttons{
-        &back_button_, &forward_button_, &up_button_, &refresh_button_,
-        &view_mode_button_, &pinned_button_};
+    constexpr std::array controls{PaneControl::back,      PaneControl::forward,
+                                  PaneControl::up,        PaneControl::refresh,
+                                  PaneControl::view_mode, PaneControl::pinned};
+    const std::array<HWND *, 6> buttons{&back_button_,      &forward_button_,
+                                        &up_button_,        &refresh_button_,
+                                        &view_mode_button_, &pinned_button_};
     for (std::size_t index = 0; index < buttons.size(); ++index) {
         *buttons[index] = CreateWindowExW(
             0, L"BUTTON", kButtonLabels[index],
             WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | BS_PUSHBUTTON |
                 BS_OWNERDRAW,
-            0, 0, 0, 0, parent,
+            0, 0, 0, 0, window_,
             reinterpret_cast<HMENU>(encode_pane_control(
                 controls[index], static_cast<std::size_t>(pane_index))),
             GetModuleHandleW(nullptr), nullptr);
@@ -56,21 +143,28 @@ bool Pane::create(HWND parent, int pane_index) noexcept {
     address_bar_ = CreateWindowExW(
         0, L"EDIT", nullptr,
         WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0,
-        parent, reinterpret_cast<HMENU>(encode_pane_control(
-                    PaneControl::address_bar,
-                    static_cast<std::size_t>(pane_index))),
+        window_,
+        reinterpret_cast<HMENU>(encode_pane_control(
+            PaneControl::address_bar, static_cast<std::size_t>(pane_index))),
         GetModuleHandleW(nullptr), nullptr);
     status_bar_ = CreateWindowExW(
-        0, L"STATIC", L"", WS_CHILD | WS_CLIPSIBLINGS | SS_OWNERDRAW, 0, 0,
-        0, 0, parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+        0, L"STATIC", L"", WS_CHILD | WS_CLIPSIBLINGS | SS_OWNERDRAW, 0, 0, 0,
+        0, window_, nullptr, GetModuleHandleW(nullptr), nullptr);
+    folder_context_button_ = CreateWindowExW(
+        0, L"BUTTON", L"Folder context menu",
+        WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW,
+        0, 0, 0, 0, window_,
+        reinterpret_cast<HMENU>(encode_pane_control(
+            PaneControl::folder_context, static_cast<std::size_t>(pane_index))),
+        GetModuleHandleW(nullptr), nullptr);
 
-    const bool complete = explorer_container_ != nullptr &&
-                          tab_strip_ != nullptr && address_bar_ != nullptr &&
-                          status_bar_ != nullptr && back_button_ != nullptr &&
-                          forward_button_ != nullptr && up_button_ != nullptr &&
-                          refresh_button_ != nullptr &&
-                          view_mode_button_ != nullptr &&
-                          pinned_button_ != nullptr;
+    const bool complete =
+        window_ != nullptr && explorer_container_ != nullptr &&
+        tab_strip_ != nullptr && address_bar_ != nullptr &&
+        status_bar_ != nullptr && back_button_ != nullptr &&
+        forward_button_ != nullptr && up_button_ != nullptr &&
+        refresh_button_ != nullptr && view_mode_button_ != nullptr &&
+        pinned_button_ != nullptr && folder_context_button_ != nullptr;
     if (!complete) {
         destroy();
         return false;
@@ -89,13 +183,17 @@ void Pane::destroy() noexcept {
     //      still alive; ExplorerHost::destroy() is a no-op if never
     //      initialized.
     //   3. The remaining chrome child windows.
-    //   4. explorer_container_ last, because the Shell view lived inside
+    //   4. explorer_container_, because the Shell view lived inside
     //      it — destroying it earlier is exactly the crash §9.4 warns
     //      about.
+    //   5. pane HWND last. DestroyWindow would recursively destroy every
+    //      child, including explorer_container_, so §9.4 requires both the
+    //      browser and its container to be gone first.
     revoke_drag_hover_target();
     explorer_host_.destroy();
     realized_ = false;
     destroy_window(status_bar_);
+    destroy_window(folder_context_button_);
     destroy_window(address_bar_);
     destroy_window(pinned_button_);
     destroy_window(view_mode_button_);
@@ -105,6 +203,7 @@ void Pane::destroy() noexcept {
     destroy_window(back_button_);
     destroy_window(tab_strip_);
     destroy_window(explorer_container_);
+    destroy_window(window_);
     laid_out_pane_rect_.reset();
     tab_tooltips_registered_ = false;
     tab_visuals_.clear();
@@ -115,10 +214,10 @@ void Pane::destroy() noexcept {
     unbind();
 }
 
-HRESULT Pane::realize(const RECT& local_rect,
-                      const panedock::core::ShellLocation& location) noexcept {
-    const HRESULT hr = explorer_host_.initialize(
-        explorer_container_, local_rect, location);
+HRESULT Pane::realize(const RECT &local_rect,
+                      const panedock::core::ShellLocation &location) noexcept {
+    const HRESULT hr =
+        explorer_host_.initialize(explorer_container_, local_rect, location);
     realized_ = SUCCEEDED(hr);
     return hr;
 }
@@ -128,11 +227,10 @@ void Pane::derealize() noexcept {
     realized_ = false;
 }
 
-bool Pane::set_rect(const RECT& rect, HDWP* deferred) noexcept {
+bool Pane::set_rect(const RECT &rect) noexcept {
     // The pane's children have different sub-rectangles (tab, navigation,
     // footer and Shell container), so the app-shell layout pass owns their
     // parent-scoped batch. This method owns the committed outer-rect cache.
-    (void)deferred;
     const bool changed = !laid_out_pane_rect_.has_value() ||
                          !EqualRect(&laid_out_pane_rect_.value(), &rect);
     laid_out_pane_rect_ = rect;
@@ -141,6 +239,7 @@ bool Pane::set_rect(const RECT& rect, HDWP* deferred) noexcept {
 
 void Pane::set_visible(bool visible) noexcept {
     const int command = visible ? SW_SHOW : SW_HIDE;
+    ShowWindow(window_, command);
     ShowWindow(explorer_container_, command);
     ShowWindow(tab_strip_, command);
     ShowWindow(back_button_, command);
@@ -151,6 +250,7 @@ void Pane::set_visible(bool visible) noexcept {
     ShowWindow(pinned_button_, command);
     ShowWindow(address_bar_, command);
     ShowWindow(status_bar_, command);
+    ShowWindow(folder_context_button_, command);
 }
 
 void Pane::apply_font(HFONT font) noexcept {
@@ -168,27 +268,33 @@ void Pane::apply_font(HFONT font) noexcept {
 void Pane::set_tabs(std::span<const std::wstring> labels) noexcept {
     tab_visuals_.clear();
     tab_visuals_.reserve(labels.size());
-    for (const auto& label : labels) tab_visuals_.push_back({label});
+    for (const auto &label : labels)
+        tab_visuals_.push_back({label});
 }
 
 std::optional<std::size_t> Pane::tab_at_screen(POINT screen) const noexcept {
-    if (tab_strip_ == nullptr) return std::nullopt;
+    if (tab_strip_ == nullptr)
+        return std::nullopt;
     POINT client = screen;
     ScreenToClient(tab_strip_, &client);
     return tab_at(client);
 }
 
-bool Pane::register_drag_hover_target(IDropTarget* target) noexcept {
-    if (tab_strip_ == nullptr || target == nullptr) return false;
-    if (FAILED(RegisterDragDrop(tab_strip_, target))) return false;
+bool Pane::register_drag_hover_target(IDropTarget *target) noexcept {
+    if (tab_strip_ == nullptr || target == nullptr)
+        return false;
+    if (FAILED(RegisterDragDrop(tab_strip_, target)))
+        return false;
     tab_drag_target_ = target;
     return true;
 }
 
 void Pane::revoke_drag_hover_target() noexcept {
-    if (tab_drag_target_ == nullptr) return;
-    if (tab_strip_ != nullptr) RevokeDragDrop(tab_strip_);
+    if (tab_drag_target_ == nullptr)
+        return;
+    if (tab_strip_ != nullptr)
+        RevokeDragDrop(tab_strip_);
     tab_drag_target_.Reset();
 }
 
-}  // namespace panedock::app_shell
+} // namespace panedock::app_shell

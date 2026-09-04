@@ -9,9 +9,9 @@ void test_rect_cache_reports_only_real_changes() {
     const RECT same{10, 20, 110, 220};
     const RECT different{10, 20, 111, 220};
 
-    EXPECT(pane.set_rect(first, nullptr));
-    EXPECT(!pane.set_rect(same, nullptr));
-    EXPECT(pane.set_rect(different, nullptr));
+    EXPECT(pane.set_rect(first));
+    EXPECT(!pane.set_rect(same));
+    EXPECT(pane.set_rect(different));
     EXPECT(pane.laid_out_pane_rect().has_value());
     EXPECT(EqualRect(&pane.laid_out_pane_rect().value(), &different));
 }
@@ -62,7 +62,36 @@ void test_destroy_unbinds_pane_state() {
     EXPECT(pane.pane_state() == nullptr);
 }
 
-}  // namespace
+void test_controls_are_children_of_the_pane_window() {
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    EXPECT(panedock::app_shell::Pane::register_window_class(instance));
+    const HWND parent =
+        CreateWindowExW(0, L"STATIC", nullptr, 0, 0, 0, 100, 100, nullptr,
+                        nullptr, instance, nullptr);
+    EXPECT(parent != nullptr);
+
+    panedock::app_shell::Pane pane;
+    EXPECT(pane.create(parent, 0));
+    EXPECT(GetParent(pane.window()) == parent);
+    const HWND controls[]{pane.explorer_container(),
+                          pane.tab_strip(),
+                          pane.back_button(),
+                          pane.forward_button(),
+                          pane.up_button(),
+                          pane.refresh_button(),
+                          pane.view_mode_button(),
+                          pane.pinned_button(),
+                          pane.address_bar(),
+                          pane.status_bar(),
+                          pane.folder_context_button()};
+    for (HWND control : controls)
+        EXPECT(GetParent(control) == pane.window());
+
+    pane.destroy();
+    DestroyWindow(parent);
+}
+
+} // namespace
 
 int main() {
     test_rect_cache_reports_only_real_changes();
@@ -70,5 +99,6 @@ int main() {
     test_tab_at_delegates_to_geometry_hit_test();
     test_pane_state_binding_uses_the_original_object();
     test_destroy_unbinds_pane_state();
+    test_controls_are_children_of_the_pane_window();
     return panedock::test::summary("pane");
 }

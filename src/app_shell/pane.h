@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <optional>
 #include <span>
@@ -22,6 +23,12 @@
 
 namespace panedock::app_shell {
 
+constexpr int kPaneCardOutset = 2;
+
+inline int pane_card_outset(UINT dpi) noexcept {
+    return (std::max)(1, MulDiv(kPaneCardOutset, static_cast<int>(dpi), 96));
+}
+
 // Dispatch surface for the drag-hover delay timer. `Pane` stores a drag
 // target only as `IDropTarget` (RegisterDragDrop/RevokeDragDrop lifetime);
 // the coordinator that built the concrete target reaches its extra hover
@@ -29,7 +36,7 @@ namespace panedock::app_shell {
 // `Pane::drag_hover_target()` returns, so `Pane` never has to know about
 // the coordinator's own drag-hover implementation type.
 class DragHoverTimer {
-public:
+  public:
     virtual ~DragHoverTimer() = default;
     virtual void invoke_hover(UINT_PTR generation) noexcept = 0;
     virtual void timer_expired() noexcept = 0;
@@ -48,30 +55,33 @@ struct StripLabel final {
 // TabStripGeometry via set_geometry(), and reads back hit-test results
 // through pure queries.
 class Pane final {
-public:
+  public:
     Pane() noexcept = default;
     ~Pane() { destroy(); }
 
-    Pane(const Pane&) = delete;
-    Pane& operator=(const Pane&) = delete;
+    Pane(const Pane &) = delete;
+    Pane &operator=(const Pane &) = delete;
 
+    static bool register_window_class(HINSTANCE instance) noexcept;
     bool create(HWND parent, int pane_index) noexcept;
     void destroy() noexcept;
+    void window_destroyed(HWND window) noexcept;
     // The PaneState this slot currently displays. Not owned: it lives in
     // core::ApplicationState and outlives every rebind (PD-184 guarantees its
     // address is stable for the group's lifetime). Null when this slot is not
     // showing anything (no active Group, or a layout with fewer panes).
-    void bind(panedock::core::PaneState* state) noexcept {
+    void bind(panedock::core::PaneState *state) noexcept {
         bound_state_ = state;
     }
     void unbind() noexcept { bound_state_ = nullptr; }
-    panedock::core::PaneState* pane_state() const noexcept {
+    panedock::core::PaneState *pane_state() const noexcept {
         return bound_state_;
     }
-    bool set_rect(const RECT& rect, HDWP* deferred = nullptr) noexcept;
+    bool set_rect(const RECT &rect) noexcept;
     void set_visible(bool visible) noexcept;
     void apply_font(HFONT font) noexcept;
 
+    HWND window() const noexcept { return window_; }
     HWND explorer_container() const noexcept { return explorer_container_; }
     HWND tab_strip() const noexcept { return tab_strip_; }
     HWND address_bar() const noexcept { return address_bar_; }
@@ -86,17 +96,14 @@ public:
     HWND folder_context_button() const noexcept {
         return folder_context_button_;
     }
-    void set_folder_context_button(HWND button) noexcept {
-        folder_context_button_ = button;
-    }
 
-    std::optional<RECT>& laid_out_pane_rect() noexcept {
+    std::optional<RECT> &laid_out_pane_rect() noexcept {
         return laid_out_pane_rect_;
     }
-    const std::optional<RECT>& laid_out_pane_rect() const noexcept {
+    const std::optional<RECT> &laid_out_pane_rect() const noexcept {
         return laid_out_pane_rect_;
     }
-    bool& tab_tooltips_registered() noexcept {
+    bool &tab_tooltips_registered() noexcept {
         return tab_tooltips_registered_;
     }
     bool tab_tooltips_registered() const noexcept {
@@ -109,14 +116,14 @@ public:
     // core::PaneState each time (refresh_tab_strip); Pane never holds a
     // copy of the tab list itself, only these display strings.
     void set_tabs(std::span<const std::wstring> labels) noexcept;
-    const std::vector<StripLabel>& tab_visuals() const noexcept {
+    const std::vector<StripLabel> &tab_visuals() const noexcept {
         return tab_visuals_;
     }
 
     // The already-resolved tab strip geometry. The coordinator computes
     // this (tab_overflow.h's layout_tab_strip, fed by its own font/drag
     // context) and stores the result here; Pane only holds and serves it.
-    const TabStripGeometry& tab_geometry() const noexcept {
+    const TabStripGeometry &tab_geometry() const noexcept {
         return tab_strip_geometry_;
     }
     void set_geometry(TabStripGeometry geometry) noexcept {
@@ -147,9 +154,9 @@ public:
     // RegisterDragDrop/RevokeDragDrop bookkeeping for this pane's own tab
     // strip HWND. The caller still wraps the RegisterDragDrop call in its
     // own ShellCallScope — Pane has no coordinator state to do that itself.
-    bool register_drag_hover_target(IDropTarget* target) noexcept;
+    bool register_drag_hover_target(IDropTarget *target) noexcept;
     void revoke_drag_hover_target() noexcept;
-    IDropTarget* drag_hover_target() const noexcept {
+    IDropTarget *drag_hover_target() const noexcept {
         return tab_drag_target_.Get();
     }
 
@@ -165,11 +172,11 @@ public:
     // explorer_container(). Returns the initialize() HRESULT (not `bool`
     // per the ticket's literal signature) because callers need the exact
     // HRESULT to report first-failure diagnostics; see PD-183 交接區.
-    HRESULT realize(const RECT& local_rect,
-                    const panedock::core::ShellLocation& location) noexcept;
+    HRESULT realize(const RECT &local_rect,
+                    const panedock::core::ShellLocation &location) noexcept;
     void derealize() noexcept;
     bool realized() const noexcept { return realized_; }
-    HRESULT navigate(const panedock::core::ShellLocation& location) {
+    HRESULT navigate(const panedock::core::ShellLocation &location) {
         return explorer_host_.navigate(location);
     }
 
@@ -182,15 +189,16 @@ public:
     // does not promote to a Pane-level command/query (navigation
     // notification setup, view mode, sort, item counts, focus, ...). See
     // PD-183 交接區 for the call-site list still using this.
-    panedock::explorer_host::ExplorerHost& host() noexcept {
+    panedock::explorer_host::ExplorerHost &host() noexcept {
         return explorer_host_;
     }
-    const panedock::explorer_host::ExplorerHost& host() const noexcept {
+    const panedock::explorer_host::ExplorerHost &host() const noexcept {
         return explorer_host_;
     }
 
-private:
-    panedock::core::PaneState* bound_state_{nullptr};
+  private:
+    panedock::core::PaneState *bound_state_{nullptr};
+    HWND window_{nullptr};
     HWND explorer_container_{nullptr};
     HWND tab_strip_{nullptr};
     HWND address_bar_{nullptr};
@@ -216,4 +224,4 @@ private:
     bool suppress_history_record_{};
 };
 
-}  // namespace panedock::app_shell
+} // namespace panedock::app_shell

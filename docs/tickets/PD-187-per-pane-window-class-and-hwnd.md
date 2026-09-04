@@ -237,4 +237,100 @@ git diff --check
 
 ## 交接區
 
-（實作者填寫）
+### 實作
+
+- `PaneDock.Pane` 由 `Pane::register_window_class` 經既有
+  `register_simple_window_class` 註冊；style 為
+  `CS_HREDRAW | CS_VREDRAW`，background brush 為 `nullptr`。pane HWND 以
+  extended style `0`、style
+  `WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS`、主視窗為 parent、
+  `Pane*` 為 `lpParam` 建立；11 個控制項都改以 pane HWND 為 parent，ID
+  仍由 `encode_pane_control` 產生。`pane_test` 逐一斷言 11 個
+  `GetParent` 結果。
+- `kPaneCardOutset = 2` 定義在 `pane.h`；`pane_card_outset(dpi)` 是
+  `draw_pane_card` 與 `apply_layout` 唯一共用的 DPI 縮放來源。pane window
+  rect 向左／上／右外擴該值、bottom 不變；所有 child rect 以
+  `pane_window_rect.left/top` 轉成 pane-local 座標，原本 `pane_rect` 的
+  原點因此位於 local `(outset, outset)`。
+- `create()` 先呼叫 `destroy()`，建立 pane HWND 後才建立 11 個 children；
+  `complete` 同時檢查 pane HWND 與全部 11 個 child HWND。pane HWND 建立
+  失敗或 `complete == false` 都呼叫 `destroy()` 後回 `false`；呼叫端仍是
+  `if (!chrome.create(...)) return -1;`。建立處註解最終為：
+  “`PaneDock.Pane` owns this pane's chrome. Its explorer container stays a
+  plain `STATIC` used only for clipping and `ExplorerHost` parenting.”
+- `Pane::destroy()` 固定五步：`RevokeDragDrop` →
+  `explorer_host_.destroy()` → 其餘 chrome children →
+  `explorer_container_` → pane HWND。註解明載 pane HWND 會遞迴摧毀包括
+  container 的 children，所以依 §9.4 必須最後處理。
+- `pane_window_proc` 位於 `pane.cpp`。`WM_DESTROY` 呼叫 idempotent 的
+  `derealize()`；旁註為 “Fail-safe for parent-chain destruction. The normal
+  §9.4 path is still `destroy_panes()` before the main HWND dies.”。
+  `WM_NCDESTROY` 經 `window_destroyed()` 清除相符的 HWND 並清空
+  `GWLP_USERDATA`。正常 shutdown 的 `destroy_panes(state)` 時機未改，且
+  `panedock_shutdown_state` 仍斷言它存在。`WM_ERASEBKGND` 先填現有 canvas
+  色 `RGB(243,246,249)`；PD-188 前暫以 `WM_PRINTCLIENT` 請主視窗把未搬動
+  的既有背景繪製到 pane DC。命令／通知僅原樣轉發，無 Shell 呼叫、
+  location 解析、命令處理或繪製函式移入 pane proc。
+- `apply_layout` 現為：一個 main-window batch（sidebar、header、4 個 pane
+  HWND）、只在該 pane rect 改變時才建立的最多四個 pane-child batch
+  （各 11 children）、既有最多四個 ExplorerBrowser batch。全部在同一
+  layout pass 內依序 commit。PD-108 同時作用於 pane HWND 與 child batch；
+  未變 pane 不排 pane HWND，也不建立 child batch。`Pane::set_rect` 的假
+  `HDWP*` 已移除。PD-097 的既有 resize 節流入口未動；PD-095 的 item
+  count 路徑未動。
+
+### 座標、DPI 與依賴檢查
+
+- `tab_strip_proc`：所有 hit test 仍使用 tab-strip client coordinates；
+  `ScreenToClient(strip, ...)` 與 main→strip 的 `MapWindowPoints` 都能跨越
+  新 ancestor。原先送到直接 parent 的私有 selection message 改送
+  `GetParent(GetParent(strip))` 的主視窗，避免把 PD-189 的處理提前放進
+  pane proc。
+- `address_edit_proc`：不使用 `GetParent`、`MapWindowPoints` 或
+  `ScreenToClient`，父層變更不影響其 Enter／subclass lifetime 行為。
+- `hover_tracking_proc`：右鍵合成的 `WM_COMMAND` 仍送直接 parent；現在
+  由 pane proc 原樣轉發至主視窗。其餘 hover 座標皆為 control-local，
+  無需改動。
+- `WM_DPICHANGED` 維持主視窗集中處理：所有 DPI-dependent rect 與
+  `kPaneCardOutset` 都在同一次 `apply_layout` 由主視窗 DPI 重算；處理時
+  先清除四個 pane rect cache，確保即使建議 rect 數值碰巧相同也不會被
+  PD-108 跳過。pane proc 不需要自己的 DPI handler。
+- `main.cpp` 的 `AppState&` 字面計數：實作前 116，實作後 116；本票碰到
+  且仍使用協調服務的 `apply_layout` 無法合理收窄，未新增任何
+  `AppState&` 介面。
+
+### 驗證
+
+- Configure／Release build：PASS（LLVM-MinGW Clang/LLD + Ninja）。
+- `ctest --test-dir build --output-on-failure`：22/22 PASS，0 failed，總計
+  4.80 秒；包含 `panedock_launch_smoke` 1.42 秒、
+  `panedock_explorer_host_lifetime` 0.44 秒、`panedock_shutdown_state`
+  0.50 秒。另跑 `-R panedock_shutdown_state`：1/1 PASS，0.43 秒。
+- 四條 `Select-String` 契約：三條禁止 pattern 均無結果；新 pane proc 的
+  `WM_NCDESTROY` 位於 `pane.cpp`。`git diff --check`：PASS。
+- 視覺逐像素比較：PASS。由同一 desktop session、同一 `session.json`、
+  diagnostic mode、固定 window size 與 DPI，依序執行 committed `HEAD`
+  baseline 與本票 build；兩者皆以 `PrintWindow(PW_RENDERFULLCONTENT)`
+  （非 `CopyFromScreen`）擷取 1300×900 PNG。差異像素 0/1,170,000；兩檔
+  SHA-256 均為
+  `B980D9D8270A17D9BC585AC74320097C9D14E191586CD20B09C12F336A394A47`。
+
+### 使用者實機檢查
+
+票面清單實際共有 13 項（標題文字寫 11 項）。本次未以易 flaky 的 UI
+automation 冒充實機驗收；下列都需使用者在指定真實桌面環境執行：
+
+1. 視窗邊框連續縮放 30 秒：未驗證，需真實桌面。
+2. pane splitter 來回 20 次：未驗證，需真實桌面。
+3. sidebar 寬度來回 10 次：未驗證，需真實桌面。
+4. 版型 1→2→3→4→1 共 20 次與記憶體觀察：未驗證，需真實桌面。
+5. 不同 DPI 螢幕來回 5 次：未驗證，需 mixed-DPI 真實桌面。
+6. 每 pane 全部按鈕路由：未驗證，需真實桌面。
+7. tab 切換／排序／跨 pane 拖曳：未驗證，需真實桌面。
+8. address bar 與 autocomplete：未驗證，需真實桌面。
+9. Shell context menu、外部程式與關閉：未驗證，需真實桌面。
+10. file operation／drag 進行中關閉：未驗證，需真實桌面。
+11. 離線 location 下 resize／layout／Group：未驗證，需離線磁碟環境。
+12. 閒置一分鐘 CPU 0%：未驗證，需工作管理員實測。
+13. 每輪結束無殘留 process：自動 launch smoke 已涵蓋一般關閉；完整
+    實機清單各輪仍未驗證。
