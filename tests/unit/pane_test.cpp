@@ -91,6 +91,39 @@ void test_controls_are_children_of_the_pane_window() {
     DestroyWindow(parent);
 }
 
+void test_active_tab_follows_the_bound_pane_state() {
+    panedock::app_shell::Pane pane;
+    EXPECT(pane.active_tab() == nullptr);
+
+    panedock::core::PaneState state;
+    state.tabs.push_back({});
+    state.tabs.back().id = "tab-a";
+    state.tabs.push_back({});
+    state.tabs.back().id = "tab-b";
+    state.active_tab_id = "tab-b";
+
+    pane.bind(&state);
+    EXPECT(pane.active_tab() == &state.tabs[1]);
+
+    // A tab list that no longer contains the active id must report null
+    // rather than hand out a stale element.
+    state.tabs.erase(state.tabs.begin() + 1);
+    EXPECT(pane.active_tab() == nullptr);
+
+    pane.unbind();
+    EXPECT(pane.active_tab() == nullptr);
+}
+
+void test_pending_navigation_is_per_pane() {
+    panedock::app_shell::Pane first;
+    panedock::app_shell::Pane second;
+    first.pending_navigation().generation = 7;
+    first.pending_navigation().tab_id = "tab-a";
+    EXPECT(second.pending_navigation().generation == 0);
+    EXPECT(second.pending_navigation().tab_id.empty());
+    EXPECT(first.pending_navigation().generation == 7);
+}
+
 } // namespace
 
 int main() {
@@ -100,5 +133,7 @@ int main() {
     test_pane_state_binding_uses_the_original_object();
     test_destroy_unbinds_pane_state();
     test_controls_are_children_of_the_pane_window();
+    test_active_tab_follows_the_bound_pane_state();
+    test_pending_navigation_is_per_pane();
     return panedock::test::summary("pane");
 }

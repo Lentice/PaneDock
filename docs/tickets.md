@@ -227,7 +227,7 @@
 | PD-187 | 為每個 pane 註冊 `PaneDock.Pane` window class，子控制項改掛 pane HWND | 7 | `done` | PD-183, PD-185 | [PD-187](tickets/PD-187-per-pane-window-class-and-hwnd.md) |
 | PD-188 | pane 卡片與導覽列背景改由 pane 自己繪製，移出 `paint_client_background` | 7 | `done` | PD-187 | [PD-188](tickets/PD-188-pane-paints-its-own-card.md) |
 | PD-189 | pane 子控制項的命令與通知改由 pane proc 就地處理，`decode_pane_control` 收斂 | 7 | `planned` | PD-186, PD-187 | [PD-189](tickets/PD-189-pane-proc-handles-its-own-commands.md) |
-| PD-190 | 六支 pane chrome 刷新函式與 `pending_navigation` 收進 `Pane` | 7 | `planned` | PD-186 | [PD-190](tickets/PD-190-pane-scoped-chrome-refresh-and-navigation-request.md) |
+| PD-190 | 六支 pane chrome 刷新函式與 `pending_navigation` 收進 `Pane` | 7 | `done` | PD-186 | [PD-190](tickets/PD-190-pane-scoped-chrome-refresh-and-navigation-request.md) |
 
 ## Dependency lanes
 

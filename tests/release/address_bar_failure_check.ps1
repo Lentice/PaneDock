@@ -17,7 +17,7 @@ if ($failedBody -notmatch
     throw 'Address-bar failure check failed: history suppression is not released'
 }
 if ($failedBody -notmatch
-    'refresh_navigation_buttons\(state,\s*pane_index\)') {
+    'state\.panes\[pane_index\]\.refresh_navigation_buttons\(\)') {
     throw 'Address-bar failure check failed: button refresh is missing'
 }
 if ($failedBody -match 'refresh_navigation_chrome|SetWindowTextW') {

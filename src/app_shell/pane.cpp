@@ -2,6 +2,8 @@
 
 #include "app_shell/window_helpers.h"
 
+#include <commctrl.h>
+
 #include <array>
 
 namespace panedock::app_shell {
@@ -10,6 +12,11 @@ namespace {
 constexpr std::array<const wchar_t *, 6> kButtonLabels{
     L"<", L">", L"Up", L"Refresh", L"View", L"Pinned"};
 constexpr wchar_t kWindowClassName[] = L"PaneDock.Pane";
+
+// Tooltip ids for this pane's tab-strip buttons on the shared tooltip
+// control. Moved here with update_tab_strip_tooltips (PD-190).
+constexpr UINT_PTR kTabAddTooltipIdBase = 1000;
+constexpr UINT_PTR kTabScrollTooltipIdBase = 1010;
 
 void fill_rounded_rect(HDC dc, const RECT &rect, int radius, COLORREF fill,
                        COLORREF border) noexcept {
@@ -99,6 +106,7 @@ bool Pane::create(HWND parent, int pane_index) noexcept {
     if (parent == nullptr || pane_index < 0)
         return false;
     destroy();
+    index_ = static_cast<std::size_t>(pane_index);
 
     window_ =
         CreateWindowExW(0, kWindowClassName, nullptr,
@@ -166,6 +174,60 @@ bool Pane::create(HWND parent, int pane_index) noexcept {
         return false;
     }
     return true;
+}
+
+panedock::core::TabState *Pane::active_tab() const noexcept {
+    if (bound_state_ == nullptr) return nullptr;
+    for (auto &tab : bound_state_->tabs) {
+        if (tab.id == bound_state_->active_tab_id) return &tab;
+    }
+    return nullptr;
+}
+
+void Pane::refresh_navigation_buttons() noexcept {
+    const panedock::core::TabState *tab = active_tab();
+    if (tab == nullptr) {
+        EnableWindow(back_button_, FALSE);
+        EnableWindow(forward_button_, FALSE);
+        EnableWindow(up_button_, FALSE);
+        EnableWindow(folder_context_button_, FALSE);
+        return;
+    }
+    EnableWindow(back_button_, !suppress_history_record_ &&
+                                   panedock::core::can_navigate_tab_back(*tab));
+    EnableWindow(forward_button_,
+                 !suppress_history_record_ &&
+                     panedock::core::can_navigate_tab_forward(*tab));
+    EnableWindow(up_button_, TRUE);
+    EnableWindow(folder_context_button_, realized_);
+}
+
+void Pane::update_tab_strip_tooltips(HWND tooltip) noexcept {
+    if (tooltip == nullptr || tab_strip_ == nullptr) return;
+
+    const std::array<RECT, 3> rects{
+        to_win32_rect(tab_strip_geometry_.add_rect),
+        to_win32_rect(tab_strip_geometry_.scroll_button_rects[0]),
+        to_win32_rect(tab_strip_geometry_.scroll_button_rects[1])};
+    const std::array<UINT_PTR, 3> ids{
+        kTabAddTooltipIdBase + static_cast<UINT_PTR>(index_),
+        kTabScrollTooltipIdBase + static_cast<UINT_PTR>(index_ * 2),
+        kTabScrollTooltipIdBase + static_cast<UINT_PTR>(index_ * 2 + 1)};
+    constexpr std::array<const wchar_t *, 3> texts{
+        L"New tab", L"Scroll tabs left", L"Scroll tabs right"};
+    const UINT message =
+        tab_tooltips_registered_ ? TTM_NEWTOOLRECT : TTM_ADDTOOLW;
+    for (std::size_t index = 0; index < ids.size(); ++index) {
+        TOOLINFOW info{};
+        info.cbSize = sizeof(info);
+        info.uFlags = TTF_SUBCLASS;
+        info.hwnd = tab_strip_;
+        info.uId = ids[index];
+        info.rect = rects[index];
+        info.lpszText = const_cast<wchar_t *>(texts[index]);
+        SendMessageW(tooltip, message, 0, reinterpret_cast<LPARAM>(&info));
+    }
+    tab_tooltips_registered_ = true;
 }
 
 void Pane::destroy() noexcept {

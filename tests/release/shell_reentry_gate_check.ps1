@@ -197,7 +197,7 @@ Assert-Source 'std::wstring tab_display_text\(AppState& state' `
 $tabHelperStart = $source.IndexOf(
     'std::wstring tab_display_text(AppState& state')
 $tabHelperEnd = $source.IndexOf(
-    'void update_tab_strip_tooltips(', $tabHelperStart)
+    'void apply_tab_item_size(', $tabHelperStart)
 if ($tabHelperStart -lt 0 -or $tabHelperEnd -lt 0) {
     throw 'Shell re-entry invariant failed: tab display helper missing'
 }

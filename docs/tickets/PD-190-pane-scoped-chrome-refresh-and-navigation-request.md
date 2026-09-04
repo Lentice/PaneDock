@@ -180,4 +180,122 @@ git diff --check
 
 ## 交接區
 
-（實作者填寫）
+2026-09-04 實作完成。
+
+### 1. `pending_navigation` 搬移後的存取方式與三個觸碰點對照
+
+`AppState::pending_navigation`（`std::array<core::NavigationRequest, kExplorerCount>`）刪除，改為 `Pane::pending_navigation_`，經 `Pane::pending_navigation()` 取得非 const reference。
+
+| 觸碰點 | 前 | 後 |
+|---|---|---|
+| 宣告 | `AppState` 的 `std::array<..., kExplorerCount> pending_navigation{}` | `Pane` 的 `panedock::core::NavigationRequest pending_navigation_{}` |
+| `begin_navigation` | `auto& request = state.pending_navigation[pane_index];` | `auto& request = state.panes[pane_index].pending_navigation();` |
+| `navigation_request_is_current` | `auto& request = state.pending_navigation[pane_index];` | `auto& request = state.panes[pane_index].pending_navigation();` |
+
+兩處都只換了取得 reference 的那一行，其下的 `request.generation`／`request.group_id`／`request.tab_id` 讀寫一字未改。
+
+### 2. PD-170 三重比對的等價性
+
+`navigation_request_is_current` 的判定序列逐條不變：
+
+| 判定 | 前 | 後 |
+|---|---|---|
+| `pane_index >= kExplorerCount` → false | 有 | 有（未動） |
+| `pane_state() == nullptr` → false | 有 | 有（未動） |
+| `generation < request.generation` → false | 有 | 有（未動） |
+| `generation > request.generation` → 以目前 group／tab 覆寫 request | 有 | 有（未動） |
+| `navigation_request_matches(request, generation, group.id, tab.id)` | 有 | 有（未動） |
+
+`request` 現在是 per-`Pane` 的成員而非 `AppState` 陣列的第 `pane_index` 個元素；因為原本的索引就是 pane index，且 `AppState::panes` 是 `std::array`（`Pane` 物件在 app 生命週期內不搬家），儲存位置與生命週期一對一等價。`NavigationRequest` 的值**不隨 rebind 重置**——與搬移前完全相同（原本的陣列元素也不隨 Group 切換重置）。PD-170 靠三重比對判定過期，不靠重置。
+
+### 3. 六支刷新函式加位址列兩支的分類表
+
+| 函式 | 分類 | 新簽章 | 理由 |
+|---|---|---|---|
+| `refresh_navigation_buttons` | **`Pane` 成員** | `void Pane::refresh_navigation_buttons() noexcept` | 只讀 bound `PaneState` 的 active tab 與自己的 `suppress_history()`／`realized()`，只呼叫 `EnableWindow` 與 `core::can_navigate_tab_*`。零協調層服務。 |
+| `update_tab_strip_tooltips` | **`Pane` 成員** | `void Pane::update_tab_strip_tooltips(HWND tooltip) noexcept` | 只需要共用 tooltip 控制項的 HWND（協調層擁有，以參數傳入）與自己的 `tab_geometry()`／`tab_strip()`／`tab_tooltips_registered()`。`kTabAddTooltipIdBase`／`kTabScrollTooltipIdBase` 一併移到 `pane.cpp`（`main.cpp` 已無其他使用者）；tooltip id 改用新增的 `Pane::index()`。 |
+| `refresh_navigation_chrome` | 自由函式，收窄 | `void refresh_navigation_chrome(Pane& pane, AppState& state)` | 需要 `display_text_for_parsing_name(state, ...)`，該函式對 `::{GUID}` 名稱會開 `ShellCallScope`。契約 (1) 不允許 `Pane` 自己開 scope。 |
+| `refresh_status_bar` | 自由函式，收窄 | `void refresh_status_bar(Pane& pane, AppState& state) noexcept` | 票內預期的第二類：讀 Shell view 的 item count，必須包在 `ShellCallScope` 內，且呼叫後要看 `state.shutdown_deferred`／`closing_` 閘門。 |
+| `apply_tab_item_size` | 自由函式，收窄 | `void apply_tab_item_size(Pane& pane, AppState& state, bool reveal_active = false)` | 需要 `state.chrome_font`、跨 pane 的 `state.tab_drag`（契約 (3)，還會讀來源 pane 的 `tab_visuals()`）與 `state.layout_tooltip`。 |
+| `refresh_tab_strip` | 自由函式，收窄 | `void refresh_tab_strip(Pane& pane, AppState& state)` | 需要 `tab_display_text(state, ...)`（同樣會開 `ShellCallScope`），並轉呼叫上面兩支。 |
+| `submit_address` | 自由函式，收窄 | `void submit_address(Pane& pane, AppState& state)` | 需要關閉閘門、`ShellCallScope` 與 `navigate_pane`（會經 `begin_navigation`）。 |
+| `address_edit_proc` | **不動** | `LRESULT CALLBACK address_edit_proc(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR)` | 簽章由 Win32 `SetWindowSubclass` 契約固定，不能收窄。只把它對 `submit_address` 的呼叫改成傳 `state->panes[pane_index]`。 |
+
+`refresh_tab_strips(AppState&)`（四 pane 迴圈）依 Scope 5 留在協調層，改為 `for (auto& pane : state.panes) refresh_tab_strip(pane, state);`。
+
+順帶：`to_win32_rect(const TabStripRect&)` 從 `main.cpp` 移到 `pane.h`（`update_tab_strip_tooltips` 在 `pane.cpp` 需要它，且 `TabStripRect` 本來就是 `app_shell` 的型別，ADL 讓 `main.cpp` 的既有呼叫點一行不改）。`main.cpp` 另新增 `using Pane = panedock::app_shell::Pane;` 別名。
+
+### 4. `Pane::active_tab()` 的註解措辭
+
+```cpp
+// The bound PaneState's active tab, or null when nothing is bound.
+//
+// NEVER store the returned pointer in a member or across a call that can
+// add or remove tabs: PD-184 guarantees the address of a PaneState, but
+// explicitly NOT the address of a TabState — PaneState::tabs is a vector
+// that push_back/insert/erase reallocates. Use it and drop it.
+panedock::core::TabState *active_tab() const noexcept;
+```
+
+`Pane::active_tab()` 目前的使用者是 `Pane::refresh_navigation_buttons()`。**`main.cpp` 既有的 `active_tab(core::PaneState&)` 自由函式保留**，理由有二，供下一個 agent 參考而不要重新提案：
+
+1. 有五處呼叫點（`navigate_realized_panes`、pane realize 的初始 location、Group 重設 location、`finish_tab_drag` 的來源與目標 pane）拿到的是 `group.panes[i]`，也就是**沒有經過 `Pane` 綁定**的 `core::PaneState&`——Group 切換／拖曳當下協調層要讀的正是那個尚未綁定或不屬於自己的 `PaneState`。`Pane::active_tab()` 對它們無解。
+2. 其餘約 20 處是 `active_tab(*pane_state)`，其中 `pane_state` 在該函式開頭已做過 null 檢查；改成 `pane.active_tab()` 會在已檢查過的路徑上再長出一個 null 分支，而 `begin_navigation` 這類必須回傳值的函式還得決定「null 時回傳什麼」，那是行為變更而非搬移。本票要求零行為變更，故不動。
+
+`main.cpp` 全檔無任何長期持有的 `TabState*`（所有取用都是當場 `auto& tab = active_tab(...)` 的區域 reference）。
+
+### 5. `AppState&` 計數
+
+| 里程碑 | `AppState&\s*state` 命中數 |
+|---|---|
+| PD-183 完成 | 118 |
+| PD-186 完成（本票起點，`git stash` 實測） | 115 |
+| PD-190 完成 | **113** |
+
+### 6. `std::array<..., kExplorerCount>` regex 命中項的人工核對
+
+```
+557:  std::array<panedock::app_shell::Pane, kExplorerCount> panes{};        → panes 本體（票內明列不算）
+809:  std::array<bool, kExplorerCount> realized_flags(...)                  → 回傳型別，非欄位
+810:  std::array<bool, kExplorerCount> flags{};                             → 函式區域變數
+2424: std::array<std::optional<WindowPositionBatch>, kExplorerCount>        → apply_layout 區域暫存
+2426: 同上                                                                  → apply_layout 區域暫存
+2474: std::array<bool, kExplorerCount> changed_panes{};                     → apply_layout 區域暫存
+2475: std::array<std::optional<RECT>, kExplorerCount> pending_shell_rects{};→ 同上
+2476: std::array<bool, kExplorerCount> shell_positions_deferred{};          → 同上
+2477: std::array<RECT, kExplorerCount> container_rects{};                   → 同上
+3058/3496/3504/3531: const std::array<Pane, kExplorerCount>& panes         → 函式參數，指向 panes 本體
+```
+
+`AppState` 內已無任何 pane-parallel 資料欄位（AC 1 達成）。其餘 Agent checks 的 grep 結果：`state\.pending_navigation|state->pending_navigation` 無結果；`(refresh_navigation_buttons|refresh_navigation_chrome|refresh_status_bar|update_tab_strip_tooltips|apply_tab_item_size|refresh_tab_strip|submit_address)\(AppState&` 無結果；`pane.h` 的 `TabState\s*\*\s*\w+_\s*(=|;)|AppState|std::function|callback` 無結果；`pane.cpp` 的 `ShellCallScope|schedule_session_save` 無結果；`git diff --check` 無結果。
+
+### 7. 隨本票更新的兩個既有 self-check
+
+兩支都是對 `main.cpp` 做原始碼樣式比對的守門測試，簽章改變後必須同步，否則誤報：
+
+- `tests/release/address_bar_failure_check.ps1`：`refresh_navigation_buttons\(state,\s*pane_index\)` → `state\.panes\[pane_index\]\.refresh_navigation_buttons\(\)`。守的不變式（失敗路徑要刷新按鈕、且不得改寫位址列）未變。
+- `tests/release/shell_reentry_gate_check.ps1`：`tab_display_text` 函式體的結束錨點 `'void update_tab_strip_tooltips('` → `'void apply_tab_item_size('`（前者已成為 `Pane` 成員，不再出現在 `main.cpp`）。守的不變式（`tab_display_text` 的呼叫點都要帶 `state`）未變。
+
+### 8. 新增的 runnable test
+
+`tests/unit/pane_test.cpp` 新增兩例（`panedock_pane_test`）：
+
+- `test_active_tab_follows_the_bound_pane_state`：未綁定回 `nullptr`；綁定後回 `&state.tabs[1]`；把 active tab 從 vector `erase` 掉之後回 `nullptr`（而不是交出過期元素）；`unbind()` 後回 `nullptr`。
+- `test_pending_navigation_is_per_pane`：兩個 `Pane` 的 `pending_navigation()` 互不影響，預設值為零。
+
+`refresh_navigation_buttons`／`update_tab_strip_tooltips` 本身是 `EnableWindow`／`SendMessageW` 的直譯，沒有可獨立測的邏輯，靠既有的 `panedock_address_bar_failure` 源碼守門與使用者實機清單第 1、3、4 項覆蓋。
+
+### 9. `ctest` 全量結果
+
+```
+cmake --build build
+ctest --test-dir build --output-on-failure
+→ 100% tests passed out of 23（含 panedock_launch_smoke、panedock_pane_test）
+```
+
+優雅關閉檢查：`Start-Process build\PaneDock.exe` → `CloseMainWindow()` → `WaitForExit(5000)` 通過，無殘留行程。
+
+### 10. 使用者實機檢查
+
+**尚未執行。** 票內 8 項清單待使用者回報。
+

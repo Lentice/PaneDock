@@ -19,6 +19,7 @@
 #include "app_shell/pane_control_id.h"
 #include "app_shell/tab_overflow.h"
 #include "core/model.h"
+#include "core/navigation.h"
 #include "explorer_host/explorer_host.h"
 
 namespace panedock::app_shell {
@@ -33,6 +34,10 @@ inline int pane_card_outset(UINT dpi) noexcept {
 // Shared by the pane card and the PD-040 explorer-container clip.
 inline int pane_card_radius(UINT dpi) noexcept {
     return (std::max)(1, MulDiv(10, static_cast<int>(dpi), 96));
+}
+
+inline RECT to_win32_rect(const TabStripRect &rect) noexcept {
+    return {rect.left, rect.top, rect.right, rect.bottom};
 }
 
 inline int pane_card_shadow_offset(UINT dpi) noexcept {
@@ -88,6 +93,31 @@ class Pane final {
     panedock::core::PaneState *pane_state() const noexcept {
         return bound_state_;
     }
+    std::size_t index() const noexcept { return index_; }
+
+    // The bound PaneState's active tab, or null when nothing is bound.
+    //
+    // NEVER store the returned pointer in a member or across a call that can
+    // add or remove tabs: PD-184 guarantees the address of a PaneState, but
+    // explicitly NOT the address of a TabState — PaneState::tabs is a vector
+    // that push_back/insert/erase reallocates. Use it and drop it.
+    panedock::core::TabState *active_tab() const noexcept;
+
+    // PD-170 navigation identity for this pane: the generation plus the
+    // group/tab it was issued for, so a result arriving after a Group or tab
+    // switch can be discarded. The coordinator owns the compare logic
+    // (begin_navigation / navigation_request_is_current); Pane only stores it.
+    panedock::core::NavigationRequest &pending_navigation() noexcept {
+        return pending_navigation_;
+    }
+
+    // Enable/disable back, forward, up and folder-context from the bound
+    // tab's history. Needs no coordinator state, so it lives here.
+    void refresh_navigation_buttons() noexcept;
+
+    // (Re)registers this pane's three tab-strip tooltip rects on the shared
+    // tooltip control the coordinator owns.
+    void update_tab_strip_tooltips(HWND tooltip) noexcept;
     bool set_rect(const RECT &rect) noexcept;
     void set_paint_geometry(const RECT &navigation_background,
                             const RECT &pane_window_rect, UINT dpi) noexcept;
@@ -212,6 +242,8 @@ class Pane final {
 
   private:
     panedock::core::PaneState *bound_state_{nullptr};
+    std::size_t index_{};
+    panedock::core::NavigationRequest pending_navigation_{};
     HWND window_{nullptr};
     HWND explorer_container_{nullptr};
     HWND tab_strip_{nullptr};

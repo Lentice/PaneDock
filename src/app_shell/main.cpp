@@ -56,6 +56,8 @@
 
 namespace {
 
+using Pane = panedock::app_shell::Pane;
+
 constexpr wchar_t kWindowClassName[] = L"PaneDockMainWindow";
 constexpr wchar_t kSingleInstanceMutexName[] =
     L"PaneDock-SingleInstanceMutex";
@@ -180,8 +182,6 @@ constexpr int kPinnedMenuManageOffset = kPinnedMenuAddOffset + 1;
 constexpr int kPinnedMenuSlotsPerPane = kPinnedMenuManageOffset + 1;
 constexpr int kPinnedMenuIdCount =
     static_cast<int>(kExplorerCount) * kPinnedMenuSlotsPerPane;
-constexpr UINT_PTR kTabAddTooltipIdBase = 1000;
-constexpr UINT_PTR kTabScrollTooltipIdBase = 1010;
 constexpr std::array<std::wstring_view, 2> kPinnedFixedParsingNames{
     L"::{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}",
     L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"};
@@ -560,8 +560,6 @@ struct AppState {
     panedock::app_shell::PinnedLocationsDialog pinned_locations_dialog;
     std::array<std::wstring, kPinnedFixedParsingNames.size()>
         pinned_fixed_labels{};
-    std::array<panedock::core::NavigationRequest, kExplorerCount>
-        pending_navigation{};
     // BrowseToObject may synchronously re-enter navigation_complete while the
     // remaining panes still display the outgoing Group's folders.
     bool suppress_location_capture{};
@@ -766,7 +764,7 @@ const panedock::core::TabState& active_tab(
 }
 
 NavigationGeneration begin_navigation(AppState& state, std::size_t pane_index) {
-    auto& request = state.pending_navigation[pane_index];
+    auto& request = state.panes[pane_index].pending_navigation();
     auto& group = active_group(state);
     auto& tab = active_tab(*state.panes[pane_index].pane_state());
     request.generation = state.panes[pane_index].host().begin_navigation();
@@ -792,7 +790,7 @@ bool navigation_request_is_current(AppState& state, std::size_t pane_index,
     auto* pane_state = state.panes[pane_index].pane_state();
     if (pane_state == nullptr) return false;
 
-    auto& request = state.pending_navigation[pane_index];
+    auto& request = state.panes[pane_index].pending_navigation();
     if (generation < request.generation) return false;
     auto& group = active_group(state);
     auto& tab = active_tab(*pane_state);
@@ -840,10 +838,6 @@ bool navigate_realized_panes(
 
 RECT to_win32_rect(const panedock::core::PaneRect& rect) noexcept {
     return {rect.x, rect.y, rect.x + rect.width, rect.y + rect.height};
-}
-
-RECT to_win32_rect(const panedock::app_shell::TabStripRect& rect) noexcept {
-    return {rect.left, rect.top, rect.right, rect.bottom};
 }
 
 RECT client_rect(HWND window) noexcept {
@@ -1585,42 +1579,21 @@ std::optional<Splitter> splitter_at_point(
     return std::nullopt;
 }
 
-void refresh_navigation_buttons(AppState& state, std::size_t pane_index) {
-    if (pane_index >= kExplorerCount) return;
-    auto& chrome = state.panes[pane_index];
-    auto* pane_state = chrome.pane_state();
-    if (pane_state == nullptr) {
-        EnableWindow(chrome.back_button(), FALSE);
-        EnableWindow(chrome.forward_button(), FALSE);
-        EnableWindow(chrome.up_button(), FALSE);
-        EnableWindow(chrome.folder_context_button(), FALSE);
-        return;
-    }
-    const auto& tab = active_tab(*pane_state);
-    EnableWindow(chrome.back_button(),
-                 !chrome.suppress_history() &&
-                     panedock::core::can_navigate_tab_back(tab));
-    EnableWindow(chrome.forward_button(),
-                 !chrome.suppress_history() &&
-                     panedock::core::can_navigate_tab_forward(tab));
-    EnableWindow(chrome.up_button(), TRUE);
-    EnableWindow(chrome.folder_context_button(), chrome.realized());
-}
-
-void refresh_navigation_chrome(AppState& state, std::size_t pane_index) {
-    if (pane_index >= kExplorerCount) return;
-    refresh_navigation_buttons(state, pane_index);
+// Needs the coordinator only for display_text_for_parsing_name, which opens
+// a ShellCallScope for shell-namespace names.
+void refresh_navigation_chrome(Pane& pane, AppState& state) {
+    pane.refresh_navigation_buttons();
     std::wstring text;
-    if (auto* pane_state = state.panes[pane_index].pane_state()) {
+    if (auto* pane_state = pane.pane_state()) {
         const std::wstring parsing_name =
             active_tab(*pane_state).location.parsing_name;
         text = display_text_for_parsing_name(state, parsing_name);
-        auto* current = state.panes[pane_index].pane_state();
+        auto* current = pane.pane_state();
         if (current != pane_state ||
             active_tab(*current).location.parsing_name != parsing_name)
             return;
     }
-    SetWindowTextW(state.panes[pane_index].address_bar(), text.c_str());
+    SetWindowTextW(pane.address_bar(), text.c_str());
 }
 
 void capture_pane_view_mode(AppState& state, std::size_t pane_index) {
@@ -1703,19 +1676,19 @@ void apply_pane_sort(AppState& state, std::size_t pane_index) {
     capture_pane_sort(state, pane_index);
 }
 
-void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
-    if (pane_index >= state.panes.size() ||
-        state.panes[pane_index].status_bar() == nullptr)
-        return;
+// Reads the Shell view's item counts, so it must stay in the coordinator:
+// the call needs a ShellCallScope and the shutdown gates that follow it.
+void refresh_status_bar(Pane& pane, AppState& state) noexcept {
+    if (pane.status_bar() == nullptr) return;
     panedock::explorer_host::ExplorerHost::ItemCounts counts;
     HRESULT hr = E_UNEXPECTED;
     {
         ShellCallScope shell_call(state);
-        hr = state.panes[pane_index].host().item_counts(counts);
+        hr = pane.host().item_counts(counts);
     }
     if (state.shutdown_deferred || state.closing_) return;
     if (FAILED(hr)) {
-        SetWindowTextW(state.panes[pane_index].status_bar(), L"");
+        SetWindowTextW(pane.status_bar(), L"");
         return;
     }
     std::wstring text = std::to_wstring(counts.total) + L" items";
@@ -1738,7 +1711,7 @@ void refresh_status_bar(AppState& state, std::size_t pane_index) noexcept {
             }
         }
     }
-    SetWindowTextW(state.panes[pane_index].status_bar(), text.c_str());
+    SetWindowTextW(pane.status_bar(), text.c_str());
 }
 
 std::wstring tab_display_text(AppState& state,
@@ -1749,54 +1722,18 @@ std::wstring tab_display_text(AppState& state,
     return std::wstring(parsing_name.substr(separator + 1));
 }
 
-void update_tab_strip_tooltips(AppState& state,
-                               std::size_t pane_index) noexcept {
-    if (state.layout_tooltip == nullptr ||
-        pane_index >= state.panes.size())
-        return;
-    auto& chrome = state.panes[pane_index];
-    const HWND strip = chrome.tab_strip();
-    if (strip == nullptr) return;
-
-    const auto& geometry = chrome.tab_geometry();
-    const std::array<RECT, 3> rects{
-        to_win32_rect(geometry.add_rect),
-        to_win32_rect(geometry.scroll_button_rects[0]),
-        to_win32_rect(geometry.scroll_button_rects[1])};
-    const std::array<UINT_PTR, 3> ids{
-        kTabAddTooltipIdBase + static_cast<UINT_PTR>(pane_index),
-        kTabScrollTooltipIdBase + static_cast<UINT_PTR>(pane_index * 2),
-        kTabScrollTooltipIdBase + static_cast<UINT_PTR>(pane_index * 2 + 1)};
-    constexpr std::array<const wchar_t*, 3> texts{
-        L"New tab", L"Scroll tabs left", L"Scroll tabs right"};
-    const UINT message = chrome.tab_tooltips_registered()
-                             ? TTM_NEWTOOLRECT
-                             : TTM_ADDTOOLW;
-    for (std::size_t index = 0; index < ids.size(); ++index) {
-        TOOLINFOW info{};
-        info.cbSize = sizeof(info);
-        info.uFlags = TTF_SUBCLASS;
-        info.hwnd = strip;
-        info.uId = ids[index];
-        info.rect = rects[index];
-        info.lpszText = const_cast<wchar_t*>(texts[index]);
-        SendMessageW(state.layout_tooltip, message, 0,
-                     reinterpret_cast<LPARAM>(&info));
-    }
-    chrome.tab_tooltips_registered() = true;
-}
-
-void apply_tab_item_size(AppState& state, std::size_t pane_index,
+// Needs the coordinator's chrome font and the cross-pane tab-drag state
+// (contract (3)), so it stays a free function.
+void apply_tab_item_size(Pane& pane, AppState& state,
                          bool reveal_active = false) {
-    if (pane_index >= state.panes.size()) return;
-    auto& chrome = state.panes[pane_index];
-    const HWND strip = chrome.tab_strip();
+    const std::size_t pane_index = pane.index();
+    const HWND strip = pane.tab_strip();
     RECT client{};
     GetClientRect(strip, &client);
     const int min_width = scaled_value(strip, kTabMinWidth);
     const int max_width = scaled_value(strip, kTabMaxWidth);
     const int add_width = scaled_value(strip, kTabAddButtonWidth);
-    const auto& visuals = chrome.tab_visuals();
+    const auto& visuals = pane.tab_visuals();
     const int text_reserve = scaled_value(
         strip, 2 * kTabTextHorizontalPadding + kTabCloseButtonSpace);
     std::vector<int> preferred_widths;
@@ -1858,10 +1795,10 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
     }
 
     std::optional<std::size_t> active_index;
-    if (reveal_active && chrome.pane_state() != nullptr) {
-        const auto& pane = *chrome.pane_state();
-        for (std::size_t index = 0; index < pane.tabs.size(); ++index) {
-            if (pane.tabs[index].id == pane.active_tab_id) {
+    if (reveal_active && pane.pane_state() != nullptr) {
+        const auto& pane_state = *pane.pane_state();
+        for (std::size_t index = 0; index < pane_state.tabs.size(); ++index) {
+            if (pane_state.tabs[index].id == pane_state.active_tab_id) {
                 active_index = index;
                 break;
             }
@@ -1883,27 +1820,27 @@ void apply_tab_item_size(AppState& state, std::size_t pane_index,
         scaled_value(strip, kTabScrollButtonVisualHeight),
         scaled_value(strip, kTabScrollButtonVisualOffsetX),
         scaled_value(strip, kTabScrollButtonVisualOffsetY),
-        chrome.tab_geometry().scroll_offset,
+        pane.tab_geometry().scroll_offset,
         drag_layout,
         active_index};
-    chrome.set_geometry(panedock::app_shell::layout_tab_strip(layout_input));
+    pane.set_geometry(panedock::app_shell::layout_tab_strip(layout_input));
     InvalidateRect(strip, nullptr, FALSE);
-    update_tab_strip_tooltips(state, pane_index);
+    pane.update_tab_strip_tooltips(state.layout_tooltip);
 }
 
-void refresh_tab_strip(AppState& state, std::size_t pane_index) {
-    if (pane_index >= state.panes.size()) return;
-    auto& chrome = state.panes[pane_index];
-    chrome.set_tab_hover(std::nullopt);
-    chrome.set_scroll_hover(std::nullopt);
-    if (chrome.pane_state() == nullptr) {
-        chrome.set_tabs({});
-        apply_tab_item_size(state, pane_index);
-        refresh_navigation_chrome(state, pane_index);
+// Needs the coordinator for tab_display_text (ShellCallScope) and for the
+// two calls below.
+void refresh_tab_strip(Pane& pane, AppState& state) {
+    pane.set_tab_hover(std::nullopt);
+    pane.set_scroll_hover(std::nullopt);
+    if (pane.pane_state() == nullptr) {
+        pane.set_tabs({});
+        apply_tab_item_size(pane, state);
+        refresh_navigation_chrome(pane, state);
         return;
     }
 
-    auto* pane_state = chrome.pane_state();
+    auto* pane_state = pane.pane_state();
     std::vector<std::pair<std::string, std::wstring>> tabs;
     tabs.reserve(pane_state->tabs.size());
     for (const auto& tab : pane_state->tabs)
@@ -1912,20 +1849,19 @@ void refresh_tab_strip(AppState& state, std::size_t pane_index) {
     labels.reserve(tabs.size());
     for (std::size_t index = 0; index < tabs.size(); ++index) {
         labels.push_back(tab_display_text(state, tabs[index].second));
-        auto* current = chrome.pane_state();
+        auto* current = pane.pane_state();
         if (current != pane_state || current->tabs.size() != tabs.size() ||
             current->tabs[index].id != tabs[index].first ||
             current->tabs[index].location.parsing_name != tabs[index].second)
             return;
     }
-    chrome.set_tabs(labels);
-    apply_tab_item_size(state, pane_index, true);
-    refresh_navigation_chrome(state, pane_index);
+    pane.set_tabs(labels);
+    apply_tab_item_size(pane, state, true);
+    refresh_navigation_chrome(pane, state);
 }
 
 void refresh_tab_strips(AppState& state) {
-    for (std::size_t index = 0; index < state.panes.size(); ++index)
-        refresh_tab_strip(state, index);
+    for (auto& pane : state.panes) refresh_tab_strip(pane, state);
 }
 
 void capture_pane_location(AppState& state, std::size_t pane_index) {
@@ -2413,7 +2349,7 @@ void handle_navigation_complete(
     if (state.shutdown_deferred || state.closing_) return;
     apply_pane_sort(state, pane_index);
     if (state.shutdown_deferred || state.closing_) return;
-    refresh_tab_strip(state, pane_index);
+    refresh_tab_strip(state.panes[pane_index], state);
     schedule_session_save(state);
 }
 
@@ -2423,7 +2359,7 @@ void handle_navigation_failed(AppState& state, std::size_t pane_index,
     // A pending back/forward navigation that fails asynchronously must still
     // release the suppression flag, or those buttons stay disabled forever.
     state.panes[pane_index].set_suppress_history(false);
-    refresh_navigation_buttons(state, pane_index);
+    state.panes[pane_index].refresh_navigation_buttons();
 }
 
 // PD-183: Pane::destroy() now folds ExplorerHost::destroy() into its own
@@ -2708,7 +2644,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                         first_failure = LayoutFailure{hr, index};
                     continue;
                 }
-                refresh_navigation_buttons(state, index);
+                state.panes[index].refresh_navigation_buttons();
                 {
                     ShellCallScope shell_call(state);
                     (void)SHAutoComplete(chrome.address_bar(),
@@ -2727,7 +2663,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                             handle_navigation_failed(state, index, generation);
                         });
                     chrome.host().set_selection_changed_callback(
-                        [&state, index]() { refresh_status_bar(state, index); });
+                        [&state, index]() { refresh_status_bar(state.panes[index], state); });
                     apply_pane_view_mode(state, index);
                     if (state.shutdown_deferred || state.closing_)
                         return E_ABORT;
@@ -2752,7 +2688,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
             }
             if (recompute_content) {
-                refresh_status_bar(state, index);
+                refresh_status_bar(state.panes[index], state);
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
             }
             // Pane owns the outer-rect cache; the native child batches
@@ -2790,7 +2726,7 @@ HRESULT apply_layout(HWND window, AppState& state,
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
         if (index < visible_panes &&
             (changed_panes[index] || recompute_content))
-            apply_tab_item_size(state, index);
+            apply_tab_item_size(state.panes[index], state);
     }
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
         if (!explorer_positions[index].has_value()) continue;
@@ -3094,7 +3030,7 @@ void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
     if (pane_state == nullptr) return;
     auto& pane = *pane_state;
     if (pane.active_tab_id == tab_id) {
-        refresh_tab_strip(state, pane_index);
+        refresh_tab_strip(state.panes[pane_index], state);
         return;
     }
     capture_pane_location(state, pane_index);
@@ -3102,7 +3038,7 @@ void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
     if (state.closing_ || state.shutdown_deferred || pane_state == nullptr)
         return;
     if (!panedock::core::set_active_tab(*pane_state, tab_id)) {
-        refresh_tab_strip(state, pane_index);
+        refresh_tab_strip(state.panes[pane_index], state);
         return;
     }
     if (state.panes[pane_index].realized()) {
@@ -3114,7 +3050,7 @@ void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
         }
         if (state.shutdown_deferred || state.closing_) return;
     }
-    refresh_tab_strip(state, pane_index);
+    refresh_tab_strip(state.panes[pane_index], state);
     schedule_session_save(state);
 }
 
@@ -3203,7 +3139,7 @@ void add_tab_to_pane(
         }
         if (state.shutdown_deferred || state.closing_) return;
     }
-    refresh_tab_strip(state, pane_index);
+    refresh_tab_strip(state.panes[pane_index], state);
     schedule_session_save(state);
 }
 
@@ -3228,7 +3164,7 @@ void close_tab_in_pane(HWND, AppState& state, std::size_t pane_index,
         }
         if (state.shutdown_deferred || state.closing_) return;
     }
-    refresh_tab_strip(state, pane_index);
+    refresh_tab_strip(state.panes[pane_index], state);
     schedule_session_save(state);
 }
 
@@ -3249,7 +3185,7 @@ void navigate_tab_history(AppState& state, std::size_t pane_index, bool back) {
     }
     if (state.shutdown_deferred || state.closing_) return;
     if (FAILED(hr)) state.panes[pane_index].set_suppress_history(false);
-    refresh_navigation_chrome(state, pane_index);
+    refresh_navigation_chrome(state.panes[pane_index], state);
 }
 
 void navigate_up(AppState& state, std::size_t pane_index) {
@@ -3406,17 +3342,18 @@ void show_pinned_locations_menu(HWND window, AppState& state,
         SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
-void submit_address(AppState& state, std::size_t pane_index) {
+// Navigates, so it needs the coordinator's shutdown gates and ShellCallScope.
+void submit_address(Pane& pane, AppState& state) {
     if (state.closing_ || state.shutdown_deferred) return;
-    if (state.panes[pane_index].pane_state() == nullptr) return;
-    const HWND edit = state.panes[pane_index].address_bar();
+    if (pane.pane_state() == nullptr) return;
+    const HWND edit = pane.address_bar();
     const int length = GetWindowTextLengthW(edit);
     std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
     GetWindowTextW(edit, text.data(), length + 1);
     text.resize(static_cast<std::size_t>(length));
     {
         ShellCallScope shell_call(state);
-        (void)navigate_pane(state, pane_index, location(std::move(text)));
+        (void)navigate_pane(state, pane.index(), location(std::move(text)));
     }
 }
 
@@ -3436,7 +3373,8 @@ LRESULT CALLBACK address_edit_proc(HWND window, UINT message, WPARAM wparam,
         return 0;
     }
     if (message == WM_KEYDOWN && wparam == VK_RETURN && state != nullptr) {
-        submit_address(*state, static_cast<std::size_t>(pane_index));
+        submit_address(state->panes[static_cast<std::size_t>(pane_index)],
+                       *state);
         return 0;
     }
     if (message == WM_CHAR && wparam == VK_RETURN) return 0;
@@ -3624,7 +3562,7 @@ void scroll_tab_strip(AppState& state, std::size_t pane_index, bool forward) {
     if (step <= 0) return;
     geometry.scroll_offset = offset + (forward ? step : -step);
     chrome.set_geometry(std::move(geometry));
-    apply_tab_item_size(state, pane_index);
+    apply_tab_item_size(state.panes[pane_index], state);
 }
 
 void cancel_tab_drag(AppState& state, HWND strip) noexcept {
@@ -3633,9 +3571,9 @@ void cancel_tab_drag(AppState& state, HWND strip) noexcept {
     const std::size_t source = state.tab_drag->pane_index;
     const auto target = state.tab_drag->target_pane_index;
     state.tab_drag.reset();
-    apply_tab_item_size(state, source);
+    apply_tab_item_size(state.panes[source], state);
     if (target.has_value() && *target != source)
-        apply_tab_item_size(state, *target);
+        apply_tab_item_size(state.panes[*target], state);
     if (GetCapture() == strip) ReleaseCapture();
 }
 
@@ -3645,9 +3583,9 @@ void finish_tab_drag(AppState& state, HWND strip) {
         return;
     AppState::TabDrag drag = std::move(*state.tab_drag);
     state.tab_drag.reset();
-    apply_tab_item_size(state, drag.pane_index);
+    apply_tab_item_size(state.panes[drag.pane_index], state);
     if (drag.target_pane_index.has_value())
-        apply_tab_item_size(state, *drag.target_pane_index);
+        apply_tab_item_size(state.panes[*drag.target_pane_index], state);
     if (GetCapture() == strip) ReleaseCapture();
     if (!drag.dragging || !drag.target_index.has_value() ||
         !has_active_group(state))
@@ -3663,7 +3601,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
                 *state.panes[drag.pane_index].pane_state(),
                                          drag.tab_id, *drag.target_index))
             return;
-        refresh_tab_strip(state, drag.pane_index);
+        refresh_tab_strip(state.panes[drag.pane_index], state);
         schedule_session_save(state);
         return;
     }
@@ -3694,8 +3632,8 @@ void finish_tab_drag(AppState& state, HWND strip) {
         }
         if (state.shutdown_deferred || state.closing_) return;
     }
-    refresh_tab_strip(state, drag.pane_index);
-    refresh_tab_strip(state, target_pane);
+    refresh_tab_strip(state.panes[drag.pane_index], state);
+    refresh_tab_strip(state.panes[target_pane], state);
     schedule_session_save(state);
 }
 
@@ -3751,12 +3689,12 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
     const auto previous_target = state.tab_drag->target_pane_index;
     state.tab_drag->target_pane_index = target_pane;
     state.tab_drag->target_index = target;
-    apply_tab_item_size(state, state.tab_drag->pane_index);
+    apply_tab_item_size(state.panes[state.tab_drag->pane_index], state);
     if (previous_target.has_value() &&
         previous_target != state.tab_drag->target_pane_index)
-        apply_tab_item_size(state, *previous_target);
+        apply_tab_item_size(state.panes[*previous_target], state);
     if (state.tab_drag->target_pane_index.has_value())
-        apply_tab_item_size(state, *state.tab_drag->target_pane_index);
+        apply_tab_item_size(state.panes[*state.tab_drag->target_pane_index], state);
 }
 
 void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
