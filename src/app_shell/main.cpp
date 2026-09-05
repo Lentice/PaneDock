@@ -36,6 +36,7 @@
 #include "app_shell/diagnostic_mode.h"
 #include "app_shell/pane.h"
 #include "app_shell/pane_control_id.h"
+#include "app_shell/pane_host.h"
 #include "app_shell/pane_message_dispatch.h"
 #include "app_shell/pinned_locations_dialog.h"
 #include "app_shell/startup_notification.h"
@@ -457,7 +458,17 @@ struct Splitter {
     bool vertical;
 };
 
-struct AppState {
+struct AppState : public panedock::app_shell::PaneHost {
+    bool is_shutting_down() const noexcept override;
+    void shell_call_entered() noexcept override;
+    void shell_call_left() noexcept override;
+    void schedule_session_save() noexcept override;
+    const std::string &active_group_id() const noexcept override;
+    std::string make_unique_tab_id() const override;
+    std::optional<panedock::app_shell::TabStripDragLayout>
+    tab_drag_layout(const Pane &pane, HWND strip, int min_width, int max_width,
+                    int text_reserve) const override;
+
     // The legacy names below are references into the reducer state. Keeping
     // them avoids a second pane-wide mechanical rewrite while making the
     // reducer the only owner of shutdown transition data.
@@ -1727,7 +1738,6 @@ std::wstring tab_display_text(AppState& state,
 // (contract (3)), so it stays a free function.
 void apply_tab_item_size(Pane& pane, AppState& state,
                          bool reveal_active = false) {
-    const std::size_t pane_index = pane.index();
     const HWND strip = pane.tab_strip();
     RECT client{};
     GetClientRect(strip, &client);
@@ -1754,46 +1764,8 @@ void apply_tab_item_size(Pane& pane, AppState& state,
         SelectObject(dc, previous);
         ReleaseDC(strip, dc);
     }
-    std::optional<panedock::app_shell::TabStripDragLayout> drag_layout;
-    const bool foreign_placeholder =
-        state.tab_drag.has_value() && state.tab_drag->dragging &&
-        state.tab_drag->target_pane_index == pane_index &&
-        state.tab_drag->pane_index != pane_index &&
-        state.tab_drag->target_index.has_value();
-    if (foreign_placeholder) {
-        int placeholder_width = min_width;
-        if (state.tab_drag->pane_index < state.panes.size() &&
-            state.tab_drag->source_index <
-                state.panes[state.tab_drag->pane_index]
-                    .tab_visuals().size()) {
-            const auto& source =
-                state.panes[state.tab_drag->pane_index]
-                    .tab_visuals()[state.tab_drag->source_index];
-            SIZE size{};
-            HDC measure = GetDC(strip);
-            const HGDIOBJ old =
-                measure == nullptr ? nullptr : SelectObject(measure, font);
-            if (measure != nullptr) {
-                GetTextExtentPoint32W(measure, source.text.c_str(),
-                                      static_cast<int>(source.text.size()),
-                                      &size);
-                SelectObject(measure, old);
-                ReleaseDC(strip, measure);
-            }
-            placeholder_width = std::clamp(
-                static_cast<int>(size.cx) + text_reserve, min_width, max_width);
-        }
-        drag_layout = panedock::app_shell::TabStripDragLayout{
-            state.tab_drag->source_index, state.tab_drag->target_index, true,
-            placeholder_width};
-    } else if (state.tab_drag.has_value() && state.tab_drag->dragging &&
-               state.tab_drag->pane_index == pane_index &&
-               !state.tab_drag->target_pane_index.has_value() &&
-               state.tab_drag->target_index.has_value()) {
-        drag_layout = panedock::app_shell::TabStripDragLayout{
-            state.tab_drag->source_index, state.tab_drag->target_index, false,
-            0};
-    }
+    const auto drag_layout = state.tab_drag_layout(
+        pane, strip, min_width, max_width, text_reserve);
 
     std::optional<std::size_t> active_index;
     if (reveal_active && pane.pane_state() != nullptr) {
@@ -3021,6 +2993,79 @@ std::string unique_tab_id(const panedock::core::GroupState& group,
             });
         if (!exists) return candidate;
     }
+}
+
+bool AppState::is_shutting_down() const noexcept {
+    return closing_ || shutdown_deferred;
+}
+
+void AppState::shell_call_entered() noexcept {
+    shutdown_sequence.step(
+        panedock::core::ShutdownEvent::shell_call_entered);
+}
+
+void AppState::shell_call_left() noexcept {
+    finish_shell_call(*this);
+}
+
+void AppState::schedule_session_save() noexcept {
+    ::schedule_session_save(*this);
+}
+
+const std::string &AppState::active_group_id() const noexcept {
+    static const std::string kEmptyGroupId;
+    return has_active_group(*this) ? active_group(*this).id : kEmptyGroupId;
+}
+
+std::string AppState::make_unique_tab_id() const {
+    std::size_t candidate = 0;
+    return unique_tab_id(active_group(*this), candidate);
+}
+
+std::optional<panedock::app_shell::TabStripDragLayout>
+AppState::tab_drag_layout(const Pane &pane, HWND strip, int min_width,
+                          int max_width, int text_reserve) const {
+    const std::size_t pane_index = pane.index();
+    const bool foreign_placeholder =
+        tab_drag.has_value() && tab_drag->dragging &&
+        tab_drag->target_pane_index == pane_index &&
+        tab_drag->pane_index != pane_index &&
+        tab_drag->target_index.has_value();
+    if (foreign_placeholder) {
+        int placeholder_width = min_width;
+        if (tab_drag->pane_index < panes.size() &&
+            tab_drag->source_index <
+                panes[tab_drag->pane_index].tab_visuals().size()) {
+            const auto &source = panes[tab_drag->pane_index]
+                                     .tab_visuals()[tab_drag->source_index];
+            SIZE size{};
+            HDC measure = GetDC(strip);
+            const HGDIOBJ old = measure == nullptr
+                                    ? nullptr
+                                    : SelectObject(measure, chrome_font);
+            if (measure != nullptr) {
+                GetTextExtentPoint32W(measure, source.text.c_str(),
+                                      static_cast<int>(source.text.size()),
+                                      &size);
+                SelectObject(measure, old);
+                ReleaseDC(strip, measure);
+            }
+            placeholder_width = std::clamp(
+                static_cast<int>(size.cx) + text_reserve, min_width,
+                max_width);
+        }
+        return panedock::app_shell::TabStripDragLayout{
+            tab_drag->source_index, tab_drag->target_index, true,
+            placeholder_width};
+    }
+    if (tab_drag.has_value() && tab_drag->dragging &&
+        tab_drag->pane_index == pane_index &&
+        !tab_drag->target_pane_index.has_value() &&
+        tab_drag->target_index.has_value()) {
+        return panedock::app_shell::TabStripDragLayout{
+            tab_drag->source_index, tab_drag->target_index, false, 0};
+    }
+    return std::nullopt;
 }
 
 void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
@@ -4563,6 +4608,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
         auto& chrome = state.panes[index];
         // PaneDock.Pane owns this pane's chrome. Its explorer container stays
         // a plain STATIC used only for clipping and ExplorerHost parenting.
+        chrome.set_host(&state);
         if (!chrome.create(window, static_cast<int>(index))) return -1;
         if (!SetWindowSubclass(chrome.tab_strip(), tab_strip_proc, index,
                                reinterpret_cast<DWORD_PTR>(&state)))

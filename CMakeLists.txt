@@ -88,6 +88,7 @@ target_link_libraries(panedock_sidebar PRIVATE user32 gdi32)
 panedock_set_warnings(panedock_sidebar)
 
 add_library(panedock_pane STATIC
+    src/app_shell/pane_host.h
     src/app_shell/pane.cpp
 )
 target_include_directories(panedock_pane PUBLIC src)

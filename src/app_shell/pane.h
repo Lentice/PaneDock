@@ -24,6 +24,8 @@
 
 namespace panedock::app_shell {
 
+class PaneHost;
+
 constexpr int kPaneCardOutset = 2;
 constexpr int kPaneCardShadowOffset = 2;
 
@@ -79,6 +81,8 @@ class Pane final {
     Pane &operator=(const Pane &) = delete;
 
     static bool register_window_class(HINSTANCE instance) noexcept;
+    void set_host(PaneHost *host) noexcept { host_ = host; }
+    PaneHost *pane_host() const noexcept { return host_; }
     bool create(HWND parent, int pane_index) noexcept;
     void destroy() noexcept;
     void window_destroyed(HWND window) noexcept;
@@ -241,6 +245,7 @@ class Pane final {
     }
 
   private:
+    PaneHost *host_{nullptr};
     panedock::core::PaneState *bound_state_{nullptr};
     std::size_t index_{};
     panedock::core::NavigationRequest pending_navigation_{};

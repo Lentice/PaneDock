@@ -14,6 +14,11 @@ std::optional<LRESULT> handle_pane_control_message(HWND, std::size_t, UINT,
 
 namespace {
 
+void test_pane_without_host_is_constructible() {
+    panedock::app_shell::Pane pane;
+    EXPECT(pane.pane_host() == nullptr);
+}
+
 void test_rect_cache_reports_only_real_changes() {
     panedock::app_shell::Pane pane;
     const RECT first{10, 20, 110, 220};
@@ -138,6 +143,7 @@ void test_pending_navigation_is_per_pane() {
 } // namespace
 
 int main() {
+    test_pane_without_host_is_constructible();
     test_rect_cache_reports_only_real_changes();
     test_set_tabs_replaces_visuals_without_owning_tab_state();
     test_tab_at_delegates_to_geometry_hit_test();

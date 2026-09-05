@@ -228,6 +228,13 @@
 | PD-188 | pane 卡片與導覽列背景改由 pane 自己繪製，移出 `paint_client_background` | 7 | `done` | PD-187 | [PD-188](tickets/PD-188-pane-paints-its-own-card.md) |
 | PD-189 | pane 子控制項的命令與通知改由 pane proc 就地處理，`decode_pane_control` 收斂 | 7 | `done` | PD-186, PD-187 | [PD-189](tickets/PD-189-pane-proc-handles-its-own-commands.md) |
 | PD-190 | 六支 pane chrome 刷新函式與 `pending_navigation` 收進 `Pane` | 7 | `done` | PD-186 | [PD-190](tickets/PD-190-pane-scoped-chrome-refresh-and-navigation-request.md) |
+| PD-191 | `PaneHost` 協調層服務介面，讓 `Pane` 能持有 pane 自己的行為 | 7 | `done` | PD-190 | [PD-191](tickets/PD-191-pane-host-coordinator-service-interface.md) |
+| PD-192 | pane 的導覽群收進 `Pane` | 7 | `todo` | PD-191 | [PD-192](tickets/PD-192-pane-owns-its-navigation.md) |
+| PD-193 | 檢視模式、排序與位置擷取收進 `Pane` | 7 | `todo` | PD-191 | [PD-193](tickets/PD-193-pane-owns-view-mode-sort-and-location-capture.md) |
+| PD-194 | pane 的 tab 生命週期命令收進 `Pane` | 7 | `todo` | PD-191, PD-192, PD-193 | [PD-194](tickets/PD-194-pane-owns-its-tab-commands.md) |
+| PD-195 | 位址列與釘選位置收進 `Pane` | 7 | `todo` | PD-191, PD-192 | [PD-195](tickets/PD-195-pane-owns-address-bar-and-pinned-locations.md) |
+| PD-196 | tab strip 收進 `Pane`（`PaneTabStrip`） | 7 | `todo` | PD-191, PD-194 | [PD-196](tickets/PD-196-pane-owns-its-tab-strip.md) |
+| PD-197 | pane 命令、chrome 與導覽完成的收尾 | 7 | `todo` | PD-192, PD-193, PD-194, PD-195, PD-196 | [PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md) |
 
 ## Dependency lanes
 
@@ -825,3 +832,23 @@ Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `
 PD-190 排在資料層那段的尾巴（而不是最後）:它只依賴 PD-186，內容全是資料與簽章收窄，與 PD-187 的視窗階層改動零重疊;先做完它，`AppState` 就不再有任何 pane-parallel 資料陣列，PD-187 開工時面對的是一個已經收斂過的協調層。反之若把它排在 PD-189 之後，那六支刷新函式會先被 PD-187／PD-188 動過一輪座標，再被 PD-190 動一輪簽章，白白多一次改動。
 
 PD-184～186＋190 全在資料層、PD-187～189 全在視窗層，兩段分開驗收比較容易歸因。PD-187 是整串風險最高的一張（動到 resize 批次契約），它的實機清單有 13 項;PD-189 票面標註為可獨立捨棄。
+
+### 2026-09-05 — 使用者要求 main 只留初始化／layout／groups，開 PD-191～PD-197
+
+使用者原話:「我希望 main 中不要有屬於 pane 中的獨立功能，所有 pane 的獨立功能都應該搬到 pane 之中，或是另外的物件歸屬在 pane 的掌控之下。main 控制程式的初始化、layout、groups，pane 控制個別的檔案瀏覽功能。」這是 2026-09-03／09-04 兩輪(PD-178～PD-190)的收尾要求。
+
+**盤點結果**:`main.cpp`(5,975 行)中仍屬單一 pane 的程式碼約 2,900 行,分成六群。它們留在 `main.cpp` 的理由**完全一致且只有四項**——關閉閘(`state.closing_ || state.shutdown_deferred`)、`ShellCallScope`、`schedule_session_save(state)`、`active_group(state)`;tab strip 群另需 `chrome_font`／`layout_tooltip`／跨 pane 的 `tab_drag`。
+
+**關鍵決定(使用者選定)**:抽出純虛介面 `PaneHost`(PD-191),`Pane` 持有 `PaneHost*`。這**明確覆寫** 2026-09-03 模組契約 (1) 的「`Pane` 不得持有…回呼介面」半句;另兩半(不得持有 `AppState*`、不得持有 `std::function`)維持有效,並由 PD-191 的 Non-goals 守住(`PaneHost` 不得長出「取得第 i 個 pane」「取得 `AppState&`」「取得 `GroupState&`」)。被否決的兩個替代方案:讓 `Pane` 直接持有 `AppState*`(等於只搬檔案位置不搬所有權)、`std::function` 回呼 struct(四個服務其實是同一個協調者,拆成四個獨立回呼更難追)。
+
+**同時覆寫的兩項既有判定**:PD-190 交接區的「需要協調層服務的刷新函式維持自由函式、改吃 `Pane&`」(PD-191 消掉了那個前提);PD-186 non-goals 的「不把 tab 操作包成 `Pane::add_tab()`」(該理由是「那條鏈只有 `AppState` 拿得到」,PD-191～193 之後整條鏈都在 `Pane` 裡,見 PD-194 票內說明)。
+
+**結清一個長期候選**:「把 tab strip 收進 `app_shell::TabStrip` 模組」的觸發條件是「PD-187～PD-189 完成後重新評估」,三張票均已 `done`,重新評估結論為開票 → PD-196。使用者原話的「或是另外的物件歸屬在 pane 的掌控之下」直接授權 `PaneTabStrip` 由 `Pane` 以值持有的做法。
+
+**開票**:[PD-191](tickets/PD-191-pane-host-coordinator-service-interface.md)(介面與接線,零函式搬移——介面形狀若錯,錯誤停在一個新檔案而不是散進 2,900 行 diff)、[PD-192](tickets/PD-192-pane-owns-its-navigation.md)(導覽,最小的一群當試金石)、[PD-193](tickets/PD-193-pane-owns-view-mode-sort-and-location-capture.md)、[PD-194](tickets/PD-194-pane-owns-its-tab-commands.md)、[PD-195](tickets/PD-195-pane-owns-address-bar-and-pinned-locations.md)(最小,可獨立捨棄)、[PD-196](tickets/PD-196-pane-owns-its-tab-strip.md)(約 700 行,最大也最有價值)、[PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md)(收尾與整串驗收)。
+
+**`PaneHost` 成員數的變動記錄**(PD-191 票面不編輯,異動記在這裡):PD-191 建立 7 支;PD-193 新增 `location_capture_suppressed()` → 8 支;PD-194 新增過渡用的 `tab_strip_needs_refresh(Pane&)` → 9 支,PD-196 刪除 → 8 支;PD-195 新增 `pinned_locations()` 與 `pin_location()` → 10 支;PD-196 新增 `tab_display_text()` → 11 支。實作者每次異動都要回來更新這一行。
+
+**明確留在協調層的界線**(PD-197 non-goals 有完整清單):跨 pane／全域協調(tab 跨 pane 拖曳、splitter、active pane 切換、版型矩形、`apply_layout`、全視窗繪製迴圈)、Group 域全部、app 生命週期(`wWinMain`／`window_proc`／shutdown／single-instance／session 存檔)、`core` 的 pane 域純函式(唯一的自動化測試接縫,`Pane` 只呼叫不吸收)、`shell_core`／`file_operations`(零 pane-scoped 狀態)、四個 singleton 狀態(`tab_context_menu_pane`／`tab_context_menu_tab_id`／`suppress_location_capture`／`owner_draw_hovered_button`)。
+
+**排序**:PD-191 → PD-192／PD-193(可並行) → PD-194 → PD-195(可隨時插入) → PD-196 → PD-197。全串零行為、零視覺變更,目標是 `main.cpp` 從 5,975 行降到 3,300 行以下。PD-196 風險最高(繪製與 `WNDPROC`,實機清單 13 項);PD-195 可獨立捨棄。整串不推進 Phase 5 release gate。
