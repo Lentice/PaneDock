@@ -19,6 +19,7 @@ set(PANEDOCK_TESTS
     "core_navigation|unit/core_navigation_test.cpp|panedock_core"
     "core_shutdown|unit/core_shutdown_test.cpp|panedock_core"
     "pane|unit/pane_test.cpp|panedock_pane panedock_explorer_host panedock_core"
+    "pane_tab_strip|unit/pane_tab_strip_test.cpp|panedock_pane panedock_explorer_host panedock_core"
     "pane_control_id|unit/pane_control_id_test.cpp|"
     "shell_core_view_mode|unit/shell_core_view_mode_test.cpp|panedock_shell_core"
     "file_operation_effect|unit/file_operation_effect_test.cpp|panedock_file_operations"

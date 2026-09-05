@@ -197,12 +197,20 @@ Assert-Source 'std::wstring tab_display_text\(AppState& state' `
 $tabHelperStart = $source.IndexOf(
     'std::wstring tab_display_text(AppState& state')
 $tabHelperEnd = $source.IndexOf(
-    'void apply_tab_item_size(', $tabHelperStart)
+    'void refresh_tab_strips(', $tabHelperStart)
 if ($tabHelperStart -lt 0 -or $tabHelperEnd -lt 0) {
     throw 'Shell re-entry invariant failed: tab display helper missing'
 }
 $tabCallSiteSource = $source.Remove($tabHelperStart,
     $tabHelperEnd - $tabHelperStart)
+# Exclude only the PaneHost bridge's declaration/signature, never its body:
+# its free-function call must still pass the coordinator's Shell-call state.
+$tabCallSiteSource = $tabCallSiteSource.Replace(
+    'std::wstring tab_display_text(std::wstring_view parsing_name) override;', '')
+$tabCallSiteSource = $tabCallSiteSource.Replace(
+    'std::wstring AppState::tab_display_text(std::wstring_view parsing_name)', '')
+Assert-Source 'std::wstring AppState::tab_display_text\(std::wstring_view parsing_name\)\s*\{\s*AppState &state = \*this;\s*return ::tab_display_text\(state, parsing_name\);\s*\}' `
+    'PaneHost tab display bridge retains the Shell-call state'
 if ([regex]::Matches($tabCallSiteSource, 'tab_display_text\(').Count -ne
     [regex]::Matches($tabCallSiteSource,
         'tab_display_text\(\s*state\s*,').Count) {

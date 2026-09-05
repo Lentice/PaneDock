@@ -11,6 +11,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 
 #include "app_shell/tab_overflow.h"
 #include "core/model.h"
@@ -43,8 +44,12 @@ class PaneHost {
     virtual void pin_location(panedock::core::ShellLocation location) = 0;
     // Singleton coordinator state: Group switching suppresses capture for all panes.
     virtual bool location_capture_suppressed() const noexcept = 0;
-    // Transitional coordinator hook: tab-strip refresh moves to Pane in PD-196.
-    virtual void tab_strip_needs_refresh(Pane &pane) = 0;
+    // Shell name resolution uses the coordinator's re-entry gate.
+    virtual std::wstring tab_display_text(std::wstring_view parsing_name) = 0;
+    virtual HFONT chrome_font() const noexcept = 0;
+    virtual HWND tooltip() const noexcept = 0;
+    // Preserve the post-refresh address/button update until PD-197 moves it.
+    virtual void refresh_navigation_chrome(Pane &pane) = 0;
 };
 
 class ShellCall final {

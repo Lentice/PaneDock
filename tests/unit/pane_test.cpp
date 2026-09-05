@@ -34,7 +34,12 @@ class TestPaneHost final : public panedock::app_shell::PaneHost {
         int) const override {
         return std::nullopt;
     }
-    void tab_strip_needs_refresh(panedock::app_shell::Pane &) override {}
+    std::wstring tab_display_text(std::wstring_view name) override {
+        return std::wstring(name);
+    }
+    HFONT chrome_font() const noexcept override { return nullptr; }
+    HWND tooltip() const noexcept override { return nullptr; }
+    void refresh_navigation_chrome(panedock::app_shell::Pane &) override {}
     std::span<const panedock::app_shell::PinnedLocation>
     pinned_locations() const noexcept override {
         return {};
@@ -66,12 +71,12 @@ void test_rect_cache_reports_only_real_changes() {
 void test_set_tabs_replaces_visuals_without_owning_tab_state() {
     panedock::app_shell::Pane pane;
     const std::vector<std::wstring> labels{L"one", L"two", L"three"};
-    pane.set_tabs(labels);
-    EXPECT(pane.tab_visuals().size() == 3);
-    EXPECT(pane.tab_visuals()[1].text == L"two");
+    pane.tab_strip_ui().set_tabs(labels);
+    EXPECT(pane.tab_strip_ui().tab_visuals().size() == 3);
+    EXPECT(pane.tab_strip_ui().tab_visuals()[1].text == L"two");
 
-    pane.set_tabs({});
-    EXPECT(pane.tab_visuals().empty());
+    pane.tab_strip_ui().set_tabs({});
+    EXPECT(pane.tab_strip_ui().tab_visuals().empty());
 }
 
 void test_tab_at_delegates_to_geometry_hit_test() {
@@ -79,11 +84,11 @@ void test_tab_at_delegates_to_geometry_hit_test() {
     panedock::app_shell::TabStripGeometry geometry;
     geometry.tab_rects.push_back({0, 0, 50, 20});
     geometry.viewport = {0, 0, 50, 20};
-    pane.set_geometry(geometry);
+    pane.tab_strip_ui().set_geometry(geometry);
 
-    const auto hit = pane.tab_at(POINT{10, 10});
+    const auto hit = pane.tab_strip_ui().tab_at(POINT{10, 10});
     EXPECT(hit.has_value() && *hit == 0);
-    EXPECT(!pane.tab_at(POINT{100, 10}).has_value());
+    EXPECT(!pane.tab_strip_ui().tab_at(POINT{100, 10}).has_value());
 }
 
 void test_pane_state_binding_uses_the_original_object() {

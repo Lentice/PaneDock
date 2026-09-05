@@ -15,10 +15,6 @@ constexpr std::array<const wchar_t *, 6> kButtonLabels{
     L"<", L">", L"Up", L"Refresh", L"View", L"Pinned"};
 constexpr wchar_t kWindowClassName[] = L"PaneDock.Pane";
 
-// Tooltip ids for this pane's tab-strip buttons on the shared tooltip
-// control. Moved here with update_tab_strip_tooltips (PD-190).
-constexpr UINT_PTR kTabAddTooltipIdBase = 1000;
-constexpr UINT_PTR kTabScrollTooltipIdBase = 1010;
 constexpr std::array<const wchar_t *, 8> kViewModeLabels{
     L"Extra large icons", L"Large icons", L"Medium icons", L"Small icons",
     L"List", L"Details", L"Tiles", L"Content"};
@@ -132,12 +128,7 @@ bool Pane::create(HWND parent, int pane_index) noexcept {
     explorer_container_ = CreateWindowExW(
         0, L"STATIC", nullptr, WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0,
         0, 0, 0, window_, nullptr, GetModuleHandleW(nullptr), nullptr);
-    tab_strip_ = CreateWindowExW(
-        0, L"STATIC", nullptr,
-        WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | SS_NOTIFY, 0, 0, 0, 0,
-        window_,
-        reinterpret_cast<HMENU>(encode_pane_control(PaneControl::tab_strip)),
-        GetModuleHandleW(nullptr), nullptr);
+    tab_strip_ui_.create(window_);
 
     constexpr std::array controls{PaneControl::back,      PaneControl::forward,
                                   PaneControl::up,        PaneControl::refresh,
@@ -174,7 +165,7 @@ bool Pane::create(HWND parent, int pane_index) noexcept {
 
     const bool complete =
         window_ != nullptr && explorer_container_ != nullptr &&
-        tab_strip_ != nullptr && address_bar_ != nullptr &&
+        tab_strip() != nullptr && address_bar_ != nullptr &&
         status_bar_ != nullptr && back_button_ != nullptr &&
         forward_button_ != nullptr && up_button_ != nullptr &&
         refresh_button_ != nullptr && view_mode_button_ != nullptr &&
@@ -517,14 +508,14 @@ void Pane::switch_active_tab(const std::string &tab_id) {
     auto *pane_state = bound_state_;
     if (pane_state == nullptr) return;
     if (pane_state->active_tab_id == tab_id) {
-        pane_host()->tab_strip_needs_refresh(*this);
+        tab_strip_ui().refresh();
         return;
     }
     capture_location();
     pane_state = bound_state_;
     if (pane_host()->is_shutting_down() || pane_state == nullptr) return;
     if (!panedock::core::set_active_tab(*pane_state, tab_id)) {
-        pane_host()->tab_strip_needs_refresh(*this);
+        tab_strip_ui().refresh();
         return;
     }
     if (realized()) {
@@ -536,7 +527,7 @@ void Pane::switch_active_tab(const std::string &tab_id) {
         }
         if (pane_host()->is_shutting_down()) return;
     }
-    pane_host()->tab_strip_needs_refresh(*this);
+    tab_strip_ui().refresh();
     pane_host()->schedule_session_save();
 }
 
@@ -583,7 +574,7 @@ void Pane::add_tab(panedock::core::ShellLocation initial_location) {
         }
         if (pane_host()->is_shutting_down()) return;
     }
-    pane_host()->tab_strip_needs_refresh(*this);
+    tab_strip_ui().refresh();
     pane_host()->schedule_session_save();
 }
 
@@ -609,7 +600,7 @@ void Pane::close_tab(const std::string &tab_id) {
         }
         if (pane_host()->is_shutting_down()) return;
     }
-    pane_host()->tab_strip_needs_refresh(*this);
+    tab_strip_ui().refresh();
     pane_host()->schedule_session_save();
 }
 
@@ -631,34 +622,6 @@ void Pane::refresh_navigation_buttons() noexcept {
     EnableWindow(folder_context_button_, realized_);
 }
 
-void Pane::update_tab_strip_tooltips(HWND tooltip) noexcept {
-    if (tooltip == nullptr || tab_strip_ == nullptr) return;
-
-    const std::array<RECT, 3> rects{
-        to_win32_rect(tab_strip_geometry_.add_rect),
-        to_win32_rect(tab_strip_geometry_.scroll_button_rects[0]),
-        to_win32_rect(tab_strip_geometry_.scroll_button_rects[1])};
-    const std::array<UINT_PTR, 3> ids{
-        kTabAddTooltipIdBase + static_cast<UINT_PTR>(index_),
-        kTabScrollTooltipIdBase + static_cast<UINT_PTR>(index_ * 2),
-        kTabScrollTooltipIdBase + static_cast<UINT_PTR>(index_ * 2 + 1)};
-    constexpr std::array<const wchar_t *, 3> texts{
-        L"New tab", L"Scroll tabs left", L"Scroll tabs right"};
-    const UINT message =
-        tab_tooltips_registered_ ? TTM_NEWTOOLRECT : TTM_ADDTOOLW;
-    for (std::size_t index = 0; index < ids.size(); ++index) {
-        TOOLINFOW info{};
-        info.cbSize = sizeof(info);
-        info.uFlags = TTF_SUBCLASS;
-        info.hwnd = tab_strip_;
-        info.uId = ids[index];
-        info.rect = rects[index];
-        info.lpszText = const_cast<wchar_t *>(texts[index]);
-        SendMessageW(tooltip, message, 0, reinterpret_cast<LPARAM>(&info));
-    }
-    tab_tooltips_registered_ = true;
-}
-
 void Pane::destroy() noexcept {
     // Fixed order, per design-spec.md §9.4 ("順序不可調換。view 存活期間
     // destroy parent HWND 是已知的崩潰面") and AGENTS.md ("Never destroy a
@@ -676,7 +639,7 @@ void Pane::destroy() noexcept {
     //   5. pane HWND last. DestroyWindow would recursively destroy every
     //      child, including explorer_container_, so §9.4 requires both the
     //      browser and its container to be gone first.
-    revoke_drag_hover_target();
+    tab_strip_ui_.revoke_drag_hover_target();
     explorer_host_.destroy();
     realized_ = false;
     destroy_window(status_bar_);
@@ -688,7 +651,7 @@ void Pane::destroy() noexcept {
     destroy_window(up_button_);
     destroy_window(forward_button_);
     destroy_window(back_button_);
-    destroy_window(tab_strip_);
+    tab_strip_ui_.destroy();
     destroy_window(explorer_container_);
     destroy_window(window_);
     if (paint_dc_ != nullptr && paint_old_bitmap_ != nullptr)
@@ -703,11 +666,6 @@ void Pane::destroy() noexcept {
     card_border_pen_ = nullptr;
     card_border_pen_dpi_ = 0;
     laid_out_pane_rect_.reset();
-    tab_tooltips_registered_ = false;
-    tab_visuals_.clear();
-    tab_strip_geometry_ = TabStripGeometry{};
-    tab_hover_index_.reset();
-    tab_scroll_hover_index_.reset();
     suppress_history_record_ = false;
     unbind();
 }
@@ -818,7 +776,7 @@ void Pane::set_visible(bool visible) noexcept {
     const int command = visible ? SW_SHOW : SW_HIDE;
     ShowWindow(window_, command);
     ShowWindow(explorer_container_, command);
-    ShowWindow(tab_strip_, command);
+    ShowWindow(tab_strip(), command);
     ShowWindow(back_button_, command);
     ShowWindow(forward_button_, command);
     ShowWindow(up_button_, command);
@@ -831,7 +789,7 @@ void Pane::set_visible(bool visible) noexcept {
 }
 
 void Pane::apply_font(HFONT font) noexcept {
-    set_font(tab_strip_, font);
+    set_font(tab_strip(), font);
     set_font(back_button_, font);
     set_font(forward_button_, font);
     set_font(up_button_, font);
@@ -840,38 +798,6 @@ void Pane::apply_font(HFONT font) noexcept {
     set_font(pinned_button_, font);
     set_font(address_bar_, font);
     set_font(status_bar_, font);
-}
-
-void Pane::set_tabs(std::span<const std::wstring> labels) noexcept {
-    tab_visuals_.clear();
-    tab_visuals_.reserve(labels.size());
-    for (const auto &label : labels)
-        tab_visuals_.push_back({label});
-}
-
-std::optional<std::size_t> Pane::tab_at_screen(POINT screen) const noexcept {
-    if (tab_strip_ == nullptr)
-        return std::nullopt;
-    POINT client = screen;
-    ScreenToClient(tab_strip_, &client);
-    return tab_at(client);
-}
-
-bool Pane::register_drag_hover_target(IDropTarget *target) noexcept {
-    if (tab_strip_ == nullptr || target == nullptr)
-        return false;
-    if (FAILED(RegisterDragDrop(tab_strip_, target)))
-        return false;
-    tab_drag_target_ = target;
-    return true;
-}
-
-void Pane::revoke_drag_hover_target() noexcept {
-    if (tab_drag_target_ == nullptr)
-        return;
-    if (tab_strip_ != nullptr)
-        RevokeDragDrop(tab_strip_);
-    tab_drag_target_.Reset();
 }
 
 } // namespace panedock::app_shell

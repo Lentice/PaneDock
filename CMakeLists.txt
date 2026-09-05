@@ -90,6 +90,8 @@ panedock_set_warnings(panedock_sidebar)
 add_library(panedock_pane STATIC
     src/app_shell/pane_host.h
     src/app_shell/pane.cpp
+    src/app_shell/pane_tab_strip.h
+    src/app_shell/pane_tab_strip.cpp
 )
 target_include_directories(panedock_pane PUBLIC src)
 target_compile_definitions(panedock_pane PRIVATE

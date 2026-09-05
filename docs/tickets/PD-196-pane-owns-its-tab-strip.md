@@ -146,4 +146,61 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作者填寫：`Pane` 對外是 `tab_strip_ui()` 還是逐支轉呼叫；`tab_strip_proc` 搬移後的行數；`shell_reentry_gate_check.ps1` 新舊錨點；`main.cpp` 前後行數。）
+- `Pane` 以值持有 `PaneTabStrip`，建構時設定 `owner_`。對外使用
+  `tab_strip_ui()`（含 const overload）；既有 `tab_strip()` HWND accessor
+  保留為單行轉呼叫，方便協調層的 layout/subclass 接線。strip HWND、標籤、
+  幾何、hover、scroll、tooltip 註冊旗標與 drop target 都由新物件持有。
+  沿用既有 STATIC class/style/control ID，沒有新增 window class。
+- `tab_strip_proc` **123 → 64 行**，仍先處理 shutdown 與 Shell re-entry
+  gate，再分派 local paint/hover/wheel/scroll-button/double-click 訊息。
+  tab drag 的建立、capture、更新、放開與取消仍在協調層；上表九支協調函式
+  全部保留。除 accessor／成員呼叫的機械替換外，八支的函式體經正規化
+  比對一致，`tab_display_text` 自由函式原樣保留。
+- `main.cpp` **5,624 → 5,213 行，淨減 411 行**（刪除 493、新增 82）。
+  未達票面「約 500 行以上」的估算：本票開工時 `apply_tab_item_size`
+  已因 PD-191 提取跨 pane 計算而只有 65 行，且繪製所需的跨 pane 查詢必須
+  留在協調層。已搬完本票列出的單 pane 功能，沒有為補行數提前搬 PD-197。
+- 繪製透過短期 `TabStripPaintState` 接收 active-pane、被拖曳 tab index
+  與 placeholder 標籤；值由協調層查詢，strip 看不到其他 pane、Group 或
+  `AppState`。placeholder 字串僅在同步繪製呼叫期間借用，不存成成員。
+  9 個 `kTab*` 色票與原值逐一相同，`draw_tab_scroll_button` 函式體
+  逐字一致；footer 原本共用的三個色值留在 main 並改為 footer 命名。
+- 刪除 `PaneHost::tab_strip_needs_refresh`、AppState override 與 Pane
+  五個呼叫點。新增 parsing-name 版 `tab_display_text(std::wstring_view)`，
+  使用 non-const override，因 Shell-call gate 會更新協調層狀態；
+  override 仍呼叫帶 `state` 的自由函式。補上 PD-191 未實作的
+  `chrome_font()`／`tooltip()`（共享 HWND/GDI 資源無法由單一 pane 擁有），
+  AppState 字型欄位改名 `chrome_font_` 以免與 accessor 衝突。
+- 額外相依：既有 refresh 的成功／未綁定路徑最後都呼叫
+  `refresh_navigation_chrome(Pane&, AppState&)`，它仍使用協調層的 Shell
+  名稱解析。新增窄服務 `PaneHost::refresh_navigation_chrome(Pane&)`
+  接回原函式，保留呼叫順序與防护，避免提前實作 PD-197。
+  PaneHost 現為 **14 支純虛服務**（不含解構子），已同步 tracker。
+- `refresh()` 中 Shell 名稱查詢後的 bound pointer、tab 數量、id、
+  parsing name 比對與提前 return **逐行保留**。tooltip 仍僅使用既有三個
+  按鈕矩形、文字、ID 與 ADDTOOL/NEWTOOLRECT 時機。destroy 保持先 revoke
+  drop target、destroy ExplorerHost，再 destroy strip/container/pane 的順序。
+- `shell_reentry_gate_check.ps1` 的 tab helper 結尾錨點從
+  `'void apply_tab_item_size('` 改為 `'void refresh_tab_strips('`。
+  caller 檢查僅扣除新增 override 的宣告／簽章，不排除其函式體，且額外
+  斷言 bridge 必須轉呼叫 `::tab_display_text(state, parsing_name)`。
+  記憶體內兩次負向檢查（bridge 移除 state、額外加入無 state 的 caller）
+  都正確失敗，未放寬原不變式。
+- 新增 `tests/unit/pane_tab_strip_test.cpp`：指定的
+  `test_refresh_bails_when_tab_list_changes_mid_scan` 驗證第二次 lookup
+  erase tab 時保留上一份完整標籤，後續正常刷新可恢復；
+  `test_scroll_offset_clamps_at_both_ends` 使用真實但隱藏的 child HWND，
+  驗證兩端停止、滾輪、scroll-button hit/hover/click、tab/add hover、
+  mouse-leave 及 strip HWND/狀態清理。這些依賴 PaneHost/Win32，
+  因此留在 app_shell 測試，沒有污染 core。
+- 2026-09-05 Agent checks：指定 LLVM-MinGW Release configure/build 通過，
+  無編譯警告；完整 `ctest --test-dir build --output-on-failure` **24/24
+  通過**（8.07 秒，`panedock_launch_smoke` 2.43 秒）。完整 suite 在
+  sandbox 外、可正常存取 session 的環境執行。header 無 `AppState`／
+  `GroupState`、舊 refresh hook 已消失、`src/core` 與
+  `tab_overflow.h` 零 diff，`git diff --check` 通過。
+- 使用者實機檢查 1–13：**未驗證，需真實桌面人工操作**，包含跨 pane
+  拖曳／Esc、不同 DPI 螢幕與視覺比對；不將 source comparison 或 smoke
+  當作視覺 PASS。開工基準並沒有 tab 的 x 繪製／點擊或截斷標題 tooltip
+  實作（只有中鍵／選單關閉與上述三個按鈕 tooltip）；依零行為變更及
+  non-goals，本票未新增這兩項。驗證清單中的對應項目保留作原始記錄。
