@@ -1,5 +1,6 @@
 #include "app_shell/pane.h"
 #include "app_shell/pane_message_dispatch.h"
+#include "app_shell/pane_host.h"
 #include "unit/test_util.h"
 
 // PD-189: pane_window_proc asks the coordinator (main.cpp) to handle its
@@ -13,6 +14,26 @@ std::optional<LRESULT> handle_pane_control_message(HWND, std::size_t, UINT,
 }  // namespace panedock::app_shell
 
 namespace {
+
+class TestPaneHost final : public panedock::app_shell::PaneHost {
+  public:
+    bool shutting_down{};
+    std::string group_id{"group-a"};
+
+    bool is_shutting_down() const noexcept override { return shutting_down; }
+    void shell_call_entered() noexcept override {}
+    void shell_call_left() noexcept override {}
+    void schedule_session_save() noexcept override {}
+    const std::string &active_group_id() const noexcept override {
+        return group_id;
+    }
+    std::string make_unique_tab_id() const override { return "tab-new"; }
+    std::optional<panedock::app_shell::TabStripDragLayout> tab_drag_layout(
+        const panedock::app_shell::Pane &, HWND, int, int,
+        int) const override {
+        return std::nullopt;
+    }
+};
 
 void test_pane_without_host_is_constructible() {
     panedock::app_shell::Pane pane;
@@ -140,6 +161,41 @@ void test_pending_navigation_is_per_pane() {
     EXPECT(first.pending_navigation().generation == 7);
 }
 
+void test_navigation_request_identity_survives_group_switch() {
+    panedock::app_shell::Pane pane;
+    panedock::core::PaneState state;
+    state.tabs.push_back({});
+    state.tabs.front().id = "tab-a";
+    state.active_tab_id = "tab-a";
+    TestPaneHost host;
+
+    pane.bind(&state);
+    pane.set_host(&host);
+    const auto generation = pane.begin_navigation();
+    EXPECT(generation != 0);
+    EXPECT(pane.navigation_request_is_current(generation));
+
+    host.group_id = "group-b";
+    EXPECT(!pane.navigation_request_is_current(generation));
+    host.group_id = "group-a";
+    EXPECT(pane.navigation_request_is_current(generation));
+}
+
+void test_navigation_calls_are_no_ops_without_host() {
+    panedock::app_shell::Pane pane;
+    panedock::core::ShellLocation location{};
+
+    EXPECT(pane.begin_navigation() == 0);
+    EXPECT(pane.navigate_to(location) == E_UNEXPECTED);
+    EXPECT(pane.navigate_up_one_level() == E_UNEXPECTED);
+    EXPECT(!pane.navigation_request_is_current(1));
+    pane.record_navigation_result(location);
+    pane.navigation_failed(1);
+    pane.navigate_history(true);
+    pane.navigate_up();
+    pane.refresh_view();
+}
+
 } // namespace
 
 int main() {
@@ -152,5 +208,7 @@ int main() {
     test_controls_are_children_of_the_pane_window();
     test_active_tab_follows_the_bound_pane_state();
     test_pending_navigation_is_per_pane();
+    test_navigation_request_identity_survives_group_switch();
+    test_navigation_calls_are_no_ops_without_host();
     return panedock::test::summary("pane");
 }

@@ -1,6 +1,7 @@
 #include "app_shell/pane.h"
 
 #include "app_shell/pane_message_dispatch.h"
+#include "app_shell/pane_host.h"
 #include "app_shell/window_helpers.h"
 
 #include <commctrl.h>
@@ -188,6 +189,112 @@ panedock::core::TabState *Pane::active_tab() const noexcept {
         if (tab.id == bound_state_->active_tab_id) return &tab;
     }
     return nullptr;
+}
+
+Pane::NavigationGeneration Pane::begin_navigation() {
+    if (pane_host() == nullptr) return 0;
+    auto *tab = active_tab();
+    if (tab == nullptr) return 0;
+    auto &request = pending_navigation_;
+    request.generation = explorer_host_.begin_navigation();
+    request.group_id = pane_host()->active_group_id();
+    request.tab_id = tab->id;
+    return request.generation;
+}
+
+HRESULT Pane::navigate_to(
+    const panedock::core::ShellLocation &location) {
+    if (pane_host() == nullptr) return E_UNEXPECTED;
+    return explorer_host_.navigate(location, begin_navigation());
+}
+
+HRESULT Pane::navigate_up_one_level() {
+    if (pane_host() == nullptr) return E_UNEXPECTED;
+    return explorer_host_.navigate_up(begin_navigation());
+}
+
+bool Pane::navigation_request_is_current(
+    NavigationGeneration generation) {
+    if (pane_host() == nullptr) return false;
+    auto *tab = active_tab();
+    if (tab == nullptr) return false;
+
+    if (generation < pending_navigation_.generation) return false;
+    const auto &group_id = pane_host()->active_group_id();
+    if (generation > pending_navigation_.generation) {
+        pending_navigation_.generation = generation;
+        pending_navigation_.group_id = group_id;
+        pending_navigation_.tab_id = tab->id;
+    }
+    return panedock::core::navigation_request_matches(
+        pending_navigation_, generation, group_id, tab->id);
+}
+
+void Pane::record_navigation_result(
+    const panedock::core::ShellLocation &new_location) {
+    if (pane_host() == nullptr) return;
+    auto *tab = active_tab();
+    if (tab == nullptr) return;
+    auto completed_location = new_location;
+    if (suppress_history_record_) {
+        set_suppress_history(false);
+        tab->location = std::move(completed_location);
+        if (!tab->history.empty() && tab->history_index < tab->history.size())
+            tab->history[tab->history_index] = tab->location;
+    } else {
+        panedock::core::record_navigation(*tab,
+                                           std::move(completed_location));
+    }
+}
+
+void Pane::navigation_failed(NavigationGeneration generation) {
+    if (pane_host() == nullptr) return;
+    if (!navigation_request_is_current(generation)) return;
+    // A pending back/forward navigation that fails asynchronously must still
+    // release the suppression flag, or those buttons stay disabled forever.
+    set_suppress_history(false);
+    refresh_navigation_buttons();
+}
+
+void Pane::navigate_history(bool back) {
+    if (pane_host() == nullptr) return;
+    if (pane_host()->is_shutting_down()) return;
+    auto *pane_state = bound_state_;
+    if (pane_state == nullptr || suppress_history_record_) return;
+    auto *tab = active_tab();
+    if (tab == nullptr) return;
+    const bool moved = back ? panedock::core::navigate_tab_back(*tab)
+                            : panedock::core::navigate_tab_forward(*tab);
+    if (!moved) return;
+    set_suppress_history(true);
+    HRESULT hr = E_UNEXPECTED;
+    {
+        ShellCall shell_call(pane_host());
+        hr = navigate_to(tab->location);
+    }
+    if (pane_host()->is_shutting_down()) return;
+    if (FAILED(hr)) set_suppress_history(false);
+    refresh_navigation_buttons();
+}
+
+void Pane::navigate_up() {
+    if (pane_host() == nullptr) return;
+    if (pane_host()->is_shutting_down()) return;
+    if (bound_state_ == nullptr) return;
+    {
+        ShellCall shell_call(pane_host());
+        (void)navigate_up_one_level();
+    }
+}
+
+void Pane::refresh_view() {
+    if (pane_host() == nullptr) return;
+    if (pane_host()->is_shutting_down()) return;
+    if (bound_state_ == nullptr) return;
+    {
+        ShellCall shell_call(pane_host());
+        (void)explorer_host_.refresh(begin_navigation());
+    }
 }
 
 void Pane::refresh_navigation_buttons() noexcept {

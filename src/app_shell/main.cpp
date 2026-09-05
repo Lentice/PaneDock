@@ -775,46 +775,6 @@ const panedock::core::TabState& active_tab(
     return *tab;
 }
 
-NavigationGeneration begin_navigation(AppState& state, std::size_t pane_index) {
-    auto& request = state.panes[pane_index].pending_navigation();
-    auto& group = active_group(state);
-    auto& tab = active_tab(*state.panes[pane_index].pane_state());
-    request.generation = state.panes[pane_index].host().begin_navigation();
-    request.group_id = group.id;
-    request.tab_id = tab.id;
-    return request.generation;
-}
-
-HRESULT navigate_pane(AppState& state, std::size_t pane_index,
-                      const panedock::core::ShellLocation& location) {
-    return state.panes[pane_index].host().navigate(
-        location, begin_navigation(state, pane_index));
-}
-
-HRESULT navigate_up_pane(AppState& state, std::size_t pane_index) {
-    return state.panes[pane_index].host().navigate_up(
-        begin_navigation(state, pane_index));
-}
-
-bool navigation_request_is_current(AppState& state, std::size_t pane_index,
-                                   NavigationGeneration generation) {
-    if (pane_index >= kExplorerCount) return false;
-    auto* pane_state = state.panes[pane_index].pane_state();
-    if (pane_state == nullptr) return false;
-
-    auto& request = state.panes[pane_index].pending_navigation();
-    if (generation < request.generation) return false;
-    auto& group = active_group(state);
-    auto& tab = active_tab(*pane_state);
-    if (generation > request.generation) {
-        request.generation = generation;
-        request.group_id = group.id;
-        request.tab_id = tab.id;
-    }
-    return panedock::core::navigation_request_matches(
-        request, generation, group.id, tab.id);
-}
-
 // plan_realization takes a snapshot of which panes currently hold a live
 // view; Pane owns that flag now (PD-183), so callers collect it here rather
 // than plan_realization reaching into Pane itself.
@@ -835,9 +795,8 @@ bool navigate_realized_panes(
     for (const std::size_t pane : plan.navigate) {
         {
             ShellCallScope shell_call(state);
-            state.panes[pane].host().navigate(
-                active_tab(group.panes[pane]).location,
-                begin_navigation(state, pane));
+            (void)state.panes[pane].navigate_to(
+                active_tab(group.panes[pane]).location);
         }
         if (state.shutdown_deferred || state.closing_) {
             state.suppress_location_capture = previous_suppression;
@@ -2302,37 +2261,18 @@ void show_pinned_locations_manager(HWND owner, AppState& state) {
 }
 
 void handle_navigation_complete(
-    AppState& state, std::size_t pane_index,
+    AppState& state, panedock::app_shell::Pane& pane,
     NavigationGeneration generation,
     const panedock::core::ShellLocation& new_location) {
     if (state.shutdown_deferred || state.closing_) return;
-    if (!navigation_request_is_current(state, pane_index, generation)) return;
-    auto& tab = active_tab(*state.panes[pane_index].pane_state());
-    auto completed_location = new_location;
-    if (state.panes[pane_index].suppress_history()) {
-        state.panes[pane_index].set_suppress_history(false);
-        tab.location = std::move(completed_location);
-        if (!tab.history.empty() && tab.history_index < tab.history.size()) {
-            tab.history[tab.history_index] = tab.location;
-        }
-    } else {
-        panedock::core::record_navigation(tab, std::move(completed_location));
-    }
-    apply_pane_view_mode(state, pane_index);
+    if (!pane.navigation_request_is_current(generation)) return;
+    pane.record_navigation_result(new_location);
+    apply_pane_view_mode(state, pane.index());
     if (state.shutdown_deferred || state.closing_) return;
-    apply_pane_sort(state, pane_index);
+    apply_pane_sort(state, pane.index());
     if (state.shutdown_deferred || state.closing_) return;
-    refresh_tab_strip(state.panes[pane_index], state);
+    refresh_tab_strip(pane, state);
     schedule_session_save(state);
-}
-
-void handle_navigation_failed(AppState& state, std::size_t pane_index,
-                              NavigationGeneration generation) {
-    if (!navigation_request_is_current(state, pane_index, generation)) return;
-    // A pending back/forward navigation that fails asynchronously must still
-    // release the suppression flag, or those buttons stay disabled forever.
-    state.panes[pane_index].set_suppress_history(false);
-    state.panes[pane_index].refresh_navigation_buttons();
 }
 
 // PD-183: Pane::destroy() now folds ExplorerHost::destroy() into its own
@@ -2628,12 +2568,13 @@ HRESULT apply_layout(HWND window, AppState& state,
                     chrome.host().set_navigation_callback(
                         [&state, index](NavigationGeneration generation,
                             const panedock::core::ShellLocation& new_location) {
-                            handle_navigation_complete(state, index, generation,
+                            handle_navigation_complete(state, state.panes[index],
+                                                       generation,
                                                        new_location);
                         });
                     chrome.host().set_navigation_failed_callback(
                         [&state, index](NavigationGeneration generation) {
-                            handle_navigation_failed(state, index, generation);
+                            state.panes[index].navigation_failed(generation);
                         });
                     chrome.host().set_selection_changed_callback(
                         [&state, index]() { refresh_status_bar(state.panes[index], state); });
@@ -3090,8 +3031,7 @@ void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
     if (state.panes[pane_index].realized()) {
         {
             ShellCallScope shell_call(state);
-            navigate_pane(
-                state, pane_index,
+            state.panes[pane_index].navigate_to(
                 active_tab(*pane_state).location);
         }
         if (state.shutdown_deferred || state.closing_) return;
@@ -3179,8 +3119,7 @@ void add_tab_to_pane(
     if (state.panes[pane_index].realized()) {
         {
             ShellCallScope shell_call(state);
-            navigate_pane(
-                state, pane_index,
+            state.panes[pane_index].navigate_to(
                 active_tab(*pane_state).location);
         }
         if (state.shutdown_deferred || state.closing_) return;
@@ -3204,53 +3143,13 @@ void close_tab_in_pane(HWND, AppState& state, std::size_t pane_index,
     if (closed_active && state.panes[pane_index].realized()) {
         {
             ShellCallScope shell_call(state);
-            navigate_pane(
-                state, pane_index,
+            state.panes[pane_index].navigate_to(
                 active_tab(*pane_state).location);
         }
         if (state.shutdown_deferred || state.closing_) return;
     }
     refresh_tab_strip(state.panes[pane_index], state);
     schedule_session_save(state);
-}
-
-void navigate_tab_history(AppState& state, std::size_t pane_index, bool back) {
-    if (state.closing_ || state.shutdown_deferred) return;
-    auto& pane = state.panes[pane_index];
-    auto* pane_state = pane.pane_state();
-    if (pane_state == nullptr || pane.suppress_history()) return;
-    auto& tab = active_tab(*pane_state);
-    const bool moved = back ? panedock::core::navigate_tab_back(tab)
-                            : panedock::core::navigate_tab_forward(tab);
-    if (!moved) return;
-    state.panes[pane_index].set_suppress_history(true);
-    HRESULT hr = E_UNEXPECTED;
-    {
-        ShellCallScope shell_call(state);
-        hr = navigate_pane(state, pane_index, tab.location);
-    }
-    if (state.shutdown_deferred || state.closing_) return;
-    if (FAILED(hr)) state.panes[pane_index].set_suppress_history(false);
-    refresh_navigation_chrome(state.panes[pane_index], state);
-}
-
-void navigate_up(AppState& state, std::size_t pane_index) {
-    if (state.closing_ || state.shutdown_deferred) return;
-    if (state.panes[pane_index].pane_state() == nullptr) return;
-    {
-        ShellCallScope shell_call(state);
-        (void)navigate_up_pane(state, pane_index);
-    }
-}
-
-void refresh_pane(AppState& state, std::size_t pane_index) {
-    if (state.closing_ || state.shutdown_deferred) return;
-    if (state.panes[pane_index].pane_state() == nullptr) return;
-    {
-        ShellCallScope shell_call(state);
-        (void)state.panes[pane_index].host().refresh(
-            begin_navigation(state, pane_index));
-    }
 }
 
 void set_pane_view_mode(AppState& state, std::size_t pane_index,
@@ -3399,7 +3298,7 @@ void submit_address(Pane& pane, AppState& state) {
     text.resize(static_cast<std::size_t>(length));
     {
         ShellCallScope shell_call(state);
-        (void)navigate_pane(state, pane.index(), location(std::move(text)));
+        (void)pane.navigate_to(location(std::move(text)));
     }
 }
 
@@ -3663,8 +3562,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
     if (source_active && state.panes[drag.pane_index].realized()) {
         {
             ShellCallScope shell_call(state);
-            navigate_pane(
-                state, drag.pane_index,
+            state.panes[drag.pane_index].navigate_to(
                 active_tab(source).location);
         }
         if (state.shutdown_deferred || state.closing_) return;
@@ -3672,9 +3570,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
     if (state.panes[target_pane].realized()) {
         {
             ShellCallScope shell_call(state);
-            navigate_pane(
-                state, target_pane,
-                active_tab(target).location);
+            state.panes[target_pane].navigate_to(active_tab(target).location);
         }
         if (state.shutdown_deferred || state.closing_) return;
     }
@@ -4689,16 +4585,16 @@ void handle_pane_command(AppState& state, std::size_t pane_index,
                          panedock::app_shell::PaneControl control) {
     switch (control) {
         case panedock::app_shell::PaneControl::back:
-            navigate_tab_history(state, pane_index, true);
+            state.panes[pane_index].navigate_history(true);
             return;
         case panedock::app_shell::PaneControl::forward:
-            navigate_tab_history(state, pane_index, false);
+            state.panes[pane_index].navigate_history(false);
             return;
         case panedock::app_shell::PaneControl::up:
-            navigate_up(state, pane_index);
+            state.panes[pane_index].navigate_up();
             return;
         case panedock::app_shell::PaneControl::refresh:
-            refresh_pane(state, pane_index);
+            state.panes[pane_index].refresh_view();
             return;
         case panedock::app_shell::PaneControl::view_mode:
             show_view_mode_menu(state.main_window, state, pane_index);
@@ -4803,8 +4699,7 @@ bool handle_global_command(HWND window, AppState& state, int id) {
         if (item == kPinnedMenuDesktopOffset ||
             item == kPinnedMenuThisPcOffset) {
             ShellCallScope shell_call(state);
-            (void)navigate_pane(
-                state, pane_index,
+            (void)state.panes[pane_index].navigate_to(
                 location(std::wstring(kPinnedFixedParsingNames[
                     static_cast<std::size_t>(item)])));
             return true;
@@ -4814,8 +4709,7 @@ bool handle_global_command(HWND window, AppState& state, int id) {
                 static_cast<std::size_t>(item - kPinnedMenuLocationOffset);
             if (location_index < state.application.pinned_locations.size()) {
                 ShellCallScope shell_call(state);
-                (void)navigate_pane(
-                    state, pane_index,
+                (void)state.panes[pane_index].navigate_to(
                     state.application.pinned_locations[location_index]);
             }
             return true;
@@ -5110,7 +5004,7 @@ std::optional<LRESULT> handle_global_mouse_message(
                     ScreenToClient(window, &point);
                     const std::size_t pane = pane_at_point(window, state, point);
                     if (pane < kExplorerCount)
-                        navigate_tab_history(state, pane, button == XBUTTON1);
+                        state.panes[pane].navigate_history(button == XBUTTON1);
                     return message == WM_XBUTTONDOWN ? std::optional<LRESULT>(TRUE)
                                                      : std::optional<LRESULT>(0);
                 }
@@ -5887,17 +5781,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 continue;
             }
             if (key_down && alt && !control && message.wParam == VK_LEFT) {
-                navigate_tab_history(state, active, true);
+                state.panes[active].navigate_history(true);
                 continue;
             }
             if (key_down && alt && !control && message.wParam == VK_RIGHT) {
-                navigate_tab_history(state, active, false);
+                state.panes[active].navigate_history(false);
                 continue;
             }
             if (key_down && !control && !alt &&
                 message.wParam == VK_BACK &&
                 !address_bar_has_focus(state.panes)) {
-                navigate_up(state, active);
+                state.panes[active].navigate_up();
                 continue;
             }
             if (key_down && !control && !alt && message.wParam == VK_TAB &&

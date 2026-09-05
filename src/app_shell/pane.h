@@ -115,6 +115,20 @@ class Pane final {
         return pending_navigation_;
     }
 
+    using NavigationGeneration =
+        panedock::explorer_host::ExplorerHost::NavigationGeneration;
+    NavigationGeneration begin_navigation();
+    HRESULT navigate_to(const panedock::core::ShellLocation &location);
+    HRESULT navigate_up_one_level();
+    bool navigation_request_is_current(
+        NavigationGeneration generation);
+    void record_navigation_result(
+        const panedock::core::ShellLocation &location);
+    void navigation_failed(NavigationGeneration generation);
+    void navigate_history(bool back);
+    void navigate_up();
+    void refresh_view();
+
     // Enable/disable back, forward, up and folder-context from the bound
     // tab's history. Needs no coordinator state, so it lives here.
     void refresh_navigation_buttons() noexcept;
@@ -224,10 +238,6 @@ class Pane final {
                     const panedock::core::ShellLocation &location) noexcept;
     void derealize() noexcept;
     bool realized() const noexcept { return realized_; }
-    HRESULT navigate(const panedock::core::ShellLocation &location) {
-        return explorer_host_.navigate(location);
-    }
-
     void set_suppress_history(bool suppress) noexcept {
         suppress_history_record_ = suppress;
     }

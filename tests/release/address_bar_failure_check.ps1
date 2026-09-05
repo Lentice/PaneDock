@@ -1,23 +1,24 @@
 param(
-    [string] $SourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\main.cpp')
+    [string] $SourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\main.cpp'),
+    [string] $PaneSourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\pane.cpp')
 )
 
 $ErrorActionPreference = 'Stop'
 $source = Get-Content -LiteralPath $SourcePath -Raw
+$paneSource = Get-Content -LiteralPath $PaneSourcePath -Raw
 
-$failedStart = $source.IndexOf('void handle_navigation_failed(')
-$failedEnd = $source.IndexOf('void destroy_panes(', $failedStart)
+$failedStart = $paneSource.IndexOf('void Pane::navigation_failed(')
+$failedEnd = $paneSource.IndexOf('void Pane::navigate_history(', $failedStart)
 if ($failedStart -lt 0 -or $failedEnd -lt 0) {
     throw 'Address-bar failure check failed: navigation failure handler missing'
 }
 
-$failedBody = $source.Substring($failedStart, $failedEnd - $failedStart)
-if ($failedBody -notmatch
-    'state\.panes\[pane_index\]\.set_suppress_history\(false\)') {
+$failedBody = $paneSource.Substring($failedStart, $failedEnd - $failedStart)
+if ($failedBody -notmatch 'set_suppress_history\(false\)') {
     throw 'Address-bar failure check failed: history suppression is not released'
 }
 if ($failedBody -notmatch
-    'state\.panes\[pane_index\]\.refresh_navigation_buttons\(\)') {
+    'refresh_navigation_buttons\(\)') {
     throw 'Address-bar failure check failed: button refresh is missing'
 }
 if ($failedBody -match 'refresh_navigation_chrome|SetWindowTextW') {

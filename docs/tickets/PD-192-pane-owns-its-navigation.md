@@ -97,4 +97,8 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作者填寫：`Pane::navigate` 的處置、`handle_navigation_complete` 拆分後留在 `main.cpp` 的實際行數、假 `PaneHost` 測試替身放在哪個檔案。）
+- `Pane::navigate` 已刪除並由 `Pane::navigate_to` 取代；所有原呼叫點都改用新成員，沒有刻意保留 generation-less 的呼叫。
+- `handle_navigation_complete` 保留在 `src/app_shell/main.cpp:2263-2276`，目前吃 `Pane&`，只做協調層的過期／關閉檢查、檢視模式／排序／tab strip 刷新與 session save；純資料更新由 `Pane::record_navigation_result` 完成。
+- 假 `PaneHost` 測試替身位於 `tests/unit/pane_test.cpp` 的 `TestPaneHost`，並由 `test_navigation_request_identity_survives_group_switch` 與 `test_navigation_calls_are_no_ops_without_host` 使用。
+- PD-192 移動函式後，同步更新 `tests/release/shell_reentry_gate_check.ps1` 與 `tests/release/address_bar_failure_check.ps1` 的原始碼檢查，讓既有 CTest 仍驗證目前的 `Pane::navigate_to`／`Pane::navigation_failed` 路徑。
+- 驗證：LLVM-MinGW configure/build 通過；除既有 `panedock_launch_smoke` 外 22/22 CTest 通過。完整 CTest 的唯一失敗是關閉後 30 秒未退出，使用乾淨且可寫的暫存 `%LOCALAPPDATA%` 仍可重現；未修改 PD-192 範圍外的 shutdown 行為。
