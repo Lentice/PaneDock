@@ -94,4 +94,25 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作者填寫：`tab_strip_needs_refresh` 的實際簽章與 PD-196 刪除它的位置；`default_shell_location()` 呼叫端清單。）
+- `PaneHost::tab_strip_needs_refresh(Pane &pane)` 是 PD-194 的第九支服務，
+  `AppState` out-of-line 實作為 `refresh_tab_strip(pane, *this)`。PD-196
+  收進 `PaneTabStrip` 後刪除 `src/app_shell/pane_host.h` 的這支介面、
+  `AppState` override/實作，以及 `pane.cpp` 三個呼叫點。
+- `default_shell_location()` 的呼叫端維持在協調層：完整清單為
+  `default_application_state`、`new_group_state`、`set_layout`、
+  `finish_tab_drag`、`kTabStripSelectionMessage` 與全域 `Ctrl+T`；新增 tab 的兩個
+  呼叫點明寫 `state.panes[index].add_tab(default_shell_location())`。
+  `Pane::close_tab` 保持關閉最後一個 tab 時導覽至相同的 My Computer
+  parsing name。
+- 四支命令已成為 `Pane` 成員；`Pane` 只呼叫 `core::add_tab`／`close_tab`
+  ／`set_active_tab`，沒有吸收 core 純函式。Shell 呼叫前後的 host/shutdown
+  guard 與 `PaneState` 重新取用均保留，`src/core/model.cpp` 未修改。
+- 新增 `test_add_tab_does_not_reuse_stale_tab_pointer` 與
+  `test_close_last_tab_leaves_pane_consistent`；同步更新
+  `shutdown_state_check.ps1` 追蹤新的成員實作。
+- 驗證：以 `E:\\Dev\\LLVM-MinGW\\bin` 與 `E:\\Dev\\Ninja` 的 LLVM-MinGW
+  toolchain 重新 configure/build 通過；PD-194 header/free-function/
+  `add_tab` 無預設引數及 `model.cpp` unchanged source gates 通過；完整
+  CTest 為 23/23 通過（含兩個本票 focused pane tests 與
+  `panedock_launch_smoke`）。sandbox 內的 smoke 曾因關閉逾時為 22/23，
+  但在可寫 session 與正常 Win32 執行環境重跑為通過。

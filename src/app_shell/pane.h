@@ -137,6 +137,10 @@ class Pane final {
     void capture_location();
     void set_view_mode(const panedock::shell_core::ViewModeOption &option);
     void show_view_mode_menu(POINT screen);
+    void switch_active_tab(const std::string &tab_id);
+    void cycle_active_tab(bool reverse);
+    void add_tab(panedock::core::ShellLocation initial_location);
+    void close_tab(const std::string &tab_id);
 
     // Enable/disable back, forward, up and folder-context from the bound
     // tab's history. Needs no coordinator state, so it lives here.

@@ -34,6 +34,7 @@ class TestPaneHost final : public panedock::app_shell::PaneHost {
         int) const override {
         return std::nullopt;
     }
+    void tab_strip_needs_refresh(panedock::app_shell::Pane &) override {}
     bool location_capture_suppressed() const noexcept override {
         return suppress_location_capture;
     }
@@ -217,6 +218,46 @@ void test_capture_location_respects_suppression() {
     EXPECT(state.tabs.front().location.parsing_name == L"before");
 }
 
+void test_add_tab_does_not_reuse_stale_tab_pointer() {
+    panedock::app_shell::Pane pane;
+    panedock::core::PaneState state;
+    state.tabs.reserve(3);
+    for (int index = 0; index < 3; ++index) {
+        state.tabs.push_back({});
+        state.tabs.back().id = "tab-" + std::to_string(index);
+    }
+    EXPECT(state.tabs.capacity() == 3);
+    state.active_tab_id = "tab-0";
+    TestPaneHost host;
+
+    pane.bind(&state);
+    pane.set_host(&host);
+    pane.add_tab({{L"new-location"}, {}, {}});
+
+    EXPECT(state.tabs.size() == 4);
+    EXPECT(pane.active_tab() == &state.tabs.back());
+}
+
+void test_close_last_tab_leaves_pane_consistent() {
+    panedock::app_shell::Pane pane;
+    panedock::core::PaneState state;
+    state.tabs.push_back({});
+    state.tabs.front().id = "tab-only";
+    state.tabs.front().location.parsing_name = L"old-location";
+    state.active_tab_id = "tab-only";
+    TestPaneHost host;
+
+    pane.bind(&state);
+    pane.set_host(&host);
+    pane.close_tab("tab-only");
+
+    EXPECT(state.tabs.size() == 1);
+    EXPECT(state.active_tab_id == "tab-only");
+    EXPECT(state.tabs.front().location.parsing_name ==
+           L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}");
+    EXPECT(pane.active_tab() == &state.tabs.front());
+}
+
 } // namespace
 
 int main() {
@@ -232,5 +273,7 @@ int main() {
     test_navigation_request_identity_survives_group_switch();
     test_navigation_calls_are_no_ops_without_host();
     test_capture_location_respects_suppression();
+    test_add_tab_does_not_reuse_stale_tab_pointer();
+    test_close_last_tab_leaves_pane_consistent();
     return panedock::test::summary("pane");
 }

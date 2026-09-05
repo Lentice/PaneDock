@@ -32,6 +32,8 @@ class PaneHost {
                     int text_reserve) const = 0;
     // Singleton coordinator state: Group switching suppresses capture for all panes.
     virtual bool location_capture_suppressed() const noexcept = 0;
+    // Transitional coordinator hook: tab-strip refresh moves to Pane in PD-196.
+    virtual void tab_strip_needs_refresh(Pane &pane) = 0;
 };
 
 class ShellCall final {

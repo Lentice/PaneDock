@@ -444,6 +444,108 @@ void Pane::show_view_mode_menu(POINT screen) {
         SendMessageW(owner, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
+void Pane::switch_active_tab(const std::string &tab_id) {
+    if (pane_host() == nullptr) return;
+    if (pane_host()->is_shutting_down()) return;
+    auto *pane_state = bound_state_;
+    if (pane_state == nullptr) return;
+    if (pane_state->active_tab_id == tab_id) {
+        pane_host()->tab_strip_needs_refresh(*this);
+        return;
+    }
+    capture_location();
+    pane_state = bound_state_;
+    if (pane_host()->is_shutting_down() || pane_state == nullptr) return;
+    if (!panedock::core::set_active_tab(*pane_state, tab_id)) {
+        pane_host()->tab_strip_needs_refresh(*this);
+        return;
+    }
+    if (realized()) {
+        auto *tab = active_tab();
+        if (tab == nullptr) return;
+        {
+            ShellCall shell_call(pane_host());
+            (void)navigate_to(tab->location);
+        }
+        if (pane_host()->is_shutting_down()) return;
+    }
+    pane_host()->tab_strip_needs_refresh(*this);
+    pane_host()->schedule_session_save();
+}
+
+void Pane::cycle_active_tab(bool reverse) {
+    if (pane_host() == nullptr) return;
+    if (pane_host()->is_shutting_down()) return;
+    auto *pane_state = bound_state_;
+    if (pane_state == nullptr) return;
+    const auto current = std::find_if(
+        pane_state->tabs.begin(), pane_state->tabs.end(),
+        [&](const auto &tab) { return tab.id == pane_state->active_tab_id; });
+    if (current == pane_state->tabs.end()) return;
+    const std::size_t index =
+        static_cast<std::size_t>(current - pane_state->tabs.begin());
+    const std::size_t next =
+        reverse ? (index + pane_state->tabs.size() - 1) %
+                     pane_state->tabs.size()
+                : (index + 1) % pane_state->tabs.size();
+    const std::string next_id = pane_state->tabs[next].id;
+    switch_active_tab(next_id);
+}
+
+void Pane::add_tab(panedock::core::ShellLocation initial_location) {
+    if (pane_host() == nullptr) return;
+    if (pane_host()->is_shutting_down()) return;
+    if (pane_host()->active_group_id().empty()) return;
+    auto *pane_state = bound_state_;
+    if (pane_state == nullptr) return;
+    capture_location();
+    pane_state = bound_state_;
+    if (pane_host()->is_shutting_down() || pane_state == nullptr) return;
+    const std::string id = pane_host()->make_unique_tab_id();
+    if (!panedock::core::add_tab(
+            *pane_state,
+            {id, std::move(initial_location), {}, {}, true, {}, 0}) ||
+        !panedock::core::set_active_tab(*pane_state, id))
+        return;
+    if (realized()) {
+        auto *tab = active_tab();
+        if (tab == nullptr) return;
+        {
+            ShellCall shell_call(pane_host());
+            (void)navigate_to(tab->location);
+        }
+        if (pane_host()->is_shutting_down()) return;
+    }
+    pane_host()->tab_strip_needs_refresh(*this);
+    pane_host()->schedule_session_save();
+}
+
+void Pane::close_tab(const std::string &tab_id) {
+    if (pane_host() == nullptr) return;
+    if (pane_host()->is_shutting_down()) return;
+    auto *pane_state = bound_state_;
+    if (pane_state == nullptr) return;
+    capture_location();
+    pane_state = bound_state_;
+    if (pane_host()->is_shutting_down() || pane_state == nullptr) return;
+    const bool closed_active = pane_state->active_tab_id == tab_id;
+    if (!panedock::core::close_tab(
+            *pane_state, tab_id,
+            {L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", {}, {}}))
+        return;
+    if (closed_active && realized()) {
+        auto *tab = active_tab();
+        if (tab == nullptr) return;
+        {
+            ShellCall shell_call(pane_host());
+            (void)navigate_to(tab->location);
+        }
+        if (pane_host()->is_shutting_down()) return;
+    }
+    pane_host()->tab_strip_needs_refresh(*this);
+    pane_host()->schedule_session_save();
+}
+
 void Pane::refresh_navigation_buttons() noexcept {
     const panedock::core::TabState *tab = active_tab();
     if (tab == nullptr) {

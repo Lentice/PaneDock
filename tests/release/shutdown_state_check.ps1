@@ -98,10 +98,9 @@ function Assert-DebouncedFunction([string] $Start, [string] $Name) {
     }
 }
 
-Assert-DebouncedFunction 'void switch_active_tab(HWND, AppState& state' `
-    'switch_active_tab'
-Assert-DebouncedFunction 'void add_tab_to_pane(' 'add_tab_to_pane'
-Assert-DebouncedFunction 'void close_tab_in_pane(' 'close_tab_in_pane'
+Assert-DebouncedFunction 'void Pane::switch_active_tab(' 'Pane::switch_active_tab'
+Assert-DebouncedFunction 'void Pane::add_tab(' 'Pane::add_tab'
+Assert-DebouncedFunction 'void Pane::close_tab(' 'Pane::close_tab'
 Assert-DebouncedFunction 'void delete_group(' 'delete_group'
 Assert-DebouncedFunction 'void move_group(' 'move_group'
 Assert-DebouncedFunction 'void set_active_pane(' 'set_active_pane'

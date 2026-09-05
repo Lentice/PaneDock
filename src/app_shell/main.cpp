@@ -454,6 +454,7 @@ struct AppState : public panedock::app_shell::PaneHost {
     tab_drag_layout(const Pane &pane, HWND strip, int min_width, int max_width,
                     int text_reserve) const override;
     bool location_capture_suppressed() const noexcept override;
+    void tab_strip_needs_refresh(Pane &pane) override;
 
     // The legacy names below are references into the reducer state. Keeping
     // them avoids a second pane-wide mechanical rewrite while making the
@@ -2848,6 +2849,10 @@ bool AppState::location_capture_suppressed() const noexcept {
     return suppress_location_capture;
 }
 
+void AppState::tab_strip_needs_refresh(Pane &pane) {
+    refresh_tab_strip(pane, *this);
+}
+
 std::string AppState::make_unique_tab_id() const {
     std::size_t candidate = 0;
     return unique_tab_id(active_group(*this), candidate);
@@ -2899,37 +2904,6 @@ AppState::tab_drag_layout(const Pane &pane, HWND strip, int min_width,
     return std::nullopt;
 }
 
-void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
-                       const std::string& tab_id) {
-    if (state.closing_ || state.shutdown_deferred)
-        return;  // re-dispatched during a Shell call or teardown pump
-    auto* pane_state = state.panes[pane_index].pane_state();
-    if (pane_state == nullptr) return;
-    auto& pane = *pane_state;
-    if (pane.active_tab_id == tab_id) {
-        refresh_tab_strip(state.panes[pane_index], state);
-        return;
-    }
-    state.panes[pane_index].capture_location();
-    pane_state = state.panes[pane_index].pane_state();
-    if (state.closing_ || state.shutdown_deferred || pane_state == nullptr)
-        return;
-    if (!panedock::core::set_active_tab(*pane_state, tab_id)) {
-        refresh_tab_strip(state.panes[pane_index], state);
-        return;
-    }
-    if (state.panes[pane_index].realized()) {
-        {
-            ShellCallScope shell_call(state);
-            state.panes[pane_index].navigate_to(
-                active_tab(*pane_state).location);
-        }
-        if (state.shutdown_deferred || state.closing_) return;
-    }
-    refresh_tab_strip(state.panes[pane_index], state);
-    schedule_session_save(state);
-}
-
 std::optional<std::size_t> tab_item_at_point(
     const std::array<panedock::app_shell::Pane, kExplorerCount>& panes,
     HWND strip, POINT point) noexcept;
@@ -2946,13 +2920,12 @@ bool register_tab_drag_hover_targets(HWND window, AppState& state) {
             ScreenToClient(strip, &client);
             return tab_item_at_point(state.panes, strip, client);
         };
-        auto hover_callback = [&state, window,
-                               pane_index](std::size_t item) {
+        auto hover_callback = [&state, pane_index](std::size_t item) {
             auto* pane_state = state.panes[pane_index].pane_state();
             if (pane_state == nullptr) return;
             auto& tabs = pane_state->tabs;
             if (item >= tabs.size()) return;
-            switch_active_tab(window, state, pane_index, tabs[item].id);
+            state.panes[pane_index].switch_active_tab(tabs[item].id);
         };
         auto target = make_drag_hover_target(
             window, kDragHoverTabTimerIdBase + pane_index,
@@ -2971,75 +2944,6 @@ bool register_tab_drag_hover_targets(HWND window, AppState& state) {
             return false;
     }
     return true;
-}
-
-void cycle_active_tab(HWND window, AppState& state, std::size_t pane_index,
-                      bool reverse) {
-    auto& pane = *state.panes[pane_index].pane_state();
-    const auto current = std::find_if(
-        pane.tabs.begin(), pane.tabs.end(), [&](const auto& tab) {
-            return tab.id == pane.active_tab_id;
-        });
-    if (current == pane.tabs.end()) return;
-    const std::size_t index =
-        static_cast<std::size_t>(current - pane.tabs.begin());
-    const std::size_t next = reverse ? (index + pane.tabs.size() - 1) %
-                                          pane.tabs.size()
-                                     : (index + 1) % pane.tabs.size();
-    switch_active_tab(window, state, pane_index, pane.tabs[next].id);
-}
-
-void add_tab_to_pane(
-    HWND, AppState& state, std::size_t pane_index,
-    panedock::core::ShellLocation initial_location = default_shell_location()) {
-    if (state.closing_ || state.shutdown_deferred) return;
-    if (!has_active_group(state)) return;
-    if (state.panes[pane_index].pane_state() == nullptr) return;
-    state.panes[pane_index].capture_location();
-    auto* pane_state = state.panes[pane_index].pane_state();
-    if (state.closing_ || state.shutdown_deferred || pane_state == nullptr)
-        return;
-    auto& group = active_group(state);
-    std::size_t candidate = 0;
-    const std::string id = unique_tab_id(group, candidate);
-    if (!panedock::core::add_tab(
-            *pane_state, {id, std::move(initial_location), {}, {}, true,
-                   {}, 0}) ||
-        !panedock::core::set_active_tab(*pane_state, id)) return;
-    if (state.panes[pane_index].realized()) {
-        {
-            ShellCallScope shell_call(state);
-            state.panes[pane_index].navigate_to(
-                active_tab(*pane_state).location);
-        }
-        if (state.shutdown_deferred || state.closing_) return;
-    }
-    refresh_tab_strip(state.panes[pane_index], state);
-    schedule_session_save(state);
-}
-
-void close_tab_in_pane(HWND, AppState& state, std::size_t pane_index,
-                       const std::string& tab_id) {
-    if (state.closing_ || state.shutdown_deferred) return;
-    auto* pane_state = state.panes[pane_index].pane_state();
-    if (pane_state == nullptr) return;
-    state.panes[pane_index].capture_location();
-    pane_state = state.panes[pane_index].pane_state();
-    if (state.closing_ || state.shutdown_deferred || pane_state == nullptr)
-        return;
-    const bool closed_active = pane_state->active_tab_id == tab_id;
-    if (!panedock::core::close_tab(
-            *pane_state, tab_id, default_shell_location())) return;
-    if (closed_active && state.panes[pane_index].realized()) {
-        {
-            ShellCallScope shell_call(state);
-            state.panes[pane_index].navigate_to(
-                active_tab(*pane_state).location);
-        }
-        if (state.shutdown_deferred || state.closing_) return;
-    }
-    refresh_tab_strip(state.panes[pane_index], state);
-    schedule_session_save(state);
 }
 
 void add_current_folder(AppState& state, std::size_t pane_index) {
@@ -3289,7 +3193,7 @@ void close_tab_at_point(HWND window, AppState& state, POINT point) {
     const auto& tabs = pane_state->tabs;
     if (!item.has_value() || *item >= tabs.size()) return;
     const std::string id = tabs[*item].id;
-    close_tab_in_pane(window, state, pane_index, id);
+    state.panes[pane_index].close_tab(id);
 }
 
 RECT tab_viewport_rect(const panedock::app_shell::Pane& pane) noexcept {
@@ -4483,7 +4387,7 @@ bool handle_global_command(HWND window, AppState& state, int id) {
             state.panes[*pane_index].pane_state() == nullptr)
             return true;
         if (id == kCloseTabId) {
-            close_tab_in_pane(window, state, *pane_index, tab_id);
+            state.panes[*pane_index].close_tab(tab_id);
             return true;
         }
 
@@ -4505,7 +4409,7 @@ bool handle_global_command(HWND window, AppState& state, int id) {
             }
         }
         for (const auto& id_to_close : tab_ids)
-            close_tab_in_pane(window, state, *pane_index, id_to_close);
+            state.panes[*pane_index].close_tab(id_to_close);
         return true;
     }
     if (id >= panedock::app_shell::kViewModeMenuIdBase &&
@@ -4974,12 +4878,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 state->panes[wparam].pane_state() != nullptr) {
                 auto& pane = *state->panes[wparam].pane_state();
                 if (lparam == -1) {
-                    add_tab_to_pane(window, *state, wparam);
+                    state->panes[wparam].add_tab(default_shell_location());
                 } else if (lparam >= 0 &&
                            static_cast<std::size_t>(lparam) < pane.tabs.size()) {
-                    switch_active_tab(window, *state, wparam,
-                                      pane.tabs[static_cast<std::size_t>(lparam)]
-                                          .id);
+                    state->panes[wparam].switch_active_tab(
+                        pane.tabs[static_cast<std::size_t>(lparam)].id);
                 }
                 return 0;
             }
@@ -5599,17 +5502,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 if (accelerator == S_OK) continue;
             }
             if (key_down && control && !alt && message.wParam == 'T') {
-                add_tab_to_pane(window, state, active);
+                state.panes[active].add_tab(default_shell_location());
                 continue;
             }
             if (key_down && control && !alt && message.wParam == 'W') {
-                close_tab_in_pane(
-                    window, state, active,
-                    active_tab(*state.panes[active].pane_state()).id);
+                state.panes[active].close_tab(
+                    state.panes[active].active_tab()->id);
                 continue;
             }
             if (key_down && control && !alt && message.wParam == VK_TAB) {
-                cycle_active_tab(window, state, active, shift);
+                state.panes[active].cycle_active_tab(shift);
                 continue;
             }
             if (key_down && alt && !control && message.wParam == VK_LEFT) {
