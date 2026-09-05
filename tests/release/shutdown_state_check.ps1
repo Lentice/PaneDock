@@ -105,7 +105,11 @@ Assert-DebouncedFunction 'void delete_group(' 'delete_group'
 Assert-DebouncedFunction 'void move_group(' 'move_group'
 Assert-DebouncedFunction 'void set_active_pane(' 'set_active_pane'
 Assert-DebouncedFunction 'void Pane::set_view_mode(' 'Pane::set_view_mode'
-Assert-DebouncedFunction 'void add_current_folder(' 'add_current_folder'
+$pinBody = Get-FunctionSource 'void Pane::pin_current_folder(' 'Pane::pin_current_folder'
+if ($pinBody.IndexOf('pane_host()->pin_location') -lt 0 -or
+    $pinBody.IndexOf('save_now(') -ge 0) {
+    throw 'session save debounce check failed: Pane::pin_current_folder does not delegate persistence'
+}
 Assert-DebouncedFunction 'void set_layout(' 'set_layout'
 Assert-DebouncedFunction 'void finish_tab_drag(' 'finish_tab_drag'
 Assert-DebouncedFunction 'void finish_group_drag(' 'finish_group_drag'

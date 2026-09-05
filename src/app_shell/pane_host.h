@@ -9,13 +9,20 @@
 #include <windows.h>
 
 #include <optional>
+#include <span>
 #include <string>
 
 #include "app_shell/tab_overflow.h"
+#include "core/model.h"
 
 namespace panedock::app_shell {
 
 class Pane;
+
+struct PinnedLocation final {
+    panedock::core::ShellLocation location;
+    std::wstring label;
+};
 
 class PaneHost {
   public:
@@ -30,6 +37,10 @@ class PaneHost {
     virtual std::optional<TabStripDragLayout>
     tab_drag_layout(const Pane &pane, HWND strip, int min_width, int max_width,
                     int text_reserve) const = 0;
+    // Pinned locations belong to application persistence, not one pane.
+    virtual std::span<const PinnedLocation> pinned_locations() const noexcept = 0;
+    // Pinning updates application persistence, not one pane.
+    virtual void pin_location(panedock::core::ShellLocation location) = 0;
     // Singleton coordinator state: Group switching suppresses capture for all panes.
     virtual bool location_capture_suppressed() const noexcept = 0;
     // Transitional coordinator hook: tab-strip refresh moves to Pane in PD-196.

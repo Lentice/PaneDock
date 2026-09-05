@@ -137,6 +137,9 @@ class Pane final {
     void capture_location();
     void set_view_mode(const panedock::shell_core::ViewModeOption &option);
     void show_view_mode_menu(POINT screen);
+    void submit_address();
+    void pin_current_folder();
+    void show_pinned_locations_menu(POINT screen);
     void switch_active_tab(const std::string &tab_id);
     void cycle_active_tab(bool reverse);
     void add_tab(panedock::core::ShellLocation initial_location);
@@ -307,5 +310,16 @@ class Pane final {
 };
 
 inline constexpr int kViewModeMenuIdBase = 360;
+
+inline constexpr int kPinnedMenuIdBase = 500;
+inline constexpr int kPinnedMenuMaxLocationCount = 64;
+inline constexpr int kPinnedMenuDesktopOffset = 0;
+inline constexpr int kPinnedMenuThisPcOffset = 1;
+inline constexpr int kPinnedMenuLocationOffset = 2;
+inline constexpr int kPinnedMenuAddOffset =
+    kPinnedMenuLocationOffset + kPinnedMenuMaxLocationCount;
+inline constexpr int kPinnedMenuManageOffset = kPinnedMenuAddOffset + 1;
+inline constexpr int kPinnedMenuSlotsPerPane = kPinnedMenuManageOffset + 1;
+inline constexpr std::size_t kPinnedMenuFixedLocationCount = 2;
 
 } // namespace panedock::app_shell

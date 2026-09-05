@@ -232,7 +232,7 @@
 | PD-192 | pane 的導覽群收進 `Pane` | 7 | `done` | PD-191 | [PD-192](tickets/PD-192-pane-owns-its-navigation.md) |
 | PD-193 | 檢視模式、排序與位置擷取收進 `Pane` | 7 | `done` | PD-191 | [PD-193](tickets/PD-193-pane-owns-view-mode-sort-and-location-capture.md) |
 | PD-194 | pane 的 tab 生命週期命令收進 `Pane` | 7 | `done` | PD-191, PD-192, PD-193 | [PD-194](tickets/PD-194-pane-owns-its-tab-commands.md) |
-| PD-195 | 位址列與釘選位置收進 `Pane` | 7 | `todo` | PD-191, PD-192 | [PD-195](tickets/PD-195-pane-owns-address-bar-and-pinned-locations.md) |
+| PD-195 | 位址列與釘選位置收進 `Pane` | 7 | `done` | PD-191, PD-192 | [PD-195](tickets/PD-195-pane-owns-address-bar-and-pinned-locations.md) |
 | PD-196 | tab strip 收進 `Pane`（`PaneTabStrip`） | 7 | `todo` | PD-191, PD-194 | [PD-196](tickets/PD-196-pane-owns-its-tab-strip.md) |
 | PD-197 | pane 命令、chrome 與導覽完成的收尾 | 7 | `todo` | PD-192, PD-193, PD-194, PD-195, PD-196 | [PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md) |
 
@@ -847,7 +847,7 @@ PD-184～186＋190 全在資料層、PD-187～189 全在視窗層，兩段分開
 
 **開票**:[PD-191](tickets/PD-191-pane-host-coordinator-service-interface.md)(介面與接線,零函式搬移——介面形狀若錯,錯誤停在一個新檔案而不是散進 2,900 行 diff)、[PD-192](tickets/PD-192-pane-owns-its-navigation.md)(導覽,最小的一群當試金石)、[PD-193](tickets/PD-193-pane-owns-view-mode-sort-and-location-capture.md)、[PD-194](tickets/PD-194-pane-owns-its-tab-commands.md)、[PD-195](tickets/PD-195-pane-owns-address-bar-and-pinned-locations.md)(最小,可獨立捨棄)、[PD-196](tickets/PD-196-pane-owns-its-tab-strip.md)(約 700 行,最大也最有價值)、[PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md)(收尾與整串驗收)。
 
-**`PaneHost` 成員數的變動記錄**(PD-191 票面不編輯,異動記在這裡):PD-191 建立 7 支;PD-193 新增 `location_capture_suppressed()` → 8 支;PD-194 新增過渡用的 `tab_strip_needs_refresh(Pane&)` → 9 支,PD-196 刪除 → 8 支;PD-195 新增 `pinned_locations()` 與 `pin_location()` → 10 支;PD-196 新增 `tab_display_text()` → 11 支。實作者每次異動都要回來更新這一行。
+**`PaneHost` 成員數的變動記錄**(PD-191 票面不編輯,異動記在這裡):PD-191 建立 7 支;PD-193 新增 `location_capture_suppressed()` → 8 支;PD-194 新增過渡用的 `tab_strip_needs_refresh(Pane&)` → 9 支,PD-196 刪除 → 8 支;PD-195 新增 `pinned_locations()` 與 `pin_location()` → 11 支;PD-196 新增 `tab_display_text()` → 12 支。實作者每次異動都要回來更新這一行。
 
 **明確留在協調層的界線**(PD-197 non-goals 有完整清單):跨 pane／全域協調(tab 跨 pane 拖曳、splitter、active pane 切換、版型矩形、`apply_layout`、全視窗繪製迴圈)、Group 域全部、app 生命週期(`wWinMain`／`window_proc`／shutdown／single-instance／session 存檔)、`core` 的 pane 域純函式(唯一的自動化測試接縫,`Pane` 只呼叫不吸收)、`shell_core`／`file_operations`(零 pane-scoped 狀態)、四個 singleton 狀態(`tab_context_menu_pane`／`tab_context_menu_tab_id`／`suppress_location_capture`／`owner_draw_hovered_button`)。
 

@@ -173,15 +173,14 @@ constexpr int kViewModeMenuIdCount =
 constexpr int kLayoutButtonIdBase = 400;
 // Pinned popup commands: four pane blocks, each with 64 custom locations and
 // four fixed/action slots. The 500-771 range is separate from all controls.
-constexpr int kPinnedMenuIdBase = 500;
-constexpr int kPinnedMenuMaxLocationCount = 64;
-constexpr int kPinnedMenuDesktopOffset = 0;
-constexpr int kPinnedMenuThisPcOffset = 1;
-constexpr int kPinnedMenuLocationOffset = 2;
-constexpr int kPinnedMenuAddOffset =
-    kPinnedMenuLocationOffset + kPinnedMenuMaxLocationCount;
-constexpr int kPinnedMenuManageOffset = kPinnedMenuAddOffset + 1;
-constexpr int kPinnedMenuSlotsPerPane = kPinnedMenuManageOffset + 1;
+using panedock::app_shell::kPinnedMenuAddOffset;
+using panedock::app_shell::kPinnedMenuDesktopOffset;
+using panedock::app_shell::kPinnedMenuIdBase;
+using panedock::app_shell::kPinnedMenuLocationOffset;
+using panedock::app_shell::kPinnedMenuManageOffset;
+using panedock::app_shell::kPinnedMenuMaxLocationCount;
+using panedock::app_shell::kPinnedMenuSlotsPerPane;
+using panedock::app_shell::kPinnedMenuThisPcOffset;
 constexpr int kPinnedMenuIdCount =
     static_cast<int>(kExplorerCount) * kPinnedMenuSlotsPerPane;
 constexpr std::array<std::wstring_view, 2> kPinnedFixedParsingNames{
@@ -453,6 +452,9 @@ struct AppState : public panedock::app_shell::PaneHost {
     std::optional<panedock::app_shell::TabStripDragLayout>
     tab_drag_layout(const Pane &pane, HWND strip, int min_width, int max_width,
                     int text_reserve) const override;
+    std::span<const panedock::app_shell::PinnedLocation>
+    pinned_locations() const noexcept override;
+    void pin_location(panedock::core::ShellLocation location) override;
     bool location_capture_suppressed() const noexcept override;
     void tab_strip_needs_refresh(Pane &pane) override;
 
@@ -559,6 +561,8 @@ struct AppState : public panedock::app_shell::PaneHost {
     panedock::app_shell::PinnedLocationsDialog pinned_locations_dialog;
     std::array<std::wstring, kPinnedFixedParsingNames.size()>
         pinned_fixed_labels{};
+    std::vector<panedock::app_shell::PinnedLocation>
+        pinned_location_menu_items;
     // BrowseToObject may synchronously re-enter navigation_complete while the
     // remaining panes still display the outgoing Group's folders.
     bool suppress_location_capture{};
@@ -2127,12 +2131,15 @@ void schedule_session_save(AppState& state) noexcept {
     }
 }
 
+void rebuild_pinned_location_menu(AppState& state);
+
 void apply_pinned_locations_dialog_result(AppState& state) noexcept {
     auto result = state.pinned_locations_dialog.take_result();
     if (!result.has_value() ||
         result->pinned_locations == state.application.pinned_locations)
         return;
     state.application.pinned_locations = std::move(result->pinned_locations);
+    rebuild_pinned_location_menu(state);
     schedule_session_save(state);
 }
 
@@ -2145,6 +2152,28 @@ void show_pinned_locations_manager(HWND owner, AppState& state) {
     state.pinned_locations_dialog.show(owner, state.application,
                                       std::move(display_labels),
                                       state.chrome_font);
+}
+
+void rebuild_pinned_location_menu(AppState& state) {
+    auto &items = state.pinned_location_menu_items;
+    items.clear();
+    items.reserve(panedock::app_shell::kPinnedMenuFixedLocationCount +
+                  (std::min)(state.application.pinned_locations.size(),
+                             static_cast<std::size_t>(
+                                 kPinnedMenuMaxLocationCount)));
+    for (std::size_t index = 0; index < kPinnedFixedParsingNames.size();
+         ++index) {
+        items.push_back({location(std::wstring(kPinnedFixedParsingNames[index])),
+                         state.pinned_fixed_labels[index]});
+    }
+    const std::size_t count =
+        (std::min)(state.application.pinned_locations.size(),
+                   static_cast<std::size_t>(kPinnedMenuMaxLocationCount));
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto &pinned = state.application.pinned_locations[index];
+        items.push_back(
+            {pinned, display_text_for_parsing_name(state, pinned.parsing_name)});
+    }
 }
 
 void handle_navigation_complete(
@@ -2568,6 +2597,7 @@ void refresh_startup_chrome(AppState& state) {
         state.pinned_fixed_labels[index] = display_text_for_parsing_name(
             state, kPinnedFixedParsingNames[index]);
     }
+    rebuild_pinned_location_menu(state);
     if (!state.shutdown_deferred && !state.closing_)
         refresh_tab_strips(state);
 }
@@ -2849,6 +2879,25 @@ bool AppState::location_capture_suppressed() const noexcept {
     return suppress_location_capture;
 }
 
+std::span<const panedock::app_shell::PinnedLocation>
+AppState::pinned_locations() const noexcept {
+    return pinned_location_menu_items;
+}
+
+void AppState::pin_location(panedock::core::ShellLocation location) {
+    if (application.pinned_locations.size() >=
+        static_cast<std::size_t>(kPinnedMenuMaxLocationCount))
+        return;
+    if (!panedock::core::add_pinned_location(application, location)) return;
+    const auto &pinned = application.pinned_locations.back();
+    AppState &state = *this;
+    if (pinned_locations_dialog.is_open())
+        pinned_locations_dialog.add_location(
+            pinned, display_text_for_parsing_name(state, pinned.parsing_name));
+    rebuild_pinned_location_menu(*this);
+    ::schedule_session_save(*this);
+}
+
 void AppState::tab_strip_needs_refresh(Pane &pane) {
     refresh_tab_strip(pane, *this);
 }
@@ -2946,97 +2995,10 @@ bool register_tab_drag_hover_targets(HWND window, AppState& state) {
     return true;
 }
 
-void add_current_folder(AppState& state, std::size_t pane_index) {
-    if (state.panes[pane_index].pane_state() == nullptr ||
-        state.application.pinned_locations.size() >=
-            static_cast<std::size_t>(kPinnedMenuMaxLocationCount))
-        return;
-    state.panes[pane_index].capture_location();
-    const auto current_location =
-        active_tab(*state.panes[pane_index].pane_state()).location;
-    if (panedock::core::add_pinned_location(state.application,
-                                            current_location)) {
-        schedule_session_save(state);
-        if (state.pinned_locations_dialog.is_open())
-            state.pinned_locations_dialog.add_location(
-                current_location,
-                display_text_for_parsing_name(state,
-                                              current_location.parsing_name));
-    }
-}
-
-void show_pinned_locations_menu(HWND window, AppState& state,
-                               std::size_t pane_index) {
-    if (state.panes[pane_index].pane_state() == nullptr) return;
-
-    RECT button_rect{};
-    if (!GetWindowRect(state.panes[pane_index].pinned_button(),
-                       &button_rect))
-        return;
-
-    const int menu_id_base =
-        kPinnedMenuIdBase +
-        static_cast<int>(pane_index * kPinnedMenuSlotsPerPane);
-    HMENU menu = CreatePopupMenu();
-    if (menu == nullptr) return;
-    AppendMenuW(menu, MF_STRING,
-                static_cast<UINT_PTR>(menu_id_base + kPinnedMenuDesktopOffset),
-                state.pinned_fixed_labels[0].c_str());
-    AppendMenuW(menu, MF_STRING,
-                static_cast<UINT_PTR>(menu_id_base + kPinnedMenuThisPcOffset),
-                state.pinned_fixed_labels[1].c_str());
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    const std::size_t count = std::min(
-        state.application.pinned_locations.size(),
-        static_cast<std::size_t>(kPinnedMenuMaxLocationCount));
-    for (std::size_t index = 0; index < count; ++index) {
-        const std::wstring label = display_text_for_parsing_name(
-            state, state.application.pinned_locations[index].parsing_name);
-        AppendMenuW(
-            menu, MF_STRING,
-            static_cast<UINT_PTR>(menu_id_base + kPinnedMenuLocationOffset +
-                                  static_cast<int>(index)),
-            label.c_str());
-    }
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING,
-                static_cast<UINT_PTR>(menu_id_base + kPinnedMenuAddOffset),
-                L"Add Current Folder");
-    AppendMenuW(menu, MF_STRING,
-                static_cast<UINT_PTR>(menu_id_base + kPinnedMenuManageOffset),
-                L"Manage Pinned Locations...");
-    SetForegroundWindow(window);
-    const int command = TrackPopupMenu(
-        menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, button_rect.left,
-        button_rect.bottom, 0, window, nullptr);
-    DestroyMenu(menu);
-    if (state.closing_ || state.shutdown_deferred) return;
-    if (command != 0)
-        SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
-}
-
-// Navigates, so it needs the coordinator's shutdown gates and ShellCallScope.
-void submit_address(Pane& pane, AppState& state) {
-    if (state.closing_ || state.shutdown_deferred) return;
-    if (pane.pane_state() == nullptr) return;
-    const HWND edit = pane.address_bar();
-    const int length = GetWindowTextLengthW(edit);
-    std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
-    GetWindowTextW(edit, text.data(), length + 1);
-    text.resize(static_cast<std::size_t>(length));
-    {
-        ShellCallScope shell_call(state);
-        (void)pane.navigate_to(location(std::move(text)));
-    }
-}
-
 LRESULT CALLBACK address_edit_proc(HWND window, UINT message, WPARAM wparam,
                                    LPARAM lparam, UINT_PTR pane_index,
                                    DWORD_PTR reference_data) {
     auto* state = reinterpret_cast<AppState*>(reference_data);
-    if (state != nullptr && (state->closing_ || state->shutdown_deferred) &&
-        message != WM_NCDESTROY)
-        return 0;
     // First click into an unfocused address bar selects everything so the user
     // can paste over the path. The EDIT places its caret in WM_LBUTTONDOWN,
     // after WM_SETFOCUS, so selecting there would be cleared immediately.
@@ -3046,8 +3008,8 @@ LRESULT CALLBACK address_edit_proc(HWND window, UINT message, WPARAM wparam,
         return 0;
     }
     if (message == WM_KEYDOWN && wparam == VK_RETURN && state != nullptr) {
-        submit_address(state->panes[static_cast<std::size_t>(pane_index)],
-                       *state);
+        if (pane_index < state->panes.size())
+            state->panes[static_cast<std::size_t>(pane_index)].submit_address();
         return 0;
     }
     if (message == WM_CHAR && wparam == VK_RETURN) return 0;
@@ -4334,7 +4296,13 @@ void handle_pane_command(AppState& state, std::size_t pane_index,
             }
             return;
         case panedock::app_shell::PaneControl::pinned:
-            show_pinned_locations_menu(state.main_window, state, pane_index);
+            {
+                RECT rect{};
+                if (GetWindowRect(state.panes[pane_index].pinned_button(),
+                                  &rect))
+                    state.panes[pane_index].show_pinned_locations_menu(
+                        {rect.left, rect.bottom});
+            }
             return;
         case panedock::app_shell::PaneControl::folder_context: break;
         default: return;
@@ -4432,26 +4400,33 @@ bool handle_global_command(HWND window, AppState& state, int id) {
         const int item = offset % kPinnedMenuSlotsPerPane;
         if (state.panes[pane_index].pane_state() == nullptr)
             return true;
+        const auto *pane_host = state.panes[pane_index].pane_host();
+        if (pane_host == nullptr) return true;
+        const auto locations = pane_host->pinned_locations();
+        if (locations.size() < panedock::app_shell::kPinnedMenuFixedLocationCount)
+            return true;
         if (item == kPinnedMenuDesktopOffset ||
             item == kPinnedMenuThisPcOffset) {
             ShellCallScope shell_call(state);
             (void)state.panes[pane_index].navigate_to(
-                location(std::wstring(kPinnedFixedParsingNames[
-                    static_cast<std::size_t>(item)])));
+                locations[static_cast<std::size_t>(item)].location);
             return true;
         }
         if (item >= kPinnedMenuLocationOffset && item < kPinnedMenuAddOffset) {
             const std::size_t location_index =
                 static_cast<std::size_t>(item - kPinnedMenuLocationOffset);
-            if (location_index < state.application.pinned_locations.size()) {
+            const std::size_t record_index =
+                panedock::app_shell::kPinnedMenuFixedLocationCount +
+                location_index;
+            if (record_index < locations.size()) {
                 ShellCallScope shell_call(state);
                 (void)state.panes[pane_index].navigate_to(
-                    state.application.pinned_locations[location_index]);
+                    locations[record_index].location);
             }
             return true;
         }
         if (item == kPinnedMenuAddOffset) {
-            add_current_folder(state, pane_index);
+            state.panes[pane_index].pin_current_folder();
             return true;
         }
         if (item == kPinnedMenuManageOffset) {

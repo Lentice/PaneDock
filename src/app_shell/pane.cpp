@@ -444,6 +444,73 @@ void Pane::show_view_mode_menu(POINT screen) {
         SendMessageW(owner, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
+void Pane::submit_address() {
+    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (pane_state() == nullptr || address_bar_ == nullptr) return;
+    const int length = GetWindowTextLengthW(address_bar_);
+    std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
+    GetWindowTextW(address_bar_, text.data(), length + 1);
+    text.resize(static_cast<std::size_t>(length));
+    const panedock::core::ShellLocation target{std::move(text), {}, {}};
+    ShellCall shell_call(pane_host());
+    (void)navigate_to(target);
+}
+
+void Pane::pin_current_folder() {
+    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (pane_state() == nullptr) return;
+    capture_location();
+    if (pane_host()->is_shutting_down()) return;
+    if (const auto *tab = active_tab(); tab != nullptr)
+        pane_host()->pin_location(tab->location);
+}
+
+void Pane::show_pinned_locations_menu(POINT screen) {
+    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (pane_state() == nullptr || window_ == nullptr) return;
+
+    const auto locations = pane_host()->pinned_locations();
+    if (locations.size() < kPinnedMenuFixedLocationCount) return;
+    HMENU menu = CreatePopupMenu();
+    if (menu == nullptr) return;
+    const int menu_id_base =
+        kPinnedMenuIdBase + static_cast<int>(index_ * kPinnedMenuSlotsPerPane);
+    for (std::size_t index = 0; index < kPinnedMenuFixedLocationCount;
+         ++index) {
+        AppendMenuW(menu, MF_STRING,
+                    static_cast<UINT_PTR>(menu_id_base +
+                                          static_cast<int>(index)),
+                    locations[index].label.c_str());
+    }
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    const std::size_t count = std::min(
+        locations.size() - kPinnedMenuFixedLocationCount,
+        static_cast<std::size_t>(kPinnedMenuMaxLocationCount));
+    for (std::size_t index = 0; index < count; ++index) {
+        AppendMenuW(
+            menu, MF_STRING,
+            static_cast<UINT_PTR>(menu_id_base + kPinnedMenuLocationOffset +
+                                  static_cast<int>(index)),
+            locations[kPinnedMenuFixedLocationCount + index].label.c_str());
+    }
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING,
+                static_cast<UINT_PTR>(menu_id_base + kPinnedMenuAddOffset),
+                L"Add Current Folder");
+    AppendMenuW(
+        menu, MF_STRING,
+        static_cast<UINT_PTR>(menu_id_base + kPinnedMenuManageOffset),
+        L"Manage Pinned Locations...");
+    SetForegroundWindow(window_);
+    const int command = TrackPopupMenu(
+        menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0, window_,
+        nullptr);
+    DestroyMenu(menu);
+    if (pane_host()->is_shutting_down() || command == 0) return;
+    if (const HWND owner = GetParent(window_); owner != nullptr)
+        SendMessageW(owner, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+}
+
 void Pane::switch_active_tab(const std::string &tab_id) {
     if (pane_host() == nullptr) return;
     if (pane_host()->is_shutting_down()) return;

@@ -35,6 +35,11 @@ class TestPaneHost final : public panedock::app_shell::PaneHost {
         return std::nullopt;
     }
     void tab_strip_needs_refresh(panedock::app_shell::Pane &) override {}
+    std::span<const panedock::app_shell::PinnedLocation>
+    pinned_locations() const noexcept override {
+        return {};
+    }
+    void pin_location(panedock::core::ShellLocation) override {}
     bool location_capture_suppressed() const noexcept override {
         return suppress_location_capture;
     }
@@ -201,6 +206,23 @@ void test_navigation_calls_are_no_ops_without_host() {
     pane.refresh_view();
 }
 
+void test_submit_address_is_a_no_op_while_shutting_down() {
+    panedock::app_shell::Pane pane;
+    panedock::core::PaneState state;
+    state.tabs.push_back({});
+    state.tabs.front().id = "tab-a";
+    state.tabs.front().location.parsing_name = L"before";
+    state.active_tab_id = "tab-a";
+    TestPaneHost host;
+    host.shutting_down = true;
+
+    pane.bind(&state);
+    pane.set_host(&host);
+    pane.submit_address();
+
+    EXPECT(state.tabs.front().location.parsing_name == L"before");
+}
+
 void test_capture_location_respects_suppression() {
     panedock::app_shell::Pane pane;
     panedock::core::PaneState state;
@@ -272,6 +294,7 @@ int main() {
     test_pending_navigation_is_per_pane();
     test_navigation_request_identity_survives_group_switch();
     test_navigation_calls_are_no_ops_without_host();
+    test_submit_address_is_a_no_op_while_shutting_down();
     test_capture_location_respects_suppression();
     test_add_tab_does_not_reuse_stale_tab_pointer();
     test_close_last_tab_leaves_pane_consistent();

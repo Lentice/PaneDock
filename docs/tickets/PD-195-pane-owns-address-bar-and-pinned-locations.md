@@ -99,4 +99,9 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-（實作者填寫：`pinned_fixed_labels` 最後如何暴露；`TrackPopupMenu` owner 決定；`panedock_address_bar_failure` 的新舊錨點。）
+- `PaneHost` 新增的 `PinnedLocation` 同時攜帶 `core::ShellLocation` 與顯示標籤。`AppState::pinned_locations()` 回傳 `pinned_location_menu_items` 的唯讀 span；快取依序放兩個固定項目（Desktop、This PC）與最多 64 個 application-level 自訂項目。固定標籤仍由既有的 `pinned_fixed_labels` 在 startup Shell lookup 後填入，再由 `rebuild_pinned_location_menu` 組成 Pane 使用的資料；管理對話框提交與新增釘選後都會重建快取。
+- `AppState::pin_location()` 保留原有的 `core::add_pinned_location` 去重與 64 項上限，更新管理對話框、重建快取並呼叫既有的 debounce 存檔。`Pane::pin_current_folder()` 只負責 capture 目前 tab location 後呼叫此 host service；持久化格式與 `PinnedLocationsDialog` 未改動。
+- `Pane::show_pinned_locations_menu(POINT)` 使用 `TPM_RETURNCMD`，因此 `TrackPopupMenu` 的 owner 使用 pane 自己的 `window()`；選擇後把 `WM_COMMAND` 送回其 parent main window。按鈕螢幕座標由 `handle_pane_command` 取得，固定／自訂項目的導覽仍由既有 coordinator command router 執行。
+- `address_edit_proc` 的舊錨點 `submit_address(Pane&, AppState&)` 已移除，Enter 現在直接呼叫 `Pane::submit_address()`；`panedock_address_bar_failure` 沒有以該函式名稱作錨點，既有的新舊檢查錨點（`Pane::navigation_failed` 與 `refresh_navigation_chrome`）維持不變。`shutdown_state_check` 的 debounce 錨點由 `add_current_folder` 更新為 `Pane::pin_current_folder`，並驗證其透過 `PaneHost::pin_location` 委派持久化。
+- 新增 `test_submit_address_is_a_no_op_while_shutting_down`。Pinned menu 依賴 Win32 HWND／TrackPopupMenu 與 AppState 的跨層快取，無法放入 `core` seam；其自動檢查由 build、source gates、`panedock_pane`、完整 CTest 與下方實機清單涵蓋。
+- 2026-09-05 Agent checks：指定 LLVM-MinGW configure/build 通過；原始碼守門通過；正常 Win32 執行環境完整 CTest 23/23 通過（含 `panedock_pane` focused test 與 `panedock_launch_smoke`，6.24 秒）。受限 sandbox 內的 smoke 曾於關閉後 30 秒逾時，但不代表產品回歸。
