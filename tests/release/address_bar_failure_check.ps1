@@ -26,7 +26,7 @@ if ($failedBody -match 'refresh_navigation_chrome|SetWindowTextW') {
 }
 
 $chromeStart = $source.IndexOf('void refresh_navigation_chrome(')
-$chromeEnd = $source.IndexOf('void capture_pane_view_mode(', $chromeStart)
+$chromeEnd = $source.IndexOf('void refresh_status_bar(', $chromeStart)
 if ($chromeStart -lt 0 -or $chromeEnd -lt 0) {
     throw 'Address-bar failure check failed: navigation chrome helper missing'
 }

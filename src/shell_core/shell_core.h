@@ -8,6 +8,7 @@
 #endif
 #include <shobjidl.h>
 
+#include <array>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -24,10 +25,25 @@ struct ViewModeSelection final {
     bool operator==(const ViewModeSelection&) const = default;
 };
 
+struct ViewModeOption final {
+    ViewModeSelection selection;
+};
+
 inline constexpr int kExtraLargeIconSize = 256;
 inline constexpr int kLargeIconSize = 96;
 inline constexpr int kMediumIconSize = 48;
 inline constexpr int kSmallIconSize = 16;
+
+inline constexpr std::array<ViewModeOption, 8> kViewModeOptions{{
+    {{FVM_ICON, kExtraLargeIconSize}},
+    {{FVM_ICON, kLargeIconSize}},
+    {{FVM_ICON, kMediumIconSize}},
+    {{FVM_ICON, kSmallIconSize}},
+    {{FVM_LIST, -1}},
+    {{FVM_DETAILS, -1}},
+    {{FVM_TILE, -1}},
+    {{FVM_CONTENT, -1}},
+}};
 
 std::string view_mode_name(FOLDERVIEWMODE mode, int image_size = -1);
 std::optional<ViewModeSelection> parse_view_mode(std::string_view name);

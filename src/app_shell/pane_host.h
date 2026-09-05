@@ -30,6 +30,8 @@ class PaneHost {
     virtual std::optional<TabStripDragLayout>
     tab_drag_layout(const Pane &pane, HWND strip, int min_width, int max_width,
                     int text_reserve) const = 0;
+    // Singleton coordinator state: Group switching suppresses capture for all panes.
+    virtual bool location_capture_suppressed() const noexcept = 0;
 };
 
 class ShellCall final {

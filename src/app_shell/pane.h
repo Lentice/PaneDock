@@ -21,6 +21,7 @@
 #include "core/model.h"
 #include "core/navigation.h"
 #include "explorer_host/explorer_host.h"
+#include "shell_core/shell_core.h"
 
 namespace panedock::app_shell {
 
@@ -128,6 +129,14 @@ class Pane final {
     void navigate_history(bool back);
     void navigate_up();
     void refresh_view();
+
+    void capture_view_mode();
+    void capture_sort();
+    void apply_view_mode();
+    void apply_sort();
+    void capture_location();
+    void set_view_mode(const panedock::shell_core::ViewModeOption &option);
+    void show_view_mode_menu(POINT screen);
 
     // Enable/disable back, forward, up and folder-context from the bound
     // tab's history. Needs no coordinator state, so it lives here.
@@ -292,5 +301,7 @@ class Pane final {
     HPEN card_border_pen_{nullptr};
     UINT card_border_pen_dpi_{};
 };
+
+inline constexpr int kViewModeMenuIdBase = 360;
 
 } // namespace panedock::app_shell

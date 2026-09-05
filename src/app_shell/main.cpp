@@ -166,8 +166,8 @@ constexpr int kAddressBarBackgroundRadius = 4;
 constexpr int kAddressBarInset = 6;
 // View-mode popup commands: eight IDs per pane, 360-391, kept separate from
 // the navigation buttons and layout commands above.
-constexpr int kViewModeMenuIdBase = 360;
-constexpr std::size_t kViewModeOptionCount = 8;
+constexpr std::size_t kViewModeOptionCount =
+    panedock::shell_core::kViewModeOptions.size();
 constexpr int kViewModeMenuIdCount =
     static_cast<int>(kExplorerCount * kViewModeOptionCount);
 constexpr int kLayoutButtonIdBase = 400;
@@ -223,21 +223,6 @@ constexpr std::array<panedock::core::LayoutTemplate, 8> kLayoutTemplates{
     panedock::core::LayoutTemplate::one_over_two,
     panedock::core::LayoutTemplate::two_over_one,
     panedock::core::LayoutTemplate::four_pane_grid};
-struct ViewModeOption final {
-    panedock::shell_core::ViewModeSelection selection;
-    const wchar_t* label;
-};
-constexpr std::array<ViewModeOption, kViewModeOptionCount> kViewModeOptions{{
-    {{FVM_ICON, panedock::shell_core::kExtraLargeIconSize},
-     L"Extra large icons"},
-    {{FVM_ICON, panedock::shell_core::kLargeIconSize}, L"Large icons"},
-    {{FVM_ICON, panedock::shell_core::kMediumIconSize}, L"Medium icons"},
-    {{FVM_ICON, panedock::shell_core::kSmallIconSize}, L"Small icons"},
-    {{FVM_LIST, -1}, L"List"},
-    {{FVM_DETAILS, -1}, L"Details"},
-    {{FVM_TILE, -1}, L"Tiles"},
-    {{FVM_CONTENT, -1}, L"Content"},
-}};
 constexpr UINT kDragHoverDelayMilliseconds = 800;
 constexpr UINT_PTR kDragHoverSidebarTimerId = 0xD034;
 constexpr UINT_PTR kDragHoverTabTimerIdBase = 0xD040;
@@ -468,6 +453,7 @@ struct AppState : public panedock::app_shell::PaneHost {
     std::optional<panedock::app_shell::TabStripDragLayout>
     tab_drag_layout(const Pane &pane, HWND strip, int min_width, int max_width,
                     int text_reserve) const override;
+    bool location_capture_suppressed() const noexcept override;
 
     // The legacy names below are references into the reducer state. Keeping
     // them avoids a second pane-wide mechanical rewrite while making the
@@ -1567,86 +1553,6 @@ void refresh_navigation_chrome(Pane& pane, AppState& state) {
     SetWindowTextW(pane.address_bar(), text.c_str());
 }
 
-void capture_pane_view_mode(AppState& state, std::size_t pane_index) {
-    auto& pane = state.panes[pane_index];
-    if (pane.pane_state() == nullptr || !pane.realized()) return;
-    FOLDERVIEWMODE mode{};
-    int image_size = -1;
-    HRESULT hr = E_UNEXPECTED;
-    {
-        ShellCallScope shell_call(state);
-        hr = pane.host().get_view_mode(mode, &image_size);
-    }
-    if (state.shutdown_deferred || state.closing_) return;
-    if (SUCCEEDED(hr)) {
-        auto* pane_state = pane.pane_state();
-        if (pane_state == nullptr) return;
-        const std::string name = panedock::shell_core::view_mode_name(
-            mode, image_size);
-        if (!name.empty())
-            active_tab(*pane_state).view_mode = name;
-    }
-}
-
-void capture_pane_sort(AppState& state, std::size_t pane_index) {
-    auto& pane = state.panes[pane_index];
-    if (pane.pane_state() == nullptr || !pane.realized()) return;
-    std::string column;
-    bool ascending{};
-    HRESULT hr = E_UNEXPECTED;
-    {
-        ShellCallScope shell_call(state);
-        hr = pane.host().get_sort(column, ascending);
-    }
-    if (state.shutdown_deferred || state.closing_) return;
-    if (SUCCEEDED(hr)) {
-        auto* pane_state = pane.pane_state();
-        if (pane_state == nullptr) return;
-        auto& tab = active_tab(*pane_state);
-        tab.sort_column = std::move(column);
-        tab.sort_ascending = ascending;
-    }
-}
-
-void apply_pane_view_mode(AppState& state, std::size_t pane_index) {
-    auto& pane = state.panes[pane_index];
-    auto* pane_state = pane.pane_state();
-    if (pane_state == nullptr || !pane.realized()) return;
-    const std::string view_mode = active_tab(*pane_state).view_mode;
-    if (const auto selection = panedock::shell_core::parse_view_mode(
-            view_mode);
-        selection.has_value()) {
-        {
-            ShellCallScope shell_call(state);
-            (void)pane.host().set_view_mode(
-                selection->mode, selection->image_size);
-        }
-    } else if (view_mode.empty()) {
-        {
-            ShellCallScope shell_call(state);
-            (void)pane.host().set_view_mode(FVM_DETAILS);
-        }
-    }
-    if (state.shutdown_deferred || state.closing_) return;
-    capture_pane_view_mode(state, pane_index);
-}
-
-void apply_pane_sort(AppState& state, std::size_t pane_index) {
-    auto& pane = state.panes[pane_index];
-    auto* pane_state = pane.pane_state();
-    if (pane_state == nullptr || !pane.realized()) return;
-    const std::string sort_column = active_tab(*pane_state).sort_column;
-    const bool sort_ascending = active_tab(*pane_state).sort_ascending;
-    if (sort_column.empty()) return;
-    HRESULT hr = E_UNEXPECTED;
-    {
-        ShellCallScope shell_call(state);
-        hr = pane.host().set_sort(sort_column, sort_ascending);
-    }
-    if (state.shutdown_deferred || state.closing_ || FAILED(hr)) return;
-    capture_pane_sort(state, pane_index);
-}
-
 // Reads the Shell view's item counts, so it must stay in the coordinator:
 // the call needs a ShellCallScope and the shutdown gates that follow it.
 void refresh_status_bar(Pane& pane, AppState& state) noexcept {
@@ -1796,31 +1702,11 @@ void refresh_tab_strips(AppState& state) {
     for (auto& pane : state.panes) refresh_tab_strip(pane, state);
 }
 
-void capture_pane_location(AppState& state, std::size_t pane_index) {
-    if (state.suppress_location_capture) return;
-    auto& pane = state.panes[pane_index];
-    auto* pane_state = pane.pane_state();
-    if (pane_state == nullptr || !pane.realized() ||
-        pane.host().location().parsing_name.empty())
-        return;
-    active_tab(*pane_state).location = pane.host().location();
-    capture_pane_view_mode(state, pane_index);
-    if (state.shutdown_deferred || state.closing_) return;
-    capture_pane_sort(state, pane_index);
-    pane_state = pane.pane_state();
-    if (state.shutdown_deferred || state.closing_ || pane_state == nullptr)
-        return;
-    auto& tab = active_tab(*pane_state);
-    if (!tab.history.empty() && tab.history_index < tab.history.size()) {
-        tab.history[tab.history_index] = tab.location;
-    }
-}
-
 void capture_locations(AppState& state) {
     if (state.suppress_location_capture || !has_active_group(state)) return;
     for (std::size_t index = 0; index < active_group(state).panes.size();
          ++index) {
-        capture_pane_location(state, index);
+        state.panes[index].capture_location();
     }
 }
 
@@ -2098,8 +1984,8 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
 // corners while keeping the internal top edge square. Called whenever the
 // container's rect changes (creation, WM_SIZE, WM_DPICHANGED — every
 // apply_layout pass).
-void apply_pane_container_region(HWND container, int width, int height,
-                                 int radius) noexcept {
+void apply_container_region(HWND container, int width, int height,
+                            int radius) noexcept {
     if (container == nullptr || width <= 0 || height <= 0) return;
     HRGN rounded = CreateRoundRectRgn(0, 0, width, height, radius, radius);
     if (rounded == nullptr) return;
@@ -2267,9 +2153,9 @@ void handle_navigation_complete(
     if (state.shutdown_deferred || state.closing_) return;
     if (!pane.navigation_request_is_current(generation)) return;
     pane.record_navigation_result(new_location);
-    apply_pane_view_mode(state, pane.index());
+    pane.apply_view_mode();
     if (state.shutdown_deferred || state.closing_) return;
-    apply_pane_sort(state, pane.index());
+    pane.apply_sort();
     if (state.shutdown_deferred || state.closing_) return;
     refresh_tab_strip(pane, state);
     schedule_session_save(state);
@@ -2532,7 +2418,7 @@ HRESULT apply_layout(HWND window, AppState& state,
             // container (not on IExplorerBrowser's own HWND) is what gives
             // the real Shell view rounded corners that line up with
             // draw_pane_card's background — see pane_card_radius/
-            // apply_pane_container_region.
+            // apply_container_region.
             const int container_width = rect.right - rect.left;
             const int container_height = rect.bottom - rect.top;
             if (pane_geometry_changed) {
@@ -2578,10 +2464,10 @@ HRESULT apply_layout(HWND window, AppState& state,
                         });
                     chrome.host().set_selection_changed_callback(
                         [&state, index]() { refresh_status_bar(state.panes[index], state); });
-                    apply_pane_view_mode(state, index);
+                    chrome.apply_view_mode();
                     if (state.shutdown_deferred || state.closing_)
                         return E_ABORT;
-                    apply_pane_sort(state, index);
+                    chrome.apply_sort();
                     if (state.shutdown_deferred || state.closing_)
                         return E_ABORT;
                 } catch (...) {
@@ -2654,7 +2540,7 @@ HRESULT apply_layout(HWND window, AppState& state,
     }
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
         if (changed_panes[index]) {
-            apply_pane_container_region(
+            apply_container_region(
                 state.panes[index].explorer_container(),
                 container_rects[index].right - container_rects[index].left,
                 container_rects[index].bottom - container_rects[index].top,
@@ -2958,6 +2844,10 @@ const std::string &AppState::active_group_id() const noexcept {
     return has_active_group(*this) ? active_group(*this).id : kEmptyGroupId;
 }
 
+bool AppState::location_capture_suppressed() const noexcept {
+    return suppress_location_capture;
+}
+
 std::string AppState::make_unique_tab_id() const {
     std::size_t candidate = 0;
     return unique_tab_id(active_group(*this), candidate);
@@ -3020,7 +2910,7 @@ void switch_active_tab(HWND, AppState& state, std::size_t pane_index,
         refresh_tab_strip(state.panes[pane_index], state);
         return;
     }
-    capture_pane_location(state, pane_index);
+    state.panes[pane_index].capture_location();
     pane_state = state.panes[pane_index].pane_state();
     if (state.closing_ || state.shutdown_deferred || pane_state == nullptr)
         return;
@@ -3105,7 +2995,7 @@ void add_tab_to_pane(
     if (state.closing_ || state.shutdown_deferred) return;
     if (!has_active_group(state)) return;
     if (state.panes[pane_index].pane_state() == nullptr) return;
-    capture_pane_location(state, pane_index);
+    state.panes[pane_index].capture_location();
     auto* pane_state = state.panes[pane_index].pane_state();
     if (state.closing_ || state.shutdown_deferred || pane_state == nullptr)
         return;
@@ -3133,7 +3023,7 @@ void close_tab_in_pane(HWND, AppState& state, std::size_t pane_index,
     if (state.closing_ || state.shutdown_deferred) return;
     auto* pane_state = state.panes[pane_index].pane_state();
     if (pane_state == nullptr) return;
-    capture_pane_location(state, pane_index);
+    state.panes[pane_index].capture_location();
     pane_state = state.panes[pane_index].pane_state();
     if (state.closing_ || state.shutdown_deferred || pane_state == nullptr)
         return;
@@ -3152,78 +3042,12 @@ void close_tab_in_pane(HWND, AppState& state, std::size_t pane_index,
     schedule_session_save(state);
 }
 
-void set_pane_view_mode(AppState& state, std::size_t pane_index,
-                        const ViewModeOption& option) {
-    if (state.closing_ || state.shutdown_deferred) return;
-    if (state.panes[pane_index].pane_state() == nullptr) return;
-    HRESULT hr = E_UNEXPECTED;
-    {
-        ShellCallScope shell_call(state);
-        hr = state.panes[pane_index].host().set_view_mode(option.selection.mode,
-                                                        option.selection.image_size);
-    }
-    if (state.shutdown_deferred || state.closing_) return;
-    if (SUCCEEDED(hr)) {
-        auto* pane_state = state.panes[pane_index].pane_state();
-        if (pane_state == nullptr) return;
-        active_tab(*pane_state).view_mode =
-            panedock::shell_core::view_mode_name(option.selection.mode,
-                                                 option.selection.image_size);
-        schedule_session_save(state);
-    }
-}
-
-void show_view_mode_menu(HWND window, AppState& state,
-                         std::size_t pane_index) {
-    auto* pane_state = state.panes[pane_index].pane_state();
-    if (pane_state == nullptr) return;
-
-    RECT button_rect{};
-    if (!GetWindowRect(state.panes[pane_index].view_mode_button(),
-                       &button_rect))
-        return;
-
-    const auto current = panedock::shell_core::parse_view_mode(
-        active_tab(*pane_state).view_mode);
-    HMENU menu = CreatePopupMenu();
-    if (menu == nullptr) return;
-    const int menu_id_base =
-        kViewModeMenuIdBase +
-        static_cast<int>(pane_index * kViewModeOptions.size());
-    int checked_id = 0;
-    for (std::size_t index = 0; index < kViewModeOptions.size(); ++index) {
-        const bool checked = current.has_value() &&
-                             current->mode ==
-                                     kViewModeOptions[index].selection.mode &&
-                             current->image_size ==
-                                 kViewModeOptions[index].selection.image_size;
-        const int id = menu_id_base + static_cast<int>(index);
-        AppendMenuW(menu, MF_STRING | (checked ? MF_CHECKED : 0),
-                    static_cast<UINT_PTR>(id), kViewModeOptions[index].label);
-        if (checked) checked_id = id;
-    }
-    if (checked_id != 0) {
-        CheckMenuRadioItem(menu, menu_id_base,
-                           menu_id_base +
-                               static_cast<int>(kViewModeOptions.size()) - 1,
-                           checked_id, MF_BYCOMMAND);
-    }
-    SetForegroundWindow(window);
-    const int command = TrackPopupMenu(
-        menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, button_rect.left,
-        button_rect.bottom, 0, window, nullptr);
-    DestroyMenu(menu);
-    if (state.closing_ || state.shutdown_deferred) return;
-    if (command != 0)
-        SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
-}
-
 void add_current_folder(AppState& state, std::size_t pane_index) {
     if (state.panes[pane_index].pane_state() == nullptr ||
         state.application.pinned_locations.size() >=
             static_cast<std::size_t>(kPinnedMenuMaxLocationCount))
         return;
-    capture_pane_location(state, pane_index);
+    state.panes[pane_index].capture_location();
     const auto current_location =
         active_tab(*state.panes[pane_index].pane_state()).location;
     if (panedock::core::add_pinned_location(state.application,
@@ -3551,8 +3375,8 @@ void finish_tab_drag(AppState& state, HWND strip) {
         return;
     }
 
-    capture_pane_location(state, drag.pane_index);
-    capture_pane_location(state, target_pane);
+    state.panes[drag.pane_index].capture_location();
+    state.panes[target_pane].capture_location();
     auto& source = group.panes[drag.pane_index];
     auto& target = group.panes[target_pane];
     const bool source_active = source.active_tab_id == drag.tab_id;
@@ -4597,7 +4421,13 @@ void handle_pane_command(AppState& state, std::size_t pane_index,
             state.panes[pane_index].refresh_view();
             return;
         case panedock::app_shell::PaneControl::view_mode:
-            show_view_mode_menu(state.main_window, state, pane_index);
+            {
+                RECT rect{};
+                if (GetWindowRect(state.panes[pane_index].view_mode_button(),
+                                  &rect))
+                    state.panes[pane_index].show_view_mode_menu(
+                        {rect.left, rect.bottom});
+            }
             return;
         case panedock::app_shell::PaneControl::pinned:
             show_pinned_locations_menu(state.main_window, state, pane_index);
@@ -4678,14 +4508,16 @@ bool handle_global_command(HWND window, AppState& state, int id) {
             close_tab_in_pane(window, state, *pane_index, id_to_close);
         return true;
     }
-    if (id >= kViewModeMenuIdBase &&
-        id < kViewModeMenuIdBase + kViewModeMenuIdCount) {
-        const int offset = id - kViewModeMenuIdBase;
+    if (id >= panedock::app_shell::kViewModeMenuIdBase &&
+        id < panedock::app_shell::kViewModeMenuIdBase + kViewModeMenuIdCount) {
+        const int offset = id - panedock::app_shell::kViewModeMenuIdBase;
         const std::size_t pane_index = static_cast<std::size_t>(
-            offset / static_cast<int>(kViewModeOptions.size()));
+            offset / static_cast<int>(kViewModeOptionCount));
         const std::size_t mode_index = static_cast<std::size_t>(
-            offset % static_cast<int>(kViewModeOptions.size()));
-        set_pane_view_mode(state, pane_index, kViewModeOptions[mode_index]);
+            offset % static_cast<int>(kViewModeOptionCount));
+        if (pane_index < state.panes.size())
+            state.panes[pane_index].set_view_mode(
+                panedock::shell_core::kViewModeOptions[mode_index]);
         return true;
     }
     if (id >= kPinnedMenuIdBase &&

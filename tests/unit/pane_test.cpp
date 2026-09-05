@@ -19,6 +19,7 @@ class TestPaneHost final : public panedock::app_shell::PaneHost {
   public:
     bool shutting_down{};
     std::string group_id{"group-a"};
+    bool suppress_location_capture{};
 
     bool is_shutting_down() const noexcept override { return shutting_down; }
     void shell_call_entered() noexcept override {}
@@ -32,6 +33,9 @@ class TestPaneHost final : public panedock::app_shell::PaneHost {
         const panedock::app_shell::Pane &, HWND, int, int,
         int) const override {
         return std::nullopt;
+    }
+    bool location_capture_suppressed() const noexcept override {
+        return suppress_location_capture;
     }
 };
 
@@ -196,6 +200,23 @@ void test_navigation_calls_are_no_ops_without_host() {
     pane.refresh_view();
 }
 
+void test_capture_location_respects_suppression() {
+    panedock::app_shell::Pane pane;
+    panedock::core::PaneState state;
+    state.tabs.push_back({});
+    state.tabs.front().id = "tab-a";
+    state.active_tab_id = "tab-a";
+    state.tabs.front().location.parsing_name = L"before";
+    TestPaneHost host;
+    host.suppress_location_capture = true;
+
+    pane.bind(&state);
+    pane.set_host(&host);
+    pane.capture_location();
+
+    EXPECT(state.tabs.front().location.parsing_name == L"before");
+}
+
 } // namespace
 
 int main() {
@@ -210,5 +231,6 @@ int main() {
     test_pending_navigation_is_per_pane();
     test_navigation_request_identity_survives_group_switch();
     test_navigation_calls_are_no_ops_without_host();
+    test_capture_location_respects_suppression();
     return panedock::test::summary("pane");
 }

@@ -88,4 +88,31 @@ session 相容性檢查：以 PD-193 前的執行檔存一份 session，用 PD-1
 
 ## 交接區
 
-（實作者填寫：`ViewModeOption` 最後切成哪兩半、放哪；`show_view_mode_menu` 的 owner HWND 決定與理由；`location_capture_suppressed` 的實際簽章。）
+- `ViewModeOption` 的資料半部（`ViewModeSelection selection`）移到
+  `src/shell_core/shell_core.h`，並由同一處的 `kViewModeOptions` 保留八個
+  mode/image-size 組合；UI label 留在 `src/app_shell/pane.cpp` 的選單建構處。
+  `main.cpp` 的 command routing 只讀該資料表，不再持有 UI label 或
+  `ViewModeOption` 定義。
+- `show_view_mode_menu` 現為 `Pane::show_view_mode_menu(POINT screen)`。
+  現況使用 `TPM_RETURNCMD`，因此 owner 改為 `Pane::window()`；呼叫點仍以
+  view button 的 screen 座標定位選單，選定後把 command 送回 parent main
+  window，保留既有 command routing。`TPM_RETURNCMD` 的 owner 變更不改
+  選單項目、順序、勾選、位置或快捷鍵。
+- `PaneHost` 新增的實際簽章為
+  `virtual bool location_capture_suppressed() const noexcept = 0;`，
+  `AppState` 以 out-of-line `AppState::location_capture_suppressed()` 回傳
+  singleton `suppress_location_capture`。它沒有變成 per-pane state。
+- 七支 view/sort/location 函式已成為 `Pane` 成員；`capture_locations` 仍
+  保留在協調層作四 pane 迴圈，`tab_drag_layout` 與跨 pane placeholder
+  計算未搬移。`apply_pane_container_region` 只改名為
+  `apply_container_region`，以滿足 `main.cpp` 不再有 `apply_pane_` 函式的
+  acceptance gate，沒有改其繪製內容。
+- 新增 `test_capture_location_respects_suppression`；同步更新兩支既有
+  source-level release checks 以追蹤 PD-192/PD-193 的新成員位置。
+- 驗證：LLVM-MinGW configure/build 通過；排除既有 baseline 的
+  `panedock_launch_smoke` 關閉逾時後，22/22 CTest 通過（含本票 focused
+  pane test 與兩支更新後的 release checks）。完整 CTest 為 22/23 通過，
+  唯一失敗仍是 `panedock_launch_smoke` 在關閉主視窗後 30 秒未退出；以可寫
+  暫存 `%LOCALAPPDATA%` 重跑仍重現，且 PD-192 交接區已有相同 baseline，
+  本票未改 shutdown scope。Session schema／序列化程式碼未變更，session
+  欄位與內容保持原樣。

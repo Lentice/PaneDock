@@ -1,5 +1,6 @@
 param(
     [string] $SourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\main.cpp'),
+    [string] $PaneSourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\pane.cpp'),
     [string] $ShutdownHeaderPath = (Join-Path $PSScriptRoot '..\..\src\core\shutdown.h'),
     [string] $ShutdownSourcePath = (Join-Path $PSScriptRoot '..\..\src\core\shutdown.cpp')
 )
@@ -8,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 $source = ($SourcePath -split ',' | ForEach-Object {
     Get-Content -LiteralPath $_ -Raw
 }) -join "`n"
+$source += "`n" + (Get-Content -LiteralPath $PaneSourcePath -Raw)
 $shutdownHeader = Get-Content -LiteralPath $ShutdownHeaderPath -Raw
 $shutdownSource = Get-Content -LiteralPath $ShutdownSourcePath -Raw
 
@@ -103,7 +105,7 @@ Assert-DebouncedFunction 'void close_tab_in_pane(' 'close_tab_in_pane'
 Assert-DebouncedFunction 'void delete_group(' 'delete_group'
 Assert-DebouncedFunction 'void move_group(' 'move_group'
 Assert-DebouncedFunction 'void set_active_pane(' 'set_active_pane'
-Assert-DebouncedFunction 'void set_pane_view_mode(' 'set_pane_view_mode'
+Assert-DebouncedFunction 'void Pane::set_view_mode(' 'Pane::set_view_mode'
 Assert-DebouncedFunction 'void add_current_folder(' 'add_current_folder'
 Assert-DebouncedFunction 'void set_layout(' 'set_layout'
 Assert-DebouncedFunction 'void finish_tab_drag(' 'finish_tab_drag'

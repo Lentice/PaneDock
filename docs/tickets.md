@@ -230,7 +230,7 @@
 | PD-190 | 六支 pane chrome 刷新函式與 `pending_navigation` 收進 `Pane` | 7 | `done` | PD-186 | [PD-190](tickets/PD-190-pane-scoped-chrome-refresh-and-navigation-request.md) |
 | PD-191 | `PaneHost` 協調層服務介面，讓 `Pane` 能持有 pane 自己的行為 | 7 | `done` | PD-190 | [PD-191](tickets/PD-191-pane-host-coordinator-service-interface.md) |
 | PD-192 | pane 的導覽群收進 `Pane` | 7 | `done` | PD-191 | [PD-192](tickets/PD-192-pane-owns-its-navigation.md) |
-| PD-193 | 檢視模式、排序與位置擷取收進 `Pane` | 7 | `todo` | PD-191 | [PD-193](tickets/PD-193-pane-owns-view-mode-sort-and-location-capture.md) |
+| PD-193 | 檢視模式、排序與位置擷取收進 `Pane` | 7 | `done` | PD-191 | [PD-193](tickets/PD-193-pane-owns-view-mode-sort-and-location-capture.md) |
 | PD-194 | pane 的 tab 生命週期命令收進 `Pane` | 7 | `todo` | PD-191, PD-192, PD-193 | [PD-194](tickets/PD-194-pane-owns-its-tab-commands.md) |
 | PD-195 | 位址列與釘選位置收進 `Pane` | 7 | `todo` | PD-191, PD-192 | [PD-195](tickets/PD-195-pane-owns-address-bar-and-pinned-locations.md) |
 | PD-196 | tab strip 收進 `Pane`（`PaneTabStrip`） | 7 | `todo` | PD-191, PD-194 | [PD-196](tickets/PD-196-pane-owns-its-tab-strip.md) |

@@ -19,6 +19,9 @@ constexpr wchar_t kWindowClassName[] = L"PaneDock.Pane";
 // control. Moved here with update_tab_strip_tooltips (PD-190).
 constexpr UINT_PTR kTabAddTooltipIdBase = 1000;
 constexpr UINT_PTR kTabScrollTooltipIdBase = 1010;
+constexpr std::array<const wchar_t *, 8> kViewModeLabels{
+    L"Extra large icons", L"Large icons", L"Medium icons", L"Small icons",
+    L"List", L"Details", L"Tiles", L"Content"};
 
 void fill_rounded_rect(HDC dc, const RECT &rect, int radius, COLORREF fill,
                        COLORREF border) noexcept {
@@ -295,6 +298,150 @@ void Pane::refresh_view() {
         ShellCall shell_call(pane_host());
         (void)explorer_host_.refresh(begin_navigation());
     }
+}
+
+void Pane::capture_view_mode() {
+    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (pane_state() == nullptr || !realized()) return;
+    FOLDERVIEWMODE mode{};
+    int image_size = -1;
+    HRESULT hr = E_UNEXPECTED;
+    {
+        ShellCall shell_call(pane_host());
+        hr = explorer_host_.get_view_mode(mode, &image_size);
+    }
+    if (pane_host()->is_shutting_down() || FAILED(hr)) return;
+    auto *state = pane_state();
+    if (state == nullptr) return;
+    const std::string name = panedock::shell_core::view_mode_name(
+        mode, image_size);
+    if (auto *tab = active_tab(); tab != nullptr && !name.empty())
+        tab->view_mode = name;
+}
+
+void Pane::capture_sort() {
+    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (pane_state() == nullptr || !realized()) return;
+    std::string column;
+    bool ascending{};
+    HRESULT hr = E_UNEXPECTED;
+    {
+        ShellCall shell_call(pane_host());
+        hr = explorer_host_.get_sort(column, ascending);
+    }
+    if (pane_host()->is_shutting_down() || FAILED(hr)) return;
+    if (auto *tab = active_tab(); tab != nullptr) {
+        tab->sort_column = std::move(column);
+        tab->sort_ascending = ascending;
+    }
+}
+
+void Pane::apply_view_mode() {
+    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    auto *tab = active_tab();
+    if (tab == nullptr || !realized()) return;
+    if (const auto selection = panedock::shell_core::parse_view_mode(
+            tab->view_mode);
+        selection.has_value()) {
+        ShellCall shell_call(pane_host());
+        (void)explorer_host_.set_view_mode(selection->mode,
+                                           selection->image_size);
+    } else if (tab->view_mode.empty()) {
+        ShellCall shell_call(pane_host());
+        (void)explorer_host_.set_view_mode(FVM_DETAILS);
+    }
+    if (pane_host()->is_shutting_down()) return;
+    capture_view_mode();
+}
+
+void Pane::apply_sort() {
+    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    auto *tab = active_tab();
+    if (tab == nullptr || !realized() || tab->sort_column.empty()) return;
+    HRESULT hr = E_UNEXPECTED;
+    {
+        ShellCall shell_call(pane_host());
+        hr = explorer_host_.set_sort(tab->sort_column, tab->sort_ascending);
+    }
+    if (pane_host()->is_shutting_down() || FAILED(hr)) return;
+    capture_sort();
+}
+
+void Pane::capture_location() {
+    if (pane_host() == nullptr ||
+        pane_host()->location_capture_suppressed())
+        return;
+    if (pane_state() == nullptr || !realized() ||
+        explorer_host_.location().parsing_name.empty())
+        return;
+    auto *tab = active_tab();
+    if (tab == nullptr) return;
+    tab->location = explorer_host_.location();
+    capture_view_mode();
+    if (pane_host()->is_shutting_down()) return;
+    capture_sort();
+    tab = active_tab();
+    if (pane_host()->is_shutting_down() || tab == nullptr) return;
+    if (!tab->history.empty() && tab->history_index < tab->history.size())
+        tab->history[tab->history_index] = tab->location;
+}
+
+void Pane::set_view_mode(const panedock::shell_core::ViewModeOption &option) {
+    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (pane_state() == nullptr) return;
+    HRESULT hr = E_UNEXPECTED;
+    {
+        ShellCall shell_call(pane_host());
+        hr = explorer_host_.set_view_mode(option.selection.mode,
+                                          option.selection.image_size);
+    }
+    if (pane_host()->is_shutting_down() || FAILED(hr)) return;
+    if (auto *tab = active_tab(); tab != nullptr) {
+        tab->view_mode = panedock::shell_core::view_mode_name(
+            option.selection.mode, option.selection.image_size);
+        pane_host()->schedule_session_save();
+    }
+}
+
+void Pane::show_view_mode_menu(POINT screen) {
+    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    auto *tab = active_tab();
+    if (tab == nullptr || window_ == nullptr) return;
+
+    const auto current =
+        panedock::shell_core::parse_view_mode(tab->view_mode);
+    HMENU menu = CreatePopupMenu();
+    if (menu == nullptr) return;
+    const int menu_id_base =
+        kViewModeMenuIdBase +
+        static_cast<int>(index_ * panedock::shell_core::kViewModeOptions.size());
+    int checked_id = 0;
+    for (std::size_t index = 0;
+         index < panedock::shell_core::kViewModeOptions.size(); ++index) {
+        const auto &option = panedock::shell_core::kViewModeOptions[index];
+        const bool checked =
+            current.has_value() && current->mode == option.selection.mode &&
+            current->image_size == option.selection.image_size;
+        const int id = menu_id_base + static_cast<int>(index);
+        AppendMenuW(menu, MF_STRING | (checked ? MF_CHECKED : 0),
+                    static_cast<UINT_PTR>(id), kViewModeLabels[index]);
+        if (checked) checked_id = id;
+    }
+    if (checked_id != 0)
+        CheckMenuRadioItem(
+            menu, menu_id_base,
+            menu_id_base +
+                static_cast<int>(panedock::shell_core::kViewModeOptions.size()) -
+                1,
+            checked_id, MF_BYCOMMAND);
+    SetForegroundWindow(window_);
+    const int command = TrackPopupMenu(
+        menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0,
+        window_, nullptr);
+    DestroyMenu(menu);
+    if (pane_host()->is_shutting_down() || command == 0) return;
+    if (const HWND owner = GetParent(window_); owner != nullptr)
+        SendMessageW(owner, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
 void Pane::refresh_navigation_buttons() noexcept {
