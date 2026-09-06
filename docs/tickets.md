@@ -237,6 +237,7 @@
 | PD-197 | pane 命令、chrome 與導覽完成的收尾 | 7 | `in_progress` | PD-192, PD-193, PD-194, PD-195, PD-196 | [PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md) |
 | PD-198 | 剩餘 pane 局部訊息與 popup 行為歸位 | 7 | `done` | PD-197 | [PD-198](tickets/PD-198-pane-local-message-and-popup-ownership.md) |
 | PD-199 | 導覽請求身分與分頁身分的正確性修正 | 7 | `done` | PD-170, PD-183, PD-196 | [PD-199](tickets/PD-199-navigation-request-identity-and-tab-identity-fixes.md) |
+| PD-200 | group list 重排手勢收進 `sidebar::Sidebar` | 7 | `done` | PD-057, PD-196 | [PD-200](tickets/PD-200-sidebar-owns-the-group-reorder-gesture.md) |
 
 
 ## Dependency lanes
@@ -900,3 +901,20 @@ LLVM-MinGW Release configure/build 與完整 CTest 24/24 通過；focused tab-cl
 **未持久化的行為，若非刻意應另行開票**：分頁的 back/forward history 完全不序列化（`session.cpp` 無 `history` 欄位），重啟後歸零；`record_navigation` 的 history 也沒有長度上限。
 
 **新增候選**：見 §候選 的 `activate_group` 跨重入參考項。
+
+
+### 2026-09-06 — 協調層自身的拆分：開 PD-200，並記下兩處評估後不拆的地方
+
+使用者要求繼續拆 `main.cpp`。這裡問的是**與 PD-191～198 不同的問題**：那一串問「哪些該搬進 `Pane`」並已窮盡，本次問「協調層自己有沒有可獨立的模組」。不是重開 PD-197 的界線判定。
+
+**開票**：[PD-200](tickets/PD-200-sidebar-owns-the-group-reorder-gesture.md)（已完成）——group list 的重排拖曳收進 `sidebar::Sidebar`，與 PD-196 的 `PaneTabStrip` 同構。`AppState::GroupDrag` 消失，`draw_item` 由 3 參數降為 1（投影順序由 Sidebar 自算），`Sidebar` 回報完成的手勢、協調層負責 `core::reorder_group` 與 debounce 存檔。`main.cpp` 4,609 → 4,470。
+
+**評估後明確不拆（附理由，避免重跑盤點）**：
+
+| 不拆的部分 | 理由 |
+|---|---|
+| Group CRUD 協調（`activate_group`／`add`／`duplicate`／`delete`／`move_group`，約 500 行） | 呼叫 `apply_layout`、`rebind_panes`、`navigate_realized_panes`、`capture_locations`、`refresh_tab_strips`、`ShellCallScope`、`panes[].host().focus()`。抽成型別必須吃下幾乎整個 `AppState`，介面不會變窄——淺模組。它們本來就是協調工作。 |
+| 版面幾何（`layout_rects`／`splitters`／`apply_layout`／`navigation_geometry`，約 850 行） | 與 `DeferWindowPos` 的 parent-scoped 批次契約糾纏，PD-155 的 atomic live resize 與 PD-187 的風險已記錄，且無法自動化驗證。行數最多、收益最差、風險最高。 |
+| pane.cpp（1,429 行）整體 | `Pane` 的成員共用 `bound_state_`／`explorer_host_`／那組 HWND，沒有一群能不穿過這些成員而獨立。開頭約 380 行的 owner-draw free function 不碰 `Pane` 狀態、確實可搬，但那是搬檔案不是深化模組：介面沒變深、測試接縫沒變多。 |
+
+**下一刀候選與風險**：`SessionWriter`（2026-09-01 既有候選）。接縫比 PD-200 更窄，但 `shutdown_state_check.ps1` 以來源掃描釘住 5 個同步 `save_now` 呼叫點與 timer 分支的確切形狀，那是 shutdown 正確性的安全網；重構它必然要同時改實作與安全網。PD-200 刻意不與它同批。

@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <commctrl.h>
 #include <ole2.h>
 #include <utility>
+#include <windowsx.h>
 
 namespace panedock::sidebar {
 
@@ -141,11 +143,23 @@ bool Sidebar::measure_item(MEASUREITEMSTRUCT* item, UINT dpi) const noexcept {
     return true;
 }
 
-bool Sidebar::draw_item(
-    const DRAWITEMSTRUCT* item, std::size_t group_index,
-    bool placeholder) const noexcept {
+bool Sidebar::draw_item(const DRAWITEMSTRUCT* item) const noexcept {
     if (item == nullptr || item->CtlType != ODT_LISTBOX ||
         item->CtlID != static_cast<UINT>(control_id_)) return false;
+
+    // While a reorder drag is live the rows show the projected order, and the
+    // row under the cursor is the insertion placeholder.
+    std::size_t group_index = item->itemID;
+    bool placeholder = false;
+    if (drag_.has_value() && drag_->dragging &&
+        drag_->target_index.has_value()) {
+        const auto projected = panedock::core::reorder_source_index(
+            groups_.size(), drag_->source_index, *drag_->target_index,
+            item->itemID);
+        if (projected.has_value()) group_index = *projected;
+        placeholder = *drag_->target_index == item->itemID;
+    }
+
     if (item->itemID == static_cast<UINT>(-1) ||
         group_index >= groups_.size()) return true;
 
@@ -272,6 +286,145 @@ bool Sidebar::begin_rename() {
 
 std::optional<std::wstring> Sidebar::take_rename_text() noexcept {
     return std::exchange(pending_rename_, std::nullopt);
+}
+
+std::optional<GroupReorder> Sidebar::take_reorder_request() noexcept {
+    return std::exchange(pending_reorder_, std::nullopt);
+}
+
+std::optional<std::size_t> Sidebar::item_at_point(HWND list,
+                                                  POINT point) const noexcept {
+    if (list != list_box_) return std::nullopt;
+    const LRESULT hit = SendMessageW(
+        list, LB_ITEMFROMPOINT, 0, MAKELPARAM(point.x, point.y));
+    const std::size_t index = static_cast<std::size_t>(LOWORD(hit));
+    if (HIWORD(hit) != 0 || index >= groups_.size()) return std::nullopt;
+    return index;
+}
+
+void Sidebar::cancel_drag() noexcept {
+    if (!drag_.has_value()) return;
+    const HWND list = drag_->list;
+    drag_.reset();
+    InvalidateRect(list, nullptr, FALSE);
+    if (GetCapture() == list) ReleaseCapture();
+}
+
+void Sidebar::finish_drag(HWND list) noexcept {
+    if (!drag_.has_value() || drag_->list != list) return;
+    const Drag drag = std::move(*drag_);
+    drag_.reset();
+    InvalidateRect(list, nullptr, FALSE);
+    if (GetCapture() == list) ReleaseCapture();
+    if (!drag.dragging || !drag.target_index.has_value() ||
+        *drag.target_index == drag.source_index)
+        return;
+    pending_reorder_ = GroupReorder{drag.group_id, *drag.target_index};
+}
+
+void Sidebar::update_drag(HWND list, WPARAM wparam, LPARAM lparam) noexcept {
+    if (!drag_.has_value() || drag_->list != list) return;
+    if ((wparam & MK_LBUTTON) == 0) {
+        cancel_drag();
+        return;
+    }
+    const POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+    RECT client{};
+    GetClientRect(list, &client);
+    if (!PtInRect(&client, point)) {
+        cancel_drag();
+        return;
+    }
+    if (!drag_->dragging) {
+        const int threshold = (std::max)(
+            1, (std::max)(GetSystemMetrics(SM_CXDRAG),
+                          GetSystemMetrics(SM_CYDRAG)));
+        const int dx = point.x - drag_->start.x;
+        const int dy = point.y - drag_->start.y;
+        if (dx < -threshold || dx > threshold || dy < -threshold ||
+            dy > threshold) {
+            drag_->dragging = true;
+            // PD-057: take the capture only now. Before this point the
+            // gesture is still an ordinary click and the LISTBOX must keep
+            // its own capture, or it cancels the selection instead of
+            // reporting it.
+            if (GetCapture() != list) SetCapture(list);
+        }
+    }
+    if (!drag_->dragging) return;
+    const auto target = item_at_point(list, point);
+    if (target == drag_->target_index) return;
+    drag_->target_index = target;
+    InvalidateRect(list, nullptr, FALSE);
+}
+
+std::optional<LRESULT> Sidebar::handle_list_message(
+    HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept {
+    if (window != list_box_) return std::nullopt;
+    const POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+    switch (message) {
+        case WM_LBUTTONDOWN: {
+            std::optional<Drag> pending;
+            if (const auto item = item_at_point(window, point);
+                item.has_value()) {
+                pending = Drag{window, *item, groups_[*item].id, point, false,
+                               std::nullopt};
+            }
+            const LRESULT result =
+                DefSubclassProc(window, message, wparam, lparam);
+            if (pending.has_value() && !drag_.has_value()) {
+                // PD-057: record the potential drag but do NOT take the
+                // capture yet. The LISTBOX runs its own capture-based click
+                // tracking between button-down and button-up; interfering
+                // with it makes the control report LBN_SELCANCEL instead of
+                // LBN_SELCHANGE, so the Group never switches. The capture is
+                // taken in update_drag once the drag threshold is actually
+                // crossed, by which point the click is no longer a plain
+                // selection.
+                drag_ = std::move(*pending);
+            }
+            return result;
+        }
+        case WM_MOUSEMOVE: {
+            TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
+            TrackMouseEvent(&tracking);
+            set_hover_index(item_at_point(window, point));
+            update_drag(window, wparam, lparam);
+            if (drag_.has_value() && drag_->list == window && drag_->dragging)
+                return 0;
+            return std::nullopt;
+        }
+        case WM_MOUSELEAVE:
+            set_hover_index(std::nullopt);
+            return 0;
+        case WM_LBUTTONUP: {
+            const bool dragging = drag_.has_value() &&
+                                  drag_->list == window && drag_->dragging;
+            // PD-057: a plain click must reach the LISTBOX first. Its
+            // selection is committed -- and LBN_SELCHANGE sent -- while it
+            // processes WM_LBUTTONUP, and finish_drag releases the capture
+            // the control is still relying on. Releasing first makes the
+            // LISTBOX abandon the click via WM_CAPTURECHANGED, so the
+            // notification never arrives and Groups cannot be switched.
+            // While actually dragging we still swallow the message, or
+            // ending a reorder would also switch the Group under the cursor.
+            // Mirrors the WM_LBUTTONDOWN branch, which already defers to the
+            // control before touching our state.
+            if (!dragging) {
+                const LRESULT result =
+                    DefSubclassProc(window, message, wparam, lparam);
+                finish_drag(window);
+                return result;
+            }
+            finish_drag(window);
+            return 0;
+        }
+        case WM_CAPTURECHANGED:
+            cancel_drag();
+            return std::nullopt;
+        default:
+            return std::nullopt;
+    }
 }
 
 LRESULT CALLBACK Sidebar::edit_proc(HWND window, UINT message, WPARAM wparam,

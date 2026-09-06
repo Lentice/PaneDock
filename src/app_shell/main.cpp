@@ -487,15 +487,6 @@ struct AppState : public panedock::app_shell::PaneHost {
         std::optional<std::size_t> target_index;
     };
     std::optional<TabDrag> tab_drag;
-    struct GroupDrag final {
-        HWND list{nullptr};
-        std::size_t source_index{};
-        std::string group_id;
-        POINT start{};
-        bool dragging{};
-        std::optional<std::size_t> target_index;
-    };
-    std::optional<GroupDrag> group_drag;
     panedock::sidebar::Sidebar sidebar;
     std::array<HWND, kButtonIds.size()> sidebar_buttons{};
     HWND group_label{nullptr};
@@ -2845,157 +2836,38 @@ LRESULT CALLBACK hover_tracking_proc(HWND window, UINT message, WPARAM wparam,
     return DefSubclassProc(window, message, wparam, lparam);
 }
 
-std::optional<std::size_t> group_item_at_point(const AppState& state,
-                                               HWND list,
-                                               POINT point) noexcept {
-    if (list != state.sidebar.window()) return std::nullopt;
-    const LRESULT hit = SendMessageW(
-        list, LB_ITEMFROMPOINT, 0, MAKELPARAM(point.x, point.y));
-    const std::size_t index = static_cast<std::size_t>(LOWORD(hit));
-    if (HIWORD(hit) != 0 || index >= state.application.groups.size())
-        return std::nullopt;
-    return index;
-}
-
-void cancel_group_drag(AppState& state, HWND list) noexcept {
-    if (!state.group_drag.has_value() || state.group_drag->list != list)
-        return;
-    state.group_drag.reset();
-    InvalidateRect(list, nullptr, FALSE);
-    if (GetCapture() == list) ReleaseCapture();
-}
-
-void finish_group_drag(AppState& state, HWND list) {
-    if (state.closing_ || state.shutdown_deferred) return;
-    if (!state.group_drag.has_value() || state.group_drag->list != list)
-        return;
-    AppState::GroupDrag drag = std::move(*state.group_drag);
-    state.group_drag.reset();
-    InvalidateRect(list, nullptr, FALSE);
-    if (GetCapture() == list) ReleaseCapture();
-    if (!drag.dragging || !drag.target_index.has_value() ||
-        *drag.target_index == drag.source_index)
-        return;
-    if (panedock::core::reorder_group(state.application, drag.group_id,
-                                      *drag.target_index)) {
-        refresh_sidebar(state);
-        schedule_session_save(state);
-    }
-}
-
-void update_group_drag(AppState& state, HWND list, WPARAM wparam,
-                       LPARAM lparam) {
-    if (!state.group_drag.has_value() || state.group_drag->list != list)
-        return;
-    if ((wparam & MK_LBUTTON) == 0) {
-        cancel_group_drag(state, list);
-        return;
-    }
-    const POINT point = point_from_lparam(lparam);
-    RECT client{};
-    GetClientRect(list, &client);
-    if (!PtInRect(&client, point)) {
-        cancel_group_drag(state, list);
-        return;
-    }
-    if (!state.group_drag->dragging) {
-        const int threshold = std::max(
-            1, std::max(GetSystemMetrics(SM_CXDRAG),
-                        GetSystemMetrics(SM_CYDRAG)));
-        const int dx = point.x - state.group_drag->start.x;
-        const int dy = point.y - state.group_drag->start.y;
-        if (dx < -threshold || dx > threshold || dy < -threshold ||
-            dy > threshold) {
-            state.group_drag->dragging = true;
-            // PD-057: take the capture only now. Before this point the
-            // gesture is still an ordinary click and the LISTBOX must keep
-            // its own capture, or it cancels the selection instead of
-            // reporting it.
-            if (GetCapture() != list) SetCapture(list);
-        }
-    }
-    if (!state.group_drag->dragging) return;
-    const auto target = group_item_at_point(state, list, point);
-    if (target == state.group_drag->target_index) return;
-    state.group_drag->target_index = target;
-    InvalidateRect(list, nullptr, FALSE);
-}
-
+// The list's own mouse behaviour lives in Sidebar. This keeps only what is
+// coordinator work: the shutdown and Shell-reentry gates, applying a finished
+// reorder to the model, and the subclass teardown.
 LRESULT CALLBACK group_list_proc(HWND window, UINT message, WPARAM wparam,
                                  LPARAM lparam, UINT_PTR,
                                  DWORD_PTR reference_data) {
     auto* state = reinterpret_cast<AppState*>(reference_data);
-    if (state != nullptr && (state->closing_ || state->shutdown_deferred) &&
+    if (state == nullptr)
+        return DefSubclassProc(window, message, wparam, lparam);
+    if ((state->closing_ || state->shutdown_deferred) &&
         message != WM_PAINT && message != WM_ERASEBKGND &&
         message != WM_NCDESTROY)
         return 0;
-    if (state != nullptr &&
-        defer_shell_reentry_mouse_message(window, *state, message, wparam,
+    if (defer_shell_reentry_mouse_message(window, *state, message, wparam,
                                           lparam))
         return 0;
-    if (message == WM_LBUTTONDOWN && state != nullptr) {
-        const POINT point = point_from_lparam(lparam);
-        std::optional<AppState::GroupDrag> pending;
-        const auto item = group_item_at_point(*state, window, point);
-        if (item.has_value()) {
-            pending = AppState::GroupDrag{
-                window, *item, state->application.groups[*item].id, point,
-                false, std::nullopt};
-        }
-        const LRESULT result = DefSubclassProc(window, message, wparam, lparam);
-        if (pending.has_value() && !state->group_drag.has_value()) {
-            // PD-057: record the potential drag but do NOT take the capture
-            // yet. The LISTBOX runs its own capture-based click tracking
-            // between button-down and button-up; interfering with it makes
-            // the control report LBN_SELCANCEL instead of LBN_SELCHANGE, so
-            // the Group never switches. The capture is taken in
-            // update_group_drag once the drag threshold is actually crossed,
-            // by which point the click is no longer a plain selection.
-            state->group_drag = std::move(*pending);
-        }
-        return result;
-    }
-    if (message == WM_MOUSEMOVE && state != nullptr) {
-        const POINT point = point_from_lparam(lparam);
-        TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
-        TrackMouseEvent(&tracking);
-        state->sidebar.set_hover_index(
-            group_item_at_point(*state, window, point));
-        update_group_drag(*state, window, wparam, lparam);
-        if (state->group_drag.has_value() &&
-            state->group_drag->list == window &&
-            state->group_drag->dragging)
-            return 0;
-    } else if (message == WM_MOUSELEAVE && state != nullptr) {
-        state->sidebar.set_hover_index(std::nullopt);
-        return 0;
-    } else if (message == WM_LBUTTONUP && state != nullptr) {
-        const bool dragging = state->group_drag.has_value() &&
-                              state->group_drag->list == window &&
-                              state->group_drag->dragging;
-        // PD-057: a plain click must reach the LISTBOX first. Its selection
-        // is committed — and LBN_SELCHANGE sent — while it processes
-        // WM_LBUTTONUP, and finish_group_drag releases the capture the
-        // control is still relying on. Releasing first makes the LISTBOX
-        // abandon the click via WM_CAPTURECHANGED, so the notification never
-        // arrives and Groups cannot be switched. While actually dragging we
-        // still swallow the message, or ending a reorder would also switch
-        // the Group under the cursor. Mirrors the WM_LBUTTONDOWN branch,
-        // which already defers to the control before touching our state.
-        if (!dragging) {
-            const LRESULT result =
-                DefSubclassProc(window, message, wparam, lparam);
-            finish_group_drag(*state, window);
-            return result;
-        }
-        finish_group_drag(*state, window);
-        return 0;
-    } else if (message == WM_CAPTURECHANGED && state != nullptr) {
-        cancel_group_drag(*state, window);
-    } else if (message == WM_NCDESTROY && state != nullptr) {
-        cancel_group_drag(*state, window);
+    if (message == WM_NCDESTROY) {
+        state->sidebar.cancel_drag();
         RemoveWindowSubclass(window, group_list_proc, 0);
+        return DefSubclassProc(window, message, wparam, lparam);
     }
+
+    const auto handled =
+        state->sidebar.handle_list_message(window, message, wparam, lparam);
+    if (const auto reorder = state->sidebar.take_reorder_request();
+        reorder.has_value() &&
+        panedock::core::reorder_group(state->application, reorder->group_id,
+                                      reorder->target_index)) {
+        refresh_sidebar(*state);
+        schedule_session_save(*state);
+    }
+    if (handled.has_value()) return *handled;
     return DefSubclassProc(window, message, wparam, lparam);
 }
 
@@ -3518,18 +3390,7 @@ bool draw_global_control(const DRAWITEMSTRUCT& item, AppState& state) {
             return true;
         }
     }
-    std::size_t group_index = item.itemID;
-    bool placeholder = false;
-    if (state.group_drag.has_value() && state.group_drag->dragging &&
-        state.group_drag->target_index.has_value()) {
-        const auto projected = panedock::core::reorder_source_index(
-            state.application.groups.size(), state.group_drag->source_index,
-            *state.group_drag->target_index, item.itemID);
-        if (projected.has_value()) group_index = *projected;
-        placeholder = *state.group_drag->target_index == item.itemID;
-    }
-    return state.sidebar.draw_item(
-        const_cast<DRAWITEMSTRUCT*>(&item), group_index, placeholder);
+    return state.sidebar.draw_item(&item);
 }
 
 bool handle_context_menu(HWND target, AppState& state, POINT screen) {
