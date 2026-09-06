@@ -254,7 +254,7 @@ ExplorerHost::NavigationGeneration ExplorerHost::begin_navigation() noexcept {
     return ++next_navigation_generation_;
 }
 
-bool ExplorerHost::enqueue_navigation(
+ExplorerHost::NavigationGeneration ExplorerHost::enqueue_navigation(
     NavigationGeneration generation) noexcept {
     if (generation == 0) generation = begin_navigation();
     if (generation > next_navigation_generation_)
@@ -263,11 +263,27 @@ bool ExplorerHost::enqueue_navigation(
         navigation_requests_.push_back({generation, false});
     } catch (...) {
         log_message(L"ExplorerHost: navigation request allocation failed");
-        return false;
+        return 0;
     }
     latest_navigation_generation_ =
         std::max(latest_navigation_generation_, generation);
-    return true;
+    return generation;
+}
+
+void ExplorerHost::fail_enqueued_navigation(
+    NavigationGeneration generation) noexcept {
+    // Withdraw this request's own record. take_navigation_generation() pops
+    // the front, which belongs to whichever navigation is still in flight;
+    // consuming it here would make that navigation's later completion answer
+    // to *this* generation -- the failure would be dropped as stale and the
+    // old folder recorded as this request's destination.
+    for (auto request = navigation_requests_.rbegin();
+         request != navigation_requests_.rend(); ++request) {
+        if (request->generation != generation) continue;
+        navigation_requests_.erase(std::next(request).base());
+        break;
+    }
+    report_navigation_failed(generation);
 }
 
 ExplorerHost::NavigationGeneration
@@ -575,14 +591,21 @@ HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
     }
     advised_ = true;
 
-    return navigate(location);
+    // navigate() now reports its own failures through its HRESULT, but the
+    // browser is live and Destroy'able either way: a folder that will not
+    // resolve is an error-overlay case, not a failed realization. Returning
+    // it here would leave Pane::realized() false on an initialized browser,
+    // and the next apply_layout would try to initialize it a second time.
+    log_hresult(L"ExplorerHost: initial navigation", navigate(location));
+    return S_OK;
 }
 
 HRESULT ExplorerHost::navigate(const core::ShellLocation& location) {
     const auto generation = prepared_navigation_generation_;
     prepared_navigation_generation_ = 0;
     if (!initialized_ || browser_ == nullptr) return E_UNEXPECTED;
-    if (!enqueue_navigation(generation)) return E_OUTOFMEMORY;
+    const auto enqueued = enqueue_navigation(generation);
+    if (enqueued == 0) return E_OUTOFMEMORY;
     ShellCallScope shell_call(*this);
 
     // Preserve the requested parsing name while navigation is pending or if
@@ -593,8 +616,8 @@ HRESULT ExplorerHost::navigate(const core::ShellLocation& location) {
     const auto bind_context = navigation_bind_context();
     if (bind_context == nullptr) {
         log_message(L"ExplorerHost: navigation bind context unavailable");
-        navigation_failed();
-        return S_OK;
+        fail_enqueued_navigation(enqueued);
+        return E_FAIL;
     }
     Microsoft::WRL::ComPtr<IShellItem> item;
     HRESULT hr = SHCreateItemFromParsingName(location_text.c_str(),
@@ -608,16 +631,16 @@ HRESULT ExplorerHost::navigate(const core::ShellLocation& location) {
     }
     if (FAILED(hr)) {
         log_hresult(L"SHCreateItemFromParsingName", hr);
-        navigation_failed();
-        return S_OK;
+        fail_enqueued_navigation(enqueued);
+        return hr;
     }
 
     hr = browser_->BrowseToObject(item.Get(), SBSP_ABSOLUTE);
     if (FAILED(hr)) {
         log_hresult(L"IExplorerBrowser::BrowseToObject", hr);
-        navigation_failed();
+        fail_enqueued_navigation(enqueued);
     }
-    return S_OK;
+    return hr;
 }
 
 HRESULT ExplorerHost::navigate(const core::ShellLocation& location,
@@ -735,13 +758,14 @@ HRESULT ExplorerHost::navigate_up() noexcept {
     const auto generation = prepared_navigation_generation_;
     prepared_navigation_generation_ = 0;
     if (!initialized_ || browser_ == nullptr) return E_UNEXPECTED;
-    if (!enqueue_navigation(generation)) return E_OUTOFMEMORY;
+    const auto enqueued = enqueue_navigation(generation);
+    if (enqueued == 0) return E_OUTOFMEMORY;
     // BrowseToObject requires a non-null punk; BrowseToIDList is the
     // documented way to pass a null pidl with SBSP_PARENT.
     const HRESULT hr = browser_->BrowseToIDList(nullptr, SBSP_PARENT);
     if (FAILED(hr)) {
         log_hresult(L"IExplorerBrowser::BrowseToIDList(SBSP_PARENT)", hr);
-        navigation_failed();
+        fail_enqueued_navigation(enqueued);
     }
     return hr;
 }
@@ -981,7 +1005,11 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
 }
 
 void ExplorerHost::navigation_failed() noexcept {
-    const auto generation = take_navigation_generation();
+    report_navigation_failed(take_navigation_generation());
+}
+
+void ExplorerHost::report_navigation_failed(
+    NavigationGeneration generation) noexcept {
     ShellCallScope shell_call(*this);
     if (parent_ == nullptr || generation != latest_navigation_generation_) {
         return;

@@ -135,9 +135,15 @@ bool switch_layout(GroupState& group, LayoutTemplate layout_template,
 bool add_tab(PaneState& pane, TabState tab);
 bool reorder_tab(PaneState& pane, const std::string& tab_id,
                  std::size_t target_index) noexcept;
+// Moves one tab between panes. When `source` holds only that tab it keeps a
+// reset placeholder rather than becoming empty; `retained_tab_id` is the id
+// that placeholder takes, and must be unused anywhere in the group -- reusing
+// `tab_id` would leave the same identity in two panes, which later blocks
+// moving the tab back and persists a duplicate id into the session.
 bool move_tab(PaneState& source, PaneState& target,
               const std::string& tab_id, std::size_t target_index,
-              const ShellLocation& default_location);
+              const ShellLocation& default_location,
+              const std::string& retained_tab_id);
 bool close_tab(PaneState& pane, const std::string& tab_id,
                const ShellLocation& default_location);
 bool set_active_tab(PaneState& pane, const std::string& tab_id) noexcept;

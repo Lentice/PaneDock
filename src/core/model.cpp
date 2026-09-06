@@ -314,7 +314,8 @@ bool reorder_tab(PaneState& pane, const std::string& tab_id,
 
 bool move_tab(PaneState& source, PaneState& target,
               const std::string& tab_id, std::size_t target_index,
-              const ShellLocation& default_location) {
+              const ShellLocation& default_location,
+              const std::string& retained_tab_id) {
     const auto tab = find_id(source.tabs, tab_id);
     if (&source == &target || tab == source.tabs.end() ||
         find_id(target.tabs, tab_id) != target.tabs.end()) {
@@ -323,9 +324,17 @@ bool move_tab(PaneState& source, PaneState& target,
 
     TabState moved = *tab;
     if (source.tabs.size() == 1) {
+        // The moved copy keeps tab_id, so the placeholder left behind must
+        // take a different one or the id exists in both panes.
+        if (retained_tab_id.empty() || retained_tab_id == tab_id ||
+            find_id(target.tabs, retained_tab_id) != target.tabs.end()) {
+            return false;
+        }
+        tab->id = retained_tab_id;
         tab->location = default_location;
         tab->history.clear();
         tab->history_index = 0;
+        source.active_tab_id = retained_tab_id;
     } else {
         const bool was_active = source.active_tab_id == tab_id;
         const auto next = source.tabs.erase(tab);

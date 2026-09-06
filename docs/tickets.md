@@ -236,6 +236,8 @@
 | PD-196 | tab strip 收進 `Pane`（`PaneTabStrip`） | 7 | `done` | PD-191, PD-194 | [PD-196](tickets/PD-196-pane-owns-its-tab-strip.md) |
 | PD-197 | pane 命令、chrome 與導覽完成的收尾 | 7 | `in_progress` | PD-192, PD-193, PD-194, PD-195, PD-196 | [PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md) |
 | PD-198 | 剩餘 pane 局部訊息與 popup 行為歸位 | 7 | `done` | PD-197 | [PD-198](tickets/PD-198-pane-local-message-and-popup-ownership.md) |
+| PD-199 | 導覽請求身分與分頁身分的正確性修正 | 7 | `done` | PD-170, PD-183, PD-196 | [PD-199](tickets/PD-199-navigation-request-identity-and-tab-identity-fixes.md) |
+
 
 ## Dependency lanes
 
@@ -373,6 +375,7 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | 崩潰迴圈的自動安全模式(連續 N 次不乾淨關閉即自動以 `--diagnostic` 啟動) | PD-025(2026-08-24)刻意排除:沒有真實崩潰資料前 N 是憑空調的,且自動重啟需要 `CreateProcess`,會在單一 process 架構上開一個口子。若使用者實際遇到崩潰迴圈再開票。 |
 | 縮圖 pipeline 的快取與尺寸上限 | 待 PD-003 量出縮圖對記憶體的實際貢獻後再開,避免憑估計調參數。PD-003 2026-08-29 的自動化量測跑出差值 0 bytes,但兩個組態都重用同一次 run 內已導覽過的資料夾(縮圖早已快取),不是有效讀數;要開票前需先用全新啟動的 process 分別量測純文字與縮圖資料夾。 |
 | ~~診斷閒置磁碟 I/O 的來源~~ | **已於 2026-09-03 開票(PD-176),不再是候選。** PD-003 2026-08-29 量到閒置 10 分鐘期間有 307294 bytes 磁碟 I/O(NFR-001 磁碟門檻 FAIL,零 bytes 才算過),觸發條件早已成立;2026-09-03 三方稽核在原始碼層面排除了 app 自身的 busy-spin 與輪詢計時器,把範圍收斂為「歸因到 app 之外的來源」。 |
+| `activate_group` 橫跨 Shell 重入持有 `GroupState&` | 2026-09-06 稽核發現：`activate_group`（`main.cpp`）取得 `auto& group = active_group(state);` 後，該參考跨越 `navigate_realized_panes()` 與 `apply_layout()`——兩者都會重入訊息迴圈——才被 `active_pane_index(group)` 使用；`navigate_realized_panes` 的 `const GroupState&` 參數同樣在每次 `ShellCallScope` 之後繼續解參考。若重入期間 `state.application.groups` 被新增或刪除而重新配置，該參考即懸空。**稽核未能證明可達路徑**：Group CRUD 走 `WM_COMMAND`，而 `defer_shell_reentry_mouse_message` 在 `shell_call_depth != 0` 時會把滑鼠訊息延後，`activate_group` 自身也有 closing/shutdown 閘。因此這是**間接**防護，不是這個函式自己的不變量。觸發條件：出現一次 Group 切換期間的崩潰或狀態錯亂回報，或有人要放寬滑鼠訊息延後機制時；屆時的修法是改持 index 或在重入後重新查找，而不是再加一層外部閘。 |
 | 追查 `panedock_launch_smoke` 間歇性崩潰(0xC0000409) | PD-003 2026-08-29 執行期間偶發一次 `STATUS_STACK_BUFFER_OVERRUN`,發生在關閉一個含 4 個 Group、其中一個 42 個 tab 的真實 `session.json` 之後;立即重跑同一測試與完整 suite 皆通過,無法穩定重現。觸發條件:再次出現(尤其是大量 tab 的 Group)時開票追查,屆時附上本次的復現條件與 session.json 特徵作為起點。 |
 | ~~把 tab strip 的 hover／drag／paint／`WNDPROC` 收進 `app_shell::TabStrip` 模組~~ | **已於 2026-09-05 開票且完成（PD-196），不再是候選；PD-197 已複驗 `PaneTabStrip` 由 Pane 以值持有。** 原始描述保留：2026-09-01 架構審查原本以「paint 與 hit-test 各自重新推導 layout」為理由列為高優先，但 Codex 唯讀核對**推翻**了該理由:layout 由 `layout_tab_strip`(`main.cpp:1798`)計算，tab 與 scroll 命中測試直接委派 `tab_overflow.h` 的純函式(`main.cpp:3817`)，paint(`:4052`)與 `WNDPROC`(`:4238`)消費同一份 `tab_strip_geometry`——PD-085／PD-107 已經把這條共用 seam 建好了。剩下的真實問題只有「這 853 行仍在 `main.cpp`、且 drag／hover／paint 的**呼叫路徑**沒有測試涵蓋」。觸發條件（**2026-09-04 更新**）:原條件為「再出現一個 hit-test／repaint 類的實機回報(PD-107、PD-152、PD-154 之後的下一個)」;現增列第二個觸發點——**PD-187～PD-189 完成後重新評估**。理由:那三張票之後 tab strip 會自然落在 `Pane` 底下（pane 有自己的 HWND 與 proc、繪製與命令都已就地處理），屆時這群 ~830 行的邊界會比現在清楚，切票會準得多。2026-09-04 全檔盤點的補充事實:`layout_tab_strip` 其實不在 `main.cpp`，它是 `tab_overflow.h:176-336` 的無狀態純函式（不依賴 `AppState`／HWND），`Pane` 現在就能直接呼叫;而 `cancel_tab_drag`／`finish_tab_drag`／`update_tab_drag`／`register_tab_drag_hover_targets` 依契約 (3) 天生跨 pane，不可能整群變成 `Pane` 成員——真正可搬的比 853 這個數字小。 |
 | `SessionWriter`——把 `session_dirty`、500ms 防抖、clean/crash marker 與 atomic replace 收進單一型別 | 2026-09-01 架構審查列為 Speculative 並自我否決:目前只有一個寫入者，注入的 "write these bytes" adapter 是**假想 seam**(一個 adapter 只是假設，兩個才是真的)。觸發條件:出現第二個持久化寫入者(獨立 settings 檔、匯出功能)，或 PD-162 實作時發現 shutdown reducer 本來就需要透過介面呼叫存檔決策——後者請在 PD-162 交接區記錄，再據以開票。 |
@@ -882,3 +885,18 @@ PD-184～186＋190 全在資料層、PD-187～189 全在視窗層，兩段分開
 PD-197 複驗表「系列漏列的真正局部行為」已由 PD-198 收進 `Pane`：EDIT subclass 與建立接線、位址列色彩／共享 brush、container region、folder-context font、view-mode／pinned 選項、tab context menu 建構及批次關閉。主視窗保留目標 pane 解碼、Manage Pinned Locations 對話框、tab context singleton、重入／shutdown 閘門與原 popup command dispatch；`PaneHost` 仍為 13 支服務。
 
 LLVM-MinGW Release configure/build 與完整 CTest 24/24 通過；focused tab-close 保留集合／最後 tab fallback、來源檢查的缺失區塊與破壞不變式反證皆通過。真實 diagnostic app 以正常 `WM_CLOSE` 在 201 ms 退出，exit code 0、最終 `live_view_count=0`、無殘留。完整證據與人工未驗清單見 PD-198 交接；不更改 PD-197 的行數／grep 驗收落差，也不推進 Phase 5 release gate。
+
+
+### 2026-09-06 — 全 repo 稽核（audit-project）：開 PD-199，留下一個候選
+
+使用者要求跑一次全 repo 稽核。讀了 `core/shutdown.cpp`、`explorer_host/explorer_host.cpp`、`app_shell/pane.cpp`、`app_shell/main.cpp` 的導覽與拖曳流程、`core/model.cpp`、`core/session.cpp`，追蹤五條流程：導覽請求生命週期、shutdown 序列、分頁增刪、跨 pane 分頁拖曳、session 存檔。
+
+**排除的疑慮（記在這裡以免下次重查）**：`file_operations.cpp` 每條 `Advise` 路徑都有對應 `Unadvise`、`ReleaseStgMedium` 成對；`Pane::destroy()` 的拆除順序與 design-spec §9.4 一致；DPI 共用資源（icon font／address brush）在 `WM_DPICHANGED` 有釋放；`record_navigation` 的 `history_index` 越界疑慮**不可達**——`session.cpp` 完全不序列化 `history`，index 只由行程內程式碼維護。
+
+**開票**：[PD-199](tickets/PD-199-navigation-request-identity-and-tab-identity-fixes.md)（已完成）——(1) `ExplorerHost` 同步導覽失敗從佇列前端取走飛行中請求的 generation，導致失敗被靜默吞掉、且舊資料夾被記成新目的地；(2) `core::move_tab` 把 pane 最後一個分頁移走時，佔位分頁沿用同一個 tab id，使同一身分同時存在於兩個 pane、拖回原 pane 被靜默拒絕、重複 id 寫進 session；(3) `navigate()` 所有失敗路徑回傳 `S_OK`，讓呼叫端的 `FAILED(hr)` 檢查失效。CTest 24/24。
+
+**明確不重開的方向**：稽核的原始建議清單有一項「拆分 `main.cpp`」。PD-191～198 已經做過這件事並在本頁記載了刻意留在協調層的完整界線與未達行數目標的取捨，**不因為一次稽核就重開**；要重開必須依規則提出新證據。
+
+**未持久化的行為，若非刻意應另行開票**：分頁的 back/forward history 完全不序列化（`session.cpp` 無 `history` 欄位），重啟後歸零；`record_navigation` 的 history 也沒有長度上限。
+
+**新增候選**：見 §候選 的 `activate_group` 跨重入參考項。

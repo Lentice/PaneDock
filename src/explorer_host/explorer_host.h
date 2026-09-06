@@ -100,8 +100,17 @@ private:
         bool pending_notified{};
     };
 
-    bool enqueue_navigation(NavigationGeneration generation) noexcept;
+    // Returns the generation actually enqueued, or 0 if the record could not
+    // be allocated. Callers keep the returned value so a synchronous failure
+    // can withdraw its own record instead of consuming the queue front.
+    NavigationGeneration enqueue_navigation(
+        NavigationGeneration generation) noexcept;
     NavigationGeneration take_navigation_generation() noexcept;
+    // Synchronous-failure path: drops this request's own queued record, then
+    // reports the failure for it. Never call it for a Shell event -- those
+    // have no request token and must go through take_navigation_generation().
+    void fail_enqueued_navigation(NavigationGeneration generation) noexcept;
+    void report_navigation_failed(NavigationGeneration generation) noexcept;
     void enter_shell_call() noexcept;
     void leave_shell_call() noexcept;
     void install_context_menu_subclass() noexcept;

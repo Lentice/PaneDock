@@ -96,10 +96,47 @@ int main() {
                             static_cast<int>(expected_mode), static_cast<int>(mode),
                             actual_size);
             }
+            using Generation =
+                panedock::explorer_host::ExplorerHost::NavigationGeneration;
+            Generation failed_generation = 0;
+            int failed_count = 0;
+            host.set_navigation_failed_callback(
+                [&](Generation generation) {
+                    failed_generation = generation;
+                    ++failed_count;
+                });
+
+            // Whether this name fails inside navigate() or later through
+            // OnNavigationFailed is the Shell's call and is not stable across
+            // repeats, so assert the contract instead of the verdict: a
+            // navigate() that reports failure in its HRESULT must raise
+            // exactly one failure callback, carrying its OWN generation.
+            // navigate() used to return a bare S_OK on every failure path,
+            // which made the previous SUCCEEDED() assertion here vacuous, and
+            // it reported failures with whatever generation sat at the front
+            // of the request queue -- a request still in flight.
             constexpr std::wstring_view missing =
                 L"?:\\PaneDock-PD-022-definitely-not-there";
-            EXPECT(SUCCEEDED(host.navigate({std::wstring(missing), {}, {}})));
-            EXPECT(host.location().parsing_name == missing);
+            int synchronous_failures = 0;
+            for (int attempt = 0; attempt < 4; ++attempt) {
+                const int before = failed_count;
+                const Generation requested = host.begin_navigation();
+                const HRESULT navigate_result =
+                    host.navigate({std::wstring(missing), {}, {}}, requested);
+                EXPECT(host.location().parsing_name == missing);
+                if (FAILED(navigate_result)) {
+                    ++synchronous_failures;
+                    EXPECT(failed_count == before + 1);
+                    EXPECT(failed_generation == requested);
+                } else {
+                    EXPECT(failed_count == before);
+                }
+            }
+            // Keep the loop above from passing vacuously.
+            EXPECT(synchronous_failures > 0);
+            std::printf("synchronous navigation failures=%d of 4\n",
+                        synchronous_failures);
+            host.set_navigation_failed_callback({});
         }
         host.destroy();
         EXPECT(live_view_count() == 0);

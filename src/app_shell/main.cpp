@@ -2631,9 +2631,13 @@ void finish_tab_drag(AppState& state, HWND strip) {
     auto& source = group.panes[drag.pane_index];
     auto& target = group.panes[target_pane];
     const bool source_active = source.active_tab_id == drag.tab_id;
+    // Reserved before the move: a single-tab source keeps a placeholder, and
+    // it needs an id that is free across the whole group.
+    const std::string retained_tab_id = state.make_unique_tab_id();
     if (!panedock::core::move_tab(
             source, target, drag.tab_id, *drag.target_index,
-            default_shell_location())) return;
+            default_shell_location(), retained_tab_id)) return;
+
     if (source_active && state.panes[drag.pane_index].realized()) {
         {
             ShellCallScope shell_call(state);

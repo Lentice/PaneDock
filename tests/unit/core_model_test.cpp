@@ -253,20 +253,41 @@ void test_move_tab() {
     source.active_tab_id = "one";
     PaneState target = pane("target", {tab("three", L"three")});
 
-    EXPECT(move_tab(source, target, "one", 0, kDefault));
+    EXPECT(move_tab(source, target, "one", 0, kDefault, "spare"));
     EXPECT(source.tabs.size() == 1);
     EXPECT(source.active_tab_id == "two");
     EXPECT(target.tabs.front().id == "one");
     EXPECT(target.tabs.front().location.parsing_name == L"one");
     EXPECT(target.active_tab_id == "one");
 
-    EXPECT(move_tab(source, target, "two", target.tabs.size(), kDefault));
+    // Moving a pane's last tab leaves a reset placeholder behind. It must not
+    // reuse the moved tab's id, or the same identity lives in both panes and
+    // moving it back is silently refused.
+    EXPECT(move_tab(source, target, "two", target.tabs.size(), kDefault,
+                    "spare"));
     EXPECT(source.tabs.size() == 1);
-    EXPECT(source.tabs.front().id == "two");
+    EXPECT(source.tabs.front().id == "spare");
+    EXPECT(source.active_tab_id == "spare");
     EXPECT(source.tabs.front().location == kDefault);
+    EXPECT(source.tabs.front().history.empty());
     EXPECT(target.tabs.back().id == "two");
     EXPECT(target.tabs.back().location.parsing_name == L"two");
     EXPECT(target.active_tab_id == "two");
+
+    // The moved tab can now go back where it came from.
+    EXPECT(move_tab(target, source, "two", 0, kDefault, "spare-2"));
+    EXPECT(source.tabs.size() == 2);
+    EXPECT(target.tabs.size() == 2);
+
+    // A placeholder id that collides is rejected rather than duplicated.
+    PaneState only = pane("only", {tab("solo", L"solo")});
+    PaneState other = pane("other", {tab("kept", L"kept")});
+    EXPECT(!move_tab(only, other, "solo", 0, kDefault, "solo"));
+    EXPECT(!move_tab(only, other, "solo", 0, kDefault, ""));
+    EXPECT(!move_tab(only, other, "solo", 0, kDefault, "kept"));
+    EXPECT(only.tabs.size() == 1);
+    EXPECT(only.tabs.front().id == "solo");
+    EXPECT(other.tabs.size() == 1);
 }
 
 void test_layout_migration_stable_pane_identity() {
