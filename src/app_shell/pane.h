@@ -120,6 +120,8 @@ class Pane final {
     void cycle_active_tab(bool reverse);
     void add_tab(panedock::core::ShellLocation initial_location);
     void close_tab(const std::string &tab_id);
+    void close_tabs(const std::string &tab_id, int command);
+    int show_tab_context_menu(const std::string &tab_id, POINT screen);
 
     // Enable/disable back, forward, up and folder-context from the bound
     // tab's history. Needs no coordinator state, so it lives here.
@@ -128,9 +130,13 @@ class Pane final {
     void refresh_status_bar() noexcept;
     bool handle_command(int id);
     bool draw_control(const DRAWITEMSTRUCT& item);
+    std::optional<LRESULT> color_address_bar(HWND control, HDC dc) noexcept;
+    // One shared address brush, released when the main window ends.
+    static void release_address_bar_background_brush() noexcept;
     // Shared icon font: the coordinator releases it on DPI change/shutdown.
     static void release_navigation_icon_font() noexcept;
 
+    void apply_container_region(int width, int height, int radius) noexcept;
     bool set_rect(const RECT &rect) noexcept;
     void set_paint_geometry(const RECT &navigation_background,
                             const RECT &pane_window_rect, UINT dpi) noexcept;
@@ -224,6 +230,11 @@ class Pane final {
     HPEN card_border_pen_{nullptr};
     UINT card_border_pen_dpi_{};
 };
+
+inline constexpr int kCloseTabId = 780;
+inline constexpr int kCloseOtherTabsId = 781;
+inline constexpr int kCloseAllTabsId = 782;
+inline constexpr int kCloseTabsToRightId = 783;
 
 inline constexpr int kViewModeMenuIdBase = 360;
 

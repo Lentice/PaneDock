@@ -131,14 +131,10 @@ constexpr int kViewModeMenuIdCount =
 constexpr int kLayoutButtonIdBase = 400;
 // Pinned popup commands: four pane blocks, each with 64 custom locations and
 // four fixed/action slots. The 500-771 range is separate from all controls.
-using panedock::app_shell::kPinnedMenuAddOffset;
-using panedock::app_shell::kPinnedMenuDesktopOffset;
 using panedock::app_shell::kPinnedMenuIdBase;
-using panedock::app_shell::kPinnedMenuLocationOffset;
 using panedock::app_shell::kPinnedMenuManageOffset;
 using panedock::app_shell::kPinnedMenuMaxLocationCount;
 using panedock::app_shell::kPinnedMenuSlotsPerPane;
-using panedock::app_shell::kPinnedMenuThisPcOffset;
 constexpr int kPinnedMenuIdCount =
     static_cast<int>(kExplorerCount) * kPinnedMenuSlotsPerPane;
 constexpr std::array<std::wstring_view, 2> kPinnedFixedParsingNames{
@@ -146,10 +142,10 @@ constexpr std::array<std::wstring_view, 2> kPinnedFixedParsingNames{
     L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"};
 // PD-113: fixed commands for the tab context menu, after all existing
 // control and popup command ranges.
-constexpr int kCloseTabId = 780;
-constexpr int kCloseOtherTabsId = 781;
-constexpr int kCloseAllTabsId = 782;
-constexpr int kCloseTabsToRightId = 783;
+using panedock::app_shell::kCloseTabId;
+using panedock::app_shell::kCloseOtherTabsId;
+using panedock::app_shell::kCloseAllTabsId;
+using panedock::app_shell::kCloseTabsToRightId;
 constexpr int kGroupListId = 100;
 constexpr int kNewGroupId = 101;
 constexpr int kDuplicateGroupId = 102;
@@ -1400,7 +1396,6 @@ void apply_ui_font(AppState& state) noexcept {
     set_ui_font(state.empty_message, font);
     for (auto& chrome : state.panes) {
         chrome.apply_font(font);
-        set_ui_font(chrome.folder_context_button(), font);
     }
     state.pinned_locations_dialog.apply_font(font);
     state.startup_notification.apply_font(font);
@@ -1490,60 +1485,6 @@ void draw_brand_bar(HWND window, HDC dc, RECT rect) noexcept {
     SetTextColor(dc, RGB(30, 41, 59));
     DrawTextW(dc, L"PaneDock", -1, &title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     if (old_font != nullptr) SelectObject(dc, old_font);
-}
-
-// PD-042: clip a pane's explorer container child window with rounded bottom
-// corners while keeping the internal top edge square. Called whenever the
-// container's rect changes (creation, WM_SIZE, WM_DPICHANGED — every
-// apply_layout pass).
-void apply_container_region(HWND container, int width, int height,
-                            int radius) noexcept {
-    if (container == nullptr || width <= 0 || height <= 0) return;
-    HRGN rounded = CreateRoundRectRgn(0, 0, width, height, radius, radius);
-    if (rounded == nullptr) return;
-    HRGN top_strip = CreateRectRgn(0, 0, width, radius);
-    if (top_strip == nullptr) {
-        DeleteObject(rounded);
-        return;
-    }
-    HRGN region = CreateRectRgn(0, 0, 0, 0);
-    if (region == nullptr) {
-        DeleteObject(top_strip);
-        DeleteObject(rounded);
-        return;
-    }
-    if (CombineRgn(region, rounded, top_strip, RGN_OR) == ERROR) {
-        DeleteObject(region);
-        DeleteObject(top_strip);
-        DeleteObject(rounded);
-        return;
-    }
-    DeleteObject(top_strip);
-    DeleteObject(rounded);
-    // Do not repaint this pane immediately. During a live layout pass every
-    // changed pane gets its region here; apply_layout invalidates all of them
-    // after the geometry commits have completed.
-    if (SetWindowRgn(container, region, FALSE) == 0) {
-        DeleteObject(region);
-    }
-}
-
-// Same fill color as draw_navigation_bar_background's RoundRect, returned as
-// a cached HBRUSH for WM_CTLCOLOREDIT so the address bar's native background
-// matches the rounded pill painted underneath it (PD-031 decision 2). Kept
-// as a single process-lifetime brush per the ticket's suggested "static
-// brush freed at process lifetime" pattern; released in WM_DESTROY.
-HBRUSH address_bar_background_brush() noexcept {
-    static HBRUSH brush = CreateSolidBrush(RGB(251, 252, 253));
-    return brush;
-}
-
-void release_address_bar_background_brush() noexcept {
-    // The static above is a function-local singleton; DeleteObject is safe
-    // to call on it more than once only if we null it out, but WM_DESTROY
-    // fires exactly once per window, so a single delete here is sufficient.
-    HBRUSH brush = address_bar_background_brush();
-    if (brush != nullptr) DeleteObject(brush);
 }
 
 void paint_client_background(HWND window, HDC dc, int sidebar_width,
@@ -2061,8 +2002,7 @@ HRESULT apply_layout(HWND window, AppState& state,
     }
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
         if (changed_panes[index]) {
-            apply_container_region(
-                state.panes[index].explorer_container(),
+            state.panes[index].apply_container_region(
                 container_rects[index].right - container_rects[index].left,
                 container_rects[index].bottom - container_rects[index].top,
                 container_radius);
@@ -2493,30 +2433,6 @@ bool register_tab_drag_hover_targets(HWND window, AppState& state) {
             return false;
     }
     return true;
-}
-
-LRESULT CALLBACK address_edit_proc(HWND window, UINT message, WPARAM wparam,
-                                   LPARAM lparam, UINT_PTR pane_index,
-                                   DWORD_PTR reference_data) {
-    auto* state = reinterpret_cast<AppState*>(reference_data);
-    // First click into an unfocused address bar selects everything so the user
-    // can paste over the path. The EDIT places its caret in WM_LBUTTONDOWN,
-    // after WM_SETFOCUS, so selecting there would be cleared immediately.
-    if (message == WM_LBUTTONDOWN && GetFocus() != window) {
-        SetFocus(window);
-        SendMessageW(window, EM_SETSEL, 0, -1);
-        return 0;
-    }
-    if (message == WM_KEYDOWN && wparam == VK_RETURN && state != nullptr) {
-        if (pane_index < state->panes.size())
-            state->panes[static_cast<std::size_t>(pane_index)].submit_address();
-        return 0;
-    }
-    if (message == WM_CHAR && wparam == VK_RETURN) return 0;
-    if (message == WM_NCDESTROY) {
-        RemoveWindowSubclass(window, address_edit_proc, pane_index);
-    }
-    return DefSubclassProc(window, message, wparam, lparam);
 }
 
 void set_layout(HWND window, AppState& state,
@@ -3434,9 +3350,6 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
                             tooltips[button]);
             }
         }
-        if (!SetWindowSubclass(chrome.address_bar(), address_edit_proc, index,
-                               reinterpret_cast<DWORD_PTR>(&state)))
-            return -1;
         if (!SetWindowSubclass(
                 chrome.folder_context_button(), hover_tracking_proc,
                 static_cast<UINT_PTR>(
@@ -3534,25 +3447,7 @@ bool handle_global_command(HWND window, AppState& state, int id,
             return true;
         }
 
-        const auto& tabs = state.panes[*pane_index].pane_state()->tabs;
-        std::vector<std::string> tab_ids;
-        if (id == kCloseOtherTabsId) {
-            for (const auto& tab : tabs)
-                if (tab.id != tab_id) tab_ids.push_back(tab.id);
-        } else if (id == kCloseAllTabsId) {
-            for (const auto& tab : tabs) tab_ids.push_back(tab.id);
-        } else {
-            const auto target_tab =
-                std::find_if(tabs.begin(), tabs.end(), [&](const auto& tab) {
-                    return tab.id == tab_id;
-                });
-            if (target_tab != tabs.end()) {
-                for (auto tab = target_tab + 1; tab != tabs.end(); ++tab)
-                    tab_ids.push_back(tab->id);
-            }
-        }
-        for (const auto& id_to_close : tab_ids)
-            state.panes[*pane_index].close_tab(id_to_close);
+        state.panes[*pane_index].close_tabs(tab_id, id);
         return true;
     }
     if (id >= panedock::app_shell::kViewModeMenuIdBase &&
@@ -3560,11 +3455,8 @@ bool handle_global_command(HWND window, AppState& state, int id,
         const int offset = id - panedock::app_shell::kViewModeMenuIdBase;
         const std::size_t pane_index = static_cast<std::size_t>(
             offset / static_cast<int>(kViewModeOptionCount));
-        const std::size_t mode_index = static_cast<std::size_t>(
-            offset % static_cast<int>(kViewModeOptionCount));
         if (pane_index < state.panes.size())
-            state.panes[pane_index].set_view_mode(
-                panedock::shell_core::kViewModeOptions[mode_index]);
+            state.panes[pane_index].handle_command(id);
         return true;
     }
     if (id >= kPinnedMenuIdBase &&
@@ -3573,6 +3465,10 @@ bool handle_global_command(HWND window, AppState& state, int id,
         const std::size_t pane_index =
             static_cast<std::size_t>(offset / kPinnedMenuSlotsPerPane);
         const int item = offset % kPinnedMenuSlotsPerPane;
+        if (item != kPinnedMenuManageOffset) {
+            state.panes[pane_index].handle_command(id);
+            return true;
+        }
         if (state.panes[pane_index].pane_state() == nullptr)
             return true;
         const auto *pane_host = state.panes[pane_index].pane_host();
@@ -3580,34 +3476,7 @@ bool handle_global_command(HWND window, AppState& state, int id,
         const auto locations = pane_host->pinned_locations();
         if (locations.size() < panedock::app_shell::kPinnedMenuFixedLocationCount)
             return true;
-        if (item == kPinnedMenuDesktopOffset ||
-            item == kPinnedMenuThisPcOffset) {
-            ShellCallScope shell_call(state);
-            (void)state.panes[pane_index].navigate_to(
-                locations[static_cast<std::size_t>(item)].location);
-            return true;
-        }
-        if (item >= kPinnedMenuLocationOffset && item < kPinnedMenuAddOffset) {
-            const std::size_t location_index =
-                static_cast<std::size_t>(item - kPinnedMenuLocationOffset);
-            const std::size_t record_index =
-                panedock::app_shell::kPinnedMenuFixedLocationCount +
-                location_index;
-            if (record_index < locations.size()) {
-                ShellCallScope shell_call(state);
-                (void)state.panes[pane_index].navigate_to(
-                    locations[record_index].location);
-            }
-            return true;
-        }
-        if (item == kPinnedMenuAddOffset) {
-            state.panes[pane_index].pin_current_folder();
-            return true;
-        }
-        if (item == kPinnedMenuManageOffset) {
-            show_pinned_locations_manager(window, state);
-            return true;
-        }
+        show_pinned_locations_manager(window, state);
         return true;
     }
     if (id >= kLayoutButtonIdBase &&
@@ -3675,29 +3544,8 @@ bool handle_context_menu(HWND target, AppState& state, POINT screen) {
 
         state.tab_context_menu_pane = *pane_index;
         state.tab_context_menu_tab_id = tabs[*item].id;
-        HMENU menu = CreatePopupMenu();
-        if (menu == nullptr) {
-            state.tab_context_menu_pane.reset();
-            state.tab_context_menu_tab_id.clear();
-            return true;
-        }
-        AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kCloseTabId),
-                    L"Close Tab");
-        AppendMenuW(menu, MF_STRING | (tabs.size() == 1 ? MF_GRAYED : 0),
-                    static_cast<UINT_PTR>(kCloseOtherTabsId),
-                    L"Close Other Tabs");
-        AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kCloseAllTabsId),
-                    L"Close All Tabs");
-        AppendMenuW(menu,
-                    MF_STRING |
-                        (*item + 1 >= tabs.size() ? MF_GRAYED : 0),
-                    static_cast<UINT_PTR>(kCloseTabsToRightId),
-                    L"Close Tabs to the Right");
-        SetForegroundWindow(window);
-        const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                                           screen.x, screen.y, 0, window,
-                                           nullptr);
-        DestroyMenu(menu);
+        const int command = state.panes[*pane_index].show_tab_context_menu(
+            state.tab_context_menu_tab_id, screen);
         if (command != 0) {
             SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
         } else {
@@ -4229,7 +4077,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             Pane::release_navigation_icon_font();
             release_brand_resources();
-            release_address_bar_background_brush();
+            Pane::release_address_bar_background_brush();
             return 0;
         case WM_NCDESTROY:
             if (state != nullptr) {
@@ -4747,15 +4595,9 @@ std::optional<LRESULT> handle_pane_control_message(Pane& chrome, UINT message,
             if (chrome.draw_control(drawing)) return LRESULT{TRUE};
             return std::nullopt;
         }
-        case WM_CTLCOLOREDIT: {
-            if (reinterpret_cast<HWND>(lparam) != chrome.address_bar())
-                return std::nullopt;
-            const HDC dc = reinterpret_cast<HDC>(wparam);
-            SetBkMode(dc, OPAQUE);
-            SetBkColor(dc, RGB(251, 252, 253));
-            SetTextColor(dc, RGB(76, 89, 107));
-            return reinterpret_cast<LRESULT>(address_bar_background_brush());
-        }
+        case WM_CTLCOLOREDIT:
+            return chrome.color_address_bar(reinterpret_cast<HWND>(lparam),
+                                            reinterpret_cast<HDC>(wparam));
         default:
             return std::nullopt;
     }

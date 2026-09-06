@@ -235,7 +235,7 @@
 | PD-195 | 位址列與釘選位置收進 `Pane` | 7 | `done` | PD-191, PD-192 | [PD-195](tickets/PD-195-pane-owns-address-bar-and-pinned-locations.md) |
 | PD-196 | tab strip 收進 `Pane`（`PaneTabStrip`） | 7 | `done` | PD-191, PD-194 | [PD-196](tickets/PD-196-pane-owns-its-tab-strip.md) |
 | PD-197 | pane 命令、chrome 與導覽完成的收尾 | 7 | `in_progress` | PD-192, PD-193, PD-194, PD-195, PD-196 | [PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md) |
-| PD-198 | 剩餘 pane 局部訊息與 popup 行為歸位 | 7 | `ready` | PD-197 | [PD-198](tickets/PD-198-pane-local-message-and-popup-ownership.md) |
+| PD-198 | 剩餘 pane 局部訊息與 popup 行為歸位 | 7 | `done` | PD-197 | [PD-198](tickets/PD-198-pane-local-message-and-popup-ownership.md) |
 
 ## Dependency lanes
 
@@ -875,3 +875,10 @@ PD-184～186＋190 全在資料層、PD-187～189 全在視窗層，兩段分開
 **量化結果與未滿足條件**：開工基準實際為 **5,213 行**（與 PD-196 交接一致），PD-197 後 **4,764 行，淨減 449**；相對系列原基準 5,975 行減少 1,211 行，**未達 Acceptance 5 的 3,300 行以下**。按字面搜尋仍有 11 行 `std::size_t pane_index`，包含 paste 與 popup dispatch，**也不滿足 Acceptance 4「只剩跨 pane」的字面限制**；逐行證據與正確归屬記於 PD-197 交接。沒有改名躲 grep、刪註解壓行或搬走 non-goals。行數／grep 限制與既定 scope 的取捨仍待使用者確認，tracker 暫不宣稱整票驗收完成。
 
 **驗證**：LLVM-MinGW Release build、完整 CTest（含 launch smoke）、正常關閉與 60 秒閒置取樣結果見 PD-197 交接。這是本票的局部回歸檢查，不推進 Phase 5 release gate；實機多步操作、跨 DPI、檔案操作重入及逐像素視覺仍待人工驗證。
+
+
+### 2026-09-06 — PD-198 局部訊息與 popup 所有權驗證
+
+PD-197 複驗表「系列漏列的真正局部行為」已由 PD-198 收進 `Pane`：EDIT subclass 與建立接線、位址列色彩／共享 brush、container region、folder-context font、view-mode／pinned 選項、tab context menu 建構及批次關閉。主視窗保留目標 pane 解碼、Manage Pinned Locations 對話框、tab context singleton、重入／shutdown 閘門與原 popup command dispatch；`PaneHost` 仍為 13 支服務。
+
+LLVM-MinGW Release configure/build 與完整 CTest 24/24 通過；focused tab-close 保留集合／最後 tab fallback、來源檢查的缺失區塊與破壞不變式反證皆通過。真實 diagnostic app 以正常 `WM_CLOSE` 在 201 ms 退出，exit code 0、最終 `live_view_count=0`、無殘留。完整證據與人工未驗清單見 PD-198 交接；不更改 PD-197 的行數／grep 驗收落差，也不推進 Phase 5 release gate。

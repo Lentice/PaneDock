@@ -101,6 +101,12 @@ function Assert-DebouncedFunction([string] $Start, [string] $Name) {
 Assert-DebouncedFunction 'void Pane::switch_active_tab(' 'Pane::switch_active_tab'
 Assert-DebouncedFunction 'void Pane::add_tab(' 'Pane::add_tab'
 Assert-DebouncedFunction 'void Pane::close_tab(' 'Pane::close_tab'
+$closeTabsBody = Get-FunctionSource 'void Pane::close_tabs(' 'Pane::close_tabs'
+if ($closeTabsBody -notmatch 'std::vector<std::string> tab_ids;' -or
+    $closeTabsBody -notmatch 'for \(const auto& id_to_close : tab_ids\)\s*close_tab\(id_to_close\)' -or
+    $closeTabsBody -match 'save_now\(|core::close_tab\(') {
+    throw 'session save debounce check failed: batch close must snapshot IDs and reuse Pane::close_tab'
+}
 Assert-DebouncedFunction 'void delete_group(' 'delete_group'
 Assert-DebouncedFunction 'void move_group(' 'move_group'
 Assert-DebouncedFunction 'void set_active_pane(' 'set_active_pane'

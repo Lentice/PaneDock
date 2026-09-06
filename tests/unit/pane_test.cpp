@@ -329,6 +329,70 @@ void test_close_last_tab_leaves_pane_consistent() {
     EXPECT(pane.active_tab() == &state.tabs.front());
 }
 
+void test_close_tabs_preserves_the_requested_set_and_last_tab_fallback() {
+    using namespace panedock::app_shell;
+    for (const int command :
+         {kCloseOtherTabsId, kCloseAllTabsId, kCloseTabsToRightId}) {
+        TestPaneHost host;
+        panedock::core::PaneState state;
+        for (const auto *id : {"a", "b", "c", "d"}) {
+            state.tabs.push_back({id, {L"folder", {}, {}}, "details",
+                                  "System.ItemNameDisplay", false,
+                                  {{L"previous", {}, {}}}, 0});
+        }
+        state.active_tab_id = "c";
+        Pane pane;
+        pane.set_host(&host);
+        pane.bind(&state);
+        const auto original = state;
+        host.shutting_down = true;
+        pane.close_tabs("b", command);
+        EXPECT(state == original);
+        host.shutting_down = false;
+        pane.close_tabs("b", -1);
+        EXPECT(state == original);
+
+        pane.close_tabs("b", command);
+
+        std::vector<std::string> remaining;
+        for (const auto &tab : state.tabs) remaining.push_back(tab.id);
+        if (command == kCloseOtherTabsId) {
+            EXPECT(remaining == std::vector<std::string>{"b"});
+            EXPECT(state.active_tab_id == "b");
+            EXPECT(state.tabs.front() == original.tabs[1]);
+            EXPECT(host.session_saves == 3);
+        } else if (command == kCloseTabsToRightId) {
+            const std::vector<std::string> expected{"a", "b"};
+            EXPECT(remaining == expected);
+            EXPECT(state.active_tab_id == "b");
+            EXPECT(state.tabs[0] == original.tabs[0]);
+            EXPECT(state.tabs[1] == original.tabs[1]);
+            EXPECT(host.session_saves == 2);
+            const auto after = state;
+            pane.close_tabs("missing", command);
+            pane.close_tabs("b", command);
+            EXPECT(state == after);
+            EXPECT(host.session_saves == 2);
+        } else {
+            EXPECT(remaining == std::vector<std::string>{"d"});
+            EXPECT(state.active_tab_id == "d");
+            EXPECT(state.tabs.front().location.parsing_name ==
+                   L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}");
+            EXPECT(state.tabs.front().history.empty());
+            EXPECT(state.tabs.front().history_index == 0);
+            EXPECT(state.tabs.front().view_mode == "details");
+            EXPECT(state.tabs.front().sort_column == "System.ItemNameDisplay");
+            EXPECT(!state.tabs.front().sort_ascending);
+            EXPECT(host.session_saves == 4);
+            pane.close_tabs("d", command);
+            EXPECT(state.tabs.size() == 1);
+            EXPECT(state.active_tab_id == "d");
+            EXPECT(host.session_saves == 5);
+        }
+        EXPECT(pane.active_tab() != nullptr);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -348,5 +412,6 @@ int main() {
     test_capture_location_respects_suppression();
     test_add_tab_does_not_reuse_stale_tab_pointer();
     test_close_last_tab_leaves_pane_consistent();
+    test_close_tabs_preserves_the_requested_set_and_last_tab_fallback();
     return panedock::test::summary("pane");
 }

@@ -336,6 +336,39 @@ void fill_rounded_rect(HDC dc, const RECT &rect, int radius, COLORREF fill,
     SelectObject(dc, old_brush);
 }
 
+// Same fill color as draw_navigation_bar_background's RoundRect, returned as
+// a cached HBRUSH for WM_CTLCOLOREDIT so the address bar's native background
+// matches the rounded pill painted underneath it (PD-031 decision 2). Kept
+// as a single process-lifetime brush per the ticket's suggested "static
+// brush freed at process lifetime" pattern; released in WM_DESTROY.
+HBRUSH address_bar_background_brush() noexcept {
+    static HBRUSH brush = CreateSolidBrush(RGB(251, 252, 253));
+    return brush;
+}
+
+LRESULT CALLBACK address_edit_proc(HWND window, UINT message, WPARAM wparam,
+                                   LPARAM lparam, UINT_PTR subclass_id,
+                                   DWORD_PTR reference_data) {
+    auto* pane = reinterpret_cast<Pane*>(reference_data);
+    // First click into an unfocused address bar selects everything so the user
+    // can paste over the path. The EDIT places its caret in WM_LBUTTONDOWN,
+    // after WM_SETFOCUS, so selecting there would be cleared immediately.
+    if (message == WM_LBUTTONDOWN && GetFocus() != window) {
+        SetFocus(window);
+        SendMessageW(window, EM_SETSEL, 0, -1);
+        return 0;
+    }
+    if (message == WM_KEYDOWN && wparam == VK_RETURN && pane != nullptr) {
+        pane->submit_address();
+        return 0;
+    }
+    if (message == WM_CHAR && wparam == VK_RETURN) return 0;
+    if (message == WM_NCDESTROY) {
+        RemoveWindowSubclass(window, address_edit_proc, subclass_id);
+    }
+    return DefSubclassProc(window, message, wparam, lparam);
+}
+
 void set_font(HWND window, HFONT font) noexcept {
     if (window != nullptr && font != nullptr)
         SendMessageW(window, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -403,6 +436,14 @@ LRESULT CALLBACK pane_window_proc(HWND window, UINT message, WPARAM wparam,
 
 } // namespace
 
+void Pane::release_address_bar_background_brush() noexcept {
+    // The static above is a function-local singleton; DeleteObject is safe
+    // to call on it more than once only if we null it out, but WM_DESTROY
+    // fires exactly once per window, so a single delete here is sufficient.
+    HBRUSH brush = address_bar_background_brush();
+    if (brush != nullptr) DeleteObject(brush);
+}
+
 void Pane::release_navigation_icon_font() noexcept {
     HFONT& font = navigation_icon_font(nullptr);
     if (font != nullptr) {
@@ -412,6 +453,46 @@ void Pane::release_navigation_icon_font() noexcept {
 }
 
 bool Pane::handle_command(int id) {
+    const int view_mode_base = kViewModeMenuIdBase + static_cast<int>(
+        index_ * panedock::shell_core::kViewModeOptions.size());
+    if (id >= view_mode_base && id < view_mode_base +
+            static_cast<int>(panedock::shell_core::kViewModeOptions.size())) {
+        set_view_mode(panedock::shell_core::kViewModeOptions[
+            static_cast<std::size_t>(id - view_mode_base)]);
+        return true;
+    }
+    const int pinned_base =
+        kPinnedMenuIdBase + static_cast<int>(index_ * kPinnedMenuSlotsPerPane);
+    if (id >= pinned_base && id < pinned_base + kPinnedMenuManageOffset) {
+        if (pane_host() == nullptr || pane_host()->is_shutting_down() ||
+            pane_state() == nullptr) return true;
+        const int item = id - pinned_base;
+        const auto locations = pane_host()->pinned_locations();
+        if (locations.size() < kPinnedMenuFixedLocationCount) return true;
+        if (item == kPinnedMenuDesktopOffset ||
+            item == kPinnedMenuThisPcOffset) {
+            ShellCall shell_call(pane_host());
+            (void)navigate_to(
+                locations[static_cast<std::size_t>(item)].location);
+            return true;
+        }
+        if (item >= kPinnedMenuLocationOffset && item < kPinnedMenuAddOffset) {
+            const std::size_t location_index =
+                static_cast<std::size_t>(item - kPinnedMenuLocationOffset);
+            const std::size_t record_index =
+                kPinnedMenuFixedLocationCount + location_index;
+            if (record_index < locations.size()) {
+                ShellCall shell_call(pane_host());
+                (void)navigate_to(locations[record_index].location);
+            }
+            return true;
+        }
+        if (item == kPinnedMenuAddOffset) {
+            pin_current_folder();
+            return true;
+        }
+    }
+
     switch (decode_pane_control(id).value_or(PaneControl::tab_strip)) {
         case PaneControl::back:
             navigate_history(true);
@@ -473,6 +554,14 @@ bool Pane::draw_control(const DRAWITEMSTRUCT& item) {
     if (drawing == pane_button_drawings.end()) return false;
     draw_navigation_icon_button(item, drawing->glyph, false, drawing->blend);
     return true;
+}
+
+std::optional<LRESULT> Pane::color_address_bar(HWND control, HDC dc) noexcept {
+    if (control != address_bar()) return std::nullopt;
+    SetBkMode(dc, OPAQUE);
+    SetBkColor(dc, RGB(251, 252, 253));
+    SetTextColor(dc, RGB(76, 89, 107));
+    return reinterpret_cast<LRESULT>(address_bar_background_brush());
 }
 
 void Pane::refresh_navigation_chrome() {
@@ -605,7 +694,9 @@ bool Pane::create(HWND parent, int pane_index) noexcept {
         forward_button_ != nullptr && up_button_ != nullptr &&
         refresh_button_ != nullptr && view_mode_button_ != nullptr &&
         pinned_button_ != nullptr && folder_context_button_ != nullptr;
-    if (!complete) {
+    if (!complete ||
+        !SetWindowSubclass(address_bar_, address_edit_proc, index_,
+                           reinterpret_cast<DWORD_PTR>(this))) {
         destroy();
         return false;
     }
@@ -945,6 +1036,35 @@ void Pane::show_pinned_locations_menu(POINT screen) {
         SendMessageW(owner, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
+int Pane::show_tab_context_menu(const std::string &tab_id, POINT screen) {
+    if (pane_state() == nullptr || window_ == nullptr) return 0;
+    const auto &tabs = pane_state()->tabs;
+    const auto target_tab = std::find_if(
+        tabs.begin(), tabs.end(), [&](const auto &tab) { return tab.id == tab_id; });
+    if (target_tab == tabs.end()) return 0;
+    const HWND window = GetParent(window_);
+    HMENU menu = CreatePopupMenu();
+    if (menu == nullptr) return 0;
+    AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kCloseTabId),
+                L"Close Tab");
+    AppendMenuW(menu, MF_STRING | (tabs.size() == 1 ? MF_GRAYED : 0),
+                static_cast<UINT_PTR>(kCloseOtherTabsId),
+                L"Close Other Tabs");
+    AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kCloseAllTabsId),
+                L"Close All Tabs");
+    AppendMenuW(menu,
+                MF_STRING |
+                    (target_tab + 1 == tabs.end() ? MF_GRAYED : 0),
+                static_cast<UINT_PTR>(kCloseTabsToRightId),
+                L"Close Tabs to the Right");
+    SetForegroundWindow(window);
+    const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                                       screen.x, screen.y, 0, window,
+                                       nullptr);
+    DestroyMenu(menu);
+    return command;
+}
+
 void Pane::switch_active_tab(const std::string &tab_id) {
     if (pane_host() == nullptr) return;
     if (pane_host()->is_shutting_down()) return;
@@ -1047,6 +1167,32 @@ void Pane::close_tab(const std::string &tab_id) {
     pane_host()->schedule_session_save();
 }
 
+void Pane::close_tabs(const std::string &tab_id, int command) {
+    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (pane_state() == nullptr) return;
+    if (command != kCloseOtherTabsId && command != kCloseAllTabsId &&
+        command != kCloseTabsToRightId) return;
+    const auto& tabs = pane_state()->tabs;
+    std::vector<std::string> tab_ids;
+    if (command == kCloseOtherTabsId) {
+        for (const auto& tab : tabs)
+            if (tab.id != tab_id) tab_ids.push_back(tab.id);
+    } else if (command == kCloseAllTabsId) {
+        for (const auto& tab : tabs) tab_ids.push_back(tab.id);
+    } else {
+        const auto target_tab =
+            std::find_if(tabs.begin(), tabs.end(), [&](const auto& tab) {
+                return tab.id == tab_id;
+            });
+        if (target_tab != tabs.end()) {
+            for (auto tab = target_tab + 1; tab != tabs.end(); ++tab)
+                tab_ids.push_back(tab->id);
+        }
+    }
+    for (const auto& id_to_close : tab_ids)
+        close_tab(id_to_close);
+}
+
 void Pane::refresh_navigation_buttons() noexcept {
     const panedock::core::TabState *tab = active_tab();
     if (tab == nullptr) {
@@ -1124,6 +1270,42 @@ HRESULT Pane::realize(const RECT &local_rect,
 void Pane::derealize() noexcept {
     explorer_host_.destroy();
     realized_ = false;
+}
+
+// PD-042: clip a pane's explorer container child window with rounded bottom
+// corners while keeping the internal top edge square. Called whenever the
+// container's rect changes (creation, WM_SIZE, WM_DPICHANGED — every
+// apply_layout pass).
+void Pane::apply_container_region(int width, int height, int radius) noexcept {
+    const HWND container = explorer_container_;
+    if (container == nullptr || width <= 0 || height <= 0) return;
+    HRGN rounded = CreateRoundRectRgn(0, 0, width, height, radius, radius);
+    if (rounded == nullptr) return;
+    HRGN top_strip = CreateRectRgn(0, 0, width, radius);
+    if (top_strip == nullptr) {
+        DeleteObject(rounded);
+        return;
+    }
+    HRGN region = CreateRectRgn(0, 0, 0, 0);
+    if (region == nullptr) {
+        DeleteObject(top_strip);
+        DeleteObject(rounded);
+        return;
+    }
+    if (CombineRgn(region, rounded, top_strip, RGN_OR) == ERROR) {
+        DeleteObject(region);
+        DeleteObject(top_strip);
+        DeleteObject(rounded);
+        return;
+    }
+    DeleteObject(top_strip);
+    DeleteObject(rounded);
+    // Do not repaint this pane immediately. During a live layout pass every
+    // changed pane gets its region here; apply_layout invalidates all of them
+    // after the geometry commits have completed.
+    if (SetWindowRgn(container, region, FALSE) == 0) {
+        DeleteObject(region);
+    }
 }
 
 bool Pane::set_rect(const RECT &rect) noexcept {
@@ -1241,6 +1423,7 @@ void Pane::apply_font(HFONT font) noexcept {
     set_font(pinned_button_, font);
     set_font(address_bar_, font);
     set_font(status_bar_, font);
+    set_font(folder_context_button_, font);
 }
 
 } // namespace panedock::app_shell

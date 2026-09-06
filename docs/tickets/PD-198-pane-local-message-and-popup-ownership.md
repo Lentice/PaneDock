@@ -96,4 +96,34 @@ git diff --check
 
 ## 交接區
 
-（實作者填寫：局部函式與 caller 歸屬、選單與 singleton 保留證據、focused check／完整 CTest／生命週期結果、實機未驗項目。）
+### 實作與 caller 歸屬（2026-09-06）
+
+| 行為 | 最終歸屬與接線 |
+|---|---|
+| EDIT subclass | `pane.cpp` 匿名 namespace 的 `address_edit_proc` 以 `Pane*` 作 reference data；`Pane::create` 在 child 建立完成後安裝，失敗走 `destroy()`／`false`，既有 main caller 仍回 `-1` 並顯示 startup UI 建立失敗。首次 click 的 SetFocus → EM_SETSEL、Enter → submit_address、WM_CHAR 吞 Enter、WM_NCDESTROY 移除 subclass → DefSubclassProc 順序保留。 |
+| 位址列色彩／brush | `handle_pane_control_message` 保留原 shutdown／re-entry gate，`WM_CTLCOLOREDIT` 窄分派至 `Pane::color_address_bar(HWND,HDC)`；後者判斷自己的 EDIT，設定原 OPAQUE、RGB(251,252,253) 背景與 RGB(76,89,107) 文字。匿名 namespace 仍只有一個 function-local static brush；main 的原 WM_DESTROY 位置呼叫一次 `Pane::release_address_bar_background_brush()`，沒有 per-pane brush 或 DPI 重建。 |
+| container region | `Pane::apply_container_region(int,int,int)` 讀自己的 `explorer_container_`；原函式體與全部失敗清理保留。`apply_layout` 唯一 caller 僅改成 member call，main/pane/Explorer batches commit → region → invalidate 的順序不變，仍 `SetWindowRgn(..., FALSE)`。 |
+| folder-context font | 原 `apply_ui_font` 迴圈仍呼叫 `Pane::apply_font`，folder-context child 字型設定成為其中最後一項；沿用既有 `set_font`。 |
+| view-mode／pinned 選項 | `handle_global_command` 照原 ID 範圍選 pane，再呼叫 `Pane::handle_command(int)`。Pane 選 view-mode，處理固定／自訂位置導覽與 Add Current Folder；兩條 pinned 導覽仍透過既有 `ShellCall` 進入同一個 app gate。Manage 分支與原 bound/host/cache guard 留在 main，沒有新增開對話框的 host service。 |
+| tab popup／批次關閉 | `Pane::show_tab_context_menu(tab_id,screen)` 查自己的 tabs，保留四項文字／次序／disabled 條件及 main-window owner，回傳 command ID。main 仍以 HWND/hit-test 選 pane/tab、開選單前設定 singleton、取消或建立失敗後清空、選定後送主視窗 WM_COMMAND；dispatch 先複製並清空 singleton。Close Tab 沿用 `close_tab`，Other/All/Right 交 `close_tabs` 先快照 ID 再逐一呼叫 `close_tab`，不跨 mutation 使用 TabState 指標。 |
+
+view-mode 360–391、pinned 500–771（每 pane 68 slots、64 個自訂上限）、Close Tab/Other/All/Right 780–783 原值不變；close ID 常數從 main 移至 `pane.h`，main 以 using 引入同一份定義。view-mode 與 pinned menu 建構函式逐字不變，仍以 pane HWND 為 TPM_RETURNCMD owner 並送 command 回 main；tab popup 與 Shell folder-context 仍以 main HWND 為 owner。`window_proc` 的 deferred WM_COMMAND、關閉 gate 與四個 singleton 均未更改。
+
+### 檢查與證據
+
+- 指定 PATH：`E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja`。執行票面 `cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release`、`cmake --build build`，均通過、無編譯警告。
+- 完整 `ctest --test-dir build --output-on-failure` **24/24 通過，8.51 秒**；`panedock_launch_smoke` 1.61 秒。使用正常可寫 session 的執行環境，沒有改用假 session 路徑或修改 shutdown。第一輪為 23/24：新增 paint check 的預設 `$PSScriptRoot` 路徑解析失敗；改由 `tests/CMakeLists.txt` 明確傳入 `-PaneSourcePath` 後重跑完整 suite 通過。
+- 新增既有 `panedock_pane` executable 內的 `test_close_tabs_preserves_the_requested_set_and_last_tab_fallback`：四 tabs 關閉 Other 留 b、Right 留 a/b、All 留最後 d 並導覽 My Computer；驗證 active ID、保留 tab 完整資料、fallback history 清空、view/sort 不變、再次關閉最後 tab、Right 無目標／無右側、未知命令與 shutdown no-op，以及沿用 debounce save。這是 Pane 的 Win32／PaneHost 操作流程測試，不能移入保持 HWND/COM-free 的 core；沒有新增框架或假 ExplorerHost。
+- `address_bar_failure_check` 保留 `Pane::navigation_failed`／`refresh_navigation_chrome` 錨點，加查 pane-owned EDIT 接線／Enter／全選／移除 subclass。`pane_paint_ownership_check` 加查 `Pane::color_address_bar`／`apply_container_region`；`shell_reentry_gate_check` 加查 Pane pinned 導覽 gate 與 main tab singleton／command 路徑；`shutdown_state_check` 加查 ID 快照委派 `close_tab`，不直接同步存檔。
+- 以 build 下暫存 source 副本進行反證，未改動產品檔：刪除 navigation_failed、refresh_navigation_chrome、address_edit_proc、paint_client_background、color_address_bar、apply_container_region、handle_command、close_tabs 八個區塊，全數失敗；另將 SetWindowRgn 改 TRUE、移除 pinned 導覽 ShellCall、EDIT reference 改 AppState*，三者亦被拒絕。原有三個 bounds check 在起始錨點缺失時由 IndexOf 範圍例外拒絕，其餘走具名失敗；沒有「區塊消失而負向斷言靜默通過」。
+- 額外啟動真正 `build\PaneDock.exe --diagnostic`（PID 36408），先確認 main HWND 與非零 live count，再按 PID/class 找到主視窗送正常 WM_CLOSE；**201 ms** 內退出、exit code **0**，診斷序列 **0 → 1 → 0 → 0**，最終 `live_view_count=0`。未強制 kill 或跳過 Destroy，結束後 `Get-Process PaneDock` 無殘留。這次 runtime session 只實現 1 個 view，不宣稱四 pane 實機矩陣已驗。
+- 與 HEAD 比對，main 的 **124 支既有頂層函式體逐字一致**，修改的 7 支與移除的 4 支皆在 scope。另驗證 `apply_layout` 只替換 member call、`window_proc` 只替換 brush release。`src/core`、`shell_core`、`file_operations`、`PaneHost`、`PaneTabStrip`、window helpers 與 session schema 零 diff，無新增 host 成員／timer／dependency。
+- `git diff --check` 通過。`main.cpp` 4,764 → 4,606 行；純記錄、不作本票驗收指標，也不據此修改 PD-197 的既有驗收落差。
+
+### 留在 main 的 pane 相關行為與人工未驗項目
+
+- popup 目標解碼、singleton 清理、WM_COMMAND 延後分派，以及 control message 的 shutdown／Shell re-entry guard：皆是 app-level 協調。
+- folder-context 的 active-pane 切換／focus／main owner，`perform_clipboard_paste` 的 app transfer／取消／close-after-transfer：本票 non-goals，沒有搬入 Pane。
+- `NavigationGeometry`／`inset_rect`／layout rectangles、parent-scoped batches、可見性／footer z-order 與整個 DPI/layout pass：跨 pane 的配置與提交時序。
+- `tab_strip_proc` 的跨 pane drag／capture／gate、tab hit 路由、tab_display_text、共享 font／tooltip／hover，以及 Group CRUD/rebind、startup Shell callback／SHAutoComplete 接線、全域鍵盤滑鼠路由、session/shutdown：依本票及 PD-196／197 明列邊界保留，不假稱 main 已無 pane 相關程式碼。
+- 使用者實機檢查 **1–4 未執行完整操作與視覺矩陣**：四 pane 位址輸入／首次 click、所有 popup 操作、不同 DPI 與裁切／字型色彩比對、menu 開啟中切換／關閉與重入、重開還原仍需人工確認。上述 source／資料／生命週期驗證不等同逐像素或完整互動 PASS；本票不推進 release gate。

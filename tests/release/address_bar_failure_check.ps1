@@ -36,4 +36,23 @@ if ($chromeBody -notmatch 'refresh_navigation_buttons' -or
     throw 'Address-bar failure check failed: normal chrome refresh lost address synchronization'
 }
 
+$editStart = $paneSource.IndexOf('LRESULT CALLBACK address_edit_proc(')
+$editEnd = $paneSource.IndexOf('void set_font(', [Math]::Max(0, $editStart))
+if ($editStart -lt 0 -or $editEnd -lt $editStart) {
+    throw 'Address-bar failure check failed: pane EDIT subclass missing'
+}
+$editBody = $paneSource.Substring($editStart, $editEnd - $editStart)
+if ($editBody -match 'AppState|state->panes' -or
+    $editBody -notmatch 'reinterpret_cast<Pane\*>\(reference_data\)' -or
+    $editBody -notmatch 'WM_LBUTTONDOWN && GetFocus\(\) != window[\s\S]*SetFocus\(window\);\s*SendMessageW\(window, EM_SETSEL, 0, -1\)' -or
+    $editBody -notmatch 'WM_KEYDOWN[\s\S]*pane->submit_address\(\)' -or
+    $editBody -notmatch 'WM_CHAR && wparam == VK_RETURN\) return 0' -or
+    $editBody -notmatch 'WM_NCDESTROY[\s\S]*RemoveWindowSubclass\(window, address_edit_proc, subclass_id\)') {
+    throw 'Address-bar failure check failed: EDIT ownership or input behavior changed'
+}
+if ($source -match 'address_edit_proc' -or
+    $paneSource -notmatch '!SetWindowSubclass\(address_bar_, address_edit_proc, index_,\s*reinterpret_cast<DWORD_PTR>\(this\)\)\)\s*\{\s*destroy\(\);\s*return false;') {
+    throw 'Address-bar failure check failed: Pane create must own subclass wiring and report failure'
+}
+
 Write-Output 'PASSED: address_bar_failure_check'

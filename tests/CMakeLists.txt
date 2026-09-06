@@ -77,7 +77,8 @@ if(WIN32)
         NAME panedock_pane_paint_ownership
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
                 "${CMAKE_CURRENT_SOURCE_DIR}/release/pane_paint_ownership_check.ps1"
-                -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp")
+                -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp"
+                -PaneSourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/pane.cpp")
     add_test(
         NAME panedock_launch_smoke
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
