@@ -102,6 +102,8 @@ panedock_set_warnings(panedock_pane)
 
 add_executable(PaneDock WIN32
     src/app_shell/main.cpp
+    src/app_shell/session_writer.h
+    src/app_shell/session_writer.cpp
     src/app_shell/pinned_locations_dialog.cpp
     src/app_shell/startup_notification.cpp
     src/app_shell/transfer_close_dialog.cpp

@@ -238,6 +238,7 @@
 | PD-198 | 剩餘 pane 局部訊息與 popup 行為歸位 | 7 | `done` | PD-197 | [PD-198](tickets/PD-198-pane-local-message-and-popup-ownership.md) |
 | PD-199 | 導覽請求身分與分頁身分的正確性修正 | 7 | `done` | PD-170, PD-183, PD-196 | [PD-199](tickets/PD-199-navigation-request-identity-and-tab-identity-fixes.md) |
 | PD-200 | group list 重排手勢收進 `sidebar::Sidebar` | 7 | `done` | PD-057, PD-196 | [PD-200](tickets/PD-200-sidebar-owns-the-group-reorder-gesture.md) |
+| PD-201 | session 存檔時機收進 `app_shell::SessionWriter` | 7 | `done` | PD-091, PD-200 | [PD-201](tickets/PD-201-session-writer-owns-persistence-timing.md) |
 
 
 ## Dependency lanes
@@ -918,3 +919,9 @@ LLVM-MinGW Release configure/build 與完整 CTest 24/24 通過；focused tab-cl
 | pane.cpp（1,429 行）整體 | `Pane` 的成員共用 `bound_state_`／`explorer_host_`／那組 HWND，沒有一群能不穿過這些成員而獨立。開頭約 380 行的 owner-draw free function 不碰 `Pane` 狀態、確實可搬，但那是搬檔案不是深化模組：介面沒變深、測試接縫沒變多。 |
 
 **下一刀候選與風險**：`SessionWriter`（2026-09-01 既有候選）。接縫比 PD-200 更窄，但 `shutdown_state_check.ps1` 以來源掃描釘住 5 個同步 `save_now` 呼叫點與 timer 分支的確切形狀，那是 shutdown 正確性的安全網；重構它必然要同時改實作與安全網。PD-200 刻意不與它同批。
+
+**結清該候選**：隨後即以 [PD-201](tickets/PD-201-session-writer-owns-persistence-timing.md) 開票並完成。`SessionWriter` 收下 `SessionDocument`／目錄／dirty 旗標／debounce timer／durability flush；`save_now` 與 `schedule_session_save` **刻意留在協調層**，因為它們承載 `suppress_location_capture` 閘與寫入前的 `capture_locations`，這也讓安全網的多數斷言原封不動。`main.cpp` 4,470 → 4,452——淨減只有 18 行，收益在 `AppState` 少兩個欄位與不變量集中，**不要用行數評估這一刀**。新增的檢查已做過反證（故意破壞 → 檢查失敗 → 還原 → 通過）。
+
+**至此 `main.cpp` 的拆分結束**（4,609 → 4,452）。剩下的三處已在 PD-200／PD-201 交接區列為「評估後不拆」並附理由：Group CRUD 協調、版面幾何、`pane.cpp` 整體。除非有新證據，不再重開。
+
+

@@ -2,7 +2,8 @@ param(
     [string] $SourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\main.cpp'),
     [string] $PaneSourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\pane.cpp'),
     [string] $ShutdownHeaderPath = (Join-Path $PSScriptRoot '..\..\src\core\shutdown.h'),
-    [string] $ShutdownSourcePath = (Join-Path $PSScriptRoot '..\..\src\core\shutdown.cpp')
+    [string] $ShutdownSourcePath = (Join-Path $PSScriptRoot '..\..\src\core\shutdown.cpp'),
+    [string] $SessionWriterPath = (Join-Path $PSScriptRoot '..\..\src\app_shell\session_writer.cpp')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,6 +13,29 @@ $source = ($SourcePath -split ',' | ForEach-Object {
 $source += "`n" + (Get-Content -LiteralPath $PaneSourcePath -Raw)
 $shutdownHeader = Get-Content -LiteralPath $ShutdownHeaderPath -Raw
 $shutdownSource = Get-Content -LiteralPath $ShutdownSourcePath -Raw
+$sessionWriter = Get-Content -LiteralPath $SessionWriterPath -Raw
+
+# SessionWriter owns the dirty flag now, so the rule that used to be visible
+# inline in save_now must hold there: a write marks dirty first and only
+# clears it after core::write_session succeeded, so a failed write is retried
+# rather than silently forgotten.
+$writeStart = $sessionWriter.IndexOf('bool SessionWriter::write(')
+if ($writeStart -lt 0) {
+    throw 'shutdown state invariant failed: SessionWriter::write is missing'
+}
+$writeEnd = $sessionWriter.IndexOf('bool SessionWriter::write_clean_marker(')
+if ($writeEnd -lt 0) {
+    throw 'shutdown state invariant failed: SessionWriter::write_clean_marker is missing'
+}
+$writeBody = $sessionWriter.Substring($writeStart, $writeEnd - $writeStart)
+$dirtySet = $writeBody.IndexOf('dirty_ = true;')
+$writeCall = $writeBody.IndexOf('core::write_session(')
+$dirtyCleared = $writeBody.IndexOf('dirty_ = false;')
+if ($dirtySet -lt 0 -or $writeCall -lt $dirtySet -or
+    $dirtyCleared -lt $writeCall -or
+    $writeBody -notmatch 'return false;[\s\S]*?dirty_ = false;') {
+    throw 'shutdown state invariant failed: a failed session write must leave the dirty flag set'
+}
 
 function Assert-Source([string] $Pattern, [string] $Name) {
     if ($source -notmatch $Pattern) {
@@ -37,8 +61,9 @@ Assert-Source 'bool&\s+main_window_destroyed\s*=\s*shutdown_sequence\.state\(\)\
     'app shell forwards the window destruction flag'
 Assert-Source 'bool&\s+end_session_pending\s*=\s*shutdown_sequence\.state\(\)\.end_session_pending;' `
     'app shell forwards the confirmed session-end flag'
-Assert-Source 'session_dirty\s*&&\s*!state->shutdown_save_attempted' `
+Assert-Source 'session\.dirty\(\)\s*&&\s*!state->shutdown_save_attempted' `
     'WM_DESTROY only saves before a final attempt'
+
 Assert-Source 'const bool save_succeeded = save_now\(state, false, true\);[\s\S]*?ShutdownEvent::save_succeeded' `
     'shutdown save result is routed through the reducer'
 Assert-Source 'ShutdownEvent::window_destroyed[\s\S]*?ShutdownEvent::save_started[\s\S]*?save_now\(\*state, false, true\)' `
@@ -66,7 +91,8 @@ Assert-Source 'case WM_ENDSESSION:[\s\S]*?ShutdownEvent::end_session' `
 
 $lastOleUninitialize = $source.LastIndexOf('OleUninitialize();')
 $finalCleanMarker = $source.LastIndexOf(
-    'state.session_document.clean_shutdown = true;')
+    'state.session.write_clean_marker(state.application)')
+
 if ($lastOleUninitialize -lt 0 -or $finalCleanMarker -lt $lastOleUninitialize) {
     throw 'shutdown state invariant failed: clean marker is not after OleUninitialize'
 }
@@ -118,7 +144,16 @@ if ($pinBody.IndexOf('pane_host()->pin_location') -lt 0 -or
 }
 Assert-DebouncedFunction 'void set_layout(' 'set_layout'
 Assert-DebouncedFunction 'void finish_tab_drag(' 'finish_tab_drag'
-Assert-DebouncedFunction 'void finish_group_drag(' 'finish_group_drag'
+# The group reorder gesture lives in Sidebar, but committing it stays
+# coordinator work: Sidebar reports the finished drag, group_list_proc applies
+# it to the model and debounces the save like every other mutation.
+$groupReorderBody = Get-FunctionSource 'LRESULT CALLBACK group_list_proc(' 'group_list_proc'
+if ($groupReorderBody -notmatch 'sidebar\.take_reorder_request\(\)' -or
+    $groupReorderBody -notmatch 'core::reorder_group\(' -or
+    $groupReorderBody -notmatch 'schedule_session_save\(' -or
+    $groupReorderBody -match 'save_now\(') {
+    throw 'session save debounce check failed: group reorder must be applied by the coordinator and debounce its save'
+}
 
 $directSaveCalls = [regex]::Matches($source, 'save_now\((?:state|\*state)')
 if ($directSaveCalls.Count -ne 5) {
@@ -133,7 +168,8 @@ if ($timerStart -lt 0 -or $timerEnd -lt 0) {
 }
 $timerBody = $source.Substring($timerStart, $timerEnd - $timerStart)
 $timerWrites = [regex]::Matches($timerBody, 'save_now\(').Count
-if ($timerWrites -ne 1 -or $timerBody -notmatch 'KillTimer\(window, kSessionSaveTimerId\)') {
+if ($timerWrites -ne 1 -or $timerBody -notmatch 'session\.cancel_timer\(window\)') {
+
     throw 'session save debounce check failed: timer does not perform one post-debounce write'
 }
 

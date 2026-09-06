@@ -53,7 +53,9 @@
 #include "file_operations/file_operations.h"
 #include "resource.h"
 #include "shell_core/shell_core.h"
+#include "app_shell/session_writer.h"
 #include "sidebar/sidebar.h"
+
 #include "com_ref_counted.h"
 
 namespace {
@@ -81,8 +83,9 @@ constexpr UINT kFileOperationFinishedMessage = WM_APP + 53;
 // become visible.
 constexpr UINT kDeferredShutdownMessage = WM_APP + 54;
 // PD-091: coalesce navigation completions without keeping a polling timer.
-constexpr UINT kSessionSaveDelayMilliseconds = 500;
-constexpr UINT_PTR kSessionSaveTimerId = 0xD050;
+constexpr UINT_PTR kSessionSaveTimerId =
+    panedock::app_shell::SessionWriter::kTimerId;
+
 // PD-155: coalesce a geometry request that arrives while Shell is pumping the
 // message loop during the current layout pass.
 constexpr UINT kDeferredLayoutMessage = WM_APP + 55;
@@ -449,11 +452,10 @@ struct AppState : public panedock::app_shell::PaneHost {
     bool startup_frame_only{};
     UINT_PTR startup_realize_generation{};
     panedock::core::ApplicationState application;
-    panedock::core::SessionDocument session_document;
-    std::filesystem::path session_directory;
+    panedock::app_shell::SessionWriter session;
     HWND main_window{nullptr};
     bool diagnostic_mode{};
-    bool session_dirty{};
+
     panedock::app_shell::TransferCloseDialog transfer_close_dialog;
     // Set by WM_CREATE when the Shell view cannot be opened. Never raised as a
     // modal MessageBox from inside WM_CREATE (that nested loop could dispatch a
@@ -589,17 +591,6 @@ void revoke_drag_hover_targets(AppState& state) noexcept {
     state.sidebar.revoke_drag_drop();
     state.sidebar_drag_target.Reset();
     for (auto& pane : state.panes) pane.tab_strip_ui().revoke_drag_hover_target();
-}
-
-bool flush_session_file(const std::filesystem::path& path) noexcept {
-    const HANDLE file = CreateFileW(
-        path.c_str(), GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return false;
-    const BOOL flushed = FlushFileBuffers(file);
-    const BOOL closed = CloseHandle(file);
-    return flushed != FALSE && closed != FALSE;
 }
 
 panedock::core::ShellLocation location(std::wstring parsing_name) {
@@ -1531,9 +1522,9 @@ void paint_client_background(HWND window, HDC dc, int sidebar_width,
 }
 
 void cancel_session_save_timer(const AppState& state) noexcept {
-    if (state.main_window != nullptr)
-        KillTimer(state.main_window, kSessionSaveTimerId);
+    state.session.cancel_timer(state.main_window);
 }
+
 
 void append_startup_warning(AppState& state, std::wstring_view warning) {
     state.startup_notification.append_warning(warning);
@@ -1545,26 +1536,18 @@ bool save_now(AppState& state, bool clean_shutdown = false,
     // the Group-switch capture guard active.
     if (state.suppress_location_capture && !force_during_transition)
         return false;
-    state.session_dirty = true;
+    state.session.mark_dirty();
     capture_locations(state);
-    state.session_document.application = state.application;
-    state.session_document.clean_shutdown = clean_shutdown;
-    if (!panedock::core::write_session(state.session_directory,
-                                       state.session_document,
-                                       flush_session_file)) {
-        OutputDebugStringW(L"PaneDock: session persistence failed\n");
-        return false;
-    }
-    state.session_dirty = false;
-    cancel_session_save_timer(state);
-    return true;
+    return state.session.write(state.application, clean_shutdown,
+                               state.main_window);
 }
 
+
 void schedule_session_save(AppState& state) noexcept {
-    state.session_dirty = true;
+    state.session.mark_dirty();
     if (state.main_window == nullptr) return;
-    if (SetTimer(state.main_window, kSessionSaveTimerId,
-                 kSessionSaveDelayMilliseconds, nullptr) == 0) {
+    if (!state.session.arm_timer(state.main_window)) {
+
         OutputDebugStringW(L"PaneDock: session save timer failed\n");
         (void)save_now(state);
     }
@@ -2628,7 +2611,6 @@ void finish_tab_drag(AppState& state, HWND strip) {
     if (!panedock::core::move_tab(
             source, target, drag.tab_id, *drag.target_index,
             default_shell_location(), retained_tab_id)) return;
-
     if (source_active && state.panes[drag.pane_index].realized()) {
         {
             ShellCallScope shell_call(state);
@@ -3887,8 +3869,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state == nullptr) break;
             const UINT_PTR timer = static_cast<UINT_PTR>(wparam);
             if (timer == kSessionSaveTimerId) {
-                KillTimer(window, kSessionSaveTimerId);
-                if (state->session_dirty) (void)save_now(*state);
+                state->session.cancel_timer(window);
+                if (state->session.dirty()) (void)save_now(*state);
+
                 return 0;
             }
             if (timer == kDragHoverSidebarTimerId &&
@@ -3933,7 +3916,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 state->pinned_locations_dialog.destroy();
                 revoke_drag_hover_targets(*state);
                 cancel_session_save_timer(*state);
-                if (state->session_dirty && !state->shutdown_save_attempted) {
+                if (state->session.dirty() &&
+                    !state->shutdown_save_attempted) {
+
                     state->shutdown_sequence.step(
                         panedock::core::ShutdownEvent::save_started);
                     capture_window_placement(window, *state);
@@ -4180,9 +4165,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         CloseHandle(single_instance_mutex);
         return exit_code;
     }
-    state.session_directory = *directory;
+    state.session.set_directory(*directory);
     auto loaded = panedock::core::read_session(
-        state.session_directory, default_application_state());
+        state.session.directory(), default_application_state());
+
     const bool recovered_from_corruption = loaded.recovered_from_corruption;
     const auto session_source = loaded.source;
     const bool clean_shutdown = loaded.document.clean_shutdown;
@@ -4191,8 +4177,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         OutputDebugStringW(session_source_name(session_source));
         OutputDebugStringW(L"\n");
     }
-    state.session_document = std::move(loaded.document);
-    state.application = state.session_document.application;
+    state.application = loaded.document.application;
+    state.session.adopt(std::move(loaded.document));
+
     assert(panedock::core::is_valid(state.application));
     if (!save_now(state)) {
         append_startup_warning(
@@ -4404,14 +4391,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         // Keep the durable marker false until Shell, the parent HWND and COM
         // have all gone away. If this write blocks or fails, the false marker
         // remains and the next startup can report the incomplete shutdown.
-        state.session_document.application = state.application;
-        state.session_document.clean_shutdown = true;
-        if (!panedock::core::write_session(state.session_directory,
-                                            state.session_document,
-                                            flush_session_file)) {
-            OutputDebugStringW(
-                L"PaneDock: final clean-shutdown marker write failed\n");
-        }
+        (void)state.session.write_clean_marker(state.application);
+
     }
     CloseHandle(single_instance_mutex);
     return exit_code;
