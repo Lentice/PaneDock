@@ -4,7 +4,7 @@
 #include "unit/test_util.h"
 
 namespace panedock::app_shell {
-std::optional<LRESULT> handle_pane_control_message(HWND, std::size_t, UINT,
+std::optional<LRESULT> handle_pane_control_message(Pane&, UINT,
                                                   WPARAM, LPARAM) {
     return std::nullopt;
 }
@@ -16,7 +16,6 @@ class TestPaneHost final : public panedock::app_shell::PaneHost {
   public:
     panedock::core::PaneState *mutate_on_second_lookup{};
     int lookups{};
-    int navigation_refreshes{};
 
     bool is_shutting_down() const noexcept override { return false; }
     void shell_call_entered() noexcept override {}
@@ -45,9 +44,6 @@ class TestPaneHost final : public panedock::app_shell::PaneHost {
         return static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     }
     HWND tooltip() const noexcept override { return nullptr; }
-    void refresh_navigation_chrome(panedock::app_shell::Pane &) override {
-        ++navigation_refreshes;
-    }
 };
 
 panedock::core::PaneState tab_state(int count) {
@@ -63,15 +59,24 @@ panedock::core::PaneState tab_state(int count) {
 }
 
 void test_refresh_bails_when_tab_list_changes_mid_scan() {
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    EXPECT(panedock::app_shell::Pane::register_window_class(instance));
+    const HWND parent = CreateWindowExW(
+        0, L"STATIC", nullptr, 0, 0, 0, 320, 200, nullptr, nullptr,
+        instance, nullptr);
+    EXPECT(parent != nullptr);
     TestPaneHost host;
     panedock::app_shell::Pane pane;
+    EXPECT(pane.create(parent, 0));
     auto state = tab_state(3);
     pane.set_host(&host);
     pane.bind(&state);
     auto &strip = pane.tab_strip_ui();
     strip.refresh();
     EXPECT(strip.tab_visuals().size() == 3);
-    EXPECT(host.navigation_refreshes == 1);
+    wchar_t address[64]{};
+    GetWindowTextW(pane.address_bar(), address, 64);
+    EXPECT(std::wstring_view(address) == L"Folder 0");
     const auto previous = strip.tab_visuals();
     host.lookups = 0;
     host.mutate_on_second_lookup = &state;
@@ -80,16 +85,21 @@ void test_refresh_bails_when_tab_list_changes_mid_scan() {
 
     EXPECT(host.lookups == 2);
     EXPECT(state.tabs.size() == 2);
-    EXPECT(host.navigation_refreshes == 1);
+    GetWindowTextW(pane.address_bar(), address, 64);
+    EXPECT(std::wstring_view(address) == L"Folder 0");
     EXPECT(strip.tab_visuals().size() == previous.size());
     for (std::size_t index = 0; index < previous.size(); ++index)
         EXPECT(strip.tab_visuals()[index].text == previous[index].text);
 
     host.mutate_on_second_lookup = nullptr;
+    state.active_tab_id = state.tabs.front().id;
     strip.refresh();
     EXPECT(strip.tab_visuals().size() == 2);
     EXPECT(strip.tab_visuals().front().text == L"Folder 1");
-    EXPECT(host.navigation_refreshes == 2);
+    GetWindowTextW(pane.address_bar(), address, 64);
+    EXPECT(std::wstring_view(address) == L"Folder 1");
+    pane.destroy();
+    DestroyWindow(parent);
 }
 
 void test_scroll_offset_clamps_at_both_ends() {

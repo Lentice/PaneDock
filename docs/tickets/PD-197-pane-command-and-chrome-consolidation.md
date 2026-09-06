@@ -114,4 +114,80 @@ $p.HasExited   # 必須為 True，且無殘留行程
 
 ## 交接區
 
-（實作者填寫：`handle_pane_command` 逐分支歸屬；繪製輔助函式的逐支歸屬；剩餘 `pane_index` 的逐行清單與理由；`main.cpp` 最終行數；全檔複驗的結論摘要與新開的票號。）
+### 實作與三個過渡點
+
+- 四支指定函式已收進 `Pane`：`handle_command(int)`、`draw_control(const DRAWITEMSTRUCT&)`、`refresh_status_bar()`、`refresh_navigation_chrome()`。`handle_pane_control_message` 的直接 caller 一併收窄為 `Pane&`；它仍在協調層維護原 shutdown/re-entry gate，不新增 PaneHost 服務。
+- `record_navigation_result` 與協調層 `handle_navigation_complete` 合併為完整 `Pane::navigation_complete(NavigationGeneration, const core::ShellLocation&)`；順序仍為 generation/Group/tab identity 檢查 → history/location 記錄 → view mode → shutdown check → sort → shutdown check → strip refresh → debounce save。兩個舊函式均不存在。
+- `PaneHost::tab_strip_needs_refresh` 確認不存在。PD-196 額外建立的 `refresh_navigation_chrome(Pane&)` 過渡 bridge 亦刪除，strip 直接呼叫 Pane 成員。PaneHost 現為 13 支服務（不含解構子），tracker 已同步。
+- PD-193／PD-195 已把 view-mode／pinned popup 的 `TrackPopupMenu` owner 改為 pane 自己的 HWND；本票維持此決定。兩者皆 `TPM_RETURNCMD`，仍向 parent main window 發 `WM_COMMAND`，不改 ID、項目、位置、勾選或主視窗的延後分派。原生 folder-context 仍以主視窗作 owner，保留與 view site／全域焦點的現有契約；不將這種 Shell 選單混同為上述產品 popup。
+
+### command 逐分支歸屬
+
+| 分支 | 最終歸屬與理由 |
+|---|---|
+| Back | `Pane::handle_command` → `navigate_history(true)`，只碰本 pane 歷史。 |
+| Forward | 同上 → `navigate_history(false)`。 |
+| Up | 同上 → `navigate_up()`。 |
+| Refresh | 同上 → `refresh_view()`。 |
+| View | 同上，讀自己的 view button 螢幕矩形，呼叫 `show_view_mode_menu()`。 |
+| Pinned | 同上，讀自己的 pinned button 螢幕矩形，呼叫 `show_pinned_locations_menu()`。 |
+| Folder context | 依 Scope 2 留在 `handle_global_command`；直接 caller 傳 `Pane* source_pane`，只此分支使用。原 bound/realized/visible 檢查、`set_active_pane`、shutdown/active-index 複驗、focus、ShellCallScope、main owner 與 anchor 全部保留。它協調全域 active-pane，不能為移入 Pane 增加 host 服務。 |
+| tab strip／address／未知 ID | Pane 回 `false`，原本沒有對應動作；外層保留已解碼控制通知的消費方式。 |
+
+原已在 `handle_global_command` 的 view-mode/pinned 選項、Manage 對話框與 tab context command 未趁本票移動；局部選項行為的後續歸屬見 PD-198。
+
+### 繪製 helper 逐支歸屬
+
+| 函式／資源 | 最終歸屬 |
+|---|---|
+| `navigation_icon_font` | `pane.cpp` 匿名 namespace；原共用靜態 Segoe MDL2 font，不改每次建立條件或 glyph size。 |
+| `release_navigation_icon_font` | `Pane` static 成員；協調層在原 `WM_DPICHANGED`／`WM_DESTROY` 兩處呼叫，維持一次全域 cache 釋放，不變成四份字型。 |
+| `draw_navigation_font_glyph` | `pane.cpp` 匿名 namespace；函式逐字不變。 |
+| `draw_navigation_fallback_glyph` | 同上，七種 fallback 的筆畫、幾何及資源清理逐字不變。 |
+| `draw_navigation_icon_button` | 同上，函式逐字不變。協調層把既有 singleton hover 資訊 OR 進本次 `DRAWITEMSTRUCT` 副本的 `ODS_HOTLIGHT`，Pane 不取得或保存 hovered-button singleton。 |
+| `draw_status_bar` | 同上，三段文字、分隔線、font、footer reserve 逐字不變。 |
+| `scaled_value` | `window_helpers.{h,cpp}`；main 與新搬移的 pane 繪製共用，公式原封不動。 |
+| `fill_rounded_rect`（main 版本） | 留在 main，caller 只有 header 的 `draw_layout_segment_background` 與 sidebar 的 `draw_sidebar_action_button`，沒有 pane caller。 |
+| `fill_rounded_rect`（pane 既有版本） | 留在 `pane.cpp`；這是使用 stock `DC_BRUSH`／`DC_PEN` 的另一個實作，與 main 的 Create/Delete 版本不同。依「不改繪製演算法」不合併這兩支同名函式。 |
+| `draw_sidebar_action_button`／layout/brand helpers | 留在協調層，服務 sidebar/header，非 pane 子控制項。 |
+
+glyph、footer 色票及 pane-only metrics 搬入 pane 匿名 namespace；layout 仍需的 4/8/12px spacing、24px footer height、3px inset 保留原值。未建立新 palette、dependency、timer 或 cache policy。
+
+### `main.cpp` 剩餘 `std::size_t pane_index` 完整逐行清單
+
+以下為本票最終檔案的 `rg -n 'std::size_t pane_index' src/app_shell/main.cpp`，共 11 行；未用改名來隱藏命中。
+
+| 行 | 所在位置 | 歸屬理由 |
+|---|---|---|
+| 485 | `AppState::TabDrag::pane_index` | 記錄跨 pane 拖曳來源，singleton coordinator state。 |
+| 1792 | `apply_layout::LayoutFailure::pane_index` | 全體 layout pass 的首個失敗 pane 診斷；不是 pane-parallel 常駐資料。 |
+| 2413 | `AppState::tab_drag_layout` | 比對來源及目標 pane，計算跨 pane placeholder；PD-191／196 明列保留。 |
+| 2461 | `register_tab_drag_hover_targets` | 四 pane 註冊迴圈，共用 app drag lifetime 與 timer/message 分派。 |
+| 2647 | `close_tab_at_point` | 從全視窗座標找目標 pane，再委派 close；PD-196 明列保留。 |
+| 2802 | `tab_strip_paint_state` | 協調全域 active-pane 與跨 pane dragged/placeholder 資訊，以短期值交給 strip paint。 |
+| 3282 | `perform_clipboard_paste` | app transfer/cancel/close-after-transfer 與 Shell-call gate；合理留在協調層，但超出票面 Acceptance 4 的列舉。 |
+| 3561 | `handle_global_command` view-mode 解碼 | 全域 popup ID → pane 路由；局部選項處理已列入 PD-198，不在本票擴大實作。 |
+| 3573 | `handle_global_command` pinned 解碼 | 同上，且 Manage 使用 app-level 對話框；局部導覽／pin 行為列入 PD-198。 |
+| 4022 | `window_proc`／`kDragHoverMessage` | app timer ID → pane target，協調延後 OLE hover 執行。 |
+| 4188 | `window_proc`／`WM_TIMER` | 同上，事件啟動的一次性 hover timer 分派，不是閒置 polling。 |
+
+### 全檔複驗、行數與驗收落差
+
+- `docs/tickets.md` 已新增整串的全檔複驗條目，列出跨 pane／Group／全域 chrome／startup／shutdown／session／DPI／file operation／singleton 的完整分類與理由；更新 tab-strip 候選現況與 2026-09-03 模組契約 (1) 的 PaneHost 例外。
+- 真正漏列的局部函式為 EDIT proc、位址列 brush/色彩、container region、folder-context font，以及 popup 選項與批次 tab-close／tab context menu 建構。依 Scope 4 開 **PD-198**，不修改這些既有函式，也不搬 non-goals。
+- **最終 4,764 行**；開工 5,213 行，**淨減 449**。相對系列原始 5,975 行共減 1,211 行。**Acceptance 5 的「3,300 行以下」未達**；指定 scope 沒有足夠可搬內容，沒有刪除註解／壓行／跨範圍切檔湊數。
+- **Acceptance 4 的「只剩跨 pane」字面條件亦未完全達成**：paste 屬必要的 app-operation 協調，popup 局部行為則是盤點後另開票的遺漏。完整逐行證據如上；不以合理歸屬說明假充 grep 限制通過。驗收取捨仍待使用者確認。
+- 五支主要 pane drawing helper（含 font 建立）的函式逐字比對一致。另 21 支協調函式（Group CRUD/rebind、active-pane、layout header/sidebar、跨 pane drag、context menu、paste、`wWinMain`、shutdown 等）與開工版本逐字一致；`apply_layout` 僅機械替換 navigation/status calls，`window_proc` 僅替換 font cleanup 呼叫。這是無意圖行為／視覺變更的程式碼證據，不能替代實機視覺 PASS。
+
+### 檢查結果（2026-09-05）
+
+- 依 AGENTS 設定 `E:\Dev\LLVM-MinGW\bin`／`E:\Dev\Ninja` PATH，指定 Release configure 與 build 通過，無編譯警告。
+- 完整 `ctest --test-dir build --output-on-failure` **24/24 通過**；最後一次 7.24 秒，`panedock_launch_smoke` 1.99 秒。使用正常可寫 session 的 Win32 執行環境；並未宣稱把 `SHGetKnownFolderPath` 的實際 session 路徑改到 build（僅改 LOCALAPPDATA environment 不會做到這件事）。
+- 新增 focused `test_navigation_completion_rejects_stale_results_and_refreshes_chrome`：舊 generation／不同 Group／shutdown 不寫入；正常完成更新 model/history/strip 並排程存檔；history suppression 不增加歷史；coordinator-only／未知 command 回傳 false。它依赖 PaneHost/Win32，沿用現有 `panedock_pane` 測試，不污染 core。
+- PD-196 的刷新中途 tab 清單變更測試，從觀察已刪除 hook 的呼叫次數改為真實 hidden child address HWND 的文字：失敗刷新保留舊地址，正常刷新更新地址。沒有移除其既有 mutation/label assertions。
+- `address_bar_failure_check` 改追 `Pane::refresh_navigation_chrome`；`shell_reentry_gate_check` 補追已搬的 display lookup／item counts guard。記憶體中移除 ShellCall 或 binding check 的兩次 mutation 均被正確拒絕，未修改產品檔案。
+- 正常模式啟動後等待 10 秒，再取樣 **60.0158449 秒**：CPU 增量 **0.015625 秒**，按邏輯處理器數正規化為 **0.00130174%**；Read/Write/Other transfer bytes 增量皆 **0**。符合本票 60 秒 NFR-001 spot check；非工作管理員人工讀值，也非 10 分鐘 release gate 或四 pane 實機矩陣。
+- 該正常模式 process（PID 4796）`CloseMainWindow` 後 `WaitForExit(5000)` 成功，`HasExited=True`、exit code 0。Diagnostic 輸出曾達 3 個 live views，正常關閉後最後兩筆皆為 `panedock.live_view_count=0`，未強制終止或繞過 Destroy。
+- Runtime probe 的限制：第一次 diagnostic 的 Process wrapper 在退出後回報空 ExitCode，雖 `HasExited=True`／live count 0，仍使暫存腳本錯判；先持有 Process handle 後重跑，另一次 `CloseMainWindow()` 未關閉實際 `PaneDockMainWindow`。依既有 smoke 的 PID/class 定位補送 `WM_CLOSE`，5 秒內退出、exit code 0、live count 0，無殘留。不把這兩次 probe 問題隱藏為首次全部通過，亦未因此改動 shutdown。
+- `git diff --check` 通過；`src/core`、`shell_core`、`file_operations`、`tab_overflow.h` 與 session schema 零 diff。舊 navigation helper、record helper 與兩個過渡刷新 hook 對 src/tests 搜尋皆無命中。
+- 「使用者實機檢查」1–13 **未執行完整清單，需真實桌面人工驗證**；尤其多版型／四 pane 按鈕、拖曳、不同 DPI、檔案操作進度重入及視覺比對。只驗證上述啟動／關閉／live-view 診斷與資料測試，不代替全部實機驗收。

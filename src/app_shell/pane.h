@@ -86,8 +86,7 @@ class Pane final {
 
     // PD-170 navigation identity for this pane: the generation plus the
     // group/tab it was issued for, so a result arriving after a Group or tab
-    // switch can be discarded. The coordinator owns the compare logic
-    // (begin_navigation / navigation_request_is_current); Pane only stores it.
+    // switch can be discarded. Pane owns the request and comparison logic.
     panedock::core::NavigationRequest &pending_navigation() noexcept {
         return pending_navigation_;
     }
@@ -99,7 +98,8 @@ class Pane final {
     HRESULT navigate_up_one_level();
     bool navigation_request_is_current(
         NavigationGeneration generation);
-    void record_navigation_result(
+    void navigation_complete(
+        NavigationGeneration generation,
         const panedock::core::ShellLocation &location);
     void navigation_failed(NavigationGeneration generation);
     void navigate_history(bool back);
@@ -124,6 +124,12 @@ class Pane final {
     // Enable/disable back, forward, up and folder-context from the bound
     // tab's history. Needs no coordinator state, so it lives here.
     void refresh_navigation_buttons() noexcept;
+    void refresh_navigation_chrome();
+    void refresh_status_bar() noexcept;
+    bool handle_command(int id);
+    bool draw_control(const DRAWITEMSTRUCT& item);
+    // Shared icon font: the coordinator releases it on DPI change/shutdown.
+    static void release_navigation_icon_font() noexcept;
 
     bool set_rect(const RECT &rect) noexcept;
     void set_paint_geometry(const RECT &navigation_background,

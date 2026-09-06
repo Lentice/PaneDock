@@ -22,6 +22,11 @@ bool register_simple_window_class(const wchar_t* name, WNDPROC proc,
            GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
 }
 
+int scaled_value(HWND window, int value) noexcept {
+    return std::max(1, MulDiv(value, static_cast<int>(GetDpiForWindow(window)),
+                              96));
+}
+
 void center_over_owner(HWND dialog, HWND owner, int width, int height,
                        bool owner_client) noexcept {
     if (dialog == nullptr) return;

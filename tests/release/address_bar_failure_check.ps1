@@ -25,12 +25,12 @@ if ($failedBody -match 'refresh_navigation_chrome|SetWindowTextW') {
     throw 'Address-bar failure check failed: failure path rewrites the address bar'
 }
 
-$chromeStart = $source.IndexOf('void refresh_navigation_chrome(')
-$chromeEnd = $source.IndexOf('void refresh_status_bar(', $chromeStart)
+$chromeStart = $paneSource.IndexOf('void Pane::refresh_navigation_chrome(')
+$chromeEnd = $paneSource.IndexOf('void Pane::refresh_status_bar(', $chromeStart)
 if ($chromeStart -lt 0 -or $chromeEnd -lt 0) {
     throw 'Address-bar failure check failed: navigation chrome helper missing'
 }
-$chromeBody = $source.Substring($chromeStart, $chromeEnd - $chromeStart)
+$chromeBody = $paneSource.Substring($chromeStart, $chromeEnd - $chromeStart)
 if ($chromeBody -notmatch 'refresh_navigation_buttons' -or
     $chromeBody -notmatch 'SetWindowTextW') {
     throw 'Address-bar failure check failed: normal chrome refresh lost address synchronization'

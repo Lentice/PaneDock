@@ -48,8 +48,6 @@ class PaneHost {
     virtual std::wstring tab_display_text(std::wstring_view parsing_name) = 0;
     virtual HFONT chrome_font() const noexcept = 0;
     virtual HWND tooltip() const noexcept = 0;
-    // Preserve the post-refresh address/button update until PD-197 moves it.
-    virtual void refresh_navigation_chrome(Pane &pane) = 0;
 };
 
 class ShellCall final {

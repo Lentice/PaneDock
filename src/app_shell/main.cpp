@@ -59,6 +59,7 @@
 namespace {
 
 using Pane = panedock::app_shell::Pane;
+using panedock::app_shell::scaled_value;
 
 constexpr wchar_t kWindowClassName[] = L"PaneDockMainWindow";
 constexpr wchar_t kSingleInstanceMutexName[] =
@@ -108,20 +109,11 @@ constexpr int kTabStripHeight = 31;
 using panedock::app_shell::kTabStripSelectionMessage;
 // Existing footer metrics/colors also used by the tab add affordance.
 constexpr int kTabAddButtonVerticalInset = 3;
-constexpr int kTabCornerRadius = 6;
-constexpr COLORREF kFooterActionHoverBackground = RGB(236, 240, 244);
-constexpr COLORREF kFooterActionBorder = RGB(226, 232, 240);
-constexpr COLORREF kFooterActionGlyph = RGB(31, 41, 55);
 constexpr int kNavigationBarHeight = 28;
 constexpr int kStatusBarHeight = 24;
 constexpr int kNavigationButtonWidth = 32;
 constexpr int kNavigationButtonOffsetX = 0;
 constexpr int kNavigationButtonOffsetY = 2;
-constexpr int kNavigationGlyphSize = 16;
-constexpr COLORREF kStatusBarBackground = RGB(249, 250, 251);
-constexpr std::array<wchar_t, 7> kNavigationGlyphs{
-    L'\uE72B', L'\uE72A', L'\uE74A', L'\uE72C', L'\uE71D', L'\uE734',
-    L'\uE712'};
 // PD-031: rounded light-gray pill drawn behind the address bar EDIT to fake
 // a rounded input box (see docs/tickets/PD-031-*.md decision 2). Radius is
 // smaller than the design mock's 6px .location radius because the fixed
@@ -425,7 +417,6 @@ struct AppState : public panedock::app_shell::PaneHost {
     std::wstring tab_display_text(std::wstring_view parsing_name) override;
     HFONT chrome_font() const noexcept override;
     HWND tooltip() const noexcept override;
-    void refresh_navigation_chrome(Pane &pane) override;
 
     // The legacy names below are references into the reducer state. Keeping
     // them avoids a second pane-wide mechanical rewrite while making the
@@ -777,11 +768,6 @@ RECT client_rect(HWND window) noexcept {
     return rect;
 }
 
-int scaled_value(HWND window, int value) noexcept {
-    return std::max(1, MulDiv(value, static_cast<int>(GetDpiForWindow(window)),
-                              96));
-}
-
 void add_tooltip(HWND tooltip, HWND owner, UINT_PTR id,
                  const wchar_t* text) noexcept {
     TOOLINFOW info{};
@@ -1049,205 +1035,6 @@ void draw_layout_segment_background(HDC dc, RECT rect, UINT dpi) noexcept {
                       RGB(217, 225, 234));
 }
 
-// PD-052 (refresh) and PD-064 (up) both use the platform icon font: hand-drawn
-// GDI geometry could not be centered for even pen widths, while the font glyph
-// is always optically centered by DrawText's DT_CENTER | DT_VCENTER.
-HFONT& navigation_icon_font(HWND button) noexcept {
-    static HFONT font = nullptr;
-    if (font == nullptr && button != nullptr) {
-        font = CreateFontW(
-            -std::max(1, scaled_value(button, kNavigationGlyphSize)), 0, 0, 0,
-                           FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                           L"Segoe MDL2 Assets");
-    }
-    return font;
-}
-
-void release_navigation_icon_font() noexcept {
-    HFONT& font = navigation_icon_font(nullptr);
-    if (font != nullptr) {
-        DeleteObject(font);
-        font = nullptr;
-    }
-}
-
-// Draws one Segoe MDL2 Assets glyph centered on the button. Returns false if
-// the icon font is unavailable so callers can keep a visible stroke fallback.
-bool draw_navigation_font_glyph(const DRAWITEMSTRUCT& item, wchar_t glyph,
-                                COLORREF color) noexcept {
-    HFONT& icon_font = navigation_icon_font(item.hwndItem);
-    if (icon_font == nullptr) return false;
-    const HGDIOBJ old_font = SelectObject(item.hDC, icon_font);
-    const int old_bk_mode = SetBkMode(item.hDC, TRANSPARENT);
-    const COLORREF old_text_color = SetTextColor(item.hDC, color);
-    // Center the actual glyph in the final owner-draw button rectangle on
-    // both axes, including after footer geometry changes.
-    RECT glyph_rect = item.rcItem;
-    const int drawn = DrawTextW(item.hDC, &glyph, 1, &glyph_rect,
-                                DT_CENTER | DT_VCENTER | DT_SINGLELINE |
-                                    DT_NOPREFIX);
-    SetTextColor(item.hDC, old_text_color);
-    SetBkMode(item.hDC, old_bk_mode);
-    SelectObject(item.hDC, old_font);
-    return drawn != 0;
-}
-
-void draw_navigation_fallback_glyph(const DRAWITEMSTRUCT& item,
-                                    std::size_t glyph_kind, COLORREF color,
-                                    int size) noexcept {
-    const int width = static_cast<int>(item.rcItem.right - item.rcItem.left);
-    const int height = static_cast<int>(item.rcItem.bottom - item.rcItem.top);
-    const int half = size / 2;
-    const int cx = item.rcItem.left + width / 2;
-    const int cy = item.rcItem.top + height / 2;
-
-    const int pen_width = std::max(1, size / 8);
-    HPEN pen = CreatePen(PS_SOLID, pen_width, color);
-    if (pen != nullptr) {
-        const HGDIOBJ previous = SelectObject(item.hDC, pen);
-        switch (glyph_kind) {
-            case 0:  // fallback back: <
-                MoveToEx(item.hDC, cx + half / 2, cy - half, nullptr);
-                LineTo(item.hDC, cx - half / 2, cy);
-                LineTo(item.hDC, cx + half / 2, cy + half);
-                break;
-            case 1:  // fallback forward: >
-                MoveToEx(item.hDC, cx - half / 2, cy - half, nullptr);
-                LineTo(item.hDC, cx + half / 2, cy);
-                LineTo(item.hDC, cx - half / 2, cy + half);
-                break;
-            case 2: {  // fallback up
-                // Shift the stem right by half the pen width so its center
-                // line matches the arrow wings when GDI uses an even width.
-                const int stem = cx + pen_width / 2;
-                MoveToEx(item.hDC, stem, cy + half, nullptr);
-                LineTo(item.hDC, stem, cy - half);
-                MoveToEx(item.hDC, stem - half / 2, cy - half / 2, nullptr);
-                LineTo(item.hDC, stem, cy - half);
-                LineTo(item.hDC, stem + half / 2, cy - half / 2);
-                break;
-            }
-            case 3:  // fallback refresh
-                Ellipse(item.hDC, cx - half, cy - half, cx + half, cy + half);
-                MoveToEx(item.hDC, cx + half / 2, cy - half, nullptr);
-                LineTo(item.hDC, cx, cy - half / 4);
-                MoveToEx(item.hDC, cx + half / 2, cy - half, nullptr);
-                LineTo(item.hDC, cx + half / 4, cy - half / 2);
-                break;
-            case 4:  // fallback view: three rows with square bullets
-                for (int row = -1; row <= 1; ++row) {
-                    const int y = cy + row * half / 2;
-                    Rectangle(item.hDC, cx - half, y - 1, cx - half + 3,
-                              y + 2);
-                    MoveToEx(item.hDC, cx - half / 2, y, nullptr);
-                    LineTo(item.hDC, cx + half, y);
-                }
-                break;
-            case 5: {  // fallback pinned location: hollow star
-                const std::array<POINT, 10> star{{
-                    {cx, cy - half},
-                    {cx + half / 3, cy - half / 3},
-                    {cx + half, cy - half / 3},
-                    {cx + half / 3, cy + half / 8},
-                    {cx + half * 3 / 5, cy + half},
-                    {cx, cy + half / 2},
-                    {cx - half * 3 / 5, cy + half},
-                    {cx - half / 3, cy + half / 8},
-                    {cx - half, cy - half / 3},
-                    {cx - half / 3, cy - half / 3}}};
-                MoveToEx(item.hDC, star.front().x, star.front().y, nullptr);
-                for (std::size_t point = 1; point < star.size(); ++point)
-                    LineTo(item.hDC, star[point].x, star[point].y);
-                LineTo(item.hDC, star.front().x, star.front().y);
-                break;
-            }
-            case 6: {  // fallback folder context menu: three dots
-                HBRUSH brush = CreateSolidBrush(color);
-                if (brush != nullptr) {
-                    const int dot = std::max(1, size / 5);
-                    const int gap = std::max(1, size / 4);
-                    for (int offset = -gap; offset <= gap; offset += gap) {
-                        RECT dot_rect{cx + offset - dot / 2,
-                                      cy - dot / 2,
-                                      cx + offset - dot / 2 + dot,
-                                      cy - dot / 2 + dot};
-                        FillRect(item.hDC, &dot_rect, brush);
-                    }
-                    DeleteObject(brush);
-                }
-                break;
-            }
-            default:
-                break;
-        }
-        SelectObject(item.hDC, previous);
-        DeleteObject(pen);
-    }
-}
-
-void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
-                                 std::size_t glyph_kind,
-                                 bool tracked_hovered,
-                                 bool blend_with_footer = false) noexcept {
-    const bool disabled = (item.itemState & ODS_DISABLED) != 0;
-    const bool hovered = !disabled &&
-                         ((item.itemState & ODS_HOTLIGHT) != 0 ||
-                          tracked_hovered);
-    const bool pressed = (item.itemState & ODS_SELECTED) != 0;
-    const COLORREF normal_background =
-        blend_with_footer ? kStatusBarBackground : RGB(255, 255, 255);
-    if (blend_with_footer && hovered) {
-        HBRUSH background = CreateSolidBrush(kFooterActionHoverBackground);
-        HPEN border = CreatePen(PS_SOLID,
-                                scaled_value(item.hwndItem, 1),
-                                kFooterActionBorder);
-        if (background != nullptr && border != nullptr) {
-            const HGDIOBJ old_brush = SelectObject(item.hDC, background);
-            const HGDIOBJ old_pen = SelectObject(item.hDC, border);
-            const int radius =
-                scaled_value(item.hwndItem, kTabCornerRadius);
-            RoundRect(item.hDC, item.rcItem.left, item.rcItem.top,
-                      item.rcItem.right, item.rcItem.bottom, radius, radius);
-            SelectObject(item.hDC, old_pen);
-            SelectObject(item.hDC, old_brush);
-        }
-        if (background != nullptr) DeleteObject(background);
-        if (border != nullptr) DeleteObject(border);
-    } else {
-        const COLORREF background_color =
-            disabled ? normal_background
-            : !blend_with_footer && pressed ? RGB(226, 232, 240)
-            : !blend_with_footer && hovered ? RGB(242, 245, 248)
-                                            : normal_background;
-        HBRUSH background = CreateSolidBrush(background_color);
-        if (background != nullptr) {
-            FillRect(item.hDC, &item.rcItem, background);
-            DeleteObject(background);
-        }
-    }
-
-    const COLORREF color = disabled
-                               ? RGB(190, 197, 209)
-                               : blend_with_footer ? kFooterActionGlyph
-                                                   : RGB(90, 102, 122);
-    const int size =
-        std::max(4, scaled_value(item.hwndItem, kNavigationGlyphSize));
-    if (glyph_kind < kNavigationGlyphs.size() &&
-        draw_navigation_font_glyph(item, kNavigationGlyphs[glyph_kind],
-                                   color)) {
-        if ((item.itemState & ODS_FOCUS) != 0)
-            DrawFocusRect(item.hDC, &item.rcItem);
-        return;
-    }
-
-    // The font-failure path keeps all navigation controls visible without the
-    // platform icon font.
-    draw_navigation_fallback_glyph(item, glyph_kind, color, size);
-    if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
-}
-
 void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
                                 const wchar_t* label,
                                 bool tracked_hovered) noexcept {
@@ -1274,101 +1061,6 @@ void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
               DT_CENTER | DT_SINGLELINE | DT_VCENTER);
     if (old_font != nullptr) SelectObject(item.hDC, old_font);
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
-}
-
-void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi) noexcept {
-    const RECT rect = item.rcItem;
-    HBRUSH background = CreateSolidBrush(kStatusBarBackground);
-    if (background != nullptr) {
-        FillRect(item.hDC, &rect, background);
-        DeleteObject(background);
-    }
-
-    const int height = std::max(0, static_cast<int>(rect.bottom - rect.top));
-    const int separator_height = std::min(
-        std::max(1, MulDiv(1, static_cast<int>(dpi), 96)), height);
-    HBRUSH divider_brush = CreateSolidBrush(RGB(232, 237, 242));
-    if (separator_height > 0 && divider_brush != nullptr) {
-        RECT separator = rect;
-        separator.bottom = separator.top + separator_height;
-        FillRect(item.hDC, &separator, divider_brush);
-    }
-
-    std::array<wchar_t, 256> text{};
-    GetWindowTextW(item.hwndItem, text.data(),
-                   static_cast<int>(text.size()));
-    const int text_inset = MulDiv(kSpaceBase, static_cast<int>(dpi), 96);
-    const int content_top = rect.top + separator_height;
-    const int content_bottom = rect.bottom;
-    const int text_left = rect.left + text_inset;
-    // Leave the larger inset footer action's area available for the
-    // full-width separator and keep status text from running underneath it.
-    const int footer_action_reserve = scaled_value(
-        item.hwndItem,
-        kStatusBarHeight - 2 * kTabAddButtonVerticalInset +
-            2 * kSpaceTight);
-    const int text_right = std::max(
-        text_left, static_cast<int>(rect.right) - text_inset -
-                       footer_action_reserve);
-    const int text_margin = std::max(
-        0, MulDiv(kSpaceSnug, static_cast<int>(dpi), 96));
-    const int divider_width = std::max(1, MulDiv(1, static_cast<int>(dpi), 96));
-    const int divider_height = std::min(
-        std::max(1, MulDiv(12, static_cast<int>(dpi), 96)),
-        std::max(0, content_bottom - content_top));
-    const HFONT font = reinterpret_cast<HFONT>(
-        SendMessageW(item.hwndItem, WM_GETFONT, 0, 0));
-    const HGDIOBJ old_font =
-        font != nullptr ? SelectObject(item.hDC, font) : nullptr;
-    SetBkMode(item.hDC, TRANSPARENT);
-    SetTextColor(item.hDC, RGB(100, 116, 139));
-    std::array<std::wstring_view, 3> segments{};
-    std::size_t segment_count = 0;
-    std::wstring_view remaining(text.data());
-    while (!remaining.empty() && segment_count < segments.size()) {
-        const std::size_t delimiter = remaining.find(L'\t');
-        const std::wstring_view segment = remaining.substr(0, delimiter);
-        if (!segment.empty()) segments[segment_count++] = segment;
-        if (delimiter == std::wstring_view::npos) break;
-        remaining.remove_prefix(delimiter + 1);
-    }
-
-    int cursor = text_left;
-    for (std::size_t index = 0; index < segment_count && cursor < text_right;
-         ++index) {
-        const auto segment = segments[index];
-        SIZE extent{};
-        const int length = static_cast<int>(segment.size());
-        if (!GetTextExtentPoint32W(item.hDC, segment.data(), length,
-                                   &extent)) {
-            extent.cx = 0;
-        }
-        RECT text_rect{cursor, content_top, text_right, content_bottom};
-        DrawTextW(item.hDC, segment.data(), length, &text_rect,
-                  DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-        cursor += std::max(0, static_cast<int>(extent.cx));
-        if (index + 1 == segment_count) break;
-
-        const int divider_left = cursor + text_margin;
-        if (divider_left > text_right - divider_width - text_margin) break;
-        if (divider_brush != nullptr && divider_height > 0) {
-            RECT divider{divider_left,
-                         content_top +
-                             std::max(0, (content_bottom - content_top -
-                                             divider_height) /
-                                            2),
-                         divider_left + divider_width,
-                         content_top +
-                             std::max(0, (content_bottom - content_top -
-                                             divider_height) /
-                                            2) +
-                             divider_height};
-            FillRect(item.hDC, &divider, divider_brush);
-        }
-        cursor = divider_left + divider_width + text_margin;
-    }
-    if (divider_brush != nullptr) DeleteObject(divider_brush);
-    if (old_font != nullptr) SelectObject(item.hDC, old_font);
 }
 
 RECT pane_area(HWND window, const AppState& state) noexcept {
@@ -1508,61 +1200,6 @@ std::optional<Splitter> splitter_at_point(
         if (PtInRect(&splitter.rect, point)) return splitter;
     }
     return std::nullopt;
-}
-
-// Needs the coordinator only for display_text_for_parsing_name, which opens
-// a ShellCallScope for shell-namespace names.
-void refresh_navigation_chrome(Pane& pane, AppState& state) {
-    pane.refresh_navigation_buttons();
-    std::wstring text;
-    if (auto* pane_state = pane.pane_state()) {
-        const std::wstring parsing_name =
-            active_tab(*pane_state).location.parsing_name;
-        text = display_text_for_parsing_name(state, parsing_name);
-        auto* current = pane.pane_state();
-        if (current != pane_state ||
-            active_tab(*current).location.parsing_name != parsing_name)
-            return;
-    }
-    SetWindowTextW(pane.address_bar(), text.c_str());
-}
-
-// Reads the Shell view's item counts, so it must stay in the coordinator:
-// the call needs a ShellCallScope and the shutdown gates that follow it.
-void refresh_status_bar(Pane& pane, AppState& state) noexcept {
-    if (pane.status_bar() == nullptr) return;
-    panedock::explorer_host::ExplorerHost::ItemCounts counts;
-    HRESULT hr = E_UNEXPECTED;
-    {
-        ShellCallScope shell_call(state);
-        hr = pane.host().item_counts(counts);
-    }
-    if (state.shutdown_deferred || state.closing_) return;
-    if (FAILED(hr)) {
-        SetWindowTextW(pane.status_bar(), L"");
-        return;
-    }
-    std::wstring text = std::to_wstring(counts.total) + L" items";
-    if (counts.selected != 0) {
-        text += L'\t';
-        text += std::to_wstring(counts.selected);
-        text += L" selected";
-        if (counts.selected_bytes_valid && counts.selected_bytes != 0) {
-            std::array<wchar_t, 64> size_text{};
-            const auto bytes = std::min(
-                counts.selected_bytes,
-                static_cast<unsigned long long>(
-                    std::numeric_limits<LONGLONG>::max()));
-            if (StrFormatByteSizeW(static_cast<LONGLONG>(bytes),
-                                   size_text.data(),
-                                   static_cast<UINT>(size_text.size())) !=
-                nullptr) {
-                text += L'\t';
-                text += size_text.data();
-            }
-        }
-    }
-    SetWindowTextW(pane.status_bar(), text.c_str());
 }
 
 std::wstring tab_display_text(AppState& state,
@@ -2046,21 +1683,6 @@ void rebuild_pinned_location_menu(AppState& state) {
     }
 }
 
-void handle_navigation_complete(
-    AppState& state, panedock::app_shell::Pane& pane,
-    NavigationGeneration generation,
-    const panedock::core::ShellLocation& new_location) {
-    if (state.shutdown_deferred || state.closing_) return;
-    if (!pane.navigation_request_is_current(generation)) return;
-    pane.record_navigation_result(new_location);
-    pane.apply_view_mode();
-    if (state.shutdown_deferred || state.closing_) return;
-    pane.apply_sort();
-    if (state.shutdown_deferred || state.closing_) return;
-    pane.tab_strip_ui().refresh();
-    schedule_session_save(state);
-}
-
 // PD-183: Pane::destroy() now folds ExplorerHost::destroy() into its own
 // fixed destroy order (see pane.cpp), so tearing down every pane's chrome
 // and Shell view is this one loop everywhere shutdown needs it — each
@@ -2354,16 +1976,15 @@ HRESULT apply_layout(HWND window, AppState& state,
                     chrome.host().set_navigation_callback(
                         [&state, index](NavigationGeneration generation,
                             const panedock::core::ShellLocation& new_location) {
-                            handle_navigation_complete(state, state.panes[index],
-                                                       generation,
-                                                       new_location);
+                            state.panes[index].navigation_complete(
+                                generation, new_location);
                         });
                     chrome.host().set_navigation_failed_callback(
                         [&state, index](NavigationGeneration generation) {
                             state.panes[index].navigation_failed(generation);
                         });
                     chrome.host().set_selection_changed_callback(
-                        [&state, index]() { refresh_status_bar(state.panes[index], state); });
+                        [&state, index]() { state.panes[index].refresh_status_bar(); });
                     chrome.apply_view_mode();
                     if (state.shutdown_deferred || state.closing_)
                         return E_ABORT;
@@ -2388,7 +2009,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
             }
             if (recompute_content) {
-                refresh_status_bar(state.panes[index], state);
+                state.panes[index].refresh_status_bar();
                 if (state.shutdown_deferred || state.closing_) return E_ABORT;
             }
             // Pane owns the outer-rect cache; the native child batches
@@ -2779,10 +2400,6 @@ HFONT AppState::chrome_font() const noexcept {
 
 HWND AppState::tooltip() const noexcept {
     return layout_tooltip;
-}
-
-void AppState::refresh_navigation_chrome(Pane &pane) {
-    ::refresh_navigation_chrome(pane, *this);
 }
 
 std::string AppState::make_unique_tab_id() const {
@@ -3860,62 +3477,6 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
     return 0;
 }
 
-void handle_pane_command(AppState& state, std::size_t pane_index,
-                         panedock::app_shell::PaneControl control) {
-    switch (control) {
-        case panedock::app_shell::PaneControl::back:
-            state.panes[pane_index].navigate_history(true);
-            return;
-        case panedock::app_shell::PaneControl::forward:
-            state.panes[pane_index].navigate_history(false);
-            return;
-        case panedock::app_shell::PaneControl::up:
-            state.panes[pane_index].navigate_up();
-            return;
-        case panedock::app_shell::PaneControl::refresh:
-            state.panes[pane_index].refresh_view();
-            return;
-        case panedock::app_shell::PaneControl::view_mode:
-            {
-                RECT rect{};
-                if (GetWindowRect(state.panes[pane_index].view_mode_button(),
-                                  &rect))
-                    state.panes[pane_index].show_view_mode_menu(
-                        {rect.left, rect.bottom});
-            }
-            return;
-        case panedock::app_shell::PaneControl::pinned:
-            {
-                RECT rect{};
-                if (GetWindowRect(state.panes[pane_index].pinned_button(),
-                                  &rect))
-                    state.panes[pane_index].show_pinned_locations_menu(
-                        {rect.left, rect.bottom});
-            }
-            return;
-        case panedock::app_shell::PaneControl::folder_context: break;
-        default: return;
-    }
-    const HWND folder_context_button =
-        state.panes[pane_index].folder_context_button();
-    if (state.panes[pane_index].pane_state() == nullptr ||
-        !state.panes[pane_index].realized() ||
-        folder_context_button == nullptr ||
-        !IsWindowVisible(folder_context_button))
-        return;
-    set_active_pane(state.main_window, state, pane_index);
-    if (state.closing_ || state.shutdown_deferred) return;
-    if (active_pane_index(active_group(state)) != pane_index) return;
-    RECT button_rect{};
-    if (!GetWindowRect(folder_context_button, &button_rect))
-        return;
-    const POINT anchor{button_rect.left, button_rect.top};
-    ShellCallScope shell_call(state);
-    state.panes[pane_index].host().focus();
-    (void)state.panes[pane_index].host().show_folder_context_menu(
-        state.main_window, anchor);
-}
-
 bool handle_sidebar_command(HWND window, AppState& state, int id) {
     if (id == kGroupListId) {
         const auto selected = state.sidebar.selected_index();
@@ -3933,7 +3494,32 @@ bool handle_sidebar_command(HWND window, AppState& state, int id) {
     }
 }
 
-bool handle_global_command(HWND window, AppState& state, int id) {
+bool handle_global_command(HWND window, AppState& state, int id,
+                           Pane* source_pane = nullptr) {
+    if (id == panedock::app_shell::encode_pane_control(
+                  panedock::app_shell::PaneControl::folder_context)) {
+        if (source_pane == nullptr) return false;
+        auto& pane = *source_pane;
+        const HWND folder_context_button =
+            pane.folder_context_button();
+        if (pane.pane_state() == nullptr ||
+            !pane.realized() ||
+            folder_context_button == nullptr ||
+            !IsWindowVisible(folder_context_button))
+            return true;
+        set_active_pane(state.main_window, state, pane.index());
+        if (state.closing_ || state.shutdown_deferred) return true;
+        if (active_pane_index(active_group(state)) != pane.index()) return true;
+        RECT button_rect{};
+        if (!GetWindowRect(folder_context_button, &button_rect))
+            return true;
+        const POINT anchor{button_rect.left, button_rect.top};
+        ShellCallScope shell_call(state);
+        pane.host().focus();
+        (void)pane.host().show_folder_context_menu(
+            state.main_window, anchor);
+        return true;
+    }
     if (id == kCloseTabId || id == kCloseOtherTabsId ||
         id == kCloseAllTabsId || id == kCloseTabsToRightId) {
         const auto pane_index = state.tab_context_menu_pane;
@@ -4032,35 +3618,6 @@ bool handle_global_command(HWND window, AppState& state, int id) {
         return true;
     }
     return false;
-}
-
-bool draw_pane_control(const DRAWITEMSTRUCT& item, AppState& state,
-                       panedock::app_shell::PaneControl control) {
-    struct PaneButtonDrawing final {
-        panedock::app_shell::PaneControl control;
-        std::size_t glyph;
-        bool blend;
-    };
-    constexpr std::array pane_button_drawings{
-        PaneButtonDrawing{panedock::app_shell::PaneControl::back, 0, false},
-        PaneButtonDrawing{panedock::app_shell::PaneControl::forward, 1, false},
-        PaneButtonDrawing{panedock::app_shell::PaneControl::up, 2, false},
-        PaneButtonDrawing{panedock::app_shell::PaneControl::refresh, 3, false},
-        PaneButtonDrawing{panedock::app_shell::PaneControl::view_mode, 4,
-                          false},
-        PaneButtonDrawing{panedock::app_shell::PaneControl::pinned, 5, false},
-        PaneButtonDrawing{panedock::app_shell::PaneControl::folder_context, 6,
-                          true}};
-    const auto drawing = std::find_if(
-        pane_button_drawings.begin(), pane_button_drawings.end(),
-        [&](const auto& candidate) {
-            return candidate.control == control;
-        });
-    if (drawing == pane_button_drawings.end()) return false;
-    draw_navigation_icon_button(
-        item, drawing->glyph,
-        state.owner_draw_hovered_button == item.hwndItem, drawing->blend);
-    return true;
 }
 
 bool draw_global_control(const DRAWITEMSTRUCT& item, AppState& state) {
@@ -4583,7 +4140,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         case WM_DPICHANGED: {
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);
-            release_navigation_icon_font();
+            Pane::release_navigation_icon_font();
             release_brand_resources();
             SetWindowPos(window, nullptr, suggested->left, suggested->top,
                          suggested->right - suggested->left,
@@ -4670,7 +4227,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     (void)save_now(*state, false, true);
                 }
             }
-            release_navigation_icon_font();
+            Pane::release_navigation_icon_font();
             release_brand_resources();
             release_address_bar_background_brush();
             return 0;
@@ -5154,13 +4711,12 @@ namespace panedock::app_shell {
 // The two entry guards mirror tab_strip_proc's: nothing is handled while the
 // window is closing, and mouse messages raised during a Shell re-entry are
 // deferred (PD-172 / PD-173).
-std::optional<LRESULT> handle_pane_control_message(HWND pane_window,
-                                                   std::size_t pane_index,
-                                                   UINT message, WPARAM wparam,
-                                                   LPARAM lparam) {
+std::optional<LRESULT> handle_pane_control_message(Pane& chrome, UINT message,
+                                                   WPARAM wparam, LPARAM lparam) {
+    const HWND pane_window = chrome.window();
     auto* state = reinterpret_cast<AppState*>(
         GetWindowLongPtrW(GetParent(pane_window), GWLP_USERDATA));
-    if (state == nullptr || pane_index >= state->panes.size())
+    if (state == nullptr || chrome.index() >= state->panes.size())
         return std::nullopt;
     if ((state->closing_ || state->shutdown_deferred) &&
         message != WM_PAINT && message != WM_ERASEBKGND &&
@@ -5170,30 +4726,25 @@ std::optional<LRESULT> handle_pane_control_message(HWND pane_window,
                                           lparam))
         return LRESULT{0};
 
-    auto& chrome = state->panes[pane_index];
     switch (message) {
         case WM_COMMAND: {
             if (HIWORD(wparam) != BN_CLICKED) return std::nullopt;
             const auto control =
                 decode_pane_control(static_cast<int>(LOWORD(wparam)));
             if (!control.has_value()) return std::nullopt;
-            handle_pane_command(*state, pane_index, *control);
+            const int id = static_cast<int>(LOWORD(wparam));
+            if (!chrome.handle_command(id))
+                (void)handle_global_command(state->main_window, *state, id,
+                                             &chrome);
             return LRESULT{0};
         }
         case WM_DRAWITEM: {
             const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
             if (item == nullptr) return std::nullopt;
-            if (item->CtlType == ODT_BUTTON) {
-                const auto control = decode_pane_control(item->CtlID);
-                if (control.has_value() &&
-                    draw_pane_control(*item, *state, *control))
-                    return LRESULT{TRUE};
-            }
-            // The status bar is an SS_OWNERDRAW STATIC with no control id.
-            if (item->hwndItem == chrome.status_bar()) {
-                draw_status_bar(*item, GetDpiForWindow(item->hwndItem));
-                return LRESULT{TRUE};
-            }
+            auto drawing = *item;
+            if (state->owner_draw_hovered_button == drawing.hwndItem)
+                drawing.itemState |= ODS_HOTLIGHT;
+            if (chrome.draw_control(drawing)) return LRESULT{TRUE};
             return std::nullopt;
         }
         case WM_CTLCOLOREDIT: {

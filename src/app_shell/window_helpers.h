@@ -25,6 +25,8 @@ bool register_simple_window_class(
     const wchar_t* name, WNDPROC proc, HINSTANCE instance, HBRUSH background,
     UINT style = 0, HICON icon = nullptr, HICON small_icon = nullptr) noexcept;
 
+int scaled_value(HWND window, int value) noexcept;
+
 void center_over_owner(HWND dialog, HWND owner, int width, int height,
                        bool owner_client = false) noexcept;
 

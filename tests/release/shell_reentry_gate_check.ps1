@@ -1,5 +1,6 @@
 param(
     [string] $SourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\main.cpp'),
+    [string] $PaneSourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\pane.cpp'),
     [string] $ShellCoreSourcePath = (Join-Path $PSScriptRoot '..\..\src\shell_core\shell_core.cpp'),
     [string] $ExplorerHostSourcePath = (Join-Path $PSScriptRoot '..\..\src\explorer_host\explorer_host.cpp'),
     [string] $ExplorerHostHeaderPath = (Join-Path $PSScriptRoot '..\..\src\explorer_host\explorer_host.h')
@@ -7,6 +8,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $source = Get-Content -LiteralPath $SourcePath -Raw
+$paneSource = Get-Content -LiteralPath $PaneSourcePath -Raw
 $shellCoreSource = Get-Content -LiteralPath $ShellCoreSourcePath -Raw
 $explorerHostSource = Get-Content -LiteralPath $ExplorerHostSourcePath -Raw
 $explorerHostHeader = Get-Content -LiteralPath $ExplorerHostHeaderPath -Raw
@@ -215,6 +217,25 @@ if ([regex]::Matches($tabCallSiteSource, 'tab_display_text\(').Count -ne
     [regex]::Matches($tabCallSiteSource,
         'tab_display_text\(\s*state\s*,').Count) {
     throw 'Shell re-entry invariant failed: state-less tab display caller exists'
+}
+
+# PD-197 moved address display lookup and status counts into Pane. Keep their
+# real Shell calls covered after removing the coordinator bridge.
+$chromeStart = $paneSource.IndexOf('void Pane::refresh_navigation_chrome(')
+$statusStart = $paneSource.IndexOf('void Pane::refresh_status_bar(')
+$statusEnd = $paneSource.IndexOf('bool Pane::register_window_class(', $statusStart)
+if ($chromeStart -lt 0 -or $statusStart -lt $chromeStart -or $statusEnd -lt $statusStart) {
+    throw 'Shell re-entry invariant failed: Pane chrome/status bodies missing'
+}
+$chromeBody = $paneSource.Substring($chromeStart, $statusStart - $chromeStart)
+$statusBody = $paneSource.Substring($statusStart, $statusEnd - $statusStart)
+if ($chromeBody -notmatch 'ShellCall shell_call\(pane_host\(\)\);[\s\S]*panedock::shell_core::display_text_for_parsing_name' -or
+    $chromeBody -notmatch 'current != bound') {
+    throw 'Shell re-entry invariant failed: Pane address display lost its Shell gate or binding check'
+}
+if ($statusBody -notmatch 'ShellCall shell_call\(pane_host\(\)\);[\s\S]*item_counts\(counts\)' -or
+    $statusBody -notmatch 'item_counts\(counts\);\s*}\s*if \(pane_host\(\)->is_shutting_down\(\)\) return;') {
+    throw 'Shell re-entry invariant failed: Pane status counts lost their Shell gate or shutdown check'
 }
 
 Write-Output 'PASSED: shell_reentry_gate_check'

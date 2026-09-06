@@ -234,7 +234,8 @@
 | PD-194 | pane 的 tab 生命週期命令收進 `Pane` | 7 | `done` | PD-191, PD-192, PD-193 | [PD-194](tickets/PD-194-pane-owns-its-tab-commands.md) |
 | PD-195 | 位址列與釘選位置收進 `Pane` | 7 | `done` | PD-191, PD-192 | [PD-195](tickets/PD-195-pane-owns-address-bar-and-pinned-locations.md) |
 | PD-196 | tab strip 收進 `Pane`（`PaneTabStrip`） | 7 | `done` | PD-191, PD-194 | [PD-196](tickets/PD-196-pane-owns-its-tab-strip.md) |
-| PD-197 | pane 命令、chrome 與導覽完成的收尾 | 7 | `todo` | PD-192, PD-193, PD-194, PD-195, PD-196 | [PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md) |
+| PD-197 | pane 命令、chrome 與導覽完成的收尾 | 7 | `in_progress` | PD-192, PD-193, PD-194, PD-195, PD-196 | [PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md) |
+| PD-198 | 剩餘 pane 局部訊息與 popup 行為歸位 | 7 | `planned` | PD-197 | [PD-198](tickets/PD-198-pane-local-message-and-popup-ownership.md) |
 
 ## Dependency lanes
 
@@ -373,7 +374,7 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | 縮圖 pipeline 的快取與尺寸上限 | 待 PD-003 量出縮圖對記憶體的實際貢獻後再開,避免憑估計調參數。PD-003 2026-08-29 的自動化量測跑出差值 0 bytes,但兩個組態都重用同一次 run 內已導覽過的資料夾(縮圖早已快取),不是有效讀數;要開票前需先用全新啟動的 process 分別量測純文字與縮圖資料夾。 |
 | ~~診斷閒置磁碟 I/O 的來源~~ | **已於 2026-09-03 開票(PD-176),不再是候選。** PD-003 2026-08-29 量到閒置 10 分鐘期間有 307294 bytes 磁碟 I/O(NFR-001 磁碟門檻 FAIL,零 bytes 才算過),觸發條件早已成立;2026-09-03 三方稽核在原始碼層面排除了 app 自身的 busy-spin 與輪詢計時器,把範圍收斂為「歸因到 app 之外的來源」。 |
 | 追查 `panedock_launch_smoke` 間歇性崩潰(0xC0000409) | PD-003 2026-08-29 執行期間偶發一次 `STATUS_STACK_BUFFER_OVERRUN`,發生在關閉一個含 4 個 Group、其中一個 42 個 tab 的真實 `session.json` 之後;立即重跑同一測試與完整 suite 皆通過,無法穩定重現。觸發條件:再次出現(尤其是大量 tab 的 Group)時開票追查,屆時附上本次的復現條件與 session.json 特徵作為起點。 |
-| ~~把 tab strip 的 hover／drag／paint／`WNDPROC` 收進 `app_shell::TabStrip` 模組~~ | **已於 2026-09-05 開票（PD-196），不再是候選。** 原始描述保留：2026-09-01 架構審查原本以「paint 與 hit-test 各自重新推導 layout」為理由列為高優先，但 Codex 唯讀核對**推翻**了該理由:layout 由 `layout_tab_strip`(`main.cpp:1798`)計算，tab 與 scroll 命中測試直接委派 `tab_overflow.h` 的純函式(`main.cpp:3817`)，paint(`:4052`)與 `WNDPROC`(`:4238`)消費同一份 `tab_strip_geometry`——PD-085／PD-107 已經把這條共用 seam 建好了。剩下的真實問題只有「這 853 行仍在 `main.cpp`、且 drag／hover／paint 的**呼叫路徑**沒有測試涵蓋」。觸發條件（**2026-09-04 更新**）:原條件為「再出現一個 hit-test／repaint 類的實機回報(PD-107、PD-152、PD-154 之後的下一個)」;現增列第二個觸發點——**PD-187～PD-189 完成後重新評估**。理由:那三張票之後 tab strip 會自然落在 `Pane` 底下（pane 有自己的 HWND 與 proc、繪製與命令都已就地處理），屆時這群 ~830 行的邊界會比現在清楚，切票會準得多。2026-09-04 全檔盤點的補充事實:`layout_tab_strip` 其實不在 `main.cpp`，它是 `tab_overflow.h:176-336` 的無狀態純函式（不依賴 `AppState`／HWND），`Pane` 現在就能直接呼叫;而 `cancel_tab_drag`／`finish_tab_drag`／`update_tab_drag`／`register_tab_drag_hover_targets` 依契約 (3) 天生跨 pane，不可能整群變成 `Pane` 成員——真正可搬的比 853 這個數字小。 |
+| ~~把 tab strip 的 hover／drag／paint／`WNDPROC` 收進 `app_shell::TabStrip` 模組~~ | **已於 2026-09-05 開票且完成（PD-196），不再是候選；PD-197 已複驗 `PaneTabStrip` 由 Pane 以值持有。** 原始描述保留：2026-09-01 架構審查原本以「paint 與 hit-test 各自重新推導 layout」為理由列為高優先，但 Codex 唯讀核對**推翻**了該理由:layout 由 `layout_tab_strip`(`main.cpp:1798`)計算，tab 與 scroll 命中測試直接委派 `tab_overflow.h` 的純函式(`main.cpp:3817`)，paint(`:4052`)與 `WNDPROC`(`:4238`)消費同一份 `tab_strip_geometry`——PD-085／PD-107 已經把這條共用 seam 建好了。剩下的真實問題只有「這 853 行仍在 `main.cpp`、且 drag／hover／paint 的**呼叫路徑**沒有測試涵蓋」。觸發條件（**2026-09-04 更新**）:原條件為「再出現一個 hit-test／repaint 類的實機回報(PD-107、PD-152、PD-154 之後的下一個)」;現增列第二個觸發點——**PD-187～PD-189 完成後重新評估**。理由:那三張票之後 tab strip 會自然落在 `Pane` 底下（pane 有自己的 HWND 與 proc、繪製與命令都已就地處理），屆時這群 ~830 行的邊界會比現在清楚，切票會準得多。2026-09-04 全檔盤點的補充事實:`layout_tab_strip` 其實不在 `main.cpp`，它是 `tab_overflow.h:176-336` 的無狀態純函式（不依賴 `AppState`／HWND），`Pane` 現在就能直接呼叫;而 `cancel_tab_drag`／`finish_tab_drag`／`update_tab_drag`／`register_tab_drag_hover_targets` 依契約 (3) 天生跨 pane，不可能整群變成 `Pane` 成員——真正可搬的比 853 這個數字小。 |
 | `SessionWriter`——把 `session_dirty`、500ms 防抖、clean/crash marker 與 atomic replace 收進單一型別 | 2026-09-01 架構審查列為 Speculative 並自我否決:目前只有一個寫入者，注入的 "write these bytes" adapter 是**假想 seam**(一個 adapter 只是假設，兩個才是真的)。觸發條件:出現第二個持久化寫入者(獨立 settings 檔、匯出功能)，或 PD-162 實作時發現 shutdown reducer 本來就需要透過介面呼叫存檔決策——後者請在 PD-162 交接區記錄，再據以開票。 |
 | ~~把剩餘 9 個 pane-parallel 陣列搬進 `PaneChrome`~~ | **已於 2026-09-03 開票，不再是候選。** 觸發條件（PD-163 完成且交接區已寫出每個未搬欄位的具體阻礙）已成立。依所有權界線拆成兩張：[PD-182](tickets/PD-182-pane-type-owns-ui-state.md) 搬六個純 UI 欄位（`tab_visuals`、`tab_strip_geometry`、`tab_hover_indices`、`tab_scroll_hover_indices`、`tab_drag_targets`、`folder_context_buttons`），[PD-183](tickets/PD-183-pane-owns-explorer-host-lifetime.md) 搬三個 Shell 生命週期欄位（`explorers`、`realized`、`suppress_history_record`）。原候選描述保留於下一列。 |
 | 〔已開票，原描述存查〕把剩餘 9 個 pane-parallel 陣列搬進 `PaneChrome` | PD-163 刻意只搬 12 個純 HWND／GDI 欄位，留下 `explorers`、`realized`、`tab_visuals`、`tab_strip_geometry`、`tab_hover_indices`、`tab_scroll_hover_indices`、`suppress_history_record`、`tab_drag_targets` 等 9 個——它們牽涉 `ExplorerHost` 生命週期與 tab 互動狀態，一起搬會讓單票超過兩天。觸發條件:PD-163 完成且其交接區已寫出每個未搬欄位的具體阻礙後開票。 |
@@ -760,7 +761,7 @@ Source:使用者回報「程式沒辦法正常執行 無法顯示畫面」,經 `
 
 **診斷結論(推翻了「切檔案」這個直覺方向)**:問題不是 `main.cpp` 6748 行，而是 `AppState`(`main.cpp:501-629`)這個約 130 成員的 god struct 被 **118 個函式**以 `AppState&` 接受。把檔案切開但簽章不變，行數搬走了、耦合一分沒少，反而多出標頭與 include 環。因此每張票的共同必辦項是「順手把碰到的函式簽章從 `AppState&` 收窄成實際需要的型別」，而不是另開一張「拆 AppState」的大票——零行為改變加上 fail-closed 的 release gate 之下，一次性動 118 個 call site 的風險最高。誠實的期待值:整串做完 `AppState&` 約從 118 降到 90，剩下的 90 是正確的(sidebar、session、splitter、group drag 本來就屬協調層)。
 
-**確立的模組契約(三條，寫進每張票)**:(1) **單向依賴**——協調層 → `Pane`，`Pane` 不得持有 `AppState*`、回呼介面或 `std::function` 成員；一個只有單一實作的介面在本專案是已否決模式(見 §已否決的方向 與 `docs/development.md`)。(2) **真相來源硬切**——`core::PaneState` 擁有 tabs/location/view mode/sort/history/active tab id(會被存檔、有 unit test)，`Pane` 只擁有 HWND/幾何/hover/捲動/drag placeholder(永不存檔)，且 **`Pane` 不得持有 tab 清單複本**，避免切 Group 後才浮現的不同步缺陷。(3) **跨 pane 的拖曳狀態留在協調層**，因為它天生跨越來源與目標兩個 pane。
+**確立的模組契約(三條，寫進每張票)**:(1) **單向依賴**——協調層 → `Pane`，`Pane` 不得持有 `AppState*`、~~回呼介面或~~ `std::function` 成員。**現況（PD-191 覆寫，PD-197 複驗）**：允許 `PaneHost*` 提供窄協調服務，禁止透過介面取得 `AppState&`、`GroupState&` 或其他 pane；原「不得持有回呼介面／單一實作介面不採用」限制只在此授權範圍解除。(2) **真相來源硬切**——`core::PaneState` 擁有 tabs/location/view mode/sort/history/active tab id(會被存檔、有 unit test)，`Pane` 只擁有 HWND/幾何/hover/捲動/drag placeholder(永不存檔)，且 **`Pane` 不得持有 tab 清單複本**，避免切 Group 後才浮現的不同步缺陷。(3) **跨 pane 的拖曳狀態留在協調層**，因為它天生跨越來源與目標兩個 pane。
 
 **明確不做的事**:`GroupState`/`TabState` 維持 `src/core` 的純資料 + 自由函式形態。把它們變成有行為的物件，要嘛只是自由函式改成成員函式(零收益、大量 diff)，要嘛把 HWND 拉進 `core`，毀掉 `AGENTS.md` 保護的唯一自動化測試接縫。使用者要的「物件化」只發生在 UI 層。
 
@@ -847,8 +848,30 @@ PD-184～186＋190 全在資料層、PD-187～189 全在視窗層，兩段分開
 
 **開票**:[PD-191](tickets/PD-191-pane-host-coordinator-service-interface.md)(介面與接線,零函式搬移——介面形狀若錯,錯誤停在一個新檔案而不是散進 2,900 行 diff)、[PD-192](tickets/PD-192-pane-owns-its-navigation.md)(導覽,最小的一群當試金石)、[PD-193](tickets/PD-193-pane-owns-view-mode-sort-and-location-capture.md)、[PD-194](tickets/PD-194-pane-owns-its-tab-commands.md)、[PD-195](tickets/PD-195-pane-owns-address-bar-and-pinned-locations.md)(最小,可獨立捨棄)、[PD-196](tickets/PD-196-pane-owns-its-tab-strip.md)(約 700 行,最大也最有價值)、[PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md)(收尾與整串驗收)。
 
-**`PaneHost` 成員數的變動記錄**(PD-191 票面不編輯,異動記在這裡):PD-191 建立 7 支;PD-193 新增 `location_capture_suppressed()` → 8 支;PD-194 新增過渡用的 `tab_strip_needs_refresh(Pane&)` → 9 支;PD-195 新增 `pinned_locations()` 與 `pin_location()` → 11 支;PD-196 刪除 `tab_strip_needs_refresh()` → 10 支，新增 `tab_display_text()`、`chrome_font()`、`tooltip()` 與 `refresh_navigation_chrome(Pane&)` → **14 支**（不含解構子）。字型與 tooltip 由協調層持有，PD-191 交接已記載當時未加入；最後一支保留 strip 刷新後的既有位址列／按鈕更新與 Shell gate，避免提前搬動 PD-197 的函式。實作者每次異動都要回來更新這一行。
+**`PaneHost` 成員數的變動記錄**(PD-191 票面不編輯,異動記在這裡):PD-191 建立 7 支;PD-193 新增 `location_capture_suppressed()` → 8 支;PD-194 新增過渡用的 `tab_strip_needs_refresh(Pane&)` → 9 支;PD-195 新增 `pinned_locations()` 與 `pin_location()` → 11 支;PD-196 刪除 `tab_strip_needs_refresh()` → 10 支，新增 `tab_display_text()`、`chrome_font()`、`tooltip()` 與 `refresh_navigation_chrome(Pane&)` → 14 支；PD-197 刪除過渡的 `refresh_navigation_chrome(Pane&)` → **13 支**（不含解構子）。字型與 tooltip 由協調層持有，PD-191 交接已記載當時未加入；PD-196 最後一支當時保留 strip 刷新後的位址列／按鈕更新與 Shell gate；PD-197 已由 `Pane::refresh_navigation_chrome()` 接手並直接使用 `ShellCall`，該 bridge 已結清。實作者每次異動都要回來更新這一行。
 
 **明確留在協調層的界線**(PD-197 non-goals 有完整清單):跨 pane／全域協調(tab 跨 pane 拖曳、splitter、active pane 切換、版型矩形、`apply_layout`、全視窗繪製迴圈)、Group 域全部、app 生命週期(`wWinMain`／`window_proc`／shutdown／single-instance／session 存檔)、`core` 的 pane 域純函式(唯一的自動化測試接縫,`Pane` 只呼叫不吸收)、`shell_core`／`file_operations`(零 pane-scoped 狀態)、四個 singleton 狀態(`tab_context_menu_pane`／`tab_context_menu_tab_id`／`suppress_location_capture`／`owner_draw_hovered_button`)。
 
 **排序**:PD-191 → PD-192／PD-193(可並行) → PD-194 → PD-195(可隨時插入) → PD-196 → PD-197。全串零行為、零視覺變更,目標是 `main.cpp` 從 5,975 行降到 3,300 行以下。PD-196 風險最高(繪製與 `WNDPROC`,實機清單 13 項);PD-195 可獨立捨棄。整串不推進 Phase 5 release gate。
+
+
+### 2026-09-05 — PD-197 全檔複驗：指定整併完成，剩餘局部行為開 PD-198
+
+對 `main.cpp` 全檔及 PD-191～196 交接重新盤點。四支指定函式已成為 `Pane` 成員，`navigation_complete` 合併資料記錄、view/sort 套用、strip 刷新與 debounce 存檔；兩個過渡刷新 hook 均已移除。PD-193／195 的 popup 繼續以 pane HWND 作 `TPM_RETURNCMD` owner、把 command 送至主視窗，保留既有重入分派。folder-context 分支因需選取全域 active pane，依 PD-197 Scope 2 留在 `handle_global_command`，沒有新增 PaneHost 服務。
+
+**仍留在協調層的分類與理由**：
+
+| 類別 | 代表內容與理由 |
+|---|---|
+| 跨 pane 幾何與 active-pane | `layout_rects`／`pane_area`／`pane_content_area`、`NavigationGeometry`／`navigation_geometry`／`inset_rect`、`apply_layout`、parent-scoped position batches、splitter/sidebar drag、`set_active_pane`、`pane_at_point`；決定多 pane 的配置、焦點或提交時序，屬本系列 non-goals。 |
+| tab 跨 pane 拖曳與命中路由 | `TabDrag`、cancel/finish/update、`tab_strip_index`／`tab_item_at_point`／`close_tab_at_point`、`tab_drag_layout`、`tab_strip_paint_state`、`tab_strip_proc` 的 capture/drag/gate、drag-hover 註冊與 timer/message 分派；讀來源及目標或反查四 pane，符合 PD-196 明列保留表。 |
+| Group 域與全體 pane 迴圈 | Group CRUD/reorder、`rebind_panes`、`navigate_realized_panes`、`realized_flags`、`refresh_tab_strips`／`capture_locations`、Group/tab unique ID、sidebar list/proc/drag。含 hidden pane 的 model lookup（兩個 `active_tab(core::PaneState&)` overload），不能以目前可見 Pane 綁定取代。 |
+| 全視窗與 app 共用 chrome | header/sidebar/brand 繪製、UI font、tooltip、全視窗背景與全域 owner-draw hover singleton。main 的 `fill_rounded_rect` 只供 header/sidebar；pane 既有同名 helper 是另一個使用 stock DC brush/pen 的實作，不為整併更換演算法。真正共用的 `scaled_value` 已移至 `window_helpers`。 |
+| app 生命週期與服務 | `wWinMain`／`window_proc`、startup/deferred realization、session/atomic flush、single-instance、shutdown reducer 接線、Shell-call gate、DPI 資源釋放與全體重排；`create_main_window_children` 的建立/subclass/tooltip 接線及 `apply_layout` 的 Shell callback/auto-complete 接線仍按啟動順序執行。 |
+| 全域互動與檔案操作 | 主訊息迴圈的 active-pane 快捷鍵/accelerator、滑鼠路由與焦點判定；`perform_clipboard_paste` 雖帶 pane index，但管理 app-level transfer/cancel/close-after-transfer，不能因 grep 縮窄而移入 Pane。folder-context 同樣含全域 active-pane 切換。 |
+| 全域選單與 persistence | Pinned manager/cache、fixed labels、`pin_location`、`tab_display_text`（PD-196 明列服務）；tab context pane/id、location-capture suppression 與 hovered-button 四個 singleton 保留。選單目標識別、取消清理、command gate 屬協調層。 |
+| 系列漏列的真正局部行為 | `address_edit_proc`、位址列 brush/色彩分支、`apply_container_region`、folder-context font 設定，以及 popup 解碼後的 pane 選项／批次 tab-close／tab 選單建構。這些仍可收進 Pane，已開 [PD-198](tickets/PD-198-pane-local-message-and-popup-ownership.md)，本票不實作。 |
+
+**量化結果與未滿足條件**：開工基準實際為 **5,213 行**（與 PD-196 交接一致），PD-197 後 **4,764 行，淨減 449**；相對系列原基準 5,975 行減少 1,211 行，**未達 Acceptance 5 的 3,300 行以下**。按字面搜尋仍有 11 行 `std::size_t pane_index`，包含 paste 與 popup dispatch，**也不滿足 Acceptance 4「只剩跨 pane」的字面限制**；逐行證據與正確归屬記於 PD-197 交接。沒有改名躲 grep、刪註解壓行或搬走 non-goals。行數／grep 限制與既定 scope 的取捨仍待使用者確認，tracker 暫不宣稱整票驗收完成。
+
+**驗證**：LLVM-MinGW Release build、完整 CTest（含 launch smoke）、正常關閉與 60 秒閒置取樣結果見 PD-197 交接。這是本票的局部回歸檢查，不推進 Phase 5 release gate；實機多步操作、跨 DPI、檔案操作重入及逐像素視覺仍待人工驗證。

@@ -7,7 +7,7 @@
 // children's notifications. This test links Pane without the coordinator, so
 // it stands in with a "not mine" answer; no test here pumps pane messages.
 namespace panedock::app_shell {
-std::optional<LRESULT> handle_pane_control_message(HWND, std::size_t, UINT,
+std::optional<LRESULT> handle_pane_control_message(Pane&, UINT,
                                                    WPARAM, LPARAM) {
     return std::nullopt;
 }
@@ -20,11 +20,12 @@ class TestPaneHost final : public panedock::app_shell::PaneHost {
     bool shutting_down{};
     std::string group_id{"group-a"};
     bool suppress_location_capture{};
+    int session_saves{};
 
     bool is_shutting_down() const noexcept override { return shutting_down; }
     void shell_call_entered() noexcept override {}
     void shell_call_left() noexcept override {}
-    void schedule_session_save() noexcept override {}
+    void schedule_session_save() noexcept override { ++session_saves; }
     const std::string &active_group_id() const noexcept override {
         return group_id;
     }
@@ -39,7 +40,6 @@ class TestPaneHost final : public panedock::app_shell::PaneHost {
     }
     HFONT chrome_font() const noexcept override { return nullptr; }
     HWND tooltip() const noexcept override { return nullptr; }
-    void refresh_navigation_chrome(panedock::app_shell::Pane &) override {}
     std::span<const panedock::app_shell::PinnedLocation>
     pinned_locations() const noexcept override {
         return {};
@@ -204,7 +204,7 @@ void test_navigation_calls_are_no_ops_without_host() {
     EXPECT(pane.navigate_to(location) == E_UNEXPECTED);
     EXPECT(pane.navigate_up_one_level() == E_UNEXPECTED);
     EXPECT(!pane.navigation_request_is_current(1));
-    pane.record_navigation_result(location);
+    pane.navigation_complete(1, location);
     pane.navigation_failed(1);
     pane.navigate_history(true);
     pane.navigate_up();
@@ -226,6 +226,50 @@ void test_submit_address_is_a_no_op_while_shutting_down() {
     pane.submit_address();
 
     EXPECT(state.tabs.front().location.parsing_name == L"before");
+}
+
+void test_navigation_completion_rejects_stale_results_and_refreshes_chrome() {
+    TestPaneHost host;
+    panedock::app_shell::Pane pane;
+    panedock::core::PaneState state;
+    state.tabs.push_back({});
+    state.tabs.front().id = "tab-a";
+    state.tabs.front().location.parsing_name = L"before";
+    state.active_tab_id = "tab-a";
+    pane.set_host(&host);
+    pane.bind(&state);
+    const auto generation = pane.begin_navigation();
+    const panedock::core::ShellLocation completed{L"after", {}, {}};
+
+    pane.navigation_complete(generation - 1, completed);
+    host.group_id = "group-b";
+    pane.navigation_complete(generation, completed);
+    host.group_id = "group-a";
+    host.shutting_down = true;
+    pane.navigation_complete(generation, completed);
+    EXPECT(pane.active_tab()->location.parsing_name == L"before");
+    EXPECT(host.session_saves == 0);
+
+    host.shutting_down = false;
+    pane.navigation_complete(generation, completed);
+    EXPECT(pane.active_tab()->location == completed);
+    EXPECT(pane.active_tab()->history.back() == completed);
+    EXPECT(pane.tab_strip_ui().tab_visuals().front().text == L"after");
+    EXPECT(host.session_saves == 1);
+
+    pane.set_suppress_history(true);
+    const auto history_size = pane.active_tab()->history.size();
+    pane.navigation_complete(generation, {L"restored", {}, {}});
+    EXPECT(!pane.suppress_history());
+    EXPECT(pane.active_tab()->history.size() == history_size);
+    EXPECT(pane.active_tab()->history.back().parsing_name == L"restored");
+    EXPECT(pane.tab_strip_ui().tab_visuals().front().text == L"restored");
+    EXPECT(host.session_saves == 2);
+
+    // Coordinator-only and unknown IDs must remain available to the caller.
+    EXPECT(!pane.handle_command(panedock::app_shell::encode_pane_control(
+        panedock::app_shell::PaneControl::folder_context)));
+    EXPECT(!pane.handle_command(-1));
 }
 
 void test_capture_location_respects_suppression() {
@@ -300,6 +344,7 @@ int main() {
     test_navigation_request_identity_survives_group_switch();
     test_navigation_calls_are_no_ops_without_host();
     test_submit_address_is_a_no_op_while_shutting_down();
+    test_navigation_completion_rejects_stale_results_and_refreshes_chrome();
     test_capture_location_respects_suppression();
     test_add_tab_does_not_reuse_stale_tab_pointer();
     test_close_last_tab_leaves_pane_consistent();

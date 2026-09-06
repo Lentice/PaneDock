@@ -201,7 +201,7 @@ void PaneTabStrip::refresh() {
     if (pane.pane_state() == nullptr) {
         set_tabs({});
         apply_item_size();
-        pane.pane_host()->refresh_navigation_chrome(pane);
+        pane.refresh_navigation_chrome();
         return;
     }
 
@@ -222,7 +222,7 @@ void PaneTabStrip::refresh() {
     }
     set_tabs(labels);
     apply_item_size(true);
-    pane.pane_host()->refresh_navigation_chrome(pane);
+    pane.refresh_navigation_chrome();
 }
 
 RECT PaneTabStrip::viewport_rect() const noexcept {
