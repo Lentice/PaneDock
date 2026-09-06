@@ -235,7 +235,7 @@
 | PD-195 | 位址列與釘選位置收進 `Pane` | 7 | `done` | PD-191, PD-192 | [PD-195](tickets/PD-195-pane-owns-address-bar-and-pinned-locations.md) |
 | PD-196 | tab strip 收進 `Pane`（`PaneTabStrip`） | 7 | `done` | PD-191, PD-194 | [PD-196](tickets/PD-196-pane-owns-its-tab-strip.md) |
 | PD-197 | pane 命令、chrome 與導覽完成的收尾 | 7 | `in_progress` | PD-192, PD-193, PD-194, PD-195, PD-196 | [PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md) |
-| PD-198 | 剩餘 pane 局部訊息與 popup 行為歸位 | 7 | `planned` | PD-197 | [PD-198](tickets/PD-198-pane-local-message-and-popup-ownership.md) |
+| PD-198 | 剩餘 pane 局部訊息與 popup 行為歸位 | 7 | `ready` | PD-197 | [PD-198](tickets/PD-198-pane-local-message-and-popup-ownership.md) |
 
 ## Dependency lanes
 
