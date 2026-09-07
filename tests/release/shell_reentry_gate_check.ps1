@@ -255,4 +255,16 @@ Assert-Source 'state\.panes\[pane_index\]\.handle_command\(id\)' 'popup commands
 Assert-Source 'state\.tab_context_menu_tab_id = tabs\[\*item\]\.id;\s*const int command = state\.panes\[\*pane_index\]\.show_tab_context_menu\([\s\S]*?if \(command != 0\) \{\s*SendMessageW\(window, WM_COMMAND,[\s\S]*?else \{\s*state\.tab_context_menu_pane.reset\(\);\s*state\.tab_context_menu_tab_id.clear\(\);' `
     'tab popup keeps singleton setup, main dispatch and cancel cleanup'
 
+# main.cpp has no standalone behavioral seam. This checks the empty-state
+# teardown wiring; the live lifetime check separately exercises Destroy.
+$emptyLayoutStart = $source.IndexOf('if (!has_active_group(state)) {',
+    $source.IndexOf('HRESULT apply_layout('))
+$emptyLayoutEnd = $source.IndexOf('ShowWindow(state.empty_message, SW_HIDE)',
+    $emptyLayoutStart)
+if ($emptyLayoutStart -lt 0 -or $emptyLayoutEnd -lt $emptyLayoutStart -or
+    $source.Substring($emptyLayoutStart, $emptyLayoutEnd - $emptyLayoutStart) -notmatch
+        'ShellCallScope shell_call\(state\);\s*state\.panes\[index\]\.derealize\(\)') {
+    throw 'Empty Group state must release every realized view before reuse'
+}
+
 Write-Output 'PASSED: shell_reentry_gate_check'

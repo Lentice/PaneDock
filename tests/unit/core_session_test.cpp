@@ -266,6 +266,30 @@ void test_clean_shutdown_type_mismatch_defaults_true() {
     EXPECT(document->clean_shutdown);
 }
 
+void test_moved_tab_keeps_unknown_fields() {
+    std::string json = serialize_session({sample(), {}, true});
+    const auto location = json.find("\"shell_location\":{");
+    json.insert(location + std::string("\"shell_location\":{").size(),
+                "\"future_location\":true,");
+    const auto tab_id = json.find("\"id\":\"tab-1\"");
+    json.insert(tab_id, "\"future_tab\":42,");
+    auto document = deserialize_session(json);
+    EXPECT(document.has_value());
+    if (!document) return;
+    auto& panes = document->application.groups.front().panes;
+    EXPECT(move_tab(panes[0], panes[1], "tab-1", 0, {}, "unused"));
+    const auto rewritten = serialize_session(*document);
+    EXPECT(rewritten.find("\"future_tab\":42") != std::string::npos);
+    EXPECT(rewritten.find("\"future_location\":true") != std::string::npos);
+    const auto restored = deserialize_session(rewritten);
+    EXPECT(restored.has_value());
+    if (restored) EXPECT(restored->application == document->application);
+    // Repeated saves and moving back must not detach the metadata either.
+    EXPECT(move_tab(panes[1], panes[0], "tab-1", 0, {}, "unused"));
+    EXPECT(serialize_session(*document).find("\"future_tab\":42") !=
+           std::string::npos);
+}
+
 void test_read_fallbacks() {
     TemporaryDirectory directory;
     const SessionDocument good{sample(), {}};
@@ -422,6 +446,7 @@ int main() {
     test_new_three_pane_layout_round_trips();
     test_corrupt_and_invalid_documents();
     test_unknown_fields_survive_write_back();
+    test_moved_tab_keeps_unknown_fields();
     test_clean_shutdown_type_mismatch_defaults_true();
     test_read_fallbacks();
     test_atomic_write_and_backup();

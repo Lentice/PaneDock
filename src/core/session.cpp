@@ -322,6 +322,17 @@ Json::Object preserved_location_object(const Json::Array* values,
     return {};
 }
 
+Json::Object preserved_tab_object(const Json::Array* panes, std::string_view id) {
+    if (!panes) return {};
+    for (const auto& pane : *panes) {
+        const auto* value = object(pane);
+        const Json* tabs = value ? field(*value, "tabs") : nullptr;
+        auto preserved = preserved_object(tabs ? array(*tabs) : nullptr, id);
+        if (!preserved.empty()) return preserved;
+    }
+    return {};
+}
+
 std::optional<ShellLocation> decode_shell_location(const Json::Object& value) {
     const auto* parsing = as<std::string>(value, "parsing_name");
     const auto* known = as<std::string>(value, "known_folder_identity");
@@ -404,6 +415,9 @@ Json encode(const ApplicationState& application, Json root,
             for (std::size_t ti = 0; ti < pane.tabs.size(); ++ti) {
                 const auto& tab = pane.tabs[ti];
                 Json::Object encoded_tab = preserved_object(old_tabs, tab.id);
+                // A tab keeps its identity when dragged to another pane.
+                if (encoded_tab.empty())
+                    encoded_tab = preserved_tab_object(old_panes, tab.id);
                 encoded_tab["id"] = Json{tab.id};
                 Json::Object location;
                 if (const Json* old = field(encoded_tab, "shell_location"); old && object(*old)) location = *object(*old);

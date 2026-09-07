@@ -1028,3 +1028,13 @@ PD-201 留下的 `SessionWriter` 是本輪最深的模組，其「寫入失敗�
 **順帶結清的重複**：`docs/tickets.md:874` 曾宣稱「真正共用的 `scaled_value` 已移至 `window_helpers`」，實際上 `pane_tab_strip.cpp:55` 仍有一份逐字複本（tab strip 用途，本次未動）。而 `pane.cpp` 的 status bar 文字保留區用自己的 `kStatusBarHeight`／`kTabAddButtonVerticalInset`／`kSpaceTight` 重算 footer action 尺寸——同一份知識兩處維護，已改為共用新 header 的常數。
 
 **明確不重開**：`layout_rects`／`splitters`／`apply_layout` 的擺放與批次。PD-202 抽走的是**不依賴**那些理由的那一半；`DeferWindowPos` parent-scoped 契約、PD-155 atomic live resize 與 PD-187 的風險都未改變。
+
+### 2026-09-07 — audit-project 後直接修正三項重要問題
+
+使用者授權依稽核結果直接修正；未另開票。完整證據、閱讀預算及驗證限制見 [Audit: PaneDock](audits/2026-09-07-important-issues.md)。
+
+- 無 Group 的 `apply_layout` 改為 derealize，避免刪除最後 Group 再新增時沿用舊資料夾。
+- ExplorerHost 的 view-mode／sort 存取只接受最新成功完成的 navigation generation，避免 pending／failed navigation 將舊 view 設定寫到目的分頁。
+- 跨 pane 搬移 tab 後，session 保留資料改可在同 Group 的舊 panes 找回，不遺失未知 tab／location 欄位。
+
+三項回歸檢查均先確認失敗再修正至通過；Release build 成功，排除 launch smoke 的 CTest 26/26 通過。launch smoke 因使用實際 session 且有強制終止清理而未執行；最後 Group 刪除／重建的桌面驗收仍未完成。這是驗證限制，不代表修正後的 UI 已實測通過。

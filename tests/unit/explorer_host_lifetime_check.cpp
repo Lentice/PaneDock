@@ -128,6 +128,14 @@ int main() {
                     ++synchronous_failures;
                     EXPECT(failed_count == before + 1);
                     EXPECT(failed_generation == requested);
+                    // The previous folder may still have a live view. Its
+                    // settings must not be captured for the failed target.
+                    std::string old_sort;
+                    bool old_ascending{};
+                    EXPECT(host.get_view_mode(mode, &image_size) == E_PENDING);
+                    EXPECT(host.get_sort(old_sort, old_ascending) == E_PENDING);
+                    EXPECT(host.set_view_mode(FVM_DETAILS) == E_PENDING);
+                    EXPECT(host.set_sort(name_key, true) == E_PENDING);
                 } else {
                     EXPECT(failed_count == before);
                 }

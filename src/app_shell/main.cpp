@@ -1620,7 +1620,7 @@ HRESULT apply_layout(HWND window, AppState& state,
         for (std::size_t index = 0; index < state.panes.size(); ++index) {
             {
                 ShellCallScope shell_call(state);
-                state.panes[index].host().set_visible(false);
+                state.panes[index].derealize();
             }
             if (state.is_shutting_down()) return E_ABORT;
             state.panes[index].set_visible(false);

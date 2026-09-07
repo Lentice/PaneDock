@@ -660,6 +660,8 @@ HRESULT ExplorerHost::refresh(NavigationGeneration generation) {
 HRESULT ExplorerHost::set_view_mode(FOLDERVIEWMODE mode,
                                      int image_size) noexcept {
     if (browser_ == nullptr) return E_UNEXPECTED;
+    if (completed_navigation_generation_ != latest_navigation_generation_)
+        return E_PENDING;
     Microsoft::WRL::ComPtr<IFolderView2> folder_view;
     const HRESULT hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
     if (FAILED(hr)) return hr;
@@ -675,6 +677,10 @@ HRESULT ExplorerHost::get_view_mode(FOLDERVIEWMODE& mode,
     mode = FVM_AUTO;
     if (image_size != nullptr) *image_size = -1;
     if (browser_ == nullptr) return E_UNEXPECTED;
+    // A live view can still belong to the previous folder after a pending or
+    // failed navigation. Never persist its settings under the new location.
+    if (completed_navigation_generation_ != latest_navigation_generation_)
+        return E_PENDING;
     Microsoft::WRL::ComPtr<IFolderView2> folder_view;
     HRESULT hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
     if (FAILED(hr)) return hr;
@@ -687,6 +693,8 @@ HRESULT ExplorerHost::get_view_mode(FOLDERVIEWMODE& mode,
 HRESULT ExplorerHost::set_sort(std::string_view column,
                                bool ascending) noexcept {
     if (browser_ == nullptr) return E_UNEXPECTED;
+    if (completed_navigation_generation_ != latest_navigation_generation_)
+        return E_PENDING;
     if (column.empty() || column.size() >= PKEYSTR_MAX) return E_INVALIDARG;
     wchar_t column_text[PKEYSTR_MAX]{};
     for (std::size_t index = 0; index < column.size(); ++index) {
@@ -715,6 +723,8 @@ HRESULT ExplorerHost::set_sort(std::string_view column,
 HRESULT ExplorerHost::get_sort(std::string& column,
                                bool& ascending) const noexcept {
     if (browser_ == nullptr) return E_UNEXPECTED;
+    if (completed_navigation_generation_ != latest_navigation_generation_)
+        return E_PENDING;
     Microsoft::WRL::ComPtr<IFolderView2> folder_view;
     HRESULT hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
     if (FAILED(hr)) {
@@ -992,6 +1002,7 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
     // reach the app model.
     if (generation != latest_navigation_generation_) return;
     location_ = completed_location;
+    completed_navigation_generation_ = generation;
 
     error_overlay_.hide();
     if (navigation_callback_) {

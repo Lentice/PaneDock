@@ -152,6 +152,7 @@ private:
     std::deque<NavigationRequestRecord> navigation_requests_;
     NavigationGeneration next_navigation_generation_{0};
     NavigationGeneration latest_navigation_generation_{0};
+    NavigationGeneration completed_navigation_generation_{0};
     NavigationGeneration prepared_navigation_generation_{0};
     HWND context_menu_view_window_{nullptr};
     Microsoft::WRL::ComPtr<IContextMenu> context_menu_;
