@@ -411,6 +411,27 @@ LRESULT CALLBACK pane_window_proc(HWND window, UINT message, WPARAM wparam,
         if (handled.has_value()) return *handled;
         break;
     }
+    case WM_NCHITTEST: {
+        // PD-187 grows this HWND past pane_rect by the card outset (and the
+        // shadow on the trailing edges) so the card border paints into the gap
+        // between panes. That growth otherwise eats most of the splitter's
+        // kDividerThickness-wide hit strip on the main window, which is why
+        // splitter drags only caught every few attempts. The margin holds
+        // decoration only, so let the main window have those pixels back.
+        POINT point{static_cast<short>(LOWORD(lparam)),
+                    static_cast<short>(HIWORD(lparam))};
+        RECT client{};
+        if (!ScreenToClient(window, &point) || !GetClientRect(window, &client))
+            break;
+        const UINT dpi = GetDpiForWindow(window);
+        const int outset = pane_card_outset(dpi);
+        const int trailing = outset + pane_card_shadow_offset(dpi);
+        if (point.x < outset || point.y < outset ||
+            point.x >= client.right - trailing ||
+            point.y >= client.bottom - trailing)
+            return HTTRANSPARENT;
+        break;
+    }
     case WM_NOTIFY:
         return SendMessageW(GetParent(window), message, wparam, lparam);
     case WM_DESTROY:
