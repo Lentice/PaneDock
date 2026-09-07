@@ -47,6 +47,11 @@ endforeach()
 
 if(WIN32)
     add_test(
+        NAME panedock_tab_pane_priority
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/release/tab_pane_priority_check.ps1"
+                -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp")
+    add_test(
         NAME panedock_shutdown_state
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
                 "${CMAKE_CURRENT_SOURCE_DIR}/release/shutdown_state_check.ps1"

@@ -193,6 +193,8 @@ Group 與其狀態自動儲存,無需使用者手動存檔。視窗位置、大�
 
 提供 pane 間移動焦點、切換 tab、新增／關閉 tab、上層導覽的快速鍵。快速鍵一律送往 active pane。
 
+`Tab`／`Shift+Tab` 在可見 pane 間正向／反向循環，優先於 Shell accelerator，避免先將焦點移到排序欄位標題。位址列有焦點時不攔截；`Ctrl+Tab`／`Ctrl+Shift+Tab` 維持 pane 內分頁切換。此為 2026-09-07 使用者回報後對 PD-101「Shell 攔截 Tab 時不覆蓋」決策的覆寫。
+
 ## 6 非功能需求
 
 ### NFR-001 閒置資源（release gate）

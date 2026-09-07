@@ -2,6 +2,17 @@
 
 ## Automated checks
 
+Tab pane routing regression (2026-09-07): `panedock_tab_pane_priority`
+checks that plain Tab is consumed before the Shell accelerator in `main.cpp`.
+It failed before the routing change and passed afterward; it is a source-order
+check, not proof of native focus behavior. Release build passed; CTest was
+27/28, with `panedock_launch_smoke` timing out while waiting for exit. Writable
+session storage must be verified before attributing that timeout to shutdown.
+Desktop verification remains: in Details view, Tab moves directly to the next
+visible pane and Shift+Tab to the previous pane, including wraparound; address
+bar Tab and Ctrl+Tab retain their existing behavior. No GUI automation runtime
+was available in this session.
+
 ```powershell
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build

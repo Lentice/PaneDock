@@ -4095,6 +4095,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 message.wParam == 'V' && !address_bar_has_focus(state.panes) &&
                 perform_clipboard_paste(window, state, active))
                 continue;
+            // Pane navigation owns plain Tab before the Shell can focus its header.
+            if (key_down && !control && !alt && message.wParam == VK_TAB &&
+                !address_bar_has_focus(state.panes)) {
+                const std::size_t count =
+                    panedock::core::pane_count(active_group(state)
+                                                   .layout_template);
+                const std::size_t next = shift ? (active + count - 1) % count
+                                               : (active + 1) % count;
+                set_active_pane(window, state, next);
+                continue;
+            }
             if (!address_bar_has_focus(state.panes)) {
                 HRESULT accelerator = S_FALSE;
                 {
@@ -4130,16 +4141,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 message.wParam == VK_BACK &&
                 !address_bar_has_focus(state.panes)) {
                 state.panes[active].navigate_up();
-                continue;
-            }
-            if (key_down && !control && !alt && message.wParam == VK_TAB &&
-                !address_bar_has_focus(state.panes)) {
-                const std::size_t count =
-                    panedock::core::pane_count(active_group(state)
-                                                   .layout_template);
-                const std::size_t next = shift ? (active + count - 1) % count
-                                               : (active + 1) % count;
-                set_active_pane(window, state, next);
                 continue;
             }
             if (message.message == WM_KEYDOWN && message.wParam == VK_F6) {
