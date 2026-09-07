@@ -1116,13 +1116,16 @@ void refresh_sidebar(AppState& state) {
     for (std::size_t index = 0; index < state.application.groups.size();
          ++index) {
         const auto& group = state.application.groups[index];
+        const std::size_t visible_panes =
+            (std::min)(panedock::core::pane_count(group.layout_template),
+                       group.panes.size());
         const std::size_t tab_count = std::accumulate(
-            group.panes.begin(), group.panes.end(), std::size_t{0},
+            group.panes.begin(), group.panes.begin() + visible_panes,
+            std::size_t{0},
             [](std::size_t total, const panedock::core::PaneState& pane) {
                 return total + pane.tabs.size();
             });
-        summaries.push_back(
-            {group.id, group.name, group.panes.size(), tab_count});
+        summaries.push_back({group.id, group.name, visible_panes, tab_count});
         if (group.id == state.application.active_group_id) active_index = index;
     }
     state.sidebar.set_groups(summaries);
@@ -3206,10 +3209,10 @@ bool handle_context_menu(HWND target, AppState& state, POINT screen) {
 
     HMENU menu = CreatePopupMenu();
     if (menu == nullptr) return true;
-    AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kDuplicateGroupId),
-                L"Duplicate Group");
     AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kRenameGroupId),
                 L"Rename Group");
+    AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kDuplicateGroupId),
+                L"Duplicate Group");
     AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kDeleteGroupId),
                 L"Delete Group");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
