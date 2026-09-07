@@ -420,6 +420,20 @@ void test_close_tabs_preserves_the_requested_set_and_last_tab_fallback() {
     }
 }
 
+// A Shell call can pump a WM_PAINT after a tab is erased from the model but
+// before PaneTabStrip::refresh() rebuilds the cached visuals. Painting must
+// stop at the shortest of the three lengths, not at the cached one.
+void test_tab_paint_stops_at_the_shortest_of_visuals_model_and_rects() {
+    using panedock::app_shell::drawable_tab_count;
+    EXPECT(drawable_tab_count(3, 3, 3) == 3);
+    // Cross-pane drag erased one tab; visuals and rects are still pre-move.
+    EXPECT(drawable_tab_count(3, 2, 3) == 2);
+    // A tab was added but the strip has not been refreshed yet.
+    EXPECT(drawable_tab_count(2, 3, 2) == 2);
+    EXPECT(drawable_tab_count(3, 3, 0) == 0);
+    EXPECT(drawable_tab_count(0, 0, 0) == 0);
+}
+
 } // namespace
 
 int main() {
@@ -442,5 +456,6 @@ int main() {
     test_add_tab_does_not_reuse_stale_tab_pointer();
     test_close_last_tab_leaves_pane_consistent();
     test_close_tabs_preserves_the_requested_set_and_last_tab_fallback();
+    test_tab_paint_stops_at_the_shortest_of_visuals_model_and_rects();
     return panedock::test::summary("pane");
 }

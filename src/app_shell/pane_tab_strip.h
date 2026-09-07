@@ -9,6 +9,8 @@
 #include <windows.h>
 #include <wrl/client.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <optional>
 #include <span>
 #include <string>
@@ -48,6 +50,17 @@ struct TabStripPaintState final {
     std::optional<std::size_t> dragged_index;
     std::optional<std::wstring_view> placeholder_text;
 };
+
+// How many tabs the strip may draw. The cached visuals, the laid-out rects
+// and the live model are three lengths kept in sync by hand, and a Shell call
+// can pump a WM_PAINT in between: a tab is erased from `PaneState::tabs` and
+// `navigate_to` re-enters the message loop before `refresh()` rebuilds the
+// visuals. Drawing past the shortest of the three reads out of bounds.
+constexpr std::size_t drawable_tab_count(std::size_t visual_count,
+                                         std::size_t model_tab_count,
+                                         std::size_t rect_count) noexcept {
+    return (std::min)({visual_count, model_tab_count, rect_count});
+}
 
 class PaneTabStrip final {
   public:

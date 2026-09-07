@@ -1038,3 +1038,17 @@ PD-201 留下的 `SessionWriter` 是本輪最深的模組，其「寫入失敗�
 - 跨 pane 搬移 tab 後，session 保留資料改可在同 Group 的舊 panes 找回，不遺失未知 tab／location 欄位。
 
 三項回歸檢查均先確認失敗再修正至通過；Release build 成功，排除 launch smoke 的 CTest 26/26 通過。launch smoke 因使用實際 session 且有強制終止清理而未執行；最後 Group 刪除／重建的桌面驗收仍未完成。這是驗證限制，不代表修正後的 UI 已實測通過。
+
+### 2026-09-07 — 第二輪 audit-project：tab strip 繪製界限
+
+使用者授權依稽核結果直接修正；未另開票。完整證據與驗證限制見
+[Audit: PaneDock（第二輪）](audits/2026-09-07-tab-strip-paint-bounds.md)。
+
+- 新增純函式 `app_shell::drawable_tab_count`，`PaneTabStrip::paint_contents` 以
+  「快取 visuals／模型 tabs／版面 rects」三者的最小值為迴圈界限。跨 pane 拖曳與
+  關閉分頁都會在模型縮短後、`refresh()` 之前經由 `navigate_to` 泵訊息，而
+  WM_PAINT 不在既有的 Shell 再進入閘門內，先前會越界讀 `PaneState::tabs`。
+- 這是**防禦性界限**，不是同步時機的改變：`refresh()` 仍是唯一讓 strip 與模型一致
+  的入口，不同步的那一瞬間現在只是少畫一格。若日後要真正消除該視窗，方向是讓
+  strip 直接由模型取得標籤數，而非快取一份長度。
+- 本輪 sidebar 的 reorder／rename／drag 狀態機逐項核對後沒有缺陷，未做任何更動。

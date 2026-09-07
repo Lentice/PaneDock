@@ -339,7 +339,9 @@ void PaneTabStrip::paint_contents(HDC dc, const TabStripPaintState &state) noexc
     const int saved_dc = SaveDC(dc);
     IntersectClipRect(dc, viewport.left, viewport.top, viewport.right,
                       viewport.bottom);
-    for (std::size_t index = 0; index < visuals.size(); ++index) {
+    const std::size_t drawable = drawable_tab_count(
+        visuals.size(), pane.tabs.size(), tab_geometry().tab_rects.size());
+    for (std::size_t index = 0; index < drawable; ++index) {
         if (state.dragged_index == index) continue;
         RECT rect = to_win32_rect(
             tab_geometry().tab_rects[index]);
