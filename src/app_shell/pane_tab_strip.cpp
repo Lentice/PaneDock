@@ -2,6 +2,7 @@
 
 #include "app_shell/pane.h"
 #include "app_shell/pane_host.h"
+#include "app_shell/window_helpers.h"
 #include "sidebar/sidebar.h"
 
 #include <commctrl.h>
@@ -51,11 +52,6 @@ constexpr COLORREF kTabAddGlyph = RGB(31, 41, 55);
 constexpr int kActivePaneIndicatorHeight = 3;
 constexpr UINT_PTR kTabAddTooltipIdBase = 1000;
 constexpr UINT_PTR kTabScrollTooltipIdBase = 1010;
-
-int scaled_value(HWND window, int value) noexcept {
-    return std::max(1, MulDiv(value, static_cast<int>(GetDpiForWindow(window)),
-                              96));
-}
 
 void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
                             bool forward, bool disabled,
