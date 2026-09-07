@@ -727,7 +727,7 @@ bool navigate_realized_panes(
             (void)state.panes[pane].navigate_to(
                 active_tab(group.panes[pane]).location);
         }
-        if (state.shutdown_deferred || state.closing_) {
+        if (state.is_shutting_down()) {
             state.suppress_location_capture = previous_suppression;
             return false;
         }
@@ -1621,8 +1621,7 @@ public:
     ~LayoutPassScope() noexcept {
         state_.layout_in_progress = false;
         if (!state_.layout_pending || state_.layout_message_queued ||
-            state_.closing_ || state_.shutdown_deferred ||
-            state_.main_window == nullptr)
+            state_.is_shutting_down() || state_.main_window == nullptr)
             return;
         state_.layout_message_queued = true;
         if (!PostMessageW(window_, kDeferredLayoutMessage, 0, 0)) {
@@ -1647,7 +1646,7 @@ HRESULT apply_layout(HWND window, AppState& state,
     // IExplorerBrowser::Destroy pump must not re-create a live view while the
     // parent HWND is being destroyed (§9.4). Guard the shared entry, not every
     // caller.
-    if (state.closing_ || state.shutdown_deferred) return E_ABORT;
+    if (state.is_shutting_down()) return E_ABORT;
     if (state.layout_in_progress) {
         state.layout_pending = true;
         return S_OK;
@@ -1670,7 +1669,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                 ShellCallScope shell_call(state);
                 state.panes[index].host().set_visible(false);
             }
-            if (state.shutdown_deferred || state.closing_) return E_ABORT;
+            if (state.is_shutting_down()) return E_ABORT;
             state.panes[index].set_visible(false);
             ShowWindow(state.panes[index].folder_context_button(), SW_HIDE);
             EnableWindow(state.panes[index].folder_context_button(), FALSE);
@@ -1874,7 +1873,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                     hr = chrome.realize(
                         local_rect, active_tab(group.panes[index]).location);
                 }
-                if (state.shutdown_deferred || state.closing_) return E_ABORT;
+                if (state.is_shutting_down()) return E_ABORT;
                 if (FAILED(hr)) {
                     if (!first_failure.has_value())
                         first_failure = LayoutFailure{hr, index};
@@ -1886,7 +1885,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                     (void)SHAutoComplete(chrome.address_bar(),
                                          SHACF_FILESYS_DIRS);
                 }
-                if (state.shutdown_deferred || state.closing_) return E_ABORT;
+                if (state.is_shutting_down()) return E_ABORT;
                 try {
                     chrome.host().set_navigation_callback(
                         [&state, index](NavigationGeneration generation,
@@ -1901,10 +1900,10 @@ HRESULT apply_layout(HWND window, AppState& state,
                     chrome.host().set_selection_changed_callback(
                         [&state, index]() { state.panes[index].refresh_status_bar(); });
                     chrome.apply_view_mode();
-                    if (state.shutdown_deferred || state.closing_)
+                    if (state.is_shutting_down())
                         return E_ABORT;
                     chrome.apply_sort();
-                    if (state.shutdown_deferred || state.closing_)
+                    if (state.is_shutting_down())
                         return E_ABORT;
                 } catch (...) {
                     return E_OUTOFMEMORY;
@@ -1921,11 +1920,11 @@ HRESULT apply_layout(HWND window, AppState& state,
                     ShellCallScope shell_call(state);
                     chrome.host().set_rect(local_rect, nullptr);
                 }
-                if (state.shutdown_deferred || state.closing_) return E_ABORT;
+                if (state.is_shutting_down()) return E_ABORT;
             }
             if (recompute_content) {
                 state.panes[index].refresh_status_bar();
-                if (state.shutdown_deferred || state.closing_) return E_ABORT;
+                if (state.is_shutting_down()) return E_ABORT;
             }
             // Pane owns the outer-rect cache; the native child batches
             // are committed below before regions are applied.
@@ -1935,7 +1934,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                     ShellCallScope shell_call(state);
                     chrome.derealize();
                 }
-                if (state.shutdown_deferred || state.closing_) return E_ABORT;
+                if (state.is_shutting_down()) return E_ABORT;
             }
             chrome.set_visible(false);
             ShowWindow(chrome.folder_context_button(), SW_HIDE);
@@ -1945,7 +1944,7 @@ HRESULT apply_layout(HWND window, AppState& state,
             ShellCallScope shell_call(state);
             chrome.host().set_visible(visible);
         }
-        if (state.shutdown_deferred || state.closing_) return E_ABORT;
+        if (state.is_shutting_down()) return E_ABORT;
     }
     const bool committed = main_positions.commit();
     if (!committed) {
@@ -1971,7 +1970,7 @@ HRESULT apply_layout(HWND window, AppState& state,
             ShellCallScope shell_call(state);
             state.panes[index].host().set_rect(
                 *pending_shell_rects[index], nullptr);
-            if (state.shutdown_deferred || state.closing_) return E_ABORT;
+            if (state.is_shutting_down()) return E_ABORT;
         }
     }
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
@@ -1998,33 +1997,33 @@ void refresh_startup_chrome(AppState& state) {
     ShellCallScope shell_call(state);
     for (std::size_t index = 0; index < kPinnedFixedParsingNames.size();
          ++index) {
-        if (state.shutdown_deferred || state.closing_) break;
+        if (state.is_shutting_down()) break;
         state.pinned_fixed_labels[index] = display_text_for_parsing_name(
             state, kPinnedFixedParsingNames[index]);
     }
     rebuild_pinned_location_menu(state);
-    if (!state.shutdown_deferred && !state.closing_)
+    if (!state.is_shutting_down())
         refresh_tab_strips(state);
 }
 
 HRESULT realize_startup_panes(HWND window, AppState& state) {
     // startup_realize_pending keeps the first pass limited to the active pane.
     refresh_startup_chrome(state);
-    if (state.shutdown_deferred || state.closing_) return E_ABORT;
+    if (state.is_shutting_down()) return E_ABORT;
     const HRESULT active_result = apply_layout(window, state);
-    if (state.shutdown_deferred || state.closing_) return E_ABORT;
+    if (state.is_shutting_down()) return E_ABORT;
     if (has_active_group(state)) {
         const std::size_t active = active_pane_index(active_group(state));
         {
             ShellCallScope shell_call(state);
             state.panes[active].host().focus();
         }
-        if (state.shutdown_deferred || state.closing_) return E_ABORT;
+        if (state.is_shutting_down()) return E_ABORT;
     }
 
     state.startup_realize_pending = false;
     const HRESULT remaining_result = apply_layout(window, state, true);
-    if (state.shutdown_deferred || state.closing_) return E_ABORT;
+    if (state.is_shutting_down()) return E_ABORT;
     if (FAILED(active_result)) return active_result;
     return remaining_result;
 }
@@ -2081,7 +2080,7 @@ panedock::core::GroupState new_group_state(const AppState& state,
 }
 
 void activate_group(HWND window, AppState& state, std::size_t index) {
-    if (state.closing_ || state.shutdown_deferred)
+    if (state.is_shutting_down())
         return;  // re-dispatched during a Shell call or teardown pump
     if (index >= state.application.groups.size()) return;
     const std::string target_id = state.application.groups[index].id;
@@ -2099,12 +2098,12 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
     if (!navigate_realized_panes(state, group)) return;
     if (FAILED(apply_layout(window, state)))
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
-    if (state.shutdown_deferred || state.closing_) return;
+    if (state.is_shutting_down()) return;
     {
         ShellCallScope shell_call(state);
         state.panes[active_pane_index(group)].host().focus();
     }
-    if (state.shutdown_deferred || state.closing_) return;
+    if (state.is_shutting_down()) return;
     refresh_sidebar(state);
     // Group switches can be triggered from the OLE drag-hover message. Keep
     // the session flush out of that interaction path; shutdown still forces
@@ -2139,7 +2138,7 @@ Microsoft::WRL::ComPtr<DragHoverTarget> make_sidebar_drag_hover_target(
 }
 
 void add_group(HWND window, AppState& state) {
-    if (state.closing_ || state.shutdown_deferred) return;
+    if (state.is_shutting_down()) return;
     const bool was_empty = state.application.groups.empty();
     const std::string id = unique_group_id(state.application);
     if (!panedock::core::add_group(state.application,
@@ -2151,12 +2150,12 @@ void add_group(HWND window, AppState& state) {
         refresh_tab_strips(state);
         if (FAILED(apply_layout(window, state)))
             OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
-        if (state.shutdown_deferred || state.closing_) return;
+        if (state.is_shutting_down()) return;
         {
             ShellCallScope shell_call(state);
             state.panes[active_pane_index(active_group(state))].host().focus();
         }
-        if (state.shutdown_deferred || state.closing_) return;
+        if (state.is_shutting_down()) return;
         refresh_sidebar(state);
         schedule_session_save(state);
         return;
@@ -2165,7 +2164,7 @@ void add_group(HWND window, AppState& state) {
 }
 
 void duplicate_group(HWND window, AppState& state) {
-    if (state.closing_ || state.shutdown_deferred) return;
+    if (state.is_shutting_down()) return;
     const auto selected = state.sidebar.selected_index();
     if (!selected.has_value() || *selected >= state.application.groups.size()) return;
     const auto& source = state.application.groups[*selected];
@@ -2181,7 +2180,7 @@ void delete_group(HWND window, AppState& state) {
     if (MessageBoxW(window,
                     L"Delete this Group? This action cannot be undone.",
                     L"Delete Group", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-    if (state.closing_ || state.shutdown_deferred) return;
+    if (state.is_shutting_down()) return;
 
     capture_locations(state);
     const std::string id = state.application.groups[*selected].id;
@@ -2196,16 +2195,16 @@ void delete_group(HWND window, AppState& state) {
         auto& group = active_group(state);
         if (!navigate_realized_panes(state, group)) return;
     }
-    if (state.shutdown_deferred || state.closing_) return;
+    if (state.is_shutting_down()) return;
     if (FAILED(apply_layout(window, state)))
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
-    if (state.shutdown_deferred || state.closing_) return;
+    if (state.is_shutting_down()) return;
     if (has_active_group(state)) {
         const std::size_t active = active_pane_index(active_group(state));
         ShellCallScope shell_call(state);
         state.panes[active].host().focus();
     }
-    if (state.shutdown_deferred || state.closing_) return;
+    if (state.is_shutting_down()) return;
     refresh_sidebar(state);
     schedule_session_save(state);
 }
@@ -2224,7 +2223,7 @@ void move_group(AppState& state, bool down) {
 }
 
 void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
-    if (state.closing_ || state.shutdown_deferred) return;
+    if (state.is_shutting_down()) return;
     if (!has_active_group(state)) return;
     auto& group = active_group(state);
     if (pane >= group.panes.size()) return;
@@ -2235,7 +2234,7 @@ void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
         ShellCallScope shell_call(state);
         state.panes[pane].host().focus();
     }
-    if (state.shutdown_deferred || state.closing_) return;
+    if (state.is_shutting_down()) return;
     InvalidateRect(state.panes[previous].tab_strip(), nullptr, FALSE);
     InvalidateRect(state.panes[pane].tab_strip(), nullptr, FALSE);
     InvalidateRect(window, nullptr, TRUE);
@@ -2259,7 +2258,7 @@ std::string unique_tab_id(const panedock::core::GroupState& group,
 }
 
 bool AppState::is_shutting_down() const noexcept {
-    return closing_ || shutdown_deferred;
+    return shutdown_sequence.is_shutting_down();
 }
 
 void AppState::shell_call_entered() noexcept {
@@ -2403,7 +2402,7 @@ bool register_tab_drag_hover_targets(HWND window, AppState& state) {
             registered =
                 state.panes[pane_index].tab_strip_ui().register_drag_hover_target(target.Get());
         }
-        if (state.shutdown_deferred || state.closing_ || !registered)
+        if (state.is_shutting_down() || !registered)
             return false;
     }
     return true;
@@ -2411,7 +2410,7 @@ bool register_tab_drag_hover_targets(HWND window, AppState& state) {
 
 void set_layout(HWND window, AppState& state,
                 panedock::core::LayoutTemplate target) noexcept {
-    if (state.closing_ || state.shutdown_deferred) return;
+    if (state.is_shutting_down()) return;
     if (!has_active_group(state)) return;
     auto& group = active_group(state);
     capture_locations(state);
@@ -2432,14 +2431,14 @@ void set_layout(HWND window, AppState& state,
     if (FAILED(apply_layout(window, state))) {
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
     }
-    if (state.shutdown_deferred || state.closing_) return;
+    if (state.is_shutting_down()) return;
 
     const std::size_t active = active_pane_index(group);
     {
         ShellCallScope shell_call(state);
         state.panes[active].host().focus();
     }
-    if (state.shutdown_deferred || state.closing_) return;
+    if (state.is_shutting_down()) return;
     schedule_session_save(state);
 }
 
@@ -2572,7 +2571,7 @@ void cancel_tab_drag(AppState& state, HWND strip) noexcept {
 }
 
 void finish_tab_drag(AppState& state, HWND strip) {
-    if (state.closing_ || state.shutdown_deferred) return;
+    if (state.is_shutting_down()) return;
     if (!state.tab_drag.has_value() || state.tab_drag->strip != strip)
         return;
     AppState::TabDrag drag = std::move(*state.tab_drag);
@@ -2617,14 +2616,14 @@ void finish_tab_drag(AppState& state, HWND strip) {
             state.panes[drag.pane_index].navigate_to(
                 active_tab(source).location);
         }
-        if (state.shutdown_deferred || state.closing_) return;
+        if (state.is_shutting_down()) return;
     }
     if (state.panes[target_pane].realized()) {
         {
             ShellCallScope shell_call(state);
             state.panes[target_pane].navigate_to(active_tab(target).location);
         }
-        if (state.shutdown_deferred || state.closing_) return;
+        if (state.is_shutting_down()) return;
     }
     state.panes[drag.pane_index].tab_strip_ui().refresh();
     state.panes[target_pane].tab_strip_ui().refresh();
@@ -2715,9 +2714,8 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                                 DWORD_PTR reference_data) {
     auto* state = reinterpret_cast<AppState*>(reference_data);
     if (state != nullptr && pane_index < state->panes.size()) {
-        if ((state->closing_ || state->shutdown_deferred) &&
-            message != WM_PAINT && message != WM_ERASEBKGND &&
-            message != WM_NCDESTROY)
+        if (panedock::app_shell::child_message_blocked_while_closing(
+                state->is_shutting_down(), message))
             return 0;
         if (defer_shell_reentry_mouse_message(window, *state, message,
                                               wparam, lparam))
@@ -2827,9 +2825,8 @@ LRESULT CALLBACK group_list_proc(HWND window, UINT message, WPARAM wparam,
     auto* state = reinterpret_cast<AppState*>(reference_data);
     if (state == nullptr)
         return DefSubclassProc(window, message, wparam, lparam);
-    if ((state->closing_ || state->shutdown_deferred) &&
-        message != WM_PAINT && message != WM_ERASEBKGND &&
-        message != WM_NCDESTROY)
+    if (panedock::app_shell::child_message_blocked_while_closing(
+            state->is_shutting_down(), message))
         return 0;
     if (defer_shell_reentry_mouse_message(window, *state, message, wparam,
                                           lparam))
@@ -2904,6 +2901,10 @@ void finish_shutdown(HWND window, AppState& state) noexcept {
     revoke_drag_hover_targets(state);
     cancel_session_save_timer(state);
     destroy_panes(state);
+    // The leak invariant must be checkable in the shipped build: assert() is
+    // compiled out by -DNDEBUG in Release, which is the configuration the
+    // launch smoke test runs. Emit the count so the test can assert on it.
+    write_live_view_count(state.diagnostic_mode);
     assert(panedock::explorer_host::live_view_count() == 0);
     if (state.shutdown_sequence.step(
             panedock::core::ShutdownEvent::views_destroyed) ==
@@ -3042,20 +3043,18 @@ void file_operation_finished(void* context) noexcept {
 bool file_operation_cancel_requested(void* context) noexcept {
     if (context == nullptr) return false;
     const auto& state = *static_cast<AppState*>(context);
-    return state.cancel_file_operation || state.shutdown_deferred ||
-           state.closing_;
+    return state.cancel_file_operation || state.is_shutting_down();
 }
 
 bool file_operation_setup_aborted(void* context) noexcept {
     if (context == nullptr) return false;
     const auto& state = *static_cast<AppState*>(context);
-    return state.shutdown_deferred || state.closing_;
+    return state.is_shutting_down();
 }
 
 bool perform_clipboard_paste(HWND window, AppState& state,
                              std::size_t pane_index) noexcept {
-    if (state.file_operation_call_active || state.closing_ ||
-        state.shutdown_deferred)
+    if (state.file_operation_call_active || state.is_shutting_down())
         return true;
     if (pane_index >= kExplorerCount || !state.panes[pane_index].realized())
         return false;
@@ -3079,7 +3078,7 @@ bool perform_clipboard_paste(HWND window, AppState& state,
     state.shutdown_sequence.step(
         panedock::core::ShutdownEvent::file_operation_call_finished);
     complete_deferred_close(window, state);
-    return state.shutdown_deferred || state.closing_ || result.handled;
+    return state.is_shutting_down() || result.handled;
 }
 
 bool activate_main_window_on_own_thread(HWND window) noexcept;
@@ -3103,7 +3102,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
         sidebar_created = state.sidebar.create(
             window, kGroupListId, state.sidebar_drag_target.Get());
     }
-    if (state.shutdown_deferred || state.closing_) return 0;
+    if (state.is_shutting_down()) return 0;
     if (!sidebar_created) {
         state.sidebar_drag_target.Reset();
         return -1;
@@ -3236,7 +3235,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
             L"PaneDock could not open the Shell view for one or more panes. "
             L"Some panes may be empty.");
     }
-    if (state.shutdown_deferred || state.closing_) return 0;
+    if (state.is_shutting_down()) return 0;
     if (!register_tab_drag_hover_targets(window, state)) {
         OutputDebugStringW(
             L"PaneDock: RegisterDragDrop for tab strip failed\n");
@@ -3244,7 +3243,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
         append_startup_warning(
             state, L"PaneDock could not enable tab drag-and-drop.");
     }
-    if (state.shutdown_deferred || state.closing_) return 0;
+    if (state.is_shutting_down()) return 0;
     return 0;
 }
 
@@ -3279,7 +3278,7 @@ bool handle_global_command(HWND window, AppState& state, int id,
             !IsWindowVisible(folder_context_button))
             return true;
         set_active_pane(state.main_window, state, pane.index());
-        if (state.closing_ || state.shutdown_deferred) return true;
+        if (state.is_shutting_down()) return true;
         if (active_pane_index(active_group(state)) != pane.index()) return true;
         RECT button_rect{};
         if (!GetWindowRect(folder_context_button, &button_rect))
@@ -3444,7 +3443,7 @@ bool handle_context_menu(HWND target, AppState& state, POINT screen) {
     const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                        point.x, point.y, 0, window, nullptr);
     DestroyMenu(menu);
-    if (state.closing_ || state.shutdown_deferred) return true;
+    if (state.is_shutting_down()) return true;
     if (command != 0)
         SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
     return true;
@@ -3601,7 +3600,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
     // work. set_main_window_title sends WM_SETTEXT; WM_NCPAINT, WM_PAINT and
     // WM_ERASEBKGND must then run so "Closing..." can be shown before the
     // synchronous Shell teardown starts.
-    if (state != nullptr && (state->closing_ || state->shutdown_deferred) &&
+    if (state != nullptr && (state->is_shutting_down()) &&
         !close_request && message != WM_QUERYENDSESSION &&
         message != WM_ENDSESSION && message != WM_DESTROY &&
         message != WM_NCDESTROY && message != WM_PAINT &&
@@ -3646,7 +3645,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 if (state->shell_call_depth != 0) {
                     defer_shell_reentry_message(
                         window, kDeferredCommandMessage, wparam, lparam);
-                } else if (!state->closing_ && !state->shutdown_deferred) {
+                } else if (!state->is_shutting_down()) {
                     SendMessageW(window, WM_COMMAND, wparam, lparam);
                 }
             }
@@ -3656,7 +3655,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 if (state->shell_call_depth != 0) {
                     defer_shell_reentry_message(
                         window, kDeferredTabSelectionMessage, wparam, lparam);
-                } else if (!state->closing_ && !state->shutdown_deferred) {
+                } else if (!state->is_shutting_down()) {
                     SendMessageW(window, kTabStripSelectionMessage, wparam,
                                  lparam);
                 }
@@ -3666,7 +3665,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state != nullptr && state->layout_message_queued) {
                 state->layout_message_queued = false;
                 state->layout_pending = false;
-                if (!state->closing_ && !state->shutdown_deferred)
+                if (!state->is_shutting_down())
                     (void)apply_layout(window, *state, false, false);
             }
             return 0;
@@ -3676,7 +3675,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     state->startup_realize_generation)
                 return 0;
             const HRESULT hr = realize_startup_panes(window, *state);
-            if (state->shutdown_deferred || state->closing_) return 0;
+            if (state->is_shutting_down()) return 0;
             if (FAILED(hr)) {
                 // A pane whose Shell view could not be realized stays blank;
                 // update the non-blocking startup notification instead of
@@ -4153,7 +4152,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         ShellCallScope shell_call(state);
         directory = panedock::shell_core::session_directory();
     }
-    if (state.shutdown_deferred || state.closing_) {
+    if (state.is_shutting_down()) {
         OleUninitialize();
         CloseHandle(single_instance_mutex);
         return exit_code;
@@ -4218,6 +4217,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         instance, &state);
     if (window == nullptr) {
         destroy_panes(state);
+        write_live_view_count(state.diagnostic_mode);
         assert(panedock::explorer_host::live_view_count() == 0);
         std::wstring fatal_message = state.startup_error_message;
         if (!state.startup_warning_message.empty()) {
@@ -4238,7 +4238,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     // deferred-realize post. `proceed` prevents startup work from continuing
     // after the main HWND has been torn down; recoverable warnings below are
     // modeless and therefore do not create another nested modal loop.
-    bool proceed = !state.closing_ && !state.shutdown_deferred &&
+    bool proceed = !state.is_shutting_down() &&
                    !state.quit_requested;
     // Queue realization before any startup warning enters a nested modal
     // loop. The warning remains acknowledgement-only, while its modal loop
@@ -4250,7 +4250,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             OutputDebugStringW(
                 L"PaneDock: could not queue deferred Shell view realization\n");
             const HRESULT hr = realize_startup_panes(window, state);
-            if (FAILED(hr) && !state.closing_ && !state.shutdown_deferred) {
+            if (FAILED(hr) && !state.is_shutting_down()) {
                 append_startup_warning(
                     state,
                     L"PaneDock could not open the Shell view for one or more "
@@ -4294,7 +4294,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         if (state.quit_requested) break;
         result = GetMessageW(&message, nullptr, 0, 0);
         if (result <= 0) break;
-        if (!state.closing_ && !state.shutdown_deferred &&
+        if (!state.is_shutting_down() &&
             has_active_group(state)) {
             const std::size_t active = active_pane_index(active_group(state));
             const bool key_down = message.message == WM_KEYDOWN ||
@@ -4319,7 +4319,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                     accelerator =
                         state.panes[active].host().translate_accelerator(&message);
                 }
-                if (state.closing_ || state.shutdown_deferred) continue;
+                if (state.is_shutting_down()) continue;
                 if (accelerator == S_OK) continue;
             }
             if (key_down && control && !alt && message.wParam == 'T') {
@@ -4385,6 +4385,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
 
     state.pinned_locations_dialog.destroy();
     destroy_panes(state);
+    // assert() is compiled out in Release; the emitted count is what the
+    // launch smoke test checks. See finish_shutdown.
+    write_live_view_count(state.diagnostic_mode);
     assert(panedock::explorer_host::live_view_count() == 0);
     OleUninitialize();
     if (state.shutdown_clean_marker_armed && state.main_window_destroyed) {
@@ -4412,9 +4415,8 @@ std::optional<LRESULT> handle_pane_control_message(Pane& chrome, UINT message,
         GetWindowLongPtrW(GetParent(pane_window), GWLP_USERDATA));
     if (state == nullptr || chrome.index() >= state->panes.size())
         return std::nullopt;
-    if ((state->closing_ || state->shutdown_deferred) &&
-        message != WM_PAINT && message != WM_ERASEBKGND &&
-        message != WM_NCDESTROY)
+    if (child_message_blocked_while_closing(state->is_shutting_down(),
+                                            message))
         return LRESULT{0};
     if (defer_shell_reentry_mouse_message(pane_window, *state, message, wparam,
                                           lparam))

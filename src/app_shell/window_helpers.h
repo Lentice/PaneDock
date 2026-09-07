@@ -21,6 +21,24 @@ T* window_state_from_create(HWND window, LPARAM lparam) noexcept {
     return state;
 }
 
+// A child control's window proc must stop handling messages once teardown has
+// been decided, but the frame still has to repaint so "Closing..." is visible
+// while the synchronous Shell teardown runs, and WM_NCDESTROY must still be
+// delivered so the control can unhook itself.
+//
+// The three child procs (tab strip, hover tracking, pane controls) shared this
+// allowlist by hand. Nothing kept the three copies identical, and a message
+// handled during teardown on one path but not another is the shutdown-crash
+// class the re-entry gates exist to close. One predicate, one place to change.
+//
+// Pure: takes the gate's answer rather than reading it, so it is testable
+// without a window or an AppState.
+inline bool child_message_blocked_while_closing(bool shutting_down,
+                                                UINT message) noexcept {
+    return shutting_down && message != WM_PAINT &&
+           message != WM_ERASEBKGND && message != WM_NCDESTROY;
+}
+
 bool register_simple_window_class(
     const wchar_t* name, WNDPROC proc, HINSTANCE instance, HBRUSH background,
     UINT style = 0, HICON icon = nullptr, HICON small_icon = nullptr) noexcept;

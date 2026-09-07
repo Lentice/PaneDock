@@ -925,3 +925,89 @@ LLVM-MinGW Release configure/build 與完整 CTest 24/24 通過；focused tab-cl
 **至此 `main.cpp` 的拆分結束**（4,609 → 4,452）。剩下的三處已在 PD-200／PD-201 交接區列為「評估後不拆」並附理由：Group CRUD 協調、版面幾何、`pane.cpp` 整體。除非有新證據，不再重開。
 
 
+### 2026-09-07 — 架構複驗：關閉閘門收斂為單一述詞，並留下一個新候選
+
+本次問的是「PD-178～201 那一輪把 pane 行為搬進 `Pane` 之後，協調層還剩什麼摩擦」。三項既有結論（`src/core` 無 HWND／COM、`explorer_host` 不反向引用 `app_shell`、`pane.cpp` 從不具名 `AppState`）以 grep 複驗，全部成立。
+
+**直接修掉（不另開票，機械且行為不變）**
+
+| 修掉的部分 | 內容 |
+|---|---|
+| 關閉閘門的 53 份手抄 | `main.cpp` 有 53 處手寫 `closing_ \|\| shutdown_deferred`（兩種運算元順序都有），而述詞 `AppState::is_shutting_down()` 早就存在、`pane.cpp` 也已在 20 餘處正確使用它。閘門下移為 `core::ShutdownSequence::is_shutting_down()`，53 處全部改走述詞；只餘 3 處與 `quit_requested` 成對的用法（那是另一個問題）保留原樣。新增 `core_shutdown_test` 案例同時釘住「已開始拆除」與「等待巢狀 Shell 呼叫退棧」兩種狀態都算關閉中。 |
+| 三個子控制項 proc 的訊息白名單 | tab strip、hover tracking、pane control 三個 proc 各自手寫 `message != WM_PAINT && != WM_ERASEBKGND && != WM_NCDESTROY`。三份今天相同，但沒有任何東西保證它們保持相同，而「拆除期間某條路徑處理了訊息、另一條沒有」正是這一系列閘門存在的理由。收為 `window_helpers.h` 的純述詞 `child_message_blocked_while_closing(bool, UINT)`，並新增 `window_helpers_test` 敘明規則（重繪與 `WM_NCDESTROY` 必須通過，其餘不得通過）。主視窗 proc 的白名單較大且語意不同（含 `WM_QUERYENDSESSION`／`WM_SETTEXT`／`kDeferredShutdownMessage`），刻意不併入。 |
+| `PaneHost` 測試 adapter 寫了兩份 | `TestPaneHost`（約 35 行）與 `handle_pane_control_message` 連結期替身在 `pane_test.cpp`／`pane_tab_strip_test.cpp` 各一份逐字複製。`PaneHost` 每加一支服務就要改三處，且編譯器修好第二處才會指出第三處。合併為 `tests/unit/test_pane_host.h`（與既有 `test_util.h` 同層）。 |
+
+LLVM-MinGW Release configure/build 乾淨，完整 CTest **25/25 通過**（含 `panedock_launch_smoke` 與新增的 `panedock_window_helpers`）。
+
+**新候選：來源掃描式檢查會漏放行為不變的重構，也會漏抓真正的順序錯誤**
+
+本次是這件事的活體證據：一次純粹機械、行為完全不變的述詞收斂，讓 `shell_reentry_gate_check.ps1`、`startup_frame_order_check.ps1` 共 3 個斷言失敗——它們釘的是**來源字串的形狀**，不是控制流。已同步更新那 3 個 regex 以對應新拼法，不變式本身未動。
+
+反面同樣成立、且更值得處理：`finish_shutdown` 真正的順序不變式（銷毀對話框 → 撤銷 drag target → 取消存檔 timer → `destroy_panes` → 斷言 `live_view_count()==0` → 最後才寫 clean marker）目前**只**由 `shutdown_state_check.ps1` 的字串比對守著。一個保留了被比對字串、但把這些呼叫重新排序的改動會通過 CI。
+
+候選做法：讓 `run_shutdown_action` 把每次派發的 `ShutdownAction` 記進 core 擁有的序列 log，再於 `core_shutdown_test.cpp` 斷言 log 的順序；效果本體留在 `main.cpp`，只有「順序」這件事跨進 core，不會有 HWND 進 core。此候選**新增**一道接縫（不是收窄既有接縫），成本非零，尚未開票。
+
+**明確不重開**：pane chrome 版面幾何搬進 `Pane`（讓 `apply_layout` 不再透過 8 個裸 `HWND` accessor 擺放 pane 自己的子視窗）在本次複驗中再次浮現，但 PD-200 交接區已列為「評估後不拆」，理由是與 `DeferWindowPos` 的 parent-scoped 批次契約糾纏、PD-155 atomic live resize 與 PD-187 的風險已記錄、且無法自動化驗證。本次未取得推翻該理由的新證據，因此不開票。
+
+### 2026-09-07 — 架構報告後修正：navigation request 的 history policy 不再跨請求沿用
+
+使用者要求依 improve-codebase-architecture 報告直接修正重要問題。本輪保留進場時已有的 shutdown gate／window helper／測試 adapter 修改，新增修正僅在 `pane.cpp` 與既有 `pane_test.cpp`。
+
+**已重現的缺陷**：tab history 為 [A, B]、目前 B，Back 已把 model 移到 A 但 Shell completion 尚未回來；此時新導覽 C 沿用 pane-wide suppression，completion 把 A 覆寫，得到 [C, B]，而非 [A, C]。應用程式呼叫 `begin_navigation()` 與 Shell 自發較新 generation 兩條路徑都存在此問題。這違反 design-spec FR-010 的 per-tab 導覽歷史語意，且不是 PD-199 已修的 completion FIFO identity 問題。
+
+**修正**：在既有 Pane navigation module 內，新 request 建立或接受 Shell 的較新 generation 時重設 history policy；Back/Forward 先建立 generation，再設定該次 suppression 並以同一 generation 導覽。同步失敗也交給既有 `navigation_failed(generation)`，避免舊請求失敗清掉新請求的旗標。沒有新增 interface、adapter、COM mock 或持久化欄位。
+
+**驗證**：
+- `ctest --test-dir build -R '^panedock_pane$' --output-on-failure`：修正前兩條路徑合計 6 個斷言失敗；修正後通過。斷言 history=[A,C]、index=1、沒有 Forward、過期 Back completion 不改結果。
+- LLVM-MinGW Release configure/build 通過；`ctest --test-dir build --output-on-failure` 為 25/25 通過，含 launch smoke 與 ExplorerHost lifetime。
+- 測試沿用 PaneHost 的 AppState／TestPaneHost seam，只驗證 request/completion 與 model 的實際邏輯；未以此宣稱慢速 Shell 導覽的真實桌面時序驗收已完成。
+- `git diff --check` 通過。
+
+**後續候選**：以 SessionWriter 現有 interface 對暫存目錄驗證「寫入失敗仍 dirty → 後續成功清 dirty → read-back 正確」，補足來源掃描與 core 檔案測試分離的缺口。這是 Worth exploring，未找到新的產品故障，不增加 adapter 抽象，也不擴大本次修正。實作前需釐清 docs/testing.md 的 core-only 宣告與後續 Pane host 測試票的適用範圍；不以 COM fake 取代真實 Shell 驗收。
+
+### 2026-09-07 — 架構報告後修正（第二輪）：收尾不變式終於有自動化把關
+
+報告（`%TEMP%\architecture-review-20260907-085350.html`）列出三項，本輪修掉前兩項 Strong，第三項留為候選。
+
+**F1 — 出貨版本完全沒有在檢查 Shell view 洩漏（已修）**
+
+`live_view_count` 的三個守門點（`main.cpp` 的 `finish_shutdown`、建視窗失敗路徑、`wWinMain` 收尾）全是 `assert()`，而 Release 帶 `-DNDEBUG`，三個在實際出貨與實際跑 CI 的那個 binary 裡都被編掉；`launch_smoke.ps1` 只看 exit code；`write_live_view_count()` 從來沒有在 teardown 之後輸出過。結果是洩漏四個 Shell view 的收尾照樣 exit 0、照樣全綠。
+
+修正：三處 `destroy_panes()` 之後各補一次 `write_live_view_count(state.diagnostic_mode)`；`launch_smoke.ps1` 改以 `--diagnostic` 啟動、導出 stdout、斷言最後一個樣本為 0（沒有樣本也算失敗）。計數器、輸出函式與解析規則三樣都已存在，本次只是把它們接起來，未新增 interface 或 seam。
+
+順帶修掉兩個 PowerShell 陷阱：`Start-Process -PassThru` 的物件在行程結束後 `ExitCode` 可能為 null，需在存活期間先取一次 `.Handle`；`WaitForExit(int)` 不會等導向的輸出讀取器排空，需再呼叫一次無參數版。
+
+**F2 — `finish_shutdown` 的順序不變式只被一條寬鬆 regex 守著（已修）**
+
+原本只有 `set_main_window_title(...,true)[\s\S]*?destroy_panes(state)` 一條，中間插什麼、怎麼重排都通過；把 `DestroyWindow(window)` 搬到 `destroy_panes` 之前——也就是 AGENTS.md 明文禁止的「view 還活著時銷毀 parent HWND」——CI 全綠。改為對 `finish_shutdown` 函式本體做一次有序掃描，釘住七個標記的相對次序。仍是來源掃描，因此不採用上一輪列為「成本非零、未開票」的 core ShutdownAction log 方案，不新增第二套順序真相。
+
+以兩個變造過的 `main.cpp` 複本反向驗證：刪掉 `revoke_drag_hover_targets`／`destroy_panes` → 失敗並指名缺哪一步；把 `DestroyWindow` 前移 → 失敗並指名次序錯誤。
+
+**驗證**：LLVM-MinGW Release build 乾淨，`ctest --test-dir build --output-on-failure` **25/25 通過**（含 `panedock_launch_smoke` 的新斷言）。實測 smoke stdout 樣本序列為 `0,1,3,0,0,0,0`，收尾為 0。
+
+**F3（未做，候選）**：`SessionWriter` 是 PD-201 留下最深的模組，其「寫入失敗必須留著 dirty」規則目前靠 `shutdown_state_check.ps1` 比對它自己的 `.cpp` 內容——一個不執行程式碼、換個寫法就失效的檢查。`write()` 的 `HWND timer_owner` 可為 `nullptr`，因此可對暫存目錄做真實往返（唯讀 → 失敗且仍 dirty → 恢復可寫 → 成功且 dirty 清除 → read-back 相符），驗完可刪掉那 20 行來源比對，淨減行數。需先釐清 `docs/testing.md` 的 core-only 測試分層宣告是否涵蓋 `app_shell` 的無 HWND 型別。
+
+### 2026-09-07 — 架構報告後修正（第三輪）：F3 `SessionWriter` 改為真實測試，並更正 `docs/testing.md`
+
+**F3 — `SessionWriter` 只被字串比對驗證（已修）**
+
+PD-201 留下的 `SessionWriter` 是本輪最深的模組，其「寫入失敗必須留著 dirty，讓下次重試」的規則原本靠 `shutdown_state_check.ps1` 去 `session_writer.cpp` 裡比對 `dirty_ = false;` 是否出現在 `core::write_session(` 之後——一個不執行程式碼、換個寫法就失效的檢查。
+
+新增 `tests/unit/session_writer_test.cpp`（ctest 名 `panedock_session_writer`），四個案例全部透過公開介面驅動真實物件對真實暫存目錄：
+
+1. 失敗寫入後 `dirty()` 仍為 true 且 `session.json` 未產生 → 恢復後寫入成功、`dirty()` 清除 → `read_session` 讀回的 `active_group_id` 與 `clean_shutdown` 相符。
+2. `mark_dirty()` 的旗標只有成功寫入能清掉。
+3. `write_clean_marker()` 把 `clean_shutdown` 由 false 改為 true，且不會重新弄髒旗標。
+4. `adopt()` 承接 `read_session` 的 `preserved_json`，未知欄位在下一次寫入後仍在檔案裡（AGENTS.md 的持久化前向相容規則）。
+
+失敗注入的手法不需要權限操作：`write_session` 會經由 `session.json.tmp` 中轉，在該名稱放一個非空目錄即讓 `std::filesystem::remove` 失敗，寫入在碰到真正的檔案之前就中止。反向驗證：在 `SessionWriter::write` 的失敗分支插入 `dirty_ = false;`，案例 1 與 2 各報一個失敗；移除後回復通過。
+
+`SessionWriter` 原本直接編進 `PaneDock` 執行檔，為了讓測試可連結而抽為 `panedock_session_writer` STATIC library；除此之外沒有搬動任何東西，也沒有新增 interface 或 adapter。同時刪掉 `shutdown_state_check.ps1` 裡那 20 行來源比對與已無用的 `$SessionWriterPath` 參數——不留第二份較弱的同規則副本。
+
+**順帶更正 `docs/testing.md` 的失真宣告**
+
+該文件寫「所有自動化測試只針對 `core`」，但 ctest 裡早就有 9 個非 core 的 unit test（`pane`、`pane_tab_strip`、`window_helpers`、`tab_overflow`、`window_placement`、`pane_control_id`、`diagnostic_flag`、`shell_core_view_mode`、`file_operation_effect`）。AGENTS.md 指向這份文件當作測試接縫的依據，所以這句失真的話會擋掉本來就該做的測試——本次 F3 一開始被判為「需先釐清政策」正是這個原因。
+
+改寫為實際適用的規則：**能不經由活的 Shell view、透過公開介面驅動的單元就要測**；排除的仍然是行為由 `shell32` 定義的部分（`explorer_host`、`file_operations` 的 Shell 路徑、UI 自動化），兩個既有的「已否決方向」原文保留。同時寫入一條本輪三次修正共同的教訓：**掃描原始碼字串的檢查不是測試**——行為不變的重寫會讓它失敗，真正的順序錯誤卻會讓它通過；只有在沒有真測試可用時（`main.cpp`）才保留，單元一旦可測就刪掉對應的來源掃描。
+
+**驗證**：LLVM-MinGW Release configure/build 乾淨，`ctest --test-dir build --output-on-failure` **26/26 通過**。`git diff --check` 通過。

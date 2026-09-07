@@ -37,7 +37,7 @@ Assert-Source 'const HRESULT active_result = apply_layout\(window, state\);' 'st
 Assert-Source 'state\.startup_realize_pending\s*=\s*false;\s*const HRESULT remaining_result = apply_layout\(window, state, true\);' 'remaining panes follow active pane'
 Assert-Source 'case kDeferredRealizeMessage:[\s\S]*?realize_startup_panes\(window, \*state\)' 'deferred message owns startup realization'
 Assert-Source 'void\s+refresh_startup_chrome\(AppState& state\)' 'startup chrome has one deferred helper'
-Assert-Source 'refresh_startup_chrome\(state\);\s*if \(state\.shutdown_deferred \|\| state\.closing_\) return E_ABORT;' 'startup chrome is gated before layout'
+Assert-Source 'refresh_startup_chrome\(state\);\s*if \(state\.is_shutting_down\(\)\) return E_ABORT;' 'startup chrome is gated before layout'
 
 $startupRealizeQueue = $source.IndexOf(
     'PostMessageW(window, kDeferredRealizeMessage', $windowUpdated)

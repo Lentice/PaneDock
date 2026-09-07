@@ -719,6 +719,8 @@ Pane::NavigationGeneration Pane::begin_navigation() {
     request.generation = explorer_host_.begin_navigation();
     request.group_id = pane_host()->active_group_id();
     request.tab_id = tab->id;
+    // History policy belongs to this request, not the previous navigation.
+    set_suppress_history(false);
     return request.generation;
 }
 
@@ -745,6 +747,7 @@ bool Pane::navigation_request_is_current(
         pending_navigation_.generation = generation;
         pending_navigation_.group_id = group_id;
         pending_navigation_.tab_id = tab->id;
+        set_suppress_history(false);
     }
     return panedock::core::navigation_request_matches(
         pending_navigation_, generation, group_id, tab->id);
@@ -794,14 +797,15 @@ void Pane::navigate_history(bool back) {
     const bool moved = back ? panedock::core::navigate_tab_back(*tab)
                             : panedock::core::navigate_tab_forward(*tab);
     if (!moved) return;
+    const auto generation = begin_navigation();
     set_suppress_history(true);
     HRESULT hr = E_UNEXPECTED;
     {
         ShellCall shell_call(pane_host());
-        hr = navigate_to(tab->location);
+        hr = explorer_host_.navigate(tab->location, generation);
     }
     if (pane_host()->is_shutting_down()) return;
-    if (FAILED(hr)) set_suppress_history(false);
+    if (FAILED(hr)) navigation_failed(generation);
     refresh_navigation_buttons();
 }
 
@@ -1065,6 +1069,20 @@ int Pane::show_tab_context_menu(const std::string &tab_id, POINT screen) {
     return command;
 }
 
+void Pane::finish_tab_change(bool navigate_active) {
+    if (navigate_active && realized()) {
+        auto *tab = active_tab();
+        if (tab == nullptr) return;
+        {
+            ShellCall shell_call(pane_host());
+            (void)navigate_to(tab->location);
+        }
+        if (pane_host()->is_shutting_down()) return;
+    }
+    tab_strip_ui().refresh();
+    pane_host()->schedule_session_save();
+}
+
 void Pane::switch_active_tab(const std::string &tab_id) {
     if (pane_host() == nullptr) return;
     if (pane_host()->is_shutting_down()) return;
@@ -1081,17 +1099,7 @@ void Pane::switch_active_tab(const std::string &tab_id) {
         tab_strip_ui().refresh();
         return;
     }
-    if (realized()) {
-        auto *tab = active_tab();
-        if (tab == nullptr) return;
-        {
-            ShellCall shell_call(pane_host());
-            (void)navigate_to(tab->location);
-        }
-        if (pane_host()->is_shutting_down()) return;
-    }
-    tab_strip_ui().refresh();
-    pane_host()->schedule_session_save();
+    finish_tab_change(true);
 }
 
 void Pane::cycle_active_tab(bool reverse) {
@@ -1128,17 +1136,7 @@ void Pane::add_tab(panedock::core::ShellLocation initial_location) {
             {id, std::move(initial_location), {}, {}, true, {}, 0}) ||
         !panedock::core::set_active_tab(*pane_state, id))
         return;
-    if (realized()) {
-        auto *tab = active_tab();
-        if (tab == nullptr) return;
-        {
-            ShellCall shell_call(pane_host());
-            (void)navigate_to(tab->location);
-        }
-        if (pane_host()->is_shutting_down()) return;
-    }
-    tab_strip_ui().refresh();
-    pane_host()->schedule_session_save();
+    finish_tab_change(true);
 }
 
 void Pane::close_tab(const std::string &tab_id) {
@@ -1154,17 +1152,7 @@ void Pane::close_tab(const std::string &tab_id) {
             *pane_state, tab_id,
             {L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", {}, {}}))
         return;
-    if (closed_active && realized()) {
-        auto *tab = active_tab();
-        if (tab == nullptr) return;
-        {
-            ShellCall shell_call(pane_host());
-            (void)navigate_to(tab->location);
-        }
-        if (pane_host()->is_shutting_down()) return;
-    }
-    tab_strip_ui().refresh();
-    pane_host()->schedule_session_save();
+    finish_tab_change(closed_active);
 }
 
 void Pane::close_tabs(const std::string &tab_id, int command) {

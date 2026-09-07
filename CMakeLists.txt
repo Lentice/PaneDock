@@ -100,10 +100,20 @@ target_compile_definitions(panedock_pane PRIVATE
 target_link_libraries(panedock_pane PUBLIC user32 ole32)
 panedock_set_warnings(panedock_pane)
 
-add_executable(PaneDock WIN32
-    src/app_shell/main.cpp
+# Its own library so the unit test can link it. Nothing else moved.
+add_library(panedock_session_writer STATIC
     src/app_shell/session_writer.h
     src/app_shell/session_writer.cpp
+)
+target_include_directories(panedock_session_writer PUBLIC src)
+target_compile_definitions(panedock_session_writer PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
+)
+target_link_libraries(panedock_session_writer PUBLIC panedock_core kernel32)
+panedock_set_warnings(panedock_session_writer)
+
+add_executable(PaneDock WIN32
+    src/app_shell/main.cpp
     src/app_shell/pinned_locations_dialog.cpp
     src/app_shell/startup_notification.cpp
     src/app_shell/transfer_close_dialog.cpp
@@ -116,7 +126,7 @@ target_compile_definitions(PaneDock PRIVATE
 target_link_options(PaneDock PRIVATE -municode)
 target_link_libraries(PaneDock PRIVATE
     panedock_core panedock_shell_core panedock_explorer_host panedock_pane
-    panedock_file_operations panedock_sidebar
+    panedock_file_operations panedock_sidebar panedock_session_writer
     shell32 ole32 shlwapi user32 gdi32 comctl32 uuid
 )
 panedock_set_warnings(PaneDock)

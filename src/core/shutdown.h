@@ -68,6 +68,15 @@ public:
 
     ShutdownAction step(ShutdownEvent event) noexcept;
 
+    // The single teardown gate. Work that would touch a Shell view, a pane's
+    // model or the session must not run once teardown has been decided —
+    // whether it started (closing_) or is waiting for a nested Shell call to
+    // unwind (shutdown_deferred). Every caller asks here rather than reading
+    // the two flags, so the gate has one definition to change.
+    bool is_shutting_down() const noexcept {
+        return state_.closing_ || state_.shutdown_deferred;
+    }
+
     State& state() noexcept { return state_; }
     const State& state() const noexcept { return state_; }
 

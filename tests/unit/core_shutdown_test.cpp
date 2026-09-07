@@ -187,6 +187,30 @@ void test_repeated_close_does_not_repeat_teardown() {
     EXPECT(sequence.step(ShutdownEvent::teardown_started) ==
            ShutdownAction::none);
 }
+
+// The single teardown gate. main.cpp asked this question 53 times by reading
+// closing_ and shutdown_deferred by hand, in two operand orders; it is one
+// predicate now, so the answer is stated once here.
+void test_gate_covers_both_started_and_deferred_teardown() {
+    ShutdownSequence idle;
+    EXPECT(!idle.is_shutting_down());
+
+    ShutdownSequence deferred;
+    queue_shutdown(deferred);
+    EXPECT(deferred.step(ShutdownEvent::close_requested) ==
+           ShutdownAction::none);
+    // Teardown is decided but waiting for the nested Shell call to unwind.
+    EXPECT(!deferred.state().closing_);
+    EXPECT(deferred.state().shutdown_deferred);
+    EXPECT(deferred.is_shutting_down());
+
+    ShutdownSequence closing;
+    queue_shutdown(closing);
+    finish_shutdown(closing);
+    // Teardown has actually started.
+    EXPECT(closing.state().closing_);
+    EXPECT(closing.is_shutting_down());
+}
 }  // namespace
 
 int main() {
@@ -197,5 +221,6 @@ int main() {
     test_transfer_decisions();
     test_end_session_paths_and_save_failure();
     test_repeated_close_does_not_repeat_teardown();
+    test_gate_covers_both_started_and_deferred_teardown();
     return panedock::test::summary("core_shutdown");
 }

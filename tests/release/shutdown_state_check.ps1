@@ -2,8 +2,7 @@ param(
     [string] $SourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\main.cpp'),
     [string] $PaneSourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\pane.cpp'),
     [string] $ShutdownHeaderPath = (Join-Path $PSScriptRoot '..\..\src\core\shutdown.h'),
-    [string] $ShutdownSourcePath = (Join-Path $PSScriptRoot '..\..\src\core\shutdown.cpp'),
-    [string] $SessionWriterPath = (Join-Path $PSScriptRoot '..\..\src\app_shell\session_writer.cpp')
+    [string] $ShutdownSourcePath = (Join-Path $PSScriptRoot '..\..\src\core\shutdown.cpp')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,29 +12,11 @@ $source = ($SourcePath -split ',' | ForEach-Object {
 $source += "`n" + (Get-Content -LiteralPath $PaneSourcePath -Raw)
 $shutdownHeader = Get-Content -LiteralPath $ShutdownHeaderPath -Raw
 $shutdownSource = Get-Content -LiteralPath $ShutdownSourcePath -Raw
-$sessionWriter = Get-Content -LiteralPath $SessionWriterPath -Raw
 
-# SessionWriter owns the dirty flag now, so the rule that used to be visible
-# inline in save_now must hold there: a write marks dirty first and only
-# clears it after core::write_session succeeded, so a failed write is retried
-# rather than silently forgotten.
-$writeStart = $sessionWriter.IndexOf('bool SessionWriter::write(')
-if ($writeStart -lt 0) {
-    throw 'shutdown state invariant failed: SessionWriter::write is missing'
-}
-$writeEnd = $sessionWriter.IndexOf('bool SessionWriter::write_clean_marker(')
-if ($writeEnd -lt 0) {
-    throw 'shutdown state invariant failed: SessionWriter::write_clean_marker is missing'
-}
-$writeBody = $sessionWriter.Substring($writeStart, $writeEnd - $writeStart)
-$dirtySet = $writeBody.IndexOf('dirty_ = true;')
-$writeCall = $writeBody.IndexOf('core::write_session(')
-$dirtyCleared = $writeBody.IndexOf('dirty_ = false;')
-if ($dirtySet -lt 0 -or $writeCall -lt $dirtySet -or
-    $dirtyCleared -lt $writeCall -or
-    $writeBody -notmatch 'return false;[\s\S]*?dirty_ = false;') {
-    throw 'shutdown state invariant failed: a failed session write must leave the dirty flag set'
-}
+# The SessionWriter dirty-flag rule used to be checked here by scanning
+# session_writer.cpp for the order of two assignments. panedock_session_writer
+# now drives the real object against a real directory instead, so the source
+# scan is gone rather than kept as a second, weaker copy of the same rule.
 
 function Assert-Source([string] $Pattern, [string] $Name) {
     if ($source -notmatch $Pattern) {
@@ -72,8 +53,51 @@ Assert-Shutdown 'case ShutdownEvent::save_prompt_finished:[\s\S]*?state_\.end_se
     'nested confirmed shutdown is remembered'
 Assert-Source 'void\s+set_main_window_title\(HWND window, bool diagnostic_mode,\s*bool closing\)[\s\S]*?L"PaneDock.*Closing\.\.\."' `
     'closing caption has a dedicated update path'
-Assert-Source 'set_main_window_title\(window, state\.diagnostic_mode, true\);[\s\S]*?destroy_panes\(state\);' `
-    'closing state is visible before Shell teardown'
+# The six teardown steps of finish_shutdown are the concrete shape of the rule
+# "never destroy the parent HWND while a view is alive". A single
+# title-then-destroy_panes regex only pinned two of them: moving DestroyWindow
+# ahead of destroy_panes, or dropping the drag-target revoke, still passed.
+# Assert the whole order instead.
+$finishStart = $source.IndexOf('void finish_shutdown(HWND window, AppState& state) noexcept {')
+if ($finishStart -lt 0) {
+    throw 'shutdown state invariant failed: finish_shutdown is missing'
+}
+$finishEnd = $source.IndexOf(
+    'void run_shutdown_action(HWND window, AppState& state,', $finishStart)
+if ($finishEnd -lt 0) {
+    throw 'shutdown state invariant failed: finish_shutdown body end is missing'
+}
+$finishBody = $source.Substring($finishStart, $finishEnd - $finishStart)
+$finishOrder = @(
+    @{ Pattern = 'set_main_window_title\(window, state\.diagnostic_mode, true\);'
+       Name = 'closing caption before teardown' },
+    @{ Pattern = 'transfer_close_dialog\.destroy\(\);'
+       Name = 'dialogs destroyed before panes' },
+    @{ Pattern = 'revoke_drag_hover_targets\(state\);'
+       Name = 'drag targets revoked before panes' },
+    @{ Pattern = 'cancel_session_save_timer\(state\);'
+       Name = 'save timer cancelled before panes' },
+    @{ Pattern = 'destroy_panes\(state\);'
+       Name = 'panes destroyed' },
+    @{ Pattern = 'write_live_view_count\(state\.diagnostic_mode\);'
+       Name = 'live view count emitted after teardown' },
+    @{ Pattern = 'DestroyWindow\(window\);'
+       Name = 'parent window destroyed last' }
+)
+$previousIndex = -1
+$previousName = 'start of finish_shutdown'
+foreach ($step in $finishOrder) {
+    $match = [regex]::Match($finishBody, $step.Pattern)
+    if (-not $match.Success) {
+        throw "shutdown state invariant failed: finish_shutdown is missing '$($step.Name)'"
+    }
+    if ($match.Index -lt $previousIndex) {
+        throw ("shutdown state invariant failed: '$($step.Name)' must come " +
+               "after '$previousName' in finish_shutdown")
+    }
+    $previousIndex = $match.Index
+    $previousName = $step.Name
+}
 Assert-Shutdown 'state_\.shutdown_deferred\s*=\s*true;' `
     'reducer records deferred shutdown'
 Assert-Source 'set_main_window_title\(window, state\.diagnostic_mode, true\);[\s\S]*?PostMessageW\(window, kDeferredShutdownMessage' `
@@ -124,9 +148,13 @@ function Assert-DebouncedFunction([string] $Start, [string] $Name) {
     }
 }
 
-Assert-DebouncedFunction 'void Pane::switch_active_tab(' 'Pane::switch_active_tab'
-Assert-DebouncedFunction 'void Pane::add_tab(' 'Pane::add_tab'
-Assert-DebouncedFunction 'void Pane::close_tab(' 'Pane::close_tab'
+Assert-DebouncedFunction 'void Pane::finish_tab_change(' 'Pane::finish_tab_change'
+foreach ($command in @('switch_active_tab', 'add_tab', 'close_tab')) {
+    $body = Get-FunctionSource "void Pane::$command(" "Pane::$command"
+    if ($body -notmatch 'finish_tab_change\(' -or $body -match 'save_now\(') {
+        throw "session save debounce check failed: Pane::$command must use finish_tab_change"
+    }
+}
 $closeTabsBody = Get-FunctionSource 'void Pane::close_tabs(' 'Pane::close_tabs'
 if ($closeTabsBody -notmatch 'std::vector<std::string> tab_ids;' -or
     $closeTabsBody -notmatch 'for \(const auto& id_to_close : tab_ids\)\s*close_tab\(id_to_close\)' -or

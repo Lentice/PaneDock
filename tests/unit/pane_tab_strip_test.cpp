@@ -1,50 +1,9 @@
-#include "app_shell/pane.h"
-#include "app_shell/pane_host.h"
-#include "app_shell/pane_message_dispatch.h"
+#include "unit/test_pane_host.h"
 #include "unit/test_util.h"
-
-namespace panedock::app_shell {
-std::optional<LRESULT> handle_pane_control_message(Pane&, UINT,
-                                                  WPARAM, LPARAM) {
-    return std::nullopt;
-}
-} // namespace panedock::app_shell
 
 namespace {
 
-class TestPaneHost final : public panedock::app_shell::PaneHost {
-  public:
-    panedock::core::PaneState *mutate_on_second_lookup{};
-    int lookups{};
-
-    bool is_shutting_down() const noexcept override { return false; }
-    void shell_call_entered() noexcept override {}
-    void shell_call_left() noexcept override {}
-    void schedule_session_save() noexcept override {}
-    const std::string &active_group_id() const noexcept override {
-        static const std::string id{"group"};
-        return id;
-    }
-    std::string make_unique_tab_id() const override { return "new"; }
-    std::optional<panedock::app_shell::TabStripDragLayout> tab_drag_layout(
-        const panedock::app_shell::Pane &, HWND, int, int, int) const override {
-        return std::nullopt;
-    }
-    std::span<const panedock::app_shell::PinnedLocation>
-    pinned_locations() const noexcept override { return {}; }
-    void pin_location(panedock::core::ShellLocation) override {}
-    bool location_capture_suppressed() const noexcept override { return false; }
-    std::wstring tab_display_text(std::wstring_view name) override {
-        if (++lookups == 2 && mutate_on_second_lookup != nullptr)
-            mutate_on_second_lookup->tabs.erase(
-                mutate_on_second_lookup->tabs.begin());
-        return std::wstring(name);
-    }
-    HFONT chrome_font() const noexcept override {
-        return static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-    }
-    HWND tooltip() const noexcept override { return nullptr; }
-};
+using panedock::test::TestPaneHost;
 
 panedock::core::PaneState tab_state(int count) {
     panedock::core::PaneState state;

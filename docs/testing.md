@@ -10,11 +10,15 @@ ctest --test-dir build --output-on-failure
 
 The live `ctest` count is the single source of truth for how many tests exist. It is deliberately not written down here, because a hardcoded count drifts and then lies.
 
-## Single seam: `core`
+## The test seam: `core`, plus anything reachable without the Shell
 
-**All automated tests target `core`, and `core` alone.** This is a deliberate one-seam design, chosen over two alternatives that were considered and rejected (see below).
+`core` is the primary seam and the one the architecture protects: keeping HWND, COM and `windows.h` out of it is what keeps it testable at all.
+
+It is no longer the only seam. The rule as applied is narrower and more useful than "core alone": **a unit is tested when it can be driven through its public interface without a live Shell view.** That covers `core`, the pure headers that happen to live in `app_shell` (`tab_overflow.h`, `window_placement.h`, `pane_control_id.h`, `diagnostic_mode.h`, `window_helpers.h`), `app_shell::Pane` and `PaneTabStrip` through the `PaneHost` seam, `SessionWriter` against a temporary directory, and the pure string↔enum half of `shell_core`. What it excludes is unchanged and is the point: anything whose behavior is defined by `shell32`.
 
 A good test here exercises externally observable behavior through a public boundary and says nothing about how that behavior is implemented. It states an input and an expected output. It does not assert on internal call sequences, private structure, or the identity of collaborating objects.
+
+A corollary that has cost real bugs: **a check that scans source text is not a test.** It asserts the shape of a string, so a behavior-preserving rewrite fails it and a genuine reordering that keeps the strings passes it. Source scans remain only where a real test is not available (`main.cpp`); when a unit becomes testable, its source scan is deleted rather than kept alongside.
 
 `core` is testable that way because it is pure computation over data:
 

@@ -27,8 +27,8 @@ Assert-Source 'state\.shell_call_depth != 0' `
     'close defers while a Shell call is active'
 Assert-Source 'PostMessageW\(state\.main_window, kDeferredShutdownMessage' `
     'Shell scope queues deferred shutdown after re-entry'
-Assert-Source 'state->closing_ \|\| state->shutdown_deferred' `
-    'main-window work is blocked during deferred teardown'
+Assert-Source 'child_message_blocked_while_closing\(\s*state->is_shutting_down\(\),\s*message\)' `
+    'child procs share one teardown allowlist'
 Assert-Source 'case kDeferredShutdownMessage:' `
     'deferred teardown is resumed by the message loop'
 Assert-Source 'constexpr UINT kDeferredCommandMessage' `
@@ -64,7 +64,7 @@ Assert-Source 'bool\s+navigate_realized_panes\(\s*AppState& state,\s*const paned
     'Group transitions share realized-pane navigation'
 Assert-Source 'ShutdownEvent::file_operation_call_started[\s\S]*paste_from_clipboard' `
     'clipboard setup is not reported as an active transfer'
-Assert-Source 'file_operation_setup_aborted[\s\S]*state\.shutdown_deferred\s*\|\|' `
+Assert-Source 'file_operation_setup_aborted[\s\S]*state\.is_shutting_down\(\)' `
     'clipboard setup observes deferred shutdown'
 Assert-Source 'case WM_CLOSE:\s*if \(state != nullptr\)\s*run_shutdown_action\([\s\S]*?ShutdownEvent::close_requested' `
     'close decisions are routed through the shutdown reducer'

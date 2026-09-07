@@ -201,6 +201,10 @@ class Pane final {
     }
 
   private:
+    // Called after a successful tab mutation. Closing an inactive tab only
+    // refreshes chrome and saves; replacing the last tab still navigates.
+    void finish_tab_change(bool navigate_active);
+
     PaneHost *host_{nullptr};
     panedock::core::PaneState *bound_state_{nullptr};
     std::size_t index_{};

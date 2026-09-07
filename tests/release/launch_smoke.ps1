@@ -61,7 +61,17 @@ if ($existing.Count -ne 0) {
     throw "Cannot run launch smoke test while $appName is already running."
 }
 
-$process = Start-Process -FilePath $resolvedAppPath -PassThru
+# --diagnostic makes the app emit "panedock.live_view_count=N". The teardown
+# path emits a final sample after destroy_panes, which is the only automated
+# check that every initialized IExplorerBrowser was destroyed: the in-source
+# assert() is compiled out by -DNDEBUG in the Release build this test runs.
+$stdoutPath = Join-Path $env:TEMP "panedock-smoke-$PID.stdout.txt"
+$stderrPath = Join-Path $env:TEMP "panedock-smoke-$PID.stderr.txt"
+$process = Start-Process -FilePath $resolvedAppPath -ArgumentList '--diagnostic' `
+    -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+# Touch the handle while the process is alive. Without this the object started
+# by Start-Process can report a null ExitCode after the process has gone.
+$null = $process.Handle
 try {
     $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSeconds)
     $mainWindow = [IntPtr]::Zero
@@ -87,14 +97,34 @@ try {
     if (-not $process.WaitForExit(30000)) {
         throw "$appName did not exit after its main window was closed."
     }
+    # The bounded overload does not wait for the redirected output readers to
+    # drain, and leaves ExitCode unpopulated. The unbounded call does both, and
+    # cannot block here because the process has already exited.
+    $process.WaitForExit()
     if ($process.ExitCode -ne 0) {
         throw "$appName exited after smoke test with code $($process.ExitCode)."
     }
-    Write-Host "$appName launch smoke test passed."
+
+    $counts = @()
+    if (Test-Path $stdoutPath) {
+        foreach ($line in @(Get-Content -LiteralPath $stdoutPath)) {
+            if ($line -notmatch '^panedock\.live_view_count=(\d+)$') { continue }
+            $counts += [int] $Matches[1]
+        }
+    }
+    if ($counts.Count -eq 0) {
+        throw "$appName emitted no live view count; the teardown sample is missing."
+    }
+    if ($counts[-1] -ne 0) {
+        throw ("$appName leaked Shell views: final live_view_count=" +
+               "$($counts[-1]) (samples: $($counts -join ','))")
+    }
+    Write-Host "$appName launch smoke test passed (live_view_count reached 0)."
 }
 finally {
     $process.Refresh()
     if (-not $process.HasExited) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
     }
+    Remove-Item $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
 }

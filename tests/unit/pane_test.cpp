@@ -1,54 +1,40 @@
-#include "app_shell/pane.h"
-#include "app_shell/pane_message_dispatch.h"
-#include "app_shell/pane_host.h"
+#include "unit/test_pane_host.h"
 #include "unit/test_util.h"
-
-// PD-189: pane_window_proc asks the coordinator (main.cpp) to handle its
-// children's notifications. This test links Pane without the coordinator, so
-// it stands in with a "not mine" answer; no test here pumps pane messages.
-namespace panedock::app_shell {
-std::optional<LRESULT> handle_pane_control_message(Pane&, UINT,
-                                                   WPARAM, LPARAM) {
-    return std::nullopt;
-}
-}  // namespace panedock::app_shell
 
 namespace {
 
-class TestPaneHost final : public panedock::app_shell::PaneHost {
-  public:
-    bool shutting_down{};
-    std::string group_id{"group-a"};
-    bool suppress_location_capture{};
-    int session_saves{};
+using panedock::test::TestPaneHost;
 
-    bool is_shutting_down() const noexcept override { return shutting_down; }
-    void shell_call_entered() noexcept override {}
-    void shell_call_left() noexcept override {}
-    void schedule_session_save() noexcept override { ++session_saves; }
-    const std::string &active_group_id() const noexcept override {
-        return group_id;
+void test_replacement_navigation_does_not_inherit_history_suppression() {
+    for (const bool shell_initiated : {false, true}) {
+        TestPaneHost host;
+        panedock::app_shell::Pane pane;
+        pane.set_host(&host);
+        const panedock::core::ShellLocation a{L"A", {}, {}};
+        const panedock::core::ShellLocation b{L"B", {}, {}};
+        const panedock::core::ShellLocation c{L"C", {}, {}};
+        panedock::core::PaneState state{
+            "pane", {{"tab", b, {}, {}, true, {a, b}, 1}}, "tab"};
+        pane.bind(&state);
+
+        // Back has changed the model, but its Shell completion is pending.
+        EXPECT(panedock::core::navigate_tab_back(*pane.active_tab()));
+        const auto back = pane.begin_navigation();
+        pane.set_suppress_history(true);
+        const auto replacement = shell_initiated ? back + 1
+                                                : pane.begin_navigation();
+        pane.navigation_complete(replacement, c);
+        pane.navigation_complete(back, a); // late Back must stay ignored
+
+        EXPECT(pane.active_tab()->history ==
+               std::vector<panedock::core::ShellLocation>({a, c}));
+        EXPECT(pane.active_tab()->history_index == 1);
+        EXPECT(pane.active_tab()->location == c);
+        EXPECT(!panedock::core::can_navigate_tab_forward(*pane.active_tab()));
+        EXPECT(!pane.suppress_history());
+        EXPECT(host.session_saves == 1);
     }
-    std::string make_unique_tab_id() const override { return "tab-new"; }
-    std::optional<panedock::app_shell::TabStripDragLayout> tab_drag_layout(
-        const panedock::app_shell::Pane &, HWND, int, int,
-        int) const override {
-        return std::nullopt;
-    }
-    std::wstring tab_display_text(std::wstring_view name) override {
-        return std::wstring(name);
-    }
-    HFONT chrome_font() const noexcept override { return nullptr; }
-    HWND tooltip() const noexcept override { return nullptr; }
-    std::span<const panedock::app_shell::PinnedLocation>
-    pinned_locations() const noexcept override {
-        return {};
-    }
-    void pin_location(panedock::core::ShellLocation) override {}
-    bool location_capture_suppressed() const noexcept override {
-        return suppress_location_capture;
-    }
-};
+}
 
 void test_pane_without_host_is_constructible() {
     panedock::app_shell::Pane pane;
@@ -289,6 +275,47 @@ void test_capture_location_respects_suppression() {
     EXPECT(state.tabs.front().location.parsing_name == L"before");
 }
 
+void test_tab_commands_schedule_only_successful_changes() {
+    TestPaneHost host;
+    panedock::core::PaneState state{
+        "pane", {{"a", {L"A", {}, {}}, {}, {}, true, {}, 0},
+                 {"b", {L"B", {}, {}}, {}, {}, true, {}, 0}}, "a"};
+    panedock::app_shell::Pane pane;
+    pane.set_host(&host);
+    pane.bind(&state);
+
+    pane.switch_active_tab("a");
+    pane.switch_active_tab("missing");
+    pane.close_tab("missing");
+    EXPECT(host.session_saves == 0);
+    EXPECT(state.active_tab_id == "a");
+
+    pane.switch_active_tab("b");
+    EXPECT(state.active_tab_id == "b");
+    EXPECT(host.session_saves == 1);
+    pane.close_tab("a"); // Closing an inactive tab still saves the model.
+    EXPECT(state.active_tab_id == "b");
+    EXPECT(pane.active_tab()->location.parsing_name == L"B");
+    EXPECT(host.session_saves == 2);
+    pane.add_tab({L"new", {}, {}});
+    EXPECT(state.active_tab_id == "tab-new");
+    EXPECT(host.session_saves == 3);
+    pane.add_tab({L"duplicate", {}, {}}); // Host returns the same ID.
+    EXPECT(host.session_saves == 3);
+    pane.close_tab("tab-new");
+    EXPECT(state.active_tab_id == "b");
+    EXPECT(host.session_saves == 4);
+    EXPECT(!pane.realized());
+
+    const auto before_shutdown = state;
+    host.shutting_down = true;
+    pane.switch_active_tab("b");
+    pane.add_tab({L"blocked", {}, {}});
+    pane.close_tab("b");
+    EXPECT(state == before_shutdown);
+    EXPECT(host.session_saves == 4);
+}
+
 void test_add_tab_does_not_reuse_stale_tab_pointer() {
     panedock::app_shell::Pane pane;
     panedock::core::PaneState state;
@@ -396,6 +423,8 @@ void test_close_tabs_preserves_the_requested_set_and_last_tab_fallback() {
 } // namespace
 
 int main() {
+    test_tab_commands_schedule_only_successful_changes();
+    test_replacement_navigation_does_not_inherit_history_suppression();
     test_pane_without_host_is_constructible();
     test_rect_cache_reports_only_real_changes();
     test_set_tabs_replaces_visuals_without_owning_tab_state();
