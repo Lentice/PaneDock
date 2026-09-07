@@ -48,6 +48,20 @@ class PaneHost {
     virtual std::wstring tab_display_text(std::wstring_view parsing_name) = 0;
     virtual HFONT chrome_font() const noexcept = 0;
     virtual HWND tooltip() const noexcept = 0;
+    // PD-189: a pane's own proc handles the notifications its child controls
+    // raise. Acting on them needs the coordinator (global commands, the
+    // hovered owner-draw button, the Shell re-entry deferral), so the pane
+    // asks its host and returns what it gets back; nullopt means the message
+    // is none of the pane's business.
+    //
+    // This is a PaneHost method rather than a free function declared in a
+    // header and defined in main.cpp: that arrangement left panedock_pane
+    // with an undefined symbol only the executable or a test stub could
+    // resolve, which is a circular dependency in everything but the include
+    // graph.
+    virtual std::optional<LRESULT>
+    handle_pane_control_message(Pane &pane, UINT message, WPARAM wparam,
+                                LPARAM lparam) = 0;
 };
 
 class ShellCall final {

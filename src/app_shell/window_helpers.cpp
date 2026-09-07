@@ -1,5 +1,7 @@
 #include "app_shell/window_helpers.h"
 
+#include "app_shell/pane_chrome_geometry.h"
+
 #include <algorithm>
 
 namespace panedock::app_shell {
@@ -23,8 +25,10 @@ bool register_simple_window_class(const wchar_t* name, WNDPROC proc,
 }
 
 int scaled_value(HWND window, int value) noexcept {
-    return std::max(1, MulDiv(value, static_cast<int>(GetDpiForWindow(window)),
-                              96));
+    // One scaling rule, including its floor of 1. This used to be a second
+    // copy of pane_chrome_geometry's arithmetic with a comment promising the
+    // two matched; nothing enforced that promise.
+    return scale_for_dpi(value, GetDpiForWindow(window));
 }
 
 void center_over_owner(HWND dialog, HWND owner, int width, int height,

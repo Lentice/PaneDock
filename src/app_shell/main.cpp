@@ -37,7 +37,6 @@
 #include "app_shell/pane.h"
 #include "app_shell/pane_control_id.h"
 #include "app_shell/pane_host.h"
-#include "app_shell/pane_message_dispatch.h"
 #include "app_shell/pinned_locations_dialog.h"
 #include "app_shell/startup_notification.h"
 #include "app_shell/tab_overflow.h"
@@ -410,6 +409,9 @@ struct AppState : public panedock::app_shell::PaneHost {
     std::wstring tab_display_text(std::wstring_view parsing_name) override;
     HFONT chrome_font() const noexcept override;
     HWND tooltip() const noexcept override;
+    std::optional<LRESULT>
+    handle_pane_control_message(Pane &pane, UINT message, WPARAM wparam,
+                                LPARAM lparam) override;
 
     // The legacy names below are references into the reducer state. Keeping
     // them avoids a second pane-wide mechanical rewrite while making the
@@ -1060,68 +1062,22 @@ std::vector<panedock::core::PaneRect> layout_rects(
     return rects;
 }
 
+// The divider geometry itself is pure and unit-tested in
+// core::compute_splitter_rects; this only supplies the window's metrics and
+// converts to RECT.
 std::vector<Splitter> splitters(HWND window,
                                 const AppState& state,
                                 const panedock::core::GroupState& group) {
     const auto rects = layout_rects(window, state, group);
-    const int thickness = layout_metrics(window).divider_thickness;
-    switch (group.layout_template) {
-        case panedock::core::LayoutTemplate::single:
-            return {};
-        case panedock::core::LayoutTemplate::left_right:
-            return {{{rects[0].x + rects[0].width, rects[0].y,
-                      rects[0].x + rects[0].width + thickness,
-                      rects[0].y + rects[0].height},
-                     0, true}};
-        case panedock::core::LayoutTemplate::top_bottom:
-            return {{{rects[0].x, rects[0].y + rects[0].height,
-                      rects[0].x + rects[0].width,
-                      rects[0].y + rects[0].height + thickness},
-                     0, false}};
-        case panedock::core::LayoutTemplate::three_pane:
-            return {{{rects[0].x + rects[0].width, rects[0].y,
-                      rects[0].x + rects[0].width + thickness,
-                      rects[0].y + rects[0].height},
-                     0, true},
-                    {{rects[1].x, rects[1].y + rects[1].height,
-                      rects[1].x + rects[1].width,
-                      rects[1].y + rects[1].height + thickness},
-                     1, false}};
-        case panedock::core::LayoutTemplate::four_pane_grid:
-            return {{{rects[0].x + rects[0].width, rects[0].y,
-                      rects[0].x + rects[0].width + thickness,
-                      rects[2].y + rects[2].height},
-                     0, true},
-                    {{rects[0].x, rects[0].y + rects[0].height,
-                      rects[1].x + rects[1].width,
-                      rects[0].y + rects[0].height + thickness},
-                     1, false}};
-        case panedock::core::LayoutTemplate::two_over_one:
-            return {{{rects[2].x, rects[2].y - thickness,
-                      rects[2].x + rects[2].width, rects[2].y},
-                     0, false},
-                    {{rects[0].x + rects[0].width, rects[0].y,
-                      rects[0].x + rects[0].width + thickness,
-                      rects[0].y + rects[0].height},
-                     1, true}};
-        case panedock::core::LayoutTemplate::one_over_two:
-            return {{{rects[1].x, rects[1].y - thickness,
-                      rects[2].x + rects[2].width, rects[1].y},
-                     0, false},
-                    {{rects[1].x + rects[1].width, rects[1].y,
-                      rects[1].x + rects[1].width + thickness,
-                      rects[1].y + rects[1].height},
-                     1, true}};
-        case panedock::core::LayoutTemplate::two_beside_one:
-            return {{{rects[2].x - thickness, rects[2].y, rects[2].x,
-                      rects[2].y + rects[2].height},
-                     0, true},
-                    {{rects[0].x, rects[0].y + rects[0].height,
-                      rects[0].x + rects[0].width,
-                      rects[0].y + rects[0].height + thickness},
-                     1, false}};
-    }
-    return {};
+    const auto bars = panedock::core::compute_splitter_rects(
+        rects, group.layout_template,
+        layout_metrics(window).divider_thickness);
+    std::vector<Splitter> result;
+    result.reserve(bars.size());
+    for (const auto& bar : bars)
+        result.push_back({to_win32_rect(bar.rect), bar.ratio_index,
+                          bar.vertical});
+    return result;
 }
 
 std::optional<Splitter> splitter_at_point(
@@ -1903,39 +1859,6 @@ HRESULT realize_startup_panes(HWND window, AppState& state) {
     return remaining_result;
 }
 
-std::string unique_group_id(const panedock::core::ApplicationState& application) {
-    std::size_t maximum = 0;
-    bool malformed_numeric_id = false;
-    for (const auto& group : application.groups) {
-        constexpr std::string_view prefix = "group-";
-        if (!group.id.starts_with(prefix)) continue;
-        std::size_t value = 0;
-        const std::string_view suffix(group.id.data() + prefix.size(),
-                                      group.id.size() - prefix.size());
-        const auto parsed = std::from_chars(suffix.data(),
-                                            suffix.data() + suffix.size(), value);
-        if (suffix.empty() || parsed.ec != std::errc{} ||
-            parsed.ptr != suffix.data() + suffix.size()) {
-            malformed_numeric_id = true;
-            break;
-        }
-        maximum = std::max(maximum, value);
-    }
-    if (!malformed_numeric_id) return "group-" + std::to_string(maximum + 1);
-
-    const auto ticks = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::system_clock::now().time_since_epoch())
-                           .count();
-    std::string candidate = "group-" + std::to_string(ticks);
-    std::size_t discriminator = 0;
-    while (std::any_of(application.groups.begin(), application.groups.end(),
-                       [&](const auto& group) { return group.id == candidate; })) {
-        candidate = "group-" + std::to_string(ticks) + "-" +
-                    std::to_string(++discriminator);
-    }
-    return candidate;
-}
-
 panedock::core::GroupState new_group_state(const AppState& state,
                                             std::string id) {
     auto group = default_application_state().groups.front();
@@ -2015,7 +1938,7 @@ Microsoft::WRL::ComPtr<DragHoverTarget> make_sidebar_drag_hover_target(
 void add_group(HWND window, AppState& state) {
     if (state.is_shutting_down()) return;
     const bool was_empty = state.application.groups.empty();
-    const std::string id = unique_group_id(state.application);
+    const std::string id = panedock::core::next_group_id(state.application);
     if (!panedock::core::add_group(state.application,
                                    new_group_state(state, id))) return;
     if (was_empty) {
@@ -2043,7 +1966,7 @@ void duplicate_group(HWND window, AppState& state) {
     const auto selected = state.sidebar.selected_index();
     if (!selected.has_value() || *selected >= state.application.groups.size()) return;
     const auto& source = state.application.groups[*selected];
-    const std::string id = unique_group_id(state.application);
+    const std::string id = panedock::core::next_group_id(state.application);
     if (!panedock::core::duplicate_group(state.application, source.id, id,
                                          source.name + L" copy")) return;
     activate_group(window, state, state.application.groups.size() - 1);
@@ -2116,21 +2039,6 @@ void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
     schedule_session_save(state);
 }
 
-std::string unique_tab_id(const panedock::core::GroupState& group,
-                          std::size_t& candidate_index) {
-    for (;;) {
-        const std::string candidate =
-            "tab-" + std::to_string(candidate_index++);
-        const bool exists = std::any_of(
-            group.panes.begin(), group.panes.end(), [&](const auto& pane) {
-                return std::any_of(
-                    pane.tabs.begin(), pane.tabs.end(), [&](const auto& tab) {
-                        return tab.id == candidate;
-                    });
-            });
-        if (!exists) return candidate;
-    }
-}
 
 bool AppState::is_shutting_down() const noexcept {
     return shutdown_sequence.is_shutting_down();
@@ -2192,7 +2100,7 @@ HWND AppState::tooltip() const noexcept {
 
 std::string AppState::make_unique_tab_id() const {
     std::size_t candidate = 0;
-    return unique_tab_id(active_group(*this), candidate);
+    return panedock::core::next_tab_id(active_group(*this), candidate);
 }
 
 std::optional<panedock::app_shell::TabStripDragLayout>
@@ -2296,7 +2204,8 @@ void set_layout(HWND window, AppState& state,
     std::size_t tab_candidate = 0;
     for (std::size_t index = group.panes.size(); index < target_count; ++index) {
         pane_ids.push_back("pane-" + std::to_string(index));
-        tab_ids.push_back(unique_tab_id(group, tab_candidate));
+        tab_ids.push_back(
+            panedock::core::next_tab_id(group, tab_candidate));
     }
     if (!panedock::core::switch_layout(group, target,
                                        default_shell_location(),
@@ -2338,16 +2247,13 @@ void update_splitter_drag(HWND window, AppState& state, POINT point,
     if (drag.ratio_index >= group.divider_ratios.size()) return;
 
     const RECT client = pane_content_area(window, state);
-    const int size = drag.vertical ? client.right - client.left
-                                   : client.bottom - client.top;
-    const int divider = layout_metrics(window).divider_thickness;
-    const int available = std::max(size, divider) - divider;
-    if (available <= 0) return;
-    const int position = drag.vertical ? point.x - client.left
-                                       : point.y - client.top;
-    group.divider_ratios[drag.ratio_index] = std::clamp(
-        static_cast<double>(position) / static_cast<double>(available),
-        0.0, 1.0);
+    const auto ratio = panedock::core::divider_ratio_at(
+        drag.vertical ? point.x - client.left : point.y - client.top,
+        drag.vertical ? client.right - client.left
+                      : client.bottom - client.top,
+        layout_metrics(window).divider_thickness);
+    if (!ratio.has_value()) return;
+    group.divider_ratios[drag.ratio_index] = *ratio;
     if (FAILED(apply_layout(window, state, false, recompute_content)))
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
 }
@@ -4276,21 +4182,21 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     return exit_code;
 }
 
-namespace panedock::app_shell {
+// Re-opens this translation unit's anonymous namespace, where AppState lives.
+namespace {
 
 // PD-189: the pane proc's handler for its own children's notifications. Lives
-// in the coordinator (main.cpp) so it can reach AppState; Pane only calls it.
+// in the coordinator (main.cpp) so it can reach AppState; Pane only calls it
+// through the PaneHost seam.
 // The two entry guards mirror tab_strip_proc's: nothing is handled while the
 // window is closing, and mouse messages raised during a Shell re-entry are
 // deferred (PD-172 / PD-173).
-std::optional<LRESULT> handle_pane_control_message(Pane& chrome, UINT message,
-                                                   WPARAM wparam, LPARAM lparam) {
+std::optional<LRESULT> AppState::handle_pane_control_message(
+    Pane& chrome, UINT message, WPARAM wparam, LPARAM lparam) {
+    AppState* const state = this;
     const HWND pane_window = chrome.window();
-    auto* state = reinterpret_cast<AppState*>(
-        GetWindowLongPtrW(GetParent(pane_window), GWLP_USERDATA));
-    if (state == nullptr || chrome.index() >= state->panes.size())
-        return std::nullopt;
-    if (child_message_blocked_while_closing(state->is_shutting_down(),
+    if (chrome.index() >= state->panes.size()) return std::nullopt;
+    if (panedock::app_shell::child_message_blocked_while_closing(state->is_shutting_down(),
                                             message))
         return LRESULT{0};
     if (defer_shell_reentry_mouse_message(pane_window, *state, message, wparam,
@@ -4301,7 +4207,7 @@ std::optional<LRESULT> handle_pane_control_message(Pane& chrome, UINT message,
         case WM_COMMAND: {
             if (HIWORD(wparam) != BN_CLICKED) return std::nullopt;
             const auto control =
-                decode_pane_control(static_cast<int>(LOWORD(wparam)));
+                panedock::app_shell::decode_pane_control(static_cast<int>(LOWORD(wparam)));
             if (!control.has_value()) return std::nullopt;
             const int id = static_cast<int>(LOWORD(wparam));
             if (!chrome.handle_command(id))
@@ -4326,4 +4232,4 @@ std::optional<LRESULT> handle_pane_control_message(Pane& chrome, UINT message,
     }
 }
 
-}  // namespace panedock::app_shell
+}  // namespace

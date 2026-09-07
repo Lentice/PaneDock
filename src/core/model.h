@@ -114,6 +114,21 @@ bool navigate_tab_forward(TabState& tab) noexcept;
 bool is_valid(const GroupState& group) noexcept;
 bool is_valid(const ApplicationState& application) noexcept;
 
+// The only source of persisted Group and tab identity. Both are pure so the
+// collision rules can be tested: an id that escapes into the session document
+// and collides there is unrecoverable by a later read.
+//
+// Numeric ids get max+1. An id that is not "group-<digits>" cannot be ordered,
+// so the whole allocation falls back to a millisecond timestamp plus a
+// discriminator loop that checks the actual group list.
+std::string next_group_id(const ApplicationState& application);
+
+// `candidate_index` is an in/out cursor so one caller allocating several ids
+// for the same Group does not hand out the same id twice: core::move_tab
+// requires the retained placeholder id to be free across the whole Group.
+std::string next_tab_id(const GroupState& group,
+                        std::size_t& candidate_index);
+
 bool add_group(ApplicationState& application, GroupState group);
 bool rename_group(ApplicationState& application, const std::string& group_id,
                   std::wstring name);

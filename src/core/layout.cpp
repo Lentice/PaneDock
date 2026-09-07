@@ -111,6 +111,80 @@ std::vector<PaneRect> compute_layout_rects(
     return {};
 }
 
+std::vector<SplitterRect> compute_splitter_rects(
+    std::span<const PaneRect> pane_rects, LayoutTemplate layout_template,
+    int divider_thickness) {
+    if (pane_rects.size() < pane_count(layout_template)) return {};
+    const int thickness = divider_thickness;
+    // Named for readability; every arm below is the same bar-between-panes
+    // computation the layout switch above already produced the panes for.
+    const auto vertical_bar = [thickness](int x, int y, int height,
+                                          std::size_t ratio_index) {
+        return SplitterRect{{x, y, thickness, height}, ratio_index, true};
+    };
+    const auto horizontal_bar = [thickness](int x, int y, int width,
+                                            std::size_t ratio_index) {
+        return SplitterRect{{x, y, width, thickness}, ratio_index, false};
+    };
+
+    switch (layout_template) {
+        case LayoutTemplate::single:
+            return {};
+        case LayoutTemplate::left_right: {
+            const PaneRect& a = pane_rects[0];
+            return {vertical_bar(a.x + a.width, a.y, a.height, 0)};
+        }
+        case LayoutTemplate::top_bottom: {
+            const PaneRect& a = pane_rects[0];
+            return {horizontal_bar(a.x, a.y + a.height, a.width, 0)};
+        }
+        case LayoutTemplate::three_pane: {
+            const PaneRect& a = pane_rects[0];
+            const PaneRect& b = pane_rects[1];
+            return {vertical_bar(a.x + a.width, a.y, a.height, 0),
+                    horizontal_bar(b.x, b.y + b.height, b.width, 1)};
+        }
+        case LayoutTemplate::four_pane_grid: {
+            const PaneRect& a = pane_rects[0];
+            const PaneRect& b = pane_rects[1];
+            const PaneRect& c = pane_rects[2];
+            return {vertical_bar(a.x + a.width, a.y,
+                                 c.y + c.height - a.y, 0),
+                    horizontal_bar(a.x, a.y + a.height,
+                                   b.x + b.width - a.x, 1)};
+        }
+        case LayoutTemplate::two_over_one: {
+            const PaneRect& a = pane_rects[0];
+            const PaneRect& c = pane_rects[2];
+            return {horizontal_bar(c.x, c.y - thickness, c.width, 0),
+                    vertical_bar(a.x + a.width, a.y, a.height, 1)};
+        }
+        case LayoutTemplate::one_over_two: {
+            const PaneRect& b = pane_rects[1];
+            const PaneRect& c = pane_rects[2];
+            return {horizontal_bar(b.x, b.y - thickness,
+                                   c.x + c.width - b.x, 0),
+                    vertical_bar(b.x + b.width, b.y, b.height, 1)};
+        }
+        case LayoutTemplate::two_beside_one: {
+            const PaneRect& a = pane_rects[0];
+            const PaneRect& c = pane_rects[2];
+            return {vertical_bar(c.x - thickness, c.y, c.height, 0),
+                    horizontal_bar(a.x, a.y + a.height, a.width, 1)};
+        }
+    }
+    return {};
+}
+
+std::optional<double> divider_ratio_at(int position, int size,
+                                       int divider_thickness) noexcept {
+    const int available = std::max(size, divider_thickness) - divider_thickness;
+    if (available <= 0) return std::nullopt;
+    return std::clamp(static_cast<double>(position) /
+                          static_cast<double>(available),
+                      0.0, 1.0);
+}
+
 RealizationPlan plan_realization(
     const GroupState& group, LayoutTemplate layout_template,
     std::span<const bool> currently_realized, RealizationMode mode) {

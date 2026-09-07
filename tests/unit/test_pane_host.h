@@ -7,24 +7,9 @@
 // meant three edits and the compiler named the third only after the second was
 // fixed. Every default here is inert; a test overrides the public field for
 // the one answer it is about.
-//
-// Also carries the link-time stand-in for handle_pane_control_message. That
-// handler lives in the coordinator (main.cpp), which the unit tests do not
-// link, so it answers "none of the pane's business" and no test here pumps
-// pane control messages.
 
 #include "app_shell/pane.h"
 #include "app_shell/pane_host.h"
-#include "app_shell/pane_message_dispatch.h"
-
-namespace panedock::app_shell {
-
-std::optional<LRESULT> handle_pane_control_message(Pane&, UINT, WPARAM,
-                                                   LPARAM) {
-    return std::nullopt;
-}
-
-}  // namespace panedock::app_shell
 
 namespace panedock::test {
 
@@ -57,6 +42,12 @@ class TestPaneHost : public panedock::app_shell::PaneHost {
         return {};
     }
     void pin_location(panedock::core::ShellLocation) override {}
+    // No test here pumps pane control messages, so this answers "none of the
+    // pane's business".
+    std::optional<LRESULT> handle_pane_control_message(
+        panedock::app_shell::Pane&, UINT, WPARAM, LPARAM) override {
+        return std::nullopt;
+    }
     bool location_capture_suppressed() const noexcept override {
         return suppress_location_capture;
     }

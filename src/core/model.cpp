@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cassert>
+#include <charconv>
+#include <chrono>
 #include <cmath>
+#include <string_view>
 #include <iterator>
 #include <unordered_set>
 #include <utility>
@@ -143,6 +146,68 @@ bool is_valid(const ApplicationState& application) noexcept {
                ? application.active_group_id.empty()
                : find_id(application.groups, application.active_group_id) !=
                      application.groups.end();
+}
+
+std::string next_group_id(const ApplicationState& application) {
+    constexpr std::string_view prefix = "group-";
+    std::size_t maximum = 0;
+    bool malformed_numeric_id = false;
+    for (const auto& group : application.groups) {
+        if (!group.id.starts_with(prefix)) continue;
+        std::size_t value = 0;
+        const std::string_view suffix(group.id.data() + prefix.size(),
+                                      group.id.size() - prefix.size());
+        const auto parsed = std::from_chars(
+            suffix.data(), suffix.data() + suffix.size(), value);
+        if (suffix.empty() || parsed.ec != std::errc{} ||
+            parsed.ptr != suffix.data() + suffix.size()) {
+            malformed_numeric_id = true;
+            break;
+        }
+        maximum = std::max(maximum, value);
+    }
+    const auto taken = [&application](const std::string& candidate) {
+        return std::any_of(application.groups.begin(),
+                           application.groups.end(),
+                           [&candidate](const GroupState& group) {
+                               return group.id == candidate;
+                           });
+    };
+    if (!malformed_numeric_id) {
+        std::string candidate = "group-" + std::to_string(maximum + 1);
+        // maximum + 1 wraps at SIZE_MAX, and a non-"group-" id can already
+        // own the name we computed. Both are rare; neither may return a
+        // colliding id, because add_group rejects it and the new Group is
+        // silently lost.
+        if (!taken(candidate)) return candidate;
+    }
+
+    const auto ticks = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count();
+    const std::string base = "group-" + std::to_string(ticks);
+    std::string candidate = base;
+    std::size_t discriminator = 0;
+    while (taken(candidate))
+        candidate = base + "-" + std::to_string(++discriminator);
+    return candidate;
+}
+
+std::string next_tab_id(const GroupState& group,
+                        std::size_t& candidate_index) {
+    for (;;) {
+        const std::string candidate =
+            "tab-" + std::to_string(candidate_index++);
+        const bool exists = std::any_of(
+            group.panes.begin(), group.panes.end(),
+            [&candidate](const PaneState& pane) {
+                return std::any_of(pane.tabs.begin(), pane.tabs.end(),
+                                   [&candidate](const TabState& tab) {
+                                       return tab.id == candidate;
+                                   });
+            });
+        if (!exists) return candidate;
+    }
 }
 
 bool add_group(ApplicationState& application, GroupState group) {

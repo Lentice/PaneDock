@@ -50,10 +50,14 @@ if ($startupRealizeQueue -lt 0 -or $uncleanWarning -lt 0 -or
 
 $chromeStart = $source.IndexOf('void refresh_startup_chrome(AppState& state)')
 $chromeEnd = $source.IndexOf('HRESULT realize_startup_panes(', $chromeStart)
-$realizeEnd = $source.IndexOf('std::string unique_group_id', $chromeEnd)
+# End realize_startup_panes at its own closing brace, not at whatever
+# function happens to follow it: anchoring on an unrelated neighbour's name
+# made this check fail whenever that neighbour moved.
+$realizeEnd = $source.IndexOf("`n}`n", $chromeEnd)
 if ($chromeStart -lt 0 -or $chromeEnd -lt 0 -or $realizeEnd -lt 0) {
     throw 'startup frame order check failed: startup chrome ownership missing'
 }
+$realizeEnd += 3
 $chromeBody = $source.Substring($chromeStart, $chromeEnd - $chromeStart)
 $realizeBody = $source.Substring($chromeEnd, $realizeEnd - $chromeEnd)
 if ($chromeBody -notmatch 'state\.pinned_fixed_labels\[index\]\s*=\s*display_text_for_parsing_name' -or

@@ -9,7 +9,10 @@ $ErrorActionPreference = 'Stop'
 $source = Get-Content -LiteralPath $SourcePath -Raw
 $paneSource = Get-Content -LiteralPath $PaneSourcePath -Raw
 $start = $source.IndexOf('void paint_client_background(')
-$end = $source.IndexOf('void cancel_session_save_timer(', $start)
+# End at paint_client_background's own closing brace. Anchoring on the next
+# function's name (cancel_session_save_timer, which has nothing to do with
+# painting) meant moving that unrelated function broke this check.
+$end = if ($start -lt 0) { -1 } else { $source.IndexOf("`n}`n", $start) }
 if ($start -lt 0 -or $end -lt 0) {
     throw 'pane paint ownership check failed: paint_client_background bounds missing'
 }

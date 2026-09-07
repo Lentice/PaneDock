@@ -377,9 +377,58 @@ void test_pinned_location_deduplication() {
     EXPECT(application.pinned_locations.front().known_folder_identity.empty());
 }
 
+// next_group_id / next_tab_id are the only source of persisted identity. A
+// collision here is not a UI glitch: add_group and move_tab reject a duplicate
+// id, so the new Group or tab is silently dropped, and a colliding id that
+// does reach the session document cannot be untangled by a later read.
+void test_next_group_id_never_collides() {
+    ApplicationState application;
+    application.groups = {group("group-1"), group("group-7")};
+    application.active_group_id = "group-1";
+    EXPECT(next_group_id(application) == "group-8");
+
+    // Not orderable, so the numeric path cannot be used at all.
+    application.groups.push_back(group("group-abc"));
+    const std::string fallback = next_group_id(application);
+    EXPECT(fallback.starts_with("group-"));
+    EXPECT(fallback != "group-abc");
+
+    // The computed numeric name is already taken by an id the scan skipped.
+    ApplicationState squatted;
+    squatted.groups = {group("custom"), group("group-1")};
+    squatted.active_group_id = "custom";
+    squatted.groups.push_back(group("group-2"));
+    // Two groups now claim ids the scan sees; max is 2, so "group-3" is free.
+    EXPECT(next_group_id(squatted) == "group-3");
+
+    // Every id the generator hands out must be usable by add_group.
+    ApplicationState growing;
+    for (int index = 0; index < 5; ++index) {
+        auto fresh = group(next_group_id(growing));
+        EXPECT(add_group(growing, std::move(fresh)));
+    }
+    EXPECT(growing.groups.size() == 5);
+    EXPECT(is_valid(growing));
+}
+
+void test_next_tab_id_skips_taken_ids_across_panes() {
+    GroupState value = group("group-1", LayoutTemplate::left_right);
+    value.panes[0] = pane("pane-0", {tab("tab-0"), tab("tab-2")});
+    value.panes[1] = pane("pane-1", {tab("tab-1")});
+
+    std::size_t cursor = 0;
+    EXPECT(next_tab_id(value, cursor) == "tab-3");
+    // The cursor advances, so a caller allocating two ids for one Group (the
+    // move_tab placeholder case) cannot be handed the same id twice.
+    EXPECT(next_tab_id(value, cursor) == "tab-4");
+    EXPECT(cursor == 5);
+}
+
 }  // namespace
 
 int main() {
+    test_next_group_id_never_collides();
+    test_next_tab_id_skips_taken_ids_across_panes();
     test_layout_metadata();
     test_invariants_reject_deliberate_breakage();
     test_tab_navigation_history();

@@ -1,6 +1,5 @@
 #include "app_shell/pane.h"
 
-#include "app_shell/pane_message_dispatch.h"
 #include "app_shell/pane_host.h"
 #include "app_shell/window_helpers.h"
 
@@ -406,7 +405,8 @@ LRESULT CALLBACK pane_window_proc(HWND window, UINT message, WPARAM wparam,
     case WM_MEASUREITEM: {
         // PD-189: this pane's controls are handled here, not forwarded.
         if (pane == nullptr) break;
-        const auto handled = handle_pane_control_message(
+        if (pane->pane_host() == nullptr) break;
+        const auto handled = pane->pane_host()->handle_pane_control_message(
             *pane, message, wparam, lparam);
         if (handled.has_value()) return *handled;
         break;

@@ -45,9 +45,10 @@ constexpr int kPaneFooterHorizontalInset = 4;
 
 constexpr int kNavigationButtonCount = 6;
 
-// Matches app_shell::scaled_value, including its floor of 1: a zero-valued
-// constant such as kNavigationButtonOffsetX scales to 1, not 0, and the layout
-// has always been authored against that.
+// The one DPI scaling rule in app_shell; app_shell::scaled_value is a thin
+// HWND-reading wrapper over it. The floor of 1 is load-bearing: a zero-valued
+// constant such as kNavigationButtonOffsetX scales to 1, not 0, and the
+// layout has always been authored against that.
 inline int scale_for_dpi(int value, UINT dpi) noexcept {
     return (std::max)(1, MulDiv(value, static_cast<int>(dpi), 96));
 }

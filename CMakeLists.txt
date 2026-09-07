@@ -55,15 +55,30 @@ target_compile_definitions(panedock_shell_core PRIVATE
 )
 target_link_libraries(panedock_shell_core PRIVATE shell32 ole32 uuid)
 panedock_set_warnings(panedock_shell_core)
+# Generic Win32 window helpers. Its own library because both app_shell and
+# explorer_host use it: it used to be compiled into panedock_explorer_host,
+# which made an app_shell file part of a lower layer's target and left the
+# library boundary saying something the build did not do.
+add_library(panedock_window_helpers STATIC
+    src/app_shell/window_helpers.h
+    src/app_shell/window_helpers.cpp
+)
+target_include_directories(panedock_window_helpers PUBLIC src)
+target_compile_definitions(panedock_window_helpers PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
+)
+target_link_libraries(panedock_window_helpers PUBLIC user32)
+panedock_set_warnings(panedock_window_helpers)
+
 add_library(panedock_explorer_host STATIC
     src/explorer_host/explorer_host.cpp
     src/explorer_host/pane_error_overlay.cpp
-    src/app_shell/window_helpers.cpp
 )
 target_include_directories(panedock_explorer_host PUBLIC src)
 target_compile_definitions(panedock_explorer_host PRIVATE
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
 )
+target_link_libraries(panedock_explorer_host PUBLIC panedock_window_helpers)
 target_link_libraries(panedock_explorer_host PRIVATE
     panedock_shell_core comctl32 ole32 propsys shell32 shlwapi user32 uuid
 )

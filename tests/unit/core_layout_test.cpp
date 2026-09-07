@@ -106,9 +106,69 @@ void test_mismatched_ratio_count_uses_defaults() {
            compute_layout_rects(1000, 800, LayoutTemplate::three_pane, {0.5, 0.5}));
 }
 
+// A splitter must sit exactly in the gap between panes: divider-thick, not
+// overlapping any pane, one per divider ratio. This is the property that
+// silently breaks when a new LayoutTemplate is added and its arm of
+// compute_splitter_rects is copied from the wrong neighbour.
+void test_splitters_fill_the_gaps_between_panes() {
+    constexpr LayoutTemplate layouts[]{
+        LayoutTemplate::single,         LayoutTemplate::left_right,
+        LayoutTemplate::top_bottom,     LayoutTemplate::three_pane,
+        LayoutTemplate::four_pane_grid, LayoutTemplate::two_over_one,
+        LayoutTemplate::one_over_two,   LayoutTemplate::two_beside_one};
+
+    for (const LayoutTemplate layout : layouts) {
+        const auto panes = compute_layout_rects(1000, 800, layout, {0.4, 0.6});
+        const auto bars = compute_splitter_rects(panes, layout,
+                                                 kDividerThickness);
+        EXPECT(bars.size() == divider_ratio_count(layout));
+        for (const auto& bar : bars) {
+            EXPECT(bar.ratio_index < divider_ratio_count(layout));
+            EXPECT(bar.vertical ? bar.rect.width == kDividerThickness
+                                : bar.rect.height == kDividerThickness);
+            // A zero-extent bar is undraggable, and a bar overlapping a pane
+            // steals that pane's mouse input.
+            EXPECT(bar.rect.width > 0 && bar.rect.height > 0);
+            for (const auto& pane : panes) {
+                const bool overlaps =
+                    bar.rect.x < pane.x + pane.width &&
+                    pane.x < bar.rect.x + bar.rect.width &&
+                    bar.rect.y < pane.y + pane.height &&
+                    pane.y < bar.rect.y + bar.rect.height;
+                EXPECT(!overlaps);
+            }
+        }
+    }
+}
+
+void test_splitters_reject_too_few_pane_rects() {
+    const std::vector<PaneRect> one{{0, 0, 100, 100}};
+    EXPECT(compute_splitter_rects(one, LayoutTemplate::four_pane_grid,
+                                  kDividerThickness)
+               .empty());
+}
+
+// A ratio outside [0,1] or NaN is persisted into the session document and
+// then feeds compute_layout_rects on every later restore.
+void test_divider_ratio_is_clamped_and_guards_degenerate_areas() {
+    EXPECT(divider_ratio_at(250, 1004, kDividerThickness) == 0.25);
+    // Dragging past either edge pins the divider instead of inverting panes.
+    EXPECT(divider_ratio_at(-500, 1004, kDividerThickness) == 0.0);
+    EXPECT(divider_ratio_at(5000, 1004, kDividerThickness) == 1.0);
+    // An area that cannot hold the divider yields no ratio at all, so the
+    // stored one survives a drag during a collapsed layout pass.
+    EXPECT(!divider_ratio_at(10, kDividerThickness, kDividerThickness)
+                .has_value());
+    EXPECT(!divider_ratio_at(10, 0, kDividerThickness).has_value());
+    EXPECT(!divider_ratio_at(10, -50, kDividerThickness).has_value());
+}
+
 }  // namespace
 
 int main() {
+    test_divider_ratio_is_clamped_and_guards_degenerate_areas();
+    test_splitters_fill_the_gaps_between_panes();
+    test_splitters_reject_too_few_pane_rects();
     test_all_layouts_have_concrete_coordinates();
     test_dividers_leave_no_gaps_or_overlap();
     test_extreme_ratios_are_clamped();
