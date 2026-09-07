@@ -29,6 +29,21 @@ A corollary that has cost real bugs: **a check that scans source text is not a t
 
 These tests are fast, deterministic, and run in CI without a desktop session, a Shell, or installed extensions.
 
+## Pane button resize painting
+
+`ctest --test-dir build -R '^panedock_pane$' --output-on-failure` includes a
+pixel check through real BUTTON HWNDs: `WM_ERASEBKGND` must preserve the
+previous image until owner draw, and normal, hovered and disabled/focused
+owner drawing must cover the entire button (including footer hover corners).
+This prevents a separate native BUTTON erase from exposing a blank frame.
+The check uses a memory DC without a live Shell view; it does not establish
+that an interactive resize is visually flicker-free.
+
+Manual follow-up: drag both splitter orientations in Four Panes, resize the
+sidebar and main window, then check navigation/folder buttons including hover
+and keyboard focus at both monitor DPIs. Buttons must retain their icons while
+moving; tabs, address bars and Shell views must continue updating smoothly.
+
 ## What is deliberately not automated
 
 `explorer_host`, `shell_core` and `file_operations` have no automated tests.

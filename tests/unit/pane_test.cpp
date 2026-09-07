@@ -129,6 +129,62 @@ void test_controls_are_children_of_the_pane_window() {
     DestroyWindow(parent);
 }
 
+void test_button_erase_preserves_pixels_until_owner_draw() {
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    EXPECT(panedock::app_shell::Pane::register_window_class(instance));
+    const HWND parent = CreateWindowExW(
+        0, L"STATIC", nullptr, 0, 0, 0, 300, 200, nullptr, nullptr,
+        instance, nullptr);
+    EXPECT(parent != nullptr);
+    panedock::app_shell::Pane pane;
+    EXPECT(pane.create(parent, 0));
+    const HDC screen = GetDC(nullptr);
+    const HDC dc = CreateCompatibleDC(screen);
+    const HBITMAP bitmap = CreateCompatibleBitmap(screen, 32, 32);
+    ReleaseDC(nullptr, screen);
+    EXPECT(dc != nullptr && bitmap != nullptr);
+    const HGDIOBJ old_bitmap = SelectObject(dc, bitmap);
+    const RECT rect{0, 0, 32, 32};
+    const COLORREF marker = RGB(255, 0, 255);
+    const HBRUSH brush = CreateSolidBrush(marker);
+    for (const HWND button : {pane.back_button(), pane.forward_button(),
+                              pane.up_button(), pane.refresh_button(),
+                              pane.view_mode_button(), pane.pinned_button(),
+                              pane.folder_context_button()}) {
+        SetWindowPos(button, nullptr, 0, 0, 32, 32,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        FillRect(dc, &rect, brush);
+        // Resize can request erasure before WM_DRAWITEM. That interval must
+        // retain the previous button image, not publish a blank background.
+        SendMessageW(button, WM_ERASEBKGND, reinterpret_cast<WPARAM>(dc), 0);
+        EXPECT(GetPixel(dc, 16, 16) == marker);
+        for (const UINT state : {0u, static_cast<UINT>(ODS_HOTLIGHT),
+                                 static_cast<UINT>(ODS_DISABLED | ODS_FOCUS)}) {
+            FillRect(dc, &rect, brush);
+            DRAWITEMSTRUCT item{};
+            item.CtlType = ODT_BUTTON;
+            item.CtlID = static_cast<UINT>(GetDlgCtrlID(button));
+            item.itemAction = ODA_DRAWENTIRE;
+            item.itemState = state;
+            item.hwndItem = button;
+            item.hDC = dc;
+            item.rcItem = rect;
+            EXPECT(pane.draw_control(item));
+            bool fully_painted = true;
+            for (int y = 0; y < 32; ++y)
+                for (int x = 0; x < 32; ++x)
+                    fully_painted &= GetPixel(dc, x, y) != marker;
+            EXPECT(fully_painted);
+        }
+    }
+    DeleteObject(brush);
+    SelectObject(dc, old_bitmap);
+    DeleteObject(bitmap);
+    DeleteDC(dc);
+    pane.destroy();
+    DestroyWindow(parent);
+}
+
 void test_active_tab_follows_the_bound_pane_state() {
     panedock::app_shell::Pane pane;
     EXPECT(pane.active_tab() == nullptr);
@@ -437,6 +493,7 @@ void test_tab_paint_stops_at_the_shortest_of_visuals_model_and_rects() {
 } // namespace
 
 int main() {
+    test_button_erase_preserves_pixels_until_owner_draw();
     test_tab_commands_schedule_only_successful_changes();
     test_replacement_navigation_does_not_inherit_history_suppression();
     test_pane_without_host_is_constructible();

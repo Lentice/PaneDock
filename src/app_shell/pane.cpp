@@ -175,6 +175,13 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
     const COLORREF normal_background =
         blend_with_footer ? kStatusBarBackground : RGB(255, 255, 255);
     if (blend_with_footer && hovered) {
+        // Erasure is suppressed, so the rounded hover surface must also
+        // supply its surrounding footer pixels.
+        const COLORREF old_brush_color =
+            SetDCBrushColor(item.hDC, normal_background);
+        FillRect(item.hDC, &item.rcItem,
+                 static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+        SetDCBrushColor(item.hDC, old_brush_color);
         HBRUSH background = CreateSolidBrush(kFooterActionHoverBackground);
         HPEN border = CreatePen(PS_SOLID,
                                 scaled_value(item.hwndItem, 1),
@@ -368,6 +375,17 @@ LRESULT CALLBACK address_edit_proc(HWND window, UINT message, WPARAM wparam,
 void set_font(HWND window, HFONT font) noexcept {
     if (window != nullptr && font != nullptr)
         SendMessageW(window, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+}
+
+LRESULT CALLBACK navigation_button_proc(HWND window, UINT message,
+                                        WPARAM wparam, LPARAM lparam,
+                                        UINT_PTR subclass_id, DWORD_PTR) {
+    // Owner draw supplies the background. Native BUTTON erasure otherwise
+    // exposes a blank frame during resize, before WM_DRAWITEM arrives.
+    if (message == WM_ERASEBKGND) return 1;
+    if (message == WM_NCDESTROY)
+        RemoveWindowSubclass(window, navigation_button_proc, subclass_id);
+    return DefSubclassProc(window, message, wparam, lparam);
 }
 
 void destroy_window(HWND &window) noexcept {
@@ -717,6 +735,14 @@ bool Pane::create(HWND parent, int pane_index) noexcept {
                            reinterpret_cast<DWORD_PTR>(this))) {
         destroy();
         return false;
+    }
+    for (HWND button : {back_button_, forward_button_, up_button_,
+                        refresh_button_, view_mode_button_, pinned_button_,
+                        folder_context_button_}) {
+        if (!SetWindowSubclass(button, navigation_button_proc, 0, 0)) {
+            destroy();
+            return false;
+        }
     }
     return true;
 }
@@ -1311,6 +1337,25 @@ void Pane::apply_container_region(int width, int height, int radius) noexcept {
     // after the geometry commits have completed.
     if (SetWindowRgn(container, region, FALSE) == 0) {
         DeleteObject(region);
+    }
+}
+
+void Pane::repaint_chrome() noexcept {
+    if (window_ == nullptr) return;
+    // Finish chrome painting before the next drag update, without a separate
+    // child-background erase. Shell painting stays on its own schedule.
+    RedrawWindow(window_, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_NOCHILDREN |
+                     RDW_UPDATENOW);
+    const std::array<HWND, 10> chrome{
+        tab_strip(),      address_bar_,      status_bar_,
+        back_button_,     forward_button_,   up_button_,
+        refresh_button_,  view_mode_button_, pinned_button_,
+        folder_context_button_};
+    for (HWND child : chrome) {
+        if (child != nullptr)
+            RedrawWindow(child, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_NOERASE | RDW_UPDATENOW);
     }
 }
 

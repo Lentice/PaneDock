@@ -128,6 +128,7 @@ class Pane final {
     void set_paint_geometry(const RECT &navigation_background,
                             const RECT &pane_window_rect, UINT dpi) noexcept;
     void paint_background(HDC target) noexcept;
+    void repaint_chrome() noexcept;
     void set_visible(bool visible) noexcept;
     void apply_font(HFONT font) noexcept;
 

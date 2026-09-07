@@ -1816,8 +1816,7 @@ HRESULT apply_layout(HWND window, AppState& state,
             RedrawWindow(state.panes[index].explorer_container(),
                          nullptr, nullptr,
                          RDW_INVALIDATE | RDW_NOERASE | RDW_ALLCHILDREN);
-            RedrawWindow(state.panes[index].window(), nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_ERASE | RDW_NOCHILDREN);
+            state.panes[index].repaint_chrome();
         }
         if (index >= panedock::core::pane_count(group.layout_template))
             state.panes[index].laid_out_pane_rect().reset();
