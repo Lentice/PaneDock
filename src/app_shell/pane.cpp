@@ -22,15 +22,12 @@ constexpr std::array<const wchar_t *, 8> kViewModeLabels{
     L"Extra large icons", L"Large icons", L"Medium icons", L"Small icons",
     L"List", L"Details", L"Tiles", L"Content"};
 
-constexpr int kSpaceTight = 4;
 constexpr int kSpaceSnug = 8;
 constexpr int kSpaceBase = 12;
-constexpr int kTabAddButtonVerticalInset = 3;
 constexpr int kTabCornerRadius = 6;
 constexpr COLORREF kFooterActionHoverBackground = RGB(236, 240, 244);
 constexpr COLORREF kFooterActionBorder = RGB(226, 232, 240);
 constexpr COLORREF kFooterActionGlyph = RGB(31, 41, 55);
-constexpr int kStatusBarHeight = 24;
 constexpr int kNavigationGlyphSize = 16;
 constexpr COLORREF kStatusBarBackground = RGB(249, 250, 251);
 constexpr std::array<wchar_t, 7> kNavigationGlyphs{
@@ -257,8 +254,8 @@ void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi) noexcept {
     // full-width separator and keep status text from running underneath it.
     const int footer_action_reserve = scaled_value(
         item.hwndItem,
-        kStatusBarHeight - 2 * kTabAddButtonVerticalInset +
-            2 * kSpaceTight);
+        kStatusBarHeight - 2 * kPaneFooterVerticalInset +
+            2 * kPaneFooterHorizontalInset);
     const int text_right = std::max(
         text_left, static_cast<int>(rect.right) - text_inset -
                        footer_action_reserve);

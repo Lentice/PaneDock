@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "app_shell/pane_chrome_geometry.h"
 #include "app_shell/pane_control_id.h"
 #include "app_shell/pane_tab_strip.h"
 #include "core/model.h"
@@ -27,25 +28,11 @@ namespace panedock::app_shell {
 
 class PaneHost;
 
-constexpr int kPaneCardOutset = 2;
-constexpr int kPaneCardShadowOffset = 2;
-
-inline int pane_card_outset(UINT dpi) noexcept {
-    return (std::max)(1, MulDiv(kPaneCardOutset, static_cast<int>(dpi), 96));
-}
-
-// Shared by the pane card and the PD-040 explorer-container clip.
-inline int pane_card_radius(UINT dpi) noexcept {
-    return (std::max)(1, MulDiv(10, static_cast<int>(dpi), 96));
-}
+// The pane card metrics and the whole pane-chrome rect computation live in
+// pane_chrome_geometry.h, which is pure and unit-tested.
 
 inline RECT to_win32_rect(const TabStripRect &rect) noexcept {
     return {rect.left, rect.top, rect.right, rect.bottom};
-}
-
-inline int pane_card_shadow_offset(UINT dpi) noexcept {
-    return (std::max)(1,
-                      MulDiv(kPaneCardShadowOffset, static_cast<int>(dpi), 96));
 }
 
 // A stable identity slot owning its Shell view, child windows and tab strip.

@@ -12,6 +12,7 @@ set(PANEDOCK_TESTS
     "tab_overflow|unit/tab_overflow_test.cpp|"
     "window_placement|unit/window_placement_test.cpp|"
     "window_helpers|unit/window_helpers_test.cpp|"
+    "pane_chrome_geometry|unit/pane_chrome_geometry_test.cpp|"
     "core_model|unit/core_model_test.cpp|panedock_core"
     "core_layout|unit/core_layout_test.cpp|panedock_core"
     "core_realization_plan|unit/core_realization_plan_test.cpp|panedock_core"

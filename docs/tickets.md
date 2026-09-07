@@ -239,6 +239,7 @@
 | PD-199 | 導覽請求身分與分頁身分的正確性修正 | 7 | `done` | PD-170, PD-183, PD-196 | [PD-199](tickets/PD-199-navigation-request-identity-and-tab-identity-fixes.md) |
 | PD-200 | group list 重排手勢收進 `sidebar::Sidebar` | 7 | `done` | PD-057, PD-196 | [PD-200](tickets/PD-200-sidebar-owns-the-group-reorder-gesture.md) |
 | PD-201 | session 存檔時機收進 `app_shell::SessionWriter` | 7 | `done` | PD-091, PD-200 | [PD-201](tickets/PD-201-session-writer-owns-persistence-timing.md) |
+| PD-202 | pane chrome 幾何抽為純函式並補測試 | 7 | `done` | PD-197, PD-201 | [PD-202](tickets/PD-202-pane-chrome-geometry-is-a-pure-tested-unit.md) |
 
 
 ## Dependency lanes
@@ -1011,3 +1012,19 @@ PD-201 留下的 `SessionWriter` 是本輪最深的模組，其「寫入失敗�
 改寫為實際適用的規則：**能不經由活的 Shell view、透過公開介面驅動的單元就要測**；排除的仍然是行為由 `shell32` 定義的部分（`explorer_host`、`file_operations` 的 Shell 路徑、UI 自動化），兩個既有的「已否決方向」原文保留。同時寫入一條本輪三次修正共同的教訓：**掃描原始碼字串的檢查不是測試**——行為不變的重寫會讓它失敗，真正的順序錯誤卻會讓它通過；只有在沒有真測試可用時（`main.cpp`）才保留，單元一旦可測就刪掉對應的來源掃描。
 
 **驗證**：LLVM-MinGW Release configure/build 乾淨，`ctest --test-dir build --output-on-failure` **26/26 通過**。`git diff --check` 通過。
+
+### 2026-09-07 — 重新評估三處「評估後不拆」：版面幾何推翻一半，開 PD-202
+
+使用者要求重新評估 PD-200／PD-201 交接區列的三處。結論：**一項推翻，兩項理由仍成立**。
+
+| 項目 | 重評結論 |
+|---|---|
+| 版面幾何 | **推翻，但換一個未評估過的形狀**。原拒絕的是把「擺放」搬進 `Pane`（8 個裸 `HWND` accessor），那個仍不做。未被評估過的是抽出**純矩形計算**、擺放與 `DeferWindowPos` 批次原地不動。新證據：原理由第三條腿「無法自動化驗證」在 2026-09-07 已失效——`docs/testing.md` 那份失真的 core-only 宣告已改寫，`app_shell` 的純 header 明列為適用範圍。已開 [PD-202](tickets/PD-202-pane-chrome-geometry-is-a-pure-tested-unit.md) 並完成。 |
+| Group CRUD 協調 | 理由成立，不重開。仍呼叫 `apply_layout`／`rebind_panes`／`capture_locations`／`ShellCallScope`／`panes[].host().focus()`；抽型別必須吃下整個 `AppState`，介面不會變窄。無新證據。 |
+| `pane.cpp` 整體 | 理由成立，不重開。開頭的 owner-draw free function 仍是搬檔案而非深化模組。無新證據。 |
+
+**PD-202 的實質收益不在行數**（4,452 → 4,329）：那段約十二個只在小 pane 尺寸生效的 `min`／`max` 夾制先前**完全沒有測試碰得到**，而 PD-107／PD-152／PD-154 三次實機回報都屬於這一類。現在有 9 個案例、並以三個變造反證過。
+
+**順帶結清的重複**：`docs/tickets.md:874` 曾宣稱「真正共用的 `scaled_value` 已移至 `window_helpers`」，實際上 `pane_tab_strip.cpp:55` 仍有一份逐字複本（tab strip 用途，本次未動）。而 `pane.cpp` 的 status bar 文字保留區用自己的 `kStatusBarHeight`／`kTabAddButtonVerticalInset`／`kSpaceTight` 重算 footer action 尺寸——同一份知識兩處維護，已改為共用新 header 的常數。
+
+**明確不重開**：`layout_rects`／`splitters`／`apply_layout` 的擺放與批次。PD-202 抽走的是**不依賴**那些理由的那一半；`DeferWindowPos` parent-scoped 契約、PD-155 atomic live resize 與 PD-187 的風險都未改變。

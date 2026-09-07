@@ -108,15 +108,10 @@ constexpr int kSpaceBase = 12;
 constexpr int kSpaceRoomy = 16;
 constexpr int kPaneDividerThickness = 8;
 constexpr int kSidebarHeadingHeight = 20;
-constexpr int kTabStripHeight = 31;
 using panedock::app_shell::kTabStripSelectionMessage;
-// Existing footer metrics/colors also used by the tab add affordance.
-constexpr int kTabAddButtonVerticalInset = 3;
-constexpr int kNavigationBarHeight = 28;
-constexpr int kStatusBarHeight = 24;
-constexpr int kNavigationButtonWidth = 32;
-constexpr int kNavigationButtonOffsetX = 0;
-constexpr int kNavigationButtonOffsetY = 2;
+// The pane chrome metrics (tab strip, navigation row, address bar, footer)
+// live in app_shell/pane_chrome_geometry.h with the rect computation that
+// consumes them.
 // PD-031: rounded light-gray pill drawn behind the address bar EDIT to fake
 // a rounded input box (see docs/tickets/PD-031-*.md decision 2). Radius is
 // smaller than the design mock's 6px .location radius because the fixed
@@ -124,7 +119,6 @@ constexpr int kNavigationButtonOffsetY = 2;
 // inset that must exceed the radius on every side while still leaving the
 // EDIT control tall enough to show text.
 constexpr int kAddressBarBackgroundRadius = 4;
-constexpr int kAddressBarInset = 6;
 // View-mode popup commands: eight IDs per pane, 360-391, kept separate from
 // the navigation buttons and layout commands above.
 constexpr std::size_t kViewModeOptionCount =
@@ -858,47 +852,6 @@ void position_window(WindowPositionBatch* batch, HWND window,
                        rect.right - rect.left, rect.bottom - rect.top, flags);
 }
 
-// PD-031: the navigation row's geometry (tab-strip height, back/forward/up
-// button width, and the rect the address bar background/EDIT occupy) is
-// used by apply_layout to position the controls and to give the pane its
-// pane-local address-background paint rectangle.
-struct NavigationGeometry {
-    int navigation_top;
-    int navigation_height;
-    int button_width;
-    // Full-width rect the address bar occupies before EDIT is inset into it;
-    // this is also the rect the rounded background pill is painted into.
-    RECT address_background;
-};
-
-NavigationGeometry navigation_geometry(HWND window, RECT pane_rect) noexcept {
-    const int strip_height = scaled_value(window, kTabStripHeight);
-    const int actual_strip_height = std::min(
-        strip_height, static_cast<int>(pane_rect.bottom - pane_rect.top));
-    const int navigation_top = pane_rect.top + actual_strip_height;
-    const int navigation_height = std::min(
-        scaled_value(window, kNavigationBarHeight),
-        std::max(0, static_cast<int>(pane_rect.bottom) - navigation_top));
-    const int pane_width = pane_rect.right - pane_rect.left;
-    const int button_width = std::min(
-        scaled_value(window, kNavigationButtonWidth), pane_width / 7);
-    const int button_offset_x = scaled_value(window, kNavigationButtonOffsetX);
-    const int address_left = pane_rect.left + button_width * 6 + button_offset_x;
-    const RECT address_background{address_left, navigation_top,
-                                  pane_rect.right,
-                                  navigation_top + navigation_height};
-    return {navigation_top, navigation_height, button_width,
-            address_background};
-}
-
-// Insets a rect on all four sides by `inset`, clamping so it never inverts.
-RECT inset_rect(RECT rect, int inset) noexcept {
-    rect.left = std::min(rect.right, rect.left + inset);
-    rect.top = std::min(rect.bottom, rect.top + inset);
-    rect.right = std::max(rect.left, rect.right - inset);
-    rect.bottom = std::max(rect.top, rect.bottom - inset);
-    return rect;
-}
 
 void draw_layout_glyph(HDC dc, RECT rect, std::size_t index,
                        COLORREF color) noexcept {
@@ -1720,123 +1673,45 @@ HRESULT apply_layout(HWND window, AppState& state,
             pane_rect = to_win32_rect(rects[index]);
             pane_geometry_changed = chrome.set_rect(pane_rect);
             changed_panes[index] = pane_geometry_changed;
-            const int pane_outset = panedock::app_shell::pane_card_outset(dpi);
-            const int shadow_offset =
-                panedock::app_shell::pane_card_shadow_offset(dpi);
-            const RECT pane_window_rect{
-                pane_rect.left - pane_outset, pane_rect.top - pane_outset,
-                pane_rect.right + pane_outset + shadow_offset,
-                pane_rect.bottom + pane_outset + shadow_offset};
-            const auto pane_local = [pane_window_rect](RECT rect) noexcept {
-                OffsetRect(&rect, -pane_window_rect.left,
-                           -pane_window_rect.top);
-                return rect;
-            };
+            const auto chrome_rects =
+                panedock::app_shell::pane_chrome_rects(pane_rect, dpi);
+            const auto pane_local =
+                [origin = chrome_rects.pane_window](RECT rect) noexcept {
+                    OffsetRect(&rect, -origin.left, -origin.top);
+                    return rect;
+                };
             if (pane_geometry_changed) {
                 position_window(&main_positions, chrome.window(),
-                                pane_window_rect,
+                                chrome_rects.pane_window,
                                 SWP_NOZORDER | SWP_NOACTIVATE);
                 pane_positions[index].emplace();
-            }
-            const int strip_height = scaled_value(window, kTabStripHeight);
-            const int actual_strip_height =
-                std::min(strip_height, static_cast<int>(pane_rect.bottom -
-                                                        pane_rect.top));
-            if (pane_geometry_changed) {
-                position_window(
-                    &*pane_positions[index], chrome.tab_strip(),
-                    pane_local(RECT{pane_rect.left, pane_rect.top,
-                                    pane_rect.right,
-                                    pane_rect.top + actual_strip_height}),
-                    SWP_NOZORDER | SWP_NOACTIVATE);
-            }
-            const NavigationGeometry geometry =
-                navigation_geometry(window, pane_rect);
-            chrome.set_paint_geometry(geometry.address_background,
-                                      pane_window_rect, dpi);
-            const int navigation_top = geometry.navigation_top;
-            const int navigation_height = geometry.navigation_height;
-            const std::array<HWND, 6> buttons{
-                chrome.back_button(), chrome.forward_button(),
-                chrome.up_button(), chrome.refresh_button(),
-                chrome.view_mode_button(), chrome.pinned_button()};
-            const int button_offset_x =
-                scaled_value(window, kNavigationButtonOffsetX);
-            const int button_offset_y =
-                scaled_value(window, kNavigationButtonOffsetY);
-            const int button_height = navigation_height - button_offset_y;
-            int x = pane_rect.left + button_offset_x;
-            for (HWND button : buttons) {
-                if (pane_geometry_changed) {
-                    position_window(
-                        &*pane_positions[index], button,
-                        pane_local(RECT{
-                            x, navigation_top + button_offset_y,
-                            x + geometry.button_width,
-                            navigation_top + button_offset_y + button_height}),
-                        SWP_NOZORDER | SWP_NOACTIVATE);
-                }
-                x += geometry.button_width;
-            }
-            // PD-031: EDIT is inset well inside the rounded background pill
-            // (drawn by draw_navigation_bar_background) so its square
-            // corners sit hidden under the pill's rounded corners — see
-            // kAddressBarInset's comment for why the inset exceeds the
-            // background's radius.
-            const RECT address_rect = inset_rect(
-                geometry.address_background,
-                scaled_value(window, kAddressBarInset));
-            if (pane_geometry_changed) {
-                position_window(&*pane_positions[index], chrome.address_bar(),
-                                pane_local(address_rect),
+                position_window(&*pane_positions[index], chrome.tab_strip(),
+                                pane_local(chrome_rects.tab_strip),
                                 SWP_NOZORDER | SWP_NOACTIVATE);
             }
-            RECT rect = pane_rect;
-            rect.top = navigation_top + navigation_height;
-            const int status_height = std::min(
-                scaled_value(window, kStatusBarHeight),
-                std::max(0, static_cast<int>(rect.bottom - rect.top)));
-            const int footer_top = static_cast<int>(rect.bottom) - status_height;
-            const int pane_width = std::max(
-                0, static_cast<int>(pane_rect.right - pane_rect.left));
-            const int footer_vertical_inset = std::min(
-                scaled_value(window, kTabAddButtonVerticalInset),
-                std::max(0, (status_height - 1) / 2));
-            const int footer_button_top = footer_top + std::max(
-                0, footer_vertical_inset - scaled_value(window, 1));
-            const int footer_button_bottom = std::max(
-                footer_button_top,
-                std::min(static_cast<int>(rect.bottom),
-                         static_cast<int>(rect.bottom) - footer_vertical_inset +
-                             scaled_value(window, 3)));
-            const int footer_horizontal_inset = std::min(
-                scaled_value(window, kSpaceTight),
-                std::max(0, (pane_width - 1) / 2));
-            const int desired_footer_button_width = std::max(
-                1, footer_button_bottom - footer_button_top);
-            const int footer_button_width = std::min(
-                desired_footer_button_width,
-                std::max(1, pane_width - 2 * footer_horizontal_inset));
-            const int footer_button_right =
-                static_cast<int>(pane_rect.right) - footer_horizontal_inset;
-            const int footer_button_left = std::max(
-                static_cast<int>(pane_rect.left) + footer_horizontal_inset,
-                static_cast<int>(footer_button_right - footer_button_width));
-            const RECT status_rect{
-                rect.left, footer_top, rect.right, rect.bottom};
-            // Keep the action inside the footer's visual bounds so its hover
-            // fill cannot cover the separator or pane card border.
-            const RECT footer_button_rect{footer_button_left,
-                                          footer_button_top,
-                                          footer_button_right,
-                                          footer_button_bottom};
+            chrome.set_paint_geometry(chrome_rects.address_background,
+                                      chrome_rects.pane_window, dpi);
             if (pane_geometry_changed) {
+                const std::array<HWND, 6> buttons{
+                    chrome.back_button(), chrome.forward_button(),
+                    chrome.up_button(), chrome.refresh_button(),
+                    chrome.view_mode_button(), chrome.pinned_button()};
+                for (std::size_t button = 0; button < buttons.size();
+                     ++button) {
+                    position_window(
+                        &*pane_positions[index], buttons[button],
+                        pane_local(chrome_rects.navigation_buttons[button]),
+                        SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+                position_window(&*pane_positions[index], chrome.address_bar(),
+                                pane_local(chrome_rects.address_bar),
+                                SWP_NOZORDER | SWP_NOACTIVATE);
                 position_window(&*pane_positions[index], chrome.status_bar(),
-                                pane_local(status_rect),
+                                pane_local(chrome_rects.status_bar),
                                 SWP_NOZORDER | SWP_NOACTIVATE);
                 position_window(&*pane_positions[index],
                                 chrome.folder_context_button(),
-                                pane_local(footer_button_rect),
+                                pane_local(chrome_rects.folder_context_button),
                                 SWP_NOZORDER | SWP_NOACTIVATE);
             }
             chrome.set_visible(true);
@@ -1846,24 +1721,24 @@ HRESULT apply_layout(HWND window, AppState& state,
             SetWindowPos(chrome.folder_context_button(), HWND_TOP, 0, 0,
                          0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             EnableWindow(chrome.folder_context_button(), chrome.realized());
-            rect.bottom -= status_height;
             // PD-040: the container is the real parent HWND passed to
-            // ExplorerHost::initialize now, positioned/sized at `rect` in
-            // main-window coordinates; the browser itself is initialized
-            // with a container-local, zero-based rect. SetWindowRgn on the
-            // container (not on IExplorerBrowser's own HWND) is what gives
-            // the real Shell view rounded corners that line up with
-            // draw_pane_card's background — see pane_card_radius/
-            // apply_container_region.
-            const int container_width = rect.right - rect.left;
-            const int container_height = rect.bottom - rect.top;
+            // ExplorerHost::initialize now, positioned/sized in main-window
+            // coordinates; the browser itself is initialized with a
+            // container-local, zero-based rect. SetWindowRgn on the container
+            // (not on IExplorerBrowser's own HWND) is what gives the real
+            // Shell view rounded corners that line up with draw_pane_card's
+            // background - see pane_card_radius/apply_container_region.
+            const RECT& container_rect = chrome_rects.explorer_container;
             if (pane_geometry_changed) {
                 position_window(&*pane_positions[index],
-                                chrome.explorer_container(), pane_local(rect),
+                                chrome.explorer_container(),
+                                pane_local(container_rect),
                                 SWP_NOZORDER | SWP_NOACTIVATE);
-                container_rects[index] = pane_local(rect);
+                container_rects[index] = pane_local(container_rect);
             }
-            const RECT local_rect{0, 0, container_width, container_height};
+            const RECT local_rect{0, 0,
+                                  container_rect.right - container_rect.left,
+                                  container_rect.bottom - container_rect.top};
             if (plan_contains(realization_plan.realize, index)) {
                 chrome.host().set_shell_call_callback(
                     &state, app_shell_call_state_changed);
