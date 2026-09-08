@@ -291,6 +291,8 @@ notification，不 disable 主視窗與 pane。deferred realize 可在 notificat
 - 位置:`%LOCALAPPDATA%\PaneDock`
 - 格式:版本化 JSON,含 schema version,自首個版本即支援遷移
 - 寫入:原子替換(temp 檔加 rename),保留上一版為備份
+- 寫入時機:模型變更只標記 dirty 並重設 60 秒的 debounce timer,閒置滿 60 秒才落盤。切換 tab／pane／Group 這類廉價變更因此不會每次寫檔;為避免持續操作把 timer 無限往後推,debounce 有 10 分鐘上限,超過後讓已武裝的 timer 直接燒完。以上皆為約略值,允許誤差。
+  關閉 AP 時若仍為 dirty 一定強制寫入(見 9.4),因此崩潰／斷電最多遺失最後一段閒置窗內的切換狀態,正常關閉不會遺失。寫入失敗保留 dirty 並重試。
 - **不得寫入 PIDL 或 COM 指標。** 持久化的 identity 為 parsing name ＋ known-folder identity ＋ fallback path。display name 永不作為 identity。
 
 ## 11 錯誤處理
