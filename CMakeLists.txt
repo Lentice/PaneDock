@@ -34,10 +34,12 @@ endfunction()
 # dependency here is what enforces it at link time.
 # ---------------------------------------------------------------------------
 add_library(panedock_core STATIC
+    src/core/key_routing.cpp
     src/core/layout.cpp
     src/core/model.cpp
     src/core/session.cpp
     src/core/shutdown.cpp
+    src/core/tab_drag.cpp
 )
 target_include_directories(panedock_core PUBLIC src)
 panedock_set_warnings(panedock_core)

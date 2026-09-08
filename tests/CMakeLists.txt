@@ -19,6 +19,8 @@ set(PANEDOCK_TESTS
     "core_session|unit/core_session_test.cpp|panedock_core"
     "core_pane_address_stability|unit/core_pane_address_stability_test.cpp|panedock_core"
     "core_navigation|unit/core_navigation_test.cpp|panedock_core"
+    "core_key_routing|unit/core_key_routing_test.cpp|panedock_core"
+    "core_tab_drag|unit/core_tab_drag_test.cpp|panedock_core"
     "core_shutdown|unit/core_shutdown_test.cpp|panedock_core"
     "session_writer|unit/session_writer_test.cpp|panedock_session_writer panedock_core"
     "pane|unit/pane_test.cpp|panedock_pane panedock_explorer_host panedock_core"
@@ -46,11 +48,6 @@ foreach(entry IN LISTS PANEDOCK_TESTS)
 endforeach()
 
 if(WIN32)
-    add_test(
-        NAME panedock_tab_pane_priority
-        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
-                "${CMAKE_CURRENT_SOURCE_DIR}/release/tab_pane_priority_check.ps1"
-                -SourcePath "${PROJECT_SOURCE_DIR}/src/app_shell/main.cpp")
     add_test(
         NAME panedock_shutdown_state
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File

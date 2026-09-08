@@ -43,11 +43,13 @@
 #include "app_shell/transfer_close_dialog.h"
 #include "app_shell/window_helpers.h"
 #include "app_shell/window_placement.h"
+#include "core/key_routing.h"
 #include "core/layout.h"
 #include "core/model.h"
 #include "core/navigation.h"
 #include "core/session.h"
 #include "core/shutdown.h"
+#include "core/tab_drag.h"
 #include "explorer_host/explorer_host.h"
 #include "file_operations/file_operations.h"
 #include "resource.h"
@@ -61,6 +63,17 @@ namespace {
 
 using Pane = panedock::app_shell::Pane;
 using panedock::app_shell::scaled_value;
+
+// core takes no Windows header, so core::key_routing.h restates the
+// virtual-key codes its rules name. This is the seam between the two
+// definitions: if a VK_* value ever disagrees, the build fails here rather
+// than the routing silently going to the wrong key.
+static_assert(panedock::core::kVirtualKeyBack == VK_BACK);
+static_assert(panedock::core::kVirtualKeyTab == VK_TAB);
+static_assert(panedock::core::kVirtualKeyLeft == VK_LEFT);
+static_assert(panedock::core::kVirtualKeyRight == VK_RIGHT);
+static_assert(panedock::core::kVirtualKeyF2 == VK_F2);
+static_assert(panedock::core::kVirtualKeyF6 == VK_F6);
 
 constexpr wchar_t kWindowClassName[] = L"PaneDockMainWindow";
 constexpr wchar_t kSingleInstanceMutexName[] =
@@ -475,14 +488,12 @@ struct AppState : public panedock::app_shell::PaneHost {
     bool layout_pending{};
     bool layout_message_queued{};
     struct TabDrag final {
+        // The window and the tab identity are the coordinator's; what the
+        // gesture *means* lives in core::TabDragState, which is pure and
+        // unit-tested (core::update_tab_drag / core::resolve_tab_drop).
         HWND strip{nullptr};
-        std::size_t pane_index{};
-        std::size_t source_index{};
         std::string tab_id;
-        POINT start{};
-        bool dragging{};
-        std::optional<std::size_t> target_pane_index;
-        std::optional<std::size_t> target_index;
+        panedock::core::TabDragState drag;
     };
     std::optional<TabDrag> tab_drag;
     panedock::sidebar::Sidebar sidebar;
@@ -2110,17 +2121,17 @@ AppState::tab_drag_layout(const Pane &pane, HWND strip, int min_width,
                           int max_width, int text_reserve) const {
     const std::size_t pane_index = pane.index();
     const bool foreign_placeholder =
-        tab_drag.has_value() && tab_drag->dragging &&
-        tab_drag->target_pane_index == pane_index &&
-        tab_drag->pane_index != pane_index &&
-        tab_drag->target_index.has_value();
+        tab_drag.has_value() && tab_drag->drag.dragging &&
+        tab_drag->drag.target_pane == pane_index &&
+        tab_drag->drag.source_pane != pane_index &&
+        tab_drag->drag.target_index.has_value();
     if (foreign_placeholder) {
         int placeholder_width = min_width;
-        if (tab_drag->pane_index < panes.size() &&
-            tab_drag->source_index <
-                panes[tab_drag->pane_index].tab_strip_ui().tab_visuals().size()) {
-            const auto &source = panes[tab_drag->pane_index]
-                                     .tab_strip_ui().tab_visuals()[tab_drag->source_index];
+        if (tab_drag->drag.source_pane < panes.size() &&
+            tab_drag->drag.source_index <
+                panes[tab_drag->drag.source_pane].tab_strip_ui().tab_visuals().size()) {
+            const auto &source = panes[tab_drag->drag.source_pane]
+                                     .tab_strip_ui().tab_visuals()[tab_drag->drag.source_index];
             SIZE size{};
             HDC measure = GetDC(strip);
             const HGDIOBJ old = measure == nullptr
@@ -2138,15 +2149,15 @@ AppState::tab_drag_layout(const Pane &pane, HWND strip, int min_width,
                 max_width);
         }
         return panedock::app_shell::TabStripDragLayout{
-            tab_drag->source_index, tab_drag->target_index, true,
+            tab_drag->drag.source_index, tab_drag->drag.target_index, true,
             placeholder_width};
     }
-    if (tab_drag.has_value() && tab_drag->dragging &&
-        tab_drag->pane_index == pane_index &&
-        !tab_drag->target_pane_index.has_value() &&
-        tab_drag->target_index.has_value()) {
+    if (tab_drag.has_value() && tab_drag->drag.dragging &&
+        tab_drag->drag.source_pane == pane_index &&
+        !tab_drag->drag.target_pane.has_value() &&
+        tab_drag->drag.target_index.has_value()) {
         return panedock::app_shell::TabStripDragLayout{
-            tab_drag->source_index, tab_drag->target_index, false, 0};
+            tab_drag->drag.source_index, tab_drag->drag.target_index, false, 0};
     }
     return std::nullopt;
 }
@@ -2344,8 +2355,8 @@ std::optional<std::size_t> tab_item_at_point(
 void cancel_tab_drag(AppState& state, HWND strip) noexcept {
     if (!state.tab_drag.has_value() || state.tab_drag->strip != strip)
         return;
-    const std::size_t source = state.tab_drag->pane_index;
-    const auto target = state.tab_drag->target_pane_index;
+    const std::size_t source = state.tab_drag->drag.source_pane;
+    const auto target = state.tab_drag->drag.target_pane;
     state.tab_drag.reset();
     state.panes[source].tab_strip_ui().apply_item_size();
     if (target.has_value() && *target != source)
@@ -2359,57 +2370,55 @@ void finish_tab_drag(AppState& state, HWND strip) {
         return;
     AppState::TabDrag drag = std::move(*state.tab_drag);
     state.tab_drag.reset();
-    state.panes[drag.pane_index].tab_strip_ui().apply_item_size();
-    if (drag.target_pane_index.has_value())
-        state.panes[*drag.target_pane_index].tab_strip_ui().apply_item_size();
+    state.panes[drag.drag.source_pane].tab_strip_ui().apply_item_size();
+    if (drag.drag.target_pane.has_value())
+        state.panes[*drag.drag.target_pane].tab_strip_ui().apply_item_size();
     if (GetCapture() == strip) ReleaseCapture();
-    if (!drag.dragging || !drag.target_index.has_value() ||
-        !has_active_group(state))
-        return;
+    if (!has_active_group(state)) return;
     auto& group = active_group(state);
-    if (drag.pane_index >= group.panes.size()) return;
-    const std::size_t target_pane =
-        drag.target_pane_index.value_or(drag.pane_index);
-    if (target_pane >= group.panes.size()) return;
-    if (target_pane == drag.pane_index) {
-        if (*drag.target_index == drag.source_index) return;
+    const auto drop =
+        panedock::core::resolve_tab_drop(drag.drag, group.panes.size());
+    if (drop.effect == panedock::core::TabDragEffect::none) return;
+
+    if (drop.effect == panedock::core::TabDragEffect::reorder) {
         if (!panedock::core::reorder_tab(
-                *state.panes[drag.pane_index].pane_state(),
-                                         drag.tab_id, *drag.target_index))
+                *state.panes[drop.source_pane].pane_state(), drag.tab_id,
+                drop.target_index))
             return;
-        state.panes[drag.pane_index].tab_strip_ui().refresh();
+        state.panes[drop.source_pane].tab_strip_ui().refresh();
         schedule_session_save(state);
         return;
     }
 
-    state.panes[drag.pane_index].capture_location();
-    state.panes[target_pane].capture_location();
-    auto& source = group.panes[drag.pane_index];
-    auto& target = group.panes[target_pane];
+    state.panes[drop.source_pane].capture_location();
+    state.panes[drop.target_pane].capture_location();
+    auto& source = group.panes[drop.source_pane];
+    auto& target = group.panes[drop.target_pane];
     const bool source_active = source.active_tab_id == drag.tab_id;
     // Reserved before the move: a single-tab source keeps a placeholder, and
     // it needs an id that is free across the whole group.
     const std::string retained_tab_id = state.make_unique_tab_id();
     if (!panedock::core::move_tab(
-            source, target, drag.tab_id, *drag.target_index,
+            source, target, drag.tab_id, drop.target_index,
             default_shell_location(), retained_tab_id)) return;
-    if (source_active && state.panes[drag.pane_index].realized()) {
+    if (source_active && state.panes[drop.source_pane].realized()) {
         {
             ShellCallScope shell_call(state);
-            state.panes[drag.pane_index].navigate_to(
+            state.panes[drop.source_pane].navigate_to(
                 active_tab(source).location);
         }
         if (state.is_shutting_down()) return;
     }
-    if (state.panes[target_pane].realized()) {
+    if (state.panes[drop.target_pane].realized()) {
         {
             ShellCallScope shell_call(state);
-            state.panes[target_pane].navigate_to(active_tab(target).location);
+            state.panes[drop.target_pane].navigate_to(
+                active_tab(target).location);
         }
         if (state.is_shutting_down()) return;
     }
-    state.panes[drag.pane_index].tab_strip_ui().refresh();
-    state.panes[target_pane].tab_strip_ui().refresh();
+    state.panes[drop.source_pane].tab_strip_ui().refresh();
+    state.panes[drop.target_pane].tab_strip_ui().refresh();
     schedule_session_save(state);
 }
 
@@ -2421,23 +2430,19 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
         return;
     }
     const POINT point = point_from_lparam(lparam);
-    if (!state.tab_drag->dragging) {
-        const int threshold = std::max(
-            1, std::max(GetSystemMetrics(SM_CXDRAG),
-                        GetSystemMetrics(SM_CYDRAG)));
-        const int dx = point.x - state.tab_drag->start.x;
-        const int dy = point.y - state.tab_drag->start.y;
-        if (dx < -threshold || dx > threshold || dy < -threshold ||
-            dy > threshold) {
-            state.tab_drag->dragging = true;
-        }
-    }
-    if (!state.tab_drag->dragging) return;
+    const int threshold =
+        std::max(1, std::max(GetSystemMetrics(SM_CXDRAG),
+                             GetSystemMetrics(SM_CYDRAG)));
+    if (!panedock::core::begin_tab_drag(state.tab_drag->drag, point.x,
+                                        point.y, threshold))
+        return;
 
     POINT screen = point;
     ClientToScreen(strip, &screen);
-    std::optional<std::size_t> target_pane;
-    std::optional<std::size_t> target;
+
+    // The only part of a drag that needs a window: which tab strip the cursor
+    // is over and which slot within it. What that means is core's decision.
+    panedock::core::TabStripHit hit;
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
         auto* pane_state = state.panes[index].pane_state();
         if (pane_state == nullptr) continue;
@@ -2448,29 +2453,28 @@ void update_tab_drag(AppState& state, HWND strip, WPARAM wparam,
         RECT client{};
         GetClientRect(candidate, &client);
         if (!PtInRect(&client, client_point)) continue;
-        target_pane = index == state.tab_drag->pane_index
-                          ? std::nullopt
-                          : std::optional<std::size_t>{index};
-        target = state.panes[index].tab_strip_ui().tab_at_screen(screen);
-        const RECT viewport =
-            to_win32_rect(state.panes[index].tab_strip_ui().tab_geometry().viewport);
-        if (!target.has_value() && index != state.tab_drag->pane_index &&
-            PtInRect(&viewport, client_point)) {
-            target = pane_state->tabs.size();
-        }
+        hit.pane = index;
+        hit.slot = state.panes[index].tab_strip_ui().tab_at_screen(screen);
+        hit.tab_count = pane_state->tabs.size();
+        const RECT viewport = to_win32_rect(
+            state.panes[index].tab_strip_ui().tab_geometry().viewport);
+        hit.in_viewport = PtInRect(&viewport, client_point) != 0;
         break;
     }
-    if (target_pane == state.tab_drag->target_pane_index &&
-        target == state.tab_drag->target_index) return;
-    const auto previous_target = state.tab_drag->target_pane_index;
-    state.tab_drag->target_pane_index = target_pane;
-    state.tab_drag->target_index = target;
-    state.panes[state.tab_drag->pane_index].tab_strip_ui().apply_item_size();
+
+    const auto previous_target = state.tab_drag->drag.target_pane;
+    if (!panedock::core::update_tab_drag(state.tab_drag->drag, hit)) return;
+
+    state.panes[state.tab_drag->drag.source_pane]
+        .tab_strip_ui()
+        .apply_item_size();
     if (previous_target.has_value() &&
-        previous_target != state.tab_drag->target_pane_index)
+        previous_target != state.tab_drag->drag.target_pane)
         state.panes[*previous_target].tab_strip_ui().apply_item_size();
-    if (state.tab_drag->target_pane_index.has_value())
-        state.panes[*state.tab_drag->target_pane_index].tab_strip_ui().apply_item_size();
+    if (state.tab_drag->drag.target_pane.has_value())
+        state.panes[*state.tab_drag->drag.target_pane]
+            .tab_strip_ui()
+            .apply_item_size();
 }
 
 panedock::app_shell::TabStripPaintState tab_strip_paint_state(
@@ -2478,13 +2482,14 @@ panedock::app_shell::TabStripPaintState tab_strip_paint_state(
     panedock::app_shell::TabStripPaintState paint;
     if (state.panes[pane_index].pane_state() == nullptr) return paint;
     paint.active_pane = pane_index == active_pane_index(active_group(state));
-    if (state.tab_drag.has_value() && state.tab_drag->dragging) {
-        const auto &drag = *state.tab_drag;
-        if (drag.pane_index == pane_index)
+    if (state.tab_drag.has_value() && state.tab_drag->drag.dragging) {
+        const auto &drag = state.tab_drag->drag;
+        if (drag.source_pane == pane_index)
             paint.dragged_index = drag.source_index;
-        if (drag.target_pane_index.value_or(drag.pane_index) == pane_index &&
-            state.panes[drag.pane_index].pane_state() != nullptr) {
-            const auto &visuals = state.panes[drag.pane_index].tab_strip_ui().tab_visuals();
+        if (drag.target_pane.value_or(drag.source_pane) == pane_index &&
+            state.panes[drag.source_pane].pane_state() != nullptr) {
+            const auto &visuals =
+                state.panes[drag.source_pane].tab_strip_ui().tab_visuals();
             if (drag.source_index < visuals.size())
                 paint.placeholder_text = visuals[drag.source_index].text;
         }
@@ -2522,9 +2527,13 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                 if (*item >= tabs.size()) return 0;
                 if (state->tab_drag.has_value())
                     cancel_tab_drag(*state, state->tab_drag->strip);
-                state->tab_drag = AppState::TabDrag{
-                    window, pane_index, *item, tabs[*item].id, point, false,
-                    std::nullopt, std::nullopt};
+                panedock::core::TabDragState drag{};
+                drag.source_pane = pane_index;
+                drag.source_index = *item;
+                drag.start_x = point.x;
+                drag.start_y = point.y;
+                state->tab_drag =
+                    AppState::TabDrag{window, tabs[*item].id, drag};
                 SetCapture(window);
                 SendMessageW(GetParent(GetParent(window)),
                              kTabStripSelectionMessage,
@@ -4079,78 +4088,94 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         if (result <= 0) break;
         if (!state.is_shutting_down() &&
             has_active_group(state)) {
-            const std::size_t active = active_pane_index(active_group(state));
-            const bool key_down = message.message == WM_KEYDOWN ||
-                                  message.message == WM_SYSKEYDOWN;
-            const bool control = GetKeyState(VK_CONTROL) < 0;
-            const bool alt = GetKeyState(VK_MENU) < 0;
-            const bool shift = GetKeyState(VK_SHIFT) < 0;
-            if (message.message == WM_KEYDOWN && !control && !alt && !shift &&
-                message.wParam == VK_F2 &&
-                GetFocus() == state.sidebar.window()) {
-                state.sidebar.begin_rename();
-                continue;
-            }
-            if (key_down && control && !alt && !shift &&
-                message.wParam == 'V' && !address_bar_has_focus(state.panes) &&
-                perform_clipboard_paste(window, state, active))
-                continue;
-            // Pane navigation owns plain Tab before the Shell can focus its header.
-            if (key_down && !control && !alt && message.wParam == VK_TAB &&
-                !address_bar_has_focus(state.panes)) {
-                const std::size_t count =
-                    panedock::core::pane_count(active_group(state)
-                                                   .layout_template);
-                const std::size_t next = shift ? (active + count - 1) % count
-                                               : (active + 1) % count;
-                set_active_pane(window, state, next);
-                continue;
-            }
-            if (!address_bar_has_focus(state.panes)) {
-                HRESULT accelerator = S_FALSE;
+            // The routing rules themselves are pure and unit-tested
+            // (core::resolve_key); this loop only reads the live Win32 state
+            // they need and performs what comes back.
+            const auto& group = active_group(state);
+            const std::size_t active = active_pane_index(group);
+            panedock::core::KeyInput input{};
+            input.message =
+                message.message == WM_KEYDOWN
+                    ? panedock::core::KeyMessage::key_down
+                    : (message.message == WM_SYSKEYDOWN
+                           ? panedock::core::KeyMessage::system_key_down
+                           : panedock::core::KeyMessage::other);
+            input.virtual_key = static_cast<unsigned>(message.wParam);
+            input.control = GetKeyState(VK_CONTROL) < 0;
+            input.alt = GetKeyState(VK_MENU) < 0;
+            input.shift = GetKeyState(VK_SHIFT) < 0;
+            input.address_bar_focused = address_bar_has_focus(state.panes);
+            input.sidebar_focused = GetFocus() == state.sidebar.window();
+            input.active_pane = active;
+            input.pane_count =
+                panedock::core::pane_count(group.layout_template);
+            const auto routing = panedock::core::resolve_key(input);
+
+            // S_OK means the Shell view consumed the key; anything else
+            // leaves it to us. A shutdown during the call abandons the
+            // message either way.
+            enum class Accelerator { declined, consumed, shutting_down };
+            const auto offer_to_shell = [&]() -> Accelerator {
+                HRESULT result = S_FALSE;
                 {
                     ShellCallScope shell_call(state);
-                    accelerator =
-                        state.panes[active].host().translate_accelerator(&message);
+                    result = state.panes[active].host().translate_accelerator(
+                        &message);
                 }
-                if (state.is_shutting_down()) continue;
-                if (accelerator == S_OK) continue;
+                if (state.is_shutting_down())
+                    return Accelerator::shutting_down;
+                return result == S_OK ? Accelerator::consumed
+                                      : Accelerator::declined;
+            };
+
+            if (routing.shell ==
+                panedock::core::ShellAccelerator::before_action) {
+                if (offer_to_shell() != Accelerator::declined) continue;
             }
-            if (key_down && control && !alt && message.wParam == 'T') {
+
+            bool handled = true;
+            switch (routing.action) {
+            case panedock::core::KeyAction::none:
+                handled = false;
+                break;
+            case panedock::core::KeyAction::begin_group_rename:
+                state.sidebar.begin_rename();
+                break;
+            case panedock::core::KeyAction::paste:
+                handled = perform_clipboard_paste(window, state, active);
+                break;
+            case panedock::core::KeyAction::focus_next_pane:
+            case panedock::core::KeyAction::focus_previous_pane:
+                set_active_pane(window, state, routing.target_pane);
+                break;
+            case panedock::core::KeyAction::new_tab:
                 state.panes[active].add_tab(default_shell_location());
-                continue;
-            }
-            if (key_down && control && !alt && message.wParam == 'W') {
+                break;
+            case panedock::core::KeyAction::close_tab:
                 state.panes[active].close_tab(
                     state.panes[active].active_tab()->id);
-                continue;
-            }
-            if (key_down && control && !alt && message.wParam == VK_TAB) {
-                state.panes[active].cycle_active_tab(shift);
-                continue;
-            }
-            if (key_down && alt && !control && message.wParam == VK_LEFT) {
+                break;
+            case panedock::core::KeyAction::next_tab:
+                state.panes[active].cycle_active_tab(false);
+                break;
+            case panedock::core::KeyAction::previous_tab:
+                state.panes[active].cycle_active_tab(true);
+                break;
+            case panedock::core::KeyAction::history_back:
                 state.panes[active].navigate_history(true);
-                continue;
-            }
-            if (key_down && alt && !control && message.wParam == VK_RIGHT) {
+                break;
+            case panedock::core::KeyAction::history_forward:
                 state.panes[active].navigate_history(false);
-                continue;
-            }
-            if (key_down && !control && !alt &&
-                message.wParam == VK_BACK &&
-                !address_bar_has_focus(state.panes)) {
+                break;
+            case panedock::core::KeyAction::navigate_up:
                 state.panes[active].navigate_up();
-                continue;
+                break;
             }
-            if (message.message == WM_KEYDOWN && message.wParam == VK_F6) {
-                const std::size_t count =
-                    panedock::core::pane_count(active_group(state)
-                                                   .layout_template);
-                const std::size_t next = shift ? (active + count - 1) % count
-                                               : (active + 1) % count;
-                set_active_pane(window, state, next);
-                continue;
+            if (handled) continue;
+
+            if (routing.shell ==
+                panedock::core::ShellAccelerator::after_action) {
+                if (offer_to_shell() != Accelerator::declined) continue;
             }
         }
         TranslateMessage(&message);

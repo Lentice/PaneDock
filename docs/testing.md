@@ -2,16 +2,19 @@
 
 ## Automated checks
 
-Tab pane routing regression (2026-09-07): `panedock_tab_pane_priority`
-checks that plain Tab is consumed before the Shell accelerator in `main.cpp`.
-It failed before the routing change and passed afterward; it is a source-order
-check, not proof of native focus behavior. Release build passed; CTest was
-27/28, with `panedock_launch_smoke` timing out while waiting for exit. Writable
-session storage must be verified before attributing that timeout to shutdown.
-Desktop verification remains: in Details view, Tab moves directly to the next
-visible pane and Shift+Tab to the previous pane, including wraparound; address
-bar Tab and Ctrl+Tab retain their existing behavior. No GUI automation runtime
-was available in this session.
+Keyboard routing (2026-09-08): the message loop's fall-through `if` chain is
+now a pure `core::resolve_key`, and `panedock_core_key_routing` asserts the
+precedence it encodes — plain Tab reaching pane navigation before the Shell
+accelerator, F6 sitting after it, Ctrl+V acting first and leaving a declined
+key to the Shell, and address-bar focus hiding every key from the Shell. This
+replaces `panedock_tab_pane_priority`, which was a source-order scan and is
+deleted per the corollary below. `main.cpp` keeps only a `static_assert` per
+virtual-key code, so `core`'s restated `VK_*` values cannot drift.
+
+Desktop verification still remains, because none of this proves native focus
+behavior: in Details view, Tab moves directly to the next visible pane and
+Shift+Tab to the previous pane, including wraparound; address bar Tab and
+Ctrl+Tab retain their existing behavior.
 
 ```powershell
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -37,6 +40,8 @@ A corollary that has cost real bugs: **a check that scans source text is not a t
 - **Layout rectangle computation** — each of the six templates, split ratios applied, behavior at degenerate window sizes (FR-004a).
 - **Session serialization** — round-trip fidelity, schema migration from an older version, graceful handling of a truncated or corrupt document.
 - **Group mutations** — create, rename, duplicate, delete, reorder, and the remove-plus-insert projection used by drag previews, asserted through resulting model state. Reorder projection covers every source/target pair, including one item and first/last boundaries.
+- **Keyboard routing** — which action a keystroke means and where the Shell view's accelerator sits relative to it. The rules are pure; the message loop only reads the live Win32 state they need and performs what comes back.
+- **Tab drag** — the drag threshold, the target-pane/target-slot transition, and whether releasing means reorder, move or nothing. The window supplies a `TabStripHit` (which strip the cursor is over, which slot, its tab count); every decision after that is arithmetic on indices.
 
 These tests are fast, deterministic, and run in CI without a desktop session, a Shell, or installed extensions.
 
