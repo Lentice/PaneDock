@@ -1592,7 +1592,18 @@ HRESULT apply_layout(HWND window, AppState& state,
         return S_OK;
     }
     ShowWindow(state.empty_message, SW_HIDE);
+    // This is the one place that holds a GroupState& across steps that pump
+    // the message loop (realization does Shell calls), which
+    // perform_group_transition deliberately does not. It is sound only
+    // because add_group/delete_group can be reached solely through WM_COMMAND,
+    // and the main window defers WM_COMMAND while shell_call_depth != 0 --
+    // nothing can grow or shrink the groups vector inside this pass and
+    // relocate what `group` points at. If that deferral ever narrows, this
+    // reference has to be looked up per step instead. The assert at the end of
+    // the pass is what catches that regression.
     auto& group = active_group(state);
+    [[maybe_unused]] const std::size_t group_count_on_entry =
+        state.application.groups.size();
     const auto rects = layout_rects(window, state.application.sidebar_width, group);
     const auto realization_mode =
         state.startup_frame_only
@@ -1819,6 +1830,10 @@ HRESULT apply_layout(HWND window, AppState& state,
     }
     InvalidateRect(window, nullptr, FALSE);
     if (recompute_content) write_live_view_count(state.diagnostic_mode);
+    // `group` above outlived every Shell call in this pass; a changed group
+    // count means one of them re-entered a Group mutation and the reference
+    // was dangling.
+    assert(state.application.groups.size() == group_count_on_entry);
     return first_failure.has_value() ? first_failure->result : S_OK;
 }
 
@@ -2003,13 +2018,27 @@ void duplicate_group(HWND window, AppState& state) {
 void delete_group(HWND window, AppState& state) {
     const auto selected = state.sidebar.selected_index();
     if (!selected.has_value() || *selected >= state.application.groups.size()) return;
+    // MessageBoxW pumps this thread's message loop with shell_call_depth at 0,
+    // so every kDeferredCommandMessage still queued from a burst of clicks
+    // replays *inside* the box -- including another add_group or delete_group.
+    // The selected index therefore does not survive the box; the Group id
+    // does. Resolve identity first and let core::delete_group report a Group
+    // that is already gone.
+    const std::string id = state.application.groups[*selected].id;
     if (MessageBoxW(window,
                     L"Delete this Group? This action cannot be undone.",
                     L"Delete Group", MB_YESNO | MB_ICONWARNING) != IDYES) return;
     if (state.is_shutting_down()) return;
 
+    // A command replayed inside the box may have deleted it already. Bail
+    // before unbind(), which would otherwise leave every pane blank with no
+    // transition to rebind it.
+    const auto& groups = state.application.groups;
+    if (std::none_of(groups.begin(), groups.end(),
+                     [&](const auto& group) { return group.id == id; }))
+        return;
+
     capture_locations(state);
-    const std::string id = state.application.groups[*selected].id;
     const bool deleted_active = id == state.application.active_group_id;
     // core::delete_group destroys PaneState objects. Drop every borrowed
     // pointer before that erase; rebind only after the surviving Group is known.
@@ -3655,6 +3684,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state == nullptr) break;
             const UINT_PTR timer = static_cast<UINT_PTR>(wparam);
             if (timer == kSessionSaveTimerId) {
+                // WM_TIMER is not on the shell_call_depth deferral list, so
+                // this can fire inside a Shell call that is pumping the loop.
+                // save_now captures live pane locations, which mid-navigation
+                // reads the outgoing folder. Leave the timer armed instead of
+                // deferring by hand: it refires after the call unwinds, and a
+                // 500ms retry cannot become a PostMessage spin.
+                if (state->shell_call_depth != 0) return 0;
                 state->session.cancel_timer(window);
                 if (state->session.dirty()) (void)save_now(*state);
 
@@ -4225,6 +4261,17 @@ std::optional<LRESULT> AppState::handle_pane_control_message(
     if (defer_shell_reentry_mouse_message(pane_window, *state, message, wparam,
                                           lparam))
         return LRESULT{0};
+    // A pane's buttons are its children, so their own mouse messages never
+    // reach us -- only the BN_CLICKED WM_COMMAND does, and it arrives at the
+    // pane window rather than the main window that gates WM_COMMAND on
+    // shell_call_depth (PD-171). Without this the back/up/new-tab buttons run
+    // model-changing work re-entrantly inside a Shell call that is pumping the
+    // loop, advancing the navigation generation under the in-flight request.
+    // Replay it at the pane so handle_command still knows which pane it is.
+    if (state->shell_call_depth != 0 && message == WM_COMMAND) {
+        defer_shell_reentry_message(pane_window, message, wparam, lparam);
+        return LRESULT{0};
+    }
 
     switch (message) {
         case WM_COMMAND: {

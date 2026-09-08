@@ -272,4 +272,65 @@ if ($emptyLayoutStart -lt 0 -or $emptyLayoutEnd -lt $emptyLayoutStart -or
     throw 'Empty Group state must release every realized view before reuse'
 }
 
+# A pane's buttons are its children, so only their BN_CLICKED WM_COMMAND
+# reaches us -- at the pane window, which is not the main window that gates
+# WM_COMMAND on shell_call_depth. Without this the nav/tab buttons mutate the
+# model re-entrantly inside a pumping Shell call.
+$paneControlStart = $source.IndexOf(
+    'std::optional<LRESULT> AppState::handle_pane_control_message(')
+if ($paneControlStart -lt 0) {
+    throw 'Shell re-entry invariant failed: pane control message handler missing'
+}
+$paneControlSwitch = $source.IndexOf('switch (message)', $paneControlStart)
+$paneControlGate = $source.IndexOf(
+    'if (state->shell_call_depth != 0 && message == WM_COMMAND)',
+    $paneControlStart)
+if ($paneControlSwitch -lt 0 -or $paneControlGate -lt 0 -or
+    $paneControlGate -gt $paneControlSwitch -or
+    $source.Substring($paneControlGate, $paneControlSwitch - $paneControlGate) -notmatch
+        'defer_shell_reentry_message\(pane_window, message, wparam, lparam\)') {
+    throw 'Shell re-entry invariant failed: pane child WM_COMMAND must be deferred during Shell re-entry'
+}
+
+# WM_TIMER is not on the deferral list, so the session-save timer can fire
+# inside a pumping Shell call and capture a pane mid-navigation. It must leave
+# the timer armed rather than cancel-and-save.
+$timerStart = $source.IndexOf('if (timer == kSessionSaveTimerId) {')
+if ($timerStart -lt 0) {
+    throw 'Shell re-entry invariant failed: session save timer branch missing'
+}
+$timerBody = $source.Substring($timerStart, 900)
+if ($timerBody -notmatch 'if \(state->shell_call_depth != 0\) return 0;[\s\S]*state->session\.cancel_timer\(window\)') {
+    throw 'Shell re-entry invariant failed: session save must not run inside a Shell call'
+}
+
+# MessageBoxW pumps with shell_call_depth at 0, so queued deferred commands
+# replay inside the box and can delete or add Groups. delete_group therefore
+# must carry the Group id across the box, never the selected index.
+$deleteStart = $source.IndexOf('void delete_group(HWND window, AppState& state)')
+$deleteEnd = $source.IndexOf('void move_group(', $deleteStart)
+if ($deleteStart -lt 0 -or $deleteEnd -lt $deleteStart) {
+    throw 'Shell re-entry invariant failed: delete_group body missing'
+}
+$deleteBody = $source.Substring($deleteStart, $deleteEnd - $deleteStart)
+if ($deleteBody -notmatch 'const std::string id = state\.application\.groups\[\*selected\]\.id;[\s\S]*MessageBoxW') {
+    throw 'Shell re-entry invariant failed: delete_group must resolve the Group id before the modal box'
+}
+if ($deleteBody -match 'MessageBoxW\(window,[\s\S]*groups\[\*selected\]') {
+    throw 'Shell re-entry invariant failed: delete_group must not index by selection after the modal box'
+}
+if ($deleteBody -notmatch 'MessageBoxW\(window,[\s\S]*std::none_of\([\s\S]*group\.id == id[\s\S]*for \(auto& pane : state\.panes\) pane\.unbind\(\)') {
+    throw 'Shell re-entry invariant failed: delete_group must re-check the Group still exists before unbinding'
+}
+
+# apply_layout is the only place holding a GroupState& across pumping Shell
+# calls; the assert is what reports a regression in the WM_COMMAND deferral
+# that makes it sound.
+$applyStart = $source.IndexOf('HRESULT apply_layout(')
+if ($applyStart -lt 0 -or
+    $source.Substring($applyStart) -notmatch
+        'group_count_on_entry =\s*state\.application\.groups\.size\(\);[\s\S]*assert\(state\.application\.groups\.size\(\) == group_count_on_entry\);') {
+    throw 'Shell re-entry invariant failed: apply_layout must assert the groups vector did not move under its GroupState&'
+}
+
 Write-Output 'PASSED: shell_reentry_gate_check'
