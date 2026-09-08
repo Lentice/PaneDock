@@ -31,7 +31,13 @@ namespace panedock::app_shell {
 class SessionWriter final {
 public:
     static constexpr UINT_PTR kTimerId = 0xD050;
-    static constexpr UINT kDelayMilliseconds = 500;
+    // Coalesces bursts of cheap model changes (tab/pane/Group switches).
+    // Losing a minute of those on a crash is acceptable; WM_DESTROY still
+    // flushes a dirty document on normal exit.
+    static constexpr UINT kDelayMilliseconds = 60000;
+    // Ceiling on the debounce: steady interaction just under the delay would
+    // otherwise reset the timer forever and never write at all.
+    static constexpr ULONGLONG kMaximumDirtyAgeMilliseconds = 600000;
 
     void set_directory(std::filesystem::path directory) {
         directory_ = std::move(directory);
@@ -55,10 +61,22 @@ public:
     // Arms the debounce timer. Returns false when the timer could not be set,
     // which is the caller's signal to fall back to an immediate write.
     bool arm_timer(HWND owner) noexcept {
-        return owner != nullptr &&
-               SetTimer(owner, kTimerId, kDelayMilliseconds, nullptr) != 0;
+        if (owner == nullptr) return false;
+        const ULONGLONG now = GetTickCount64();
+        if (!armed_) {
+            dirty_since_ = now;
+        } else if (now - dirty_since_ >= kMaximumDirtyAgeMilliseconds) {
+            // Past the ceiling: leave the already-armed timer alone so it
+            // fires within one delay instead of being pushed back again.
+            return true;
+        }
+        if (SetTimer(owner, kTimerId, kDelayMilliseconds, nullptr) == 0)
+            return false;
+        armed_ = true;
+        return true;
     }
-    void cancel_timer(HWND owner) const noexcept {
+    void cancel_timer(HWND owner) noexcept {
+        armed_ = false;
         if (owner != nullptr) KillTimer(owner, kTimerId);
     }
 
@@ -76,7 +94,9 @@ public:
 private:
     core::SessionDocument document_;
     std::filesystem::path directory_;
+    ULONGLONG dirty_since_{};
     bool dirty_{};
+    bool armed_{};
 };
 
 }  // namespace panedock::app_shell

@@ -1429,7 +1429,7 @@ void paint_client_background(HWND window, HDC dc, int sidebar_width,
 
 }
 
-void cancel_session_save_timer(const AppState& state) noexcept {
+void cancel_session_save_timer(AppState& state) noexcept {
     state.session.cancel_timer(state.main_window);
 }
 

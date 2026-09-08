@@ -32,6 +32,10 @@ bool SessionWriter::write(const core::ApplicationState& application,
     } catch (...) {
         // noexcept: a failed session write must not terminate the process.
         OutputDebugStringW(L"PaneDock: session persistence failed\n");
+        // The WM_TIMER handler killed the timer before calling in, so
+        // without this the dirty document waits for the next model
+        // change or for shutdown. Re-arming makes the retry real.
+        (void)arm_timer(timer_owner);
         return false;
     }
     dirty_ = false;
