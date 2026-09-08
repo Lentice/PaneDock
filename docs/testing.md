@@ -24,6 +24,15 @@ ctest --test-dir build --output-on-failure
 
 The live `ctest` count is the single source of truth for how many tests exist. It is deliberately not written down here, because a hardcoded count drifts and then lies.
 
+## Windows 10 compatibility
+
+On 2026-09-08 the user confirmed that the statically linked Release executable
+starts and runs on Windows 10. The exact Windows build and the full MVP matrix
+were not recorded, so this is a compatibility smoke result rather than a
+replacement for the acceptance run below. The executable's PE imports are
+also checked to ensure deployment does not require `libc++.dll` or
+`libunwind.dll`.
+
 ## The test seam: `core`, plus anything reachable without the Shell
 
 `core` is the primary seam and the one the architecture protects: keeping HWND, COM and `windows.h` out of it is what keeps it testable at all.

@@ -141,7 +141,7 @@ target_include_directories(PaneDock PRIVATE resources)
 target_compile_definitions(PaneDock PRIVATE
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
 )
-target_link_options(PaneDock PRIVATE -municode)
+target_link_options(PaneDock PRIVATE -municode -static)
 target_link_libraries(PaneDock PRIVATE
     panedock_core panedock_shell_core panedock_explorer_host panedock_pane
     panedock_file_operations panedock_sidebar panedock_session_writer

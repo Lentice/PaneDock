@@ -91,6 +91,12 @@ if(WIN32)
                 "${CMAKE_CURRENT_SOURCE_DIR}/release/launch_smoke.ps1"
                 -AppPath "$<TARGET_FILE:PaneDock>")
     set_tests_properties(panedock_launch_smoke PROPERTIES TIMEOUT 70)
+    add_test(
+        NAME panedock_no_compiler_runtime_dlls
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/release/compiler_runtime_check.ps1"
+                -AppPath "$<TARGET_FILE:PaneDock>"
+                -ObjdumpPath "${CMAKE_OBJDUMP}")
 
     # PD-183: this executable already existed (built by the root
     # CMakeLists.txt) but was never registered with ctest.
