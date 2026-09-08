@@ -44,6 +44,7 @@
 #include "app_shell/window_helpers.h"
 #include "app_shell/window_placement.h"
 #include "core/key_routing.h"
+#include "core/group_transition.h"
 #include "core/layout.h"
 #include "core/model.h"
 #include "core/navigation.h"
@@ -1874,6 +1875,60 @@ panedock::core::GroupState new_group_state(const AppState& state,
     return group;
 }
 
+// The ordered script every Group mutation runs once the model has changed.
+// core::plan_group_transition owns the order and which steps apply; this
+// performs them behind a single shutdown gate.
+//
+// Nothing here holds a GroupState& across a step. apply_layout and the Shell
+// focus call both re-enter the message loop, and a reference into
+// state.application.groups would not survive a Group being added or removed
+// during that re-entry -- so every step looks the Group up again.
+void perform_group_transition(HWND window, AppState& state,
+                              panedock::core::GroupTransition transition,
+                              bool active_group_changed) {
+    using Step = panedock::core::GroupTransitionStep;
+    for (const Step step : panedock::core::plan_group_transition(
+             transition, has_active_group(state), active_group_changed)) {
+        if (state.is_shutting_down()) return;
+        switch (step) {
+            case Step::rebind_panes:
+                rebind_panes(state);
+                break;
+            case Step::refresh_tab_strips:
+                refresh_tab_strips(state);
+                break;
+            case Step::navigate_realized_panes:
+                if (!has_active_group(state)) break;
+                if (!navigate_realized_panes(state, active_group(state)))
+                    return;
+                break;
+            case Step::apply_layout:
+                if (FAILED(apply_layout(window, state)))
+                    OutputDebugStringW(
+                        L"PaneDock: Shell view realization failed\n");
+                break;
+            case Step::focus_active_pane: {
+                if (!has_active_group(state)) break;
+                const std::size_t active =
+                    active_pane_index(active_group(state));
+                ShellCallScope shell_call(state);
+                state.panes[active].host().focus();
+                break;
+            }
+            case Step::refresh_sidebar:
+                refresh_sidebar(state);
+                break;
+            case Step::save_session:
+                // Group switches can be triggered from the OLE drag-hover
+                // message. Keep the session flush out of that interaction
+                // path; shutdown still forces the dirty state through a
+                // synchronous save.
+                schedule_session_save(state);
+                break;
+        }
+    }
+}
+
 void activate_group(HWND window, AppState& state, std::size_t index) {
     if (state.is_shutting_down())
         return;  // re-dispatched during a Shell call or teardown pump
@@ -1887,23 +1942,8 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
 
     capture_locations(state);
     state.application.active_group_id = target_id;
-    rebind_panes(state);
-    refresh_tab_strips(state);
-    auto& group = active_group(state);
-    if (!navigate_realized_panes(state, group)) return;
-    if (FAILED(apply_layout(window, state)))
-        OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
-    if (state.is_shutting_down()) return;
-    {
-        ShellCallScope shell_call(state);
-        state.panes[active_pane_index(group)].host().focus();
-    }
-    if (state.is_shutting_down()) return;
-    refresh_sidebar(state);
-    // Group switches can be triggered from the OLE drag-hover message. Keep
-    // the session flush out of that interaction path; shutdown still forces
-    // the dirty state through a synchronous save.
-    schedule_session_save(state);
+    perform_group_transition(window, state,
+                             panedock::core::GroupTransition::activate, true);
 }
 
 Microsoft::WRL::ComPtr<DragHoverTarget> make_sidebar_drag_hover_target(
@@ -1939,20 +1979,11 @@ void add_group(HWND window, AppState& state) {
     if (!panedock::core::add_group(state.application,
                                    new_group_state(state, id))) return;
     if (was_empty) {
-        // The first Group is already active when core adds it; route through
-        // activate_group's same-id path so binding still has one owner.
-        activate_group(window, state, state.application.groups.size() - 1);
-        refresh_tab_strips(state);
-        if (FAILED(apply_layout(window, state)))
-            OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
-        if (state.is_shutting_down()) return;
-        {
-            ShellCallScope shell_call(state);
-            state.panes[active_pane_index(active_group(state))].host().focus();
-        }
-        if (state.is_shutting_down()) return;
-        refresh_sidebar(state);
-        schedule_session_save(state);
+        // core made the first Group active as it added it, so there is no id
+        // to switch to; run the same tail every other mutation runs.
+        perform_group_transition(window, state,
+                                 panedock::core::GroupTransition::activate,
+                                 true);
         return;
     }
     activate_group(window, state, state.application.groups.size() - 1);
@@ -1984,24 +2015,9 @@ void delete_group(HWND window, AppState& state) {
     // pointer before that erase; rebind only after the surviving Group is known.
     for (auto& pane : state.panes) pane.unbind();
     if (!panedock::core::delete_group(state.application, id)) return;
-    rebind_panes(state);
-    refresh_tab_strips(state);
-    if (deleted_active && has_active_group(state)) {
-        auto& group = active_group(state);
-        if (!navigate_realized_panes(state, group)) return;
-    }
-    if (state.is_shutting_down()) return;
-    if (FAILED(apply_layout(window, state)))
-        OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
-    if (state.is_shutting_down()) return;
-    if (has_active_group(state)) {
-        const std::size_t active = active_pane_index(active_group(state));
-        ShellCallScope shell_call(state);
-        state.panes[active].host().focus();
-    }
-    if (state.is_shutting_down()) return;
-    refresh_sidebar(state);
-    schedule_session_save(state);
+    perform_group_transition(window, state,
+                             panedock::core::GroupTransition::remove,
+                             deleted_active);
 }
 
 // No rebind: PD-184 guarantees group reorder preserves PaneState addresses.
@@ -2209,20 +2225,11 @@ void set_layout(HWND window, AppState& state,
     if (!panedock::core::switch_layout(group, target,
                                        default_shell_location(),
                                        pane_ids, tab_ids)) return;
-    rebind_panes(state);
-    refresh_tab_strips(state);
-    if (FAILED(apply_layout(window, state))) {
-        OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
-    }
-    if (state.is_shutting_down()) return;
-
-    const std::size_t active = active_pane_index(group);
-    {
-        ShellCallScope shell_call(state);
-        state.panes[active].host().focus();
-    }
-    if (state.is_shutting_down()) return;
-    schedule_session_save(state);
+    // This is where the four copies had drifted: set_layout never refreshed
+    // the sidebar, but the Group summary counts only the panes the current
+    // layout shows, so the row went stale until the next unrelated refresh.
+    perform_group_transition(window, state,
+                             panedock::core::GroupTransition::relayout, false);
 }
 
 void update_sidebar_drag(HWND window, AppState& state, POINT point,

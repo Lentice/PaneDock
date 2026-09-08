@@ -32,6 +32,10 @@ _Avoid_: group item, list item
 The pane that receives keyboard commands, clipboard operations and shortcuts. Exactly one pane is active at any time, and it is visually indicated.
 _Avoid_: focused pane, current pane, selected pane
 
+**Group transition**:
+What follows any change to the Group arrangement — switching Group, adding the first one, deleting one, or changing the layout template. It is one fixed ordered script (rebind, refresh tab strips, re-navigate realized panes, apply layout, focus the active pane, refresh the sidebar, save), and which of its steps apply depends only on the kind of change. The mutation itself is not part of it; the transition is everything the UI owes afterwards.
+_Avoid_: group switch (that is only one of the four kinds), refresh, update
+
 ## Shell terms
 
 **Shell view**:

@@ -41,6 +41,7 @@ A corollary that has cost real bugs: **a check that scans source text is not a t
 - **Session serialization** — round-trip fidelity, schema migration from an older version, graceful handling of a truncated or corrupt document.
 - **Group mutations** — create, rename, duplicate, delete, reorder, and the remove-plus-insert projection used by drag previews, asserted through resulting model state. Reorder projection covers every source/target pair, including one item and first/last boundaries.
 - **Keyboard routing** — which action a keystroke means and where the Shell view's accelerator sits relative to it. The rules are pure; the message loop only reads the live Win32 state they need and performs what comes back.
+- **Group transition ordering** — the script that runs after a Group is switched, added, deleted or re-laid-out. Four hand-copied copies had already drifted; the plan is now a value, so the sequence and the conditions on re-navigation and focus are asserted directly.
 - **Tab drag** — the drag threshold, the target-pane/target-slot transition, and whether releasing means reorder, move or nothing. The window supplies a `TabStripHit` (which strip the cursor is over, which slot, its tab count); every decision after that is arithmetic on indices.
 
 These tests are fast, deterministic, and run in CI without a desktop session, a Shell, or installed extensions.

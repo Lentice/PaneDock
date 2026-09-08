@@ -34,6 +34,7 @@ endfunction()
 # dependency here is what enforces it at link time.
 # ---------------------------------------------------------------------------
 add_library(panedock_core STATIC
+    src/core/group_transition.cpp
     src/core/key_routing.cpp
     src/core/layout.cpp
     src/core/model.cpp

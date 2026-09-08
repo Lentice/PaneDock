@@ -84,9 +84,14 @@ if ($navigationHelperBody -notmatch 'state\.suppress_location_capture\s*=\s*true
 }
 $navigationCallSiteSource = $source.Remove(
     $navigationHelperStart, $navigationHelperEnd - $navigationHelperStart)
+# Both Group transitions now reach the helper through the single
+# perform_group_transition script, so there is exactly one call site left and
+# it looks the Group up fresh rather than holding a reference across re-entry.
 if ([regex]::Matches(
         $navigationCallSiteSource,
-        'navigate_realized_panes\(\s*state,\s*group\s*\)').Count -ne 2) {
+        'navigate_realized_panes\(state, active_group\(state\)\)').Count -ne 1 -or
+    [regex]::Matches($navigationCallSiteSource,
+        'navigate_realized_panes\(').Count -ne 1) {
     throw 'Shell re-entry invariant failed: both Group transitions must use the shared helper'
 }
 

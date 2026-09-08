@@ -161,7 +161,9 @@ if ($closeTabsBody -notmatch 'std::vector<std::string> tab_ids;' -or
     $closeTabsBody -match 'save_now\(|core::close_tab\(') {
     throw 'session save debounce check failed: batch close must snapshot IDs and reuse Pane::close_tab'
 }
-Assert-DebouncedFunction 'void delete_group(' 'delete_group'
+# delete_group and set_layout no longer save directly: every Group mutation
+# runs the one shared script, so the debounce is asserted where it now lives.
+Assert-DebouncedFunction 'void perform_group_transition(' 'perform_group_transition'
 Assert-DebouncedFunction 'void move_group(' 'move_group'
 Assert-DebouncedFunction 'void set_active_pane(' 'set_active_pane'
 Assert-DebouncedFunction 'void Pane::set_view_mode(' 'Pane::set_view_mode'
@@ -170,7 +172,6 @@ if ($pinBody.IndexOf('pane_host()->pin_location') -lt 0 -or
     $pinBody.IndexOf('save_now(') -ge 0) {
     throw 'session save debounce check failed: Pane::pin_current_folder does not delegate persistence'
 }
-Assert-DebouncedFunction 'void set_layout(' 'set_layout'
 Assert-DebouncedFunction 'void finish_tab_drag(' 'finish_tab_drag'
 # The group reorder gesture lives in Sidebar, but committing it stays
 # coordinator work: Sidebar reports the finished drag, group_list_proc applies
