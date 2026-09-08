@@ -223,22 +223,4 @@ class Pane final {
     UINT card_border_pen_dpi_{};
 };
 
-inline constexpr int kCloseTabId = 780;
-inline constexpr int kCloseOtherTabsId = 781;
-inline constexpr int kCloseAllTabsId = 782;
-inline constexpr int kCloseTabsToRightId = 783;
-
-inline constexpr int kViewModeMenuIdBase = 360;
-
-inline constexpr int kPinnedMenuIdBase = 500;
-inline constexpr int kPinnedMenuMaxLocationCount = 64;
-inline constexpr int kPinnedMenuDesktopOffset = 0;
-inline constexpr int kPinnedMenuThisPcOffset = 1;
-inline constexpr int kPinnedMenuLocationOffset = 2;
-inline constexpr int kPinnedMenuAddOffset =
-    kPinnedMenuLocationOffset + kPinnedMenuMaxLocationCount;
-inline constexpr int kPinnedMenuManageOffset = kPinnedMenuAddOffset + 1;
-inline constexpr int kPinnedMenuSlotsPerPane = kPinnedMenuManageOffset + 1;
-inline constexpr std::size_t kPinnedMenuFixedLocationCount = 2;
-
 } // namespace panedock::app_shell

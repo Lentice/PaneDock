@@ -291,12 +291,14 @@ std::optional<std::size_t> PaneTabStrip::tab_at_screen(POINT screen) const noexc
     return tab_at(client);
 }
 
-bool PaneTabStrip::register_drag_hover_target(IDropTarget *target) noexcept {
+bool PaneTabStrip::register_drag_hover_target(IDropTarget *target,
+                                              DragHoverTimer *timer) noexcept {
     if (tab_strip_ == nullptr || target == nullptr)
         return false;
     if (FAILED(RegisterDragDrop(tab_strip_, target)))
         return false;
     tab_drag_target_ = target;
+    tab_drag_timer_ = timer;
     return true;
 }
 
@@ -306,6 +308,7 @@ void PaneTabStrip::revoke_drag_hover_target() noexcept {
     if (tab_strip_ != nullptr)
         RevokeDragDrop(tab_strip_);
     tab_drag_target_.Reset();
+    tab_drag_timer_ = nullptr;
 }
 
 void PaneTabStrip::paint_contents(HDC dc, const TabStripPaintState &state) noexcept {

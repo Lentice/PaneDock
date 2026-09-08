@@ -26,11 +26,11 @@ class Pane;
 inline constexpr UINT kTabStripSelectionMessage = WM_APP + 49;
 
 // Dispatch surface for the drag-hover delay timer. `PaneTabStrip` stores a drag
-// target only as `IDropTarget` (RegisterDragDrop/RevokeDragDrop lifetime);
-// the coordinator that built the concrete target reaches its extra hover
-// behavior via `dynamic_cast<DragHoverTimer*>` on the pointer
-// `PaneTabStrip::drag_hover_target()` returns, so `PaneTabStrip` never has to know about
-// the coordinator's own drag-hover implementation type.
+// target as `IDropTarget` (RegisterDragDrop/RevokeDragDrop lifetime) plus this
+// non-owning view of the same object, so the coordinator can reach the hover
+// behavior without naming its own implementation type -- which lives in
+// main.cpp's anonymous namespace and cannot be named here at all. Registering
+// both at once is what keeps a `dynamic_cast` (and RTTI) out of the timer path.
 class DragHoverTimer {
   public:
     virtual ~DragHoverTimer() = default;
@@ -120,11 +120,17 @@ class PaneTabStrip final {
         tab_scroll_hover_index_ = index;
     }
 
-    // The coordinator wraps registration in its ShellCallScope.
-    bool register_drag_hover_target(IDropTarget *target) noexcept;
+    // The coordinator wraps registration in its ShellCallScope. `timer` is the
+    // same object as `target`, viewed through its hover interface; it is not
+    // owned and is cleared with the target.
+    bool register_drag_hover_target(IDropTarget *target,
+                                    DragHoverTimer *timer) noexcept;
     void revoke_drag_hover_target() noexcept;
     IDropTarget *drag_hover_target() const noexcept {
         return tab_drag_target_.Get();
+    }
+    DragHoverTimer *drag_hover_timer() const noexcept {
+        return tab_drag_timer_;
     }
 
   private:
@@ -137,6 +143,7 @@ class PaneTabStrip final {
     std::optional<std::size_t> tab_hover_index_;
     std::optional<std::size_t> tab_scroll_hover_index_;
     Microsoft::WRL::ComPtr<IDropTarget> tab_drag_target_;
+    DragHoverTimer *tab_drag_timer_{nullptr};
 };
 
 } // namespace panedock::app_shell

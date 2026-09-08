@@ -251,7 +251,7 @@ if ([regex]::Matches($commandBody, 'ShellCall shell_call\(pane_host\(\)\);\s*\(v
     $commandBody -match 'show_pinned_locations_manager') {
     throw 'Shell re-entry invariant failed: Pane pinned options lost their gate or own the app dialog'
 }
-Assert-Source 'state\.panes\[pane_index\]\.handle_command\(id\)' 'popup commands dispatch to the decoded pane'
+Assert-Source 'state\.panes\[command\.pane\]\.handle_command\(id\)' 'popup commands dispatch to the decoded pane'
 Assert-Source 'state\.tab_context_menu_tab_id = tabs\[\*item\]\.id;\s*const int command = state\.panes\[\*pane_index\]\.show_tab_context_menu\([\s\S]*?if \(command != 0\) \{\s*SendMessageW\(window, WM_COMMAND,[\s\S]*?else \{\s*state\.tab_context_menu_pane.reset\(\);\s*state\.tab_context_menu_tab_id.clear\(\);' `
     'tab popup keeps singleton setup, main dispatch and cancel cleanup'
 

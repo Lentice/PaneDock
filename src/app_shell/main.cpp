@@ -131,44 +131,41 @@ using panedock::app_shell::kTabStripSelectionMessage;
 // inset that must exceed the radius on every side while still leaving the
 // EDIT control tall enough to show text.
 constexpr int kAddressBarBackgroundRadius = 4;
-// View-mode popup commands: eight IDs per pane, 360-391, kept separate from
-// the navigation buttons and layout commands above.
-constexpr std::size_t kViewModeOptionCount =
-    panedock::shell_core::kViewModeOptions.size();
-constexpr int kViewModeMenuIdCount =
-    static_cast<int>(kExplorerCount * kViewModeOptionCount);
-constexpr int kLayoutButtonIdBase = 400;
-// Pinned popup commands: four pane blocks, each with 64 custom locations and
-// four fixed/action slots. The 500-771 range is separate from all controls.
+// Every command id range, and the decode that owns it, lives in
+// app_shell/pane_control_id.h so the four routing/painting sites below cannot
+// disagree about where a block starts.
+using panedock::app_shell::kCloseAllTabsId;
+using panedock::app_shell::kCloseOtherTabsId;
+using panedock::app_shell::kCloseTabId;
+using panedock::app_shell::kCloseTabsToRightId;
+using panedock::app_shell::kDeleteGroupId;
+using panedock::app_shell::kDuplicateGroupId;
+using panedock::app_shell::kGroupListId;
+using panedock::app_shell::kLayoutButtonCount;
+using panedock::app_shell::kLayoutButtonIdBase;
+using panedock::app_shell::kMoveDownId;
+using panedock::app_shell::kMoveUpId;
+using panedock::app_shell::kNewGroupId;
 using panedock::app_shell::kPinnedMenuIdBase;
 using panedock::app_shell::kPinnedMenuManageOffset;
 using panedock::app_shell::kPinnedMenuMaxLocationCount;
 using panedock::app_shell::kPinnedMenuSlotsPerPane;
-constexpr int kPinnedMenuIdCount =
-    static_cast<int>(kExplorerCount) * kPinnedMenuSlotsPerPane;
+using panedock::app_shell::kRenameGroupId;
+using panedock::app_shell::kViewModeOptionCount;
+static_assert(panedock::app_shell::kCommandPaneCount ==
+              panedock::core::kMaxPaneCount);
+static_assert(kViewModeOptionCount ==
+              panedock::shell_core::kViewModeOptions.size());
 constexpr std::array<std::wstring_view, 2> kPinnedFixedParsingNames{
     L"::{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}",
     L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"};
-// PD-113: fixed commands for the tab context menu, after all existing
-// control and popup command ranges.
-using panedock::app_shell::kCloseTabId;
-using panedock::app_shell::kCloseOtherTabsId;
-using panedock::app_shell::kCloseAllTabsId;
-using panedock::app_shell::kCloseTabsToRightId;
-constexpr int kGroupListId = 100;
-constexpr int kNewGroupId = 101;
-constexpr int kDuplicateGroupId = 102;
-constexpr int kRenameGroupId = 103;
-constexpr int kDeleteGroupId = 104;
-constexpr int kMoveUpId = 105;
-constexpr int kMoveDownId = 106;
 // Duplicate/Rename/Delete/Move Up/Move Down keep their ids (reused as the
 // group list's context-menu command ids, see WM_CONTEXTMENU) but no longer
 // get their own footer button; the footer button array shrinks to New Group.
 constexpr std::array<int, 1> kButtonIds{kNewGroupId};
 constexpr std::array<const wchar_t*, 1> kButtonLabels{L"+ New Group"};
 constexpr int kBrandBarHeight = 52;
-constexpr std::array<int, 8> kLayoutButtonIds{
+constexpr std::array<int, kLayoutButtonCount> kLayoutButtonIds{
     kLayoutButtonIdBase, kLayoutButtonIdBase + 1, kLayoutButtonIdBase + 2,
     kLayoutButtonIdBase + 3, kLayoutButtonIdBase + 4,
     kLayoutButtonIdBase + 5, kLayoutButtonIdBase + 6,
@@ -2196,7 +2193,9 @@ bool register_tab_drag_hover_targets(HWND window, AppState& state) {
         {
             ShellCallScope shell_call(state);
             registered =
-                state.panes[pane_index].tab_strip_ui().register_drag_hover_target(target.Get());
+                state.panes[pane_index]
+                    .tab_strip_ui()
+                    .register_drag_hover_target(target.Get(), target.Get());
         }
         if (state.is_shutting_down() || !registered)
             return false;
@@ -3040,26 +3039,32 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
 }
 
 bool handle_sidebar_command(HWND window, AppState& state, int id) {
-    if (id == kGroupListId) {
+    using panedock::app_shell::CommandKind;
+    using panedock::app_shell::GroupAction;
+    const auto command = panedock::app_shell::decode_command(id);
+    if (command.kind == CommandKind::group_list) {
         const auto selected = state.sidebar.selected_index();
         if (selected.has_value()) activate_group(window, state, *selected);
         return true;
     }
-    switch (id) {
-        case kNewGroupId: add_group(window, state); return true;
-        case kDuplicateGroupId: duplicate_group(window, state); return true;
-        case kRenameGroupId: state.sidebar.begin_rename(); return true;
-        case kDeleteGroupId: delete_group(window, state); return true;
-        case kMoveUpId: move_group(state, false); return true;
-        case kMoveDownId: move_group(state, true); return true;
-        default: return false;
+    if (command.kind != CommandKind::group_action) return false;
+    switch (command.action) {
+        case GroupAction::create: add_group(window, state); return true;
+        case GroupAction::duplicate: duplicate_group(window, state); return true;
+        case GroupAction::rename: state.sidebar.begin_rename(); return true;
+        case GroupAction::remove: delete_group(window, state); return true;
+        case GroupAction::move_up: move_group(state, false); return true;
+        case GroupAction::move_down: move_group(state, true); return true;
     }
+    return false;
 }
 
 bool handle_global_command(HWND window, AppState& state, int id,
                            Pane* source_pane = nullptr) {
-    if (id == panedock::app_shell::encode_pane_control(
-                  panedock::app_shell::PaneControl::folder_context)) {
+    using panedock::app_shell::CommandKind;
+    const auto command = panedock::app_shell::decode_command(id);
+    if (command.kind == CommandKind::pane_control &&
+        command.control == panedock::app_shell::PaneControl::folder_context) {
         if (source_pane == nullptr) return false;
         auto& pane = *source_pane;
         const HWND folder_context_button =
@@ -3082,8 +3087,7 @@ bool handle_global_command(HWND window, AppState& state, int id,
             state.main_window, anchor);
         return true;
     }
-    if (id == kCloseTabId || id == kCloseOtherTabsId ||
-        id == kCloseAllTabsId || id == kCloseTabsToRightId) {
+    if (command.kind == CommandKind::tab_close) {
         const auto pane_index = state.tab_context_menu_pane;
         const std::string tab_id = state.tab_context_menu_tab_id;
         state.tab_context_menu_pane.reset();
@@ -3099,28 +3103,16 @@ bool handle_global_command(HWND window, AppState& state, int id,
         state.panes[*pane_index].close_tabs(tab_id, id);
         return true;
     }
-    if (id >= panedock::app_shell::kViewModeMenuIdBase &&
-        id < panedock::app_shell::kViewModeMenuIdBase + kViewModeMenuIdCount) {
-        const int offset = id - panedock::app_shell::kViewModeMenuIdBase;
-        const std::size_t pane_index = static_cast<std::size_t>(
-            offset / static_cast<int>(kViewModeOptionCount));
-        if (pane_index < state.panes.size())
-            state.panes[pane_index].handle_command(id);
+    if (command.kind == CommandKind::view_mode ||
+        command.kind == CommandKind::pinned_location) {
+        if (command.pane < state.panes.size())
+            state.panes[command.pane].handle_command(id);
         return true;
     }
-    if (id >= kPinnedMenuIdBase &&
-        id < kPinnedMenuIdBase + kPinnedMenuIdCount) {
-        const int offset = id - kPinnedMenuIdBase;
-        const std::size_t pane_index =
-            static_cast<std::size_t>(offset / kPinnedMenuSlotsPerPane);
-        const int item = offset % kPinnedMenuSlotsPerPane;
-        if (item != kPinnedMenuManageOffset) {
-            state.panes[pane_index].handle_command(id);
-            return true;
-        }
-        if (state.panes[pane_index].pane_state() == nullptr)
-            return true;
-        const auto *pane_host = state.panes[pane_index].pane_host();
+    if (command.kind == CommandKind::pinned_manage) {
+        if (command.pane >= state.panes.size()) return true;
+        if (state.panes[command.pane].pane_state() == nullptr) return true;
+        const auto *pane_host = state.panes[command.pane].pane_host();
         if (pane_host == nullptr) return true;
         const auto locations = pane_host->pinned_locations();
         if (locations.size() < panedock::app_shell::kPinnedMenuFixedLocationCount)
@@ -3128,22 +3120,19 @@ bool handle_global_command(HWND window, AppState& state, int id,
         show_pinned_locations_manager(window, state);
         return true;
     }
-    if (id >= kLayoutButtonIdBase &&
-        id < kLayoutButtonIdBase + static_cast<int>(kLayoutButtonIds.size())) {
-        const std::size_t layout_index =
-            static_cast<std::size_t>(id - kLayoutButtonIdBase);
-        set_layout(window, state, kLayoutTemplates[layout_index]);
+    if (command.kind == CommandKind::layout_template) {
+        set_layout(window, state, kLayoutTemplates[command.index]);
         return true;
     }
     return false;
 }
 
 bool draw_global_control(const DRAWITEMSTRUCT& item, AppState& state) {
-    if (item.CtlType == ODT_BUTTON && item.CtlID >= kLayoutButtonIdBase &&
-        item.CtlID < kLayoutButtonIdBase +
-                         static_cast<int>(kLayoutButtonIds.size())) {
-        const std::size_t index =
-            static_cast<std::size_t>(item.CtlID - kLayoutButtonIdBase);
+    const auto command =
+        panedock::app_shell::decode_command(static_cast<int>(item.CtlID));
+    if (item.CtlType == ODT_BUTTON &&
+        command.kind == panedock::app_shell::CommandKind::layout_template) {
+        const std::size_t index = command.index;
         const bool enabled = has_active_group(state);
         const auto current = enabled ? active_group(state).layout_template
                                      : panedock::core::LayoutTemplate::single;
@@ -3507,8 +3496,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 timer < kDragHoverTabTimerIdBase + kExplorerCount) {
                 const std::size_t pane_index = static_cast<std::size_t>(
                     timer - kDragHoverTabTimerIdBase);
-                if (auto* hover = dynamic_cast<panedock::app_shell::DragHoverTimer*>(
-                        state->panes[pane_index].tab_strip_ui().drag_hover_target()))
+                if (auto* hover =
+                        state->panes[pane_index].tab_strip_ui().drag_hover_timer())
                     hover->invoke_hover(generation);
                 return 0;
             }
@@ -3522,9 +3511,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state != nullptr) {
                 auto* item = reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
                 if (item != nullptr && item->CtlType == ODT_BUTTON &&
-                    item->CtlID >= kLayoutButtonIdBase &&
-                    item->CtlID < kLayoutButtonIdBase +
-                                      static_cast<int>(kLayoutButtonIds.size())) {
+                    panedock::app_shell::decode_command(
+                        static_cast<int>(item->CtlID))
+                            .kind ==
+                        panedock::app_shell::CommandKind::layout_template) {
                     item->itemWidth = static_cast<UINT>(
                         scaled_value(window, kLayoutButtonWidth));
                     item->itemHeight = static_cast<UINT>(
@@ -3674,8 +3664,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 timer < kDragHoverTabTimerIdBase + kExplorerCount) {
                 const std::size_t pane_index = static_cast<std::size_t>(
                     timer - kDragHoverTabTimerIdBase);
-                if (auto* hover = dynamic_cast<panedock::app_shell::DragHoverTimer*>(
-                        state->panes[pane_index].tab_strip_ui().drag_hover_target()))
+                if (auto* hover =
+                        state->panes[pane_index].tab_strip_ui().drag_hover_timer())
                     hover->timer_expired();
                 return 0;
             }
