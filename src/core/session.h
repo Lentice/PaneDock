@@ -13,8 +13,6 @@ inline constexpr std::uint32_t kSessionSchemaVersion = 1;
 inline constexpr std::string_view kSessionFileName = "session.json";
 inline constexpr std::string_view kSessionBackupFileName = "session.json.bak";
 inline constexpr std::string_view kSessionTemporaryFileName = "session.json.tmp";
-inline constexpr std::string_view kSessionBackupTemporaryFileName =
-    "session.json.bak.tmp";
 
 struct SessionDocument final {
     ApplicationState application;
@@ -22,7 +20,16 @@ struct SessionDocument final {
     bool clean_shutdown{true};
 };
 
-enum class SessionSource { primary, backup, default_state };
+// interrupted_write means the primary was gone but the temporary file left
+// behind by a write that crashed between its two renames parsed cleanly. It
+// is the newest complete document on disk, so nothing was lost and there is
+// nothing to warn the user about.
+enum class SessionSource {
+    primary,
+    interrupted_write,
+    backup,
+    default_state
+};
 
 struct SessionReadResult final {
     SessionDocument document;

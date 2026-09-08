@@ -2327,6 +2327,8 @@ void capture_window_placement(HWND window, AppState& state) noexcept {
 const wchar_t* session_source_name(panedock::core::SessionSource source) {
     switch (source) {
         case panedock::core::SessionSource::primary: return L"primary";
+        case panedock::core::SessionSource::interrupted_write:
+            return L"interrupted_write";
         case panedock::core::SessionSource::backup: return L"backup";
         case panedock::core::SessionSource::default_state:
             return L"default_state";

@@ -601,12 +601,9 @@ bool write_session(const std::filesystem::path& directory,
     const auto primary = directory / kSessionFileName;
     const auto backup = directory / kSessionBackupFileName;
     const auto temporary = directory / kSessionTemporaryFileName;
-    const auto backup_temporary =
-        directory / kSessionBackupTemporaryFileName;
+    // A temporary left behind by an interrupted write is a read_session
+    // recovery candidate, so it must not survive into the next write.
     std::filesystem::remove(temporary, error);
-    if (error) return false;
-    error.clear();
-    std::filesystem::remove(backup_temporary, error);
     if (error) return false;
     error.clear();
     {
@@ -620,42 +617,28 @@ bool write_session(const std::filesystem::path& directory,
             return false;
         }
     }
+    // The only durability flush. The old primary becomes the backup by
+    // rename below, and its bytes were already flushed when it was written,
+    // so copying and flushing them a second time buys nothing.
     if (durability_hook != nullptr && !durability_hook(temporary)) {
         std::filesystem::remove(temporary, error);
         return false;
     }
-    const bool had_primary = std::filesystem::exists(primary, error);
-    if (error) { std::filesystem::remove(temporary, error); return false; }
-    if (had_primary) {
-        // A corrupt primary must never replace the last known-good backup.
-        if (read_file(primary)) {
-            std::filesystem::copy_file(
-                primary, backup_temporary,
-                std::filesystem::copy_options::none, error);
-            if (error) {
-                std::filesystem::remove(temporary, error);
-                std::filesystem::remove(backup_temporary, error);
-                return false;
-            }
-            if (durability_hook != nullptr &&
-                !durability_hook(backup_temporary)) {
-                std::filesystem::remove(temporary, error);
-                std::filesystem::remove(backup_temporary, error);
-                return false;
-            }
-            error.clear();
-            std::filesystem::rename(backup_temporary, backup, error);
-            if (error) {
-                std::filesystem::remove(temporary, error);
-                std::filesystem::remove(backup_temporary, error);
-                return false;
-            }
+    // A corrupt primary must never replace the last known-good backup, so
+    // rotate only what parses. read_file also tells us whether a primary is
+    // there at all, which makes a separate exists() call redundant.
+    if (read_file(primary)) {
+        error.clear();
+        std::filesystem::rename(primary, backup, error);
+        if (error) {
+            std::filesystem::remove(temporary, error);
+            return false;
         }
     }
+    error.clear();
     std::filesystem::rename(temporary, primary, error);
     if (!error) return true;
     std::filesystem::remove(temporary, error);
-    std::filesystem::remove(backup_temporary, error);
     return false;
 }
 
@@ -663,6 +646,7 @@ SessionReadResult read_session(const std::filesystem::path& directory,
                                ApplicationState default_state) {
     const auto primary = directory / kSessionFileName;
     const auto backup = directory / kSessionBackupFileName;
+    const auto temporary = directory / kSessionTemporaryFileName;
     std::error_code error;
     const bool directory_exists = std::filesystem::exists(directory, error);
     bool directory_status_error = bool(error);
@@ -681,15 +665,22 @@ SessionReadResult read_session(const std::filesystem::path& directory,
     if (!primary_status_error && primary_exists) {
         if (auto document = read_file(primary)) return {std::move(*document), SessionSource::primary, false};
     }
+    // The primary is missing between write_session's two renames. The
+    // temporary there is the newest complete document on disk: accept it if
+    // it parses, which a write torn mid-stream does not.
+    if (auto document = read_file(temporary))
+        return {std::move(*document), SessionSource::interrupted_write, false};
     error.clear();
     const bool backup_exists = std::filesystem::exists(backup, error);
     const bool backup_status_error = bool(error);
     if (!backup_status_error && backup_exists) {
         if (auto document = read_file(backup)) return {std::move(*document), SessionSource::backup, true};
     }
+    error.clear();
+    const bool temporary_exists = std::filesystem::exists(temporary, error);
     return {{std::move(default_state), {}}, SessionSource::default_state,
-            primary_exists || backup_exists || primary_status_error ||
-                backup_status_error};
+            primary_exists || backup_exists || temporary_exists ||
+                primary_status_error || backup_status_error || bool(error)};
 }
 
 }  // namespace panedock::core

@@ -290,7 +290,13 @@ notification，不 disable 主視窗與 pane。deferred realize 可在 notificat
 
 - 位置:`%LOCALAPPDATA%\PaneDock`
 - 格式:版本化 JSON,含 schema version,自首個版本即支援遷移
-- 寫入:原子替換(temp 檔加 rename),保留上一版為備份
+- 寫入:原子替換(`session.json.tmp` 寫入並 flush,再 rename 為 `session.json`),
+  保留上一版為備份。備份由舊 primary 直接 rename 成 `session.json.bak` 產生,
+  不複製資料、每次寫入只 flush 一次。
+- 讀取候選順序:`session.json` → `session.json.tmp` → `session.json.bak`,
+  每個都以「能完整 parse 且通過模型驗證」為閘門。採用 `.tmp` 的情況是寫入在兩次
+  rename 之間被中斷,此時 `.tmp` 是磁碟上最新的完整文件,沒有遺失,不發警告;
+  只有退到備份才告知使用者近期變更可能遺失。
 - 寫入時機:模型變更只標記 dirty 並重設 60 秒的 debounce timer,閒置滿 60 秒才落盤。切換 tab／pane／Group 這類廉價變更因此不會每次寫檔;為避免持續操作把 timer 無限往後推,debounce 有 10 分鐘上限,超過後讓已武裝的 timer 直接燒完。以上皆為約略值,允許誤差。
   關閉 AP 時若仍為 dirty 一定強制寫入(見 9.4),因此崩潰／斷電最多遺失最後一段閒置窗內的切換狀態,正常關閉不會遺失。寫入失敗保留 dirty 並重試。
 - **不得寫入 PIDL 或 COM 指標。** 持久化的 identity 為 parsing name ＋ known-folder identity ＋ fallback path。display name 永不作為 identity。

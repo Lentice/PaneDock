@@ -351,6 +351,10 @@ PD-011 gates everything. A No-Go verdict there redirects Phase 1 onward to the `
 | C# UI 殼層 ＋ C++ shell host DLL 混合 | `docs/adr/0001` | 同一 process 仍須付 .NET runtime,RAM 沒有改善,卻多出 ABI、除錯與打包複雜度;本專案 UI 只有側邊欄與固定版型,C# 殼層可省的工作量趨近於零。唯一值得重開的情境是改為**獨立 process** 隔離第三方 extension 崩潰,且需先有實際崩潰紀錄。 |
 | PD-067 的 `LBS_DISABLENOSCROLL` + pill 右側內距加大(4px→14px) | 2026-08-27 使用者實機驗收 | 使用者認為改回原本樣式(無 `LBS_DISABLENOSCROLL`、右側內距 4px)即可,已在 `src/sidebar/sidebar.cpp` revert。要重開需先有使用者具體回報捲軸仍不可見的情境。 |
 
+**2026-09-08 註記(PD-137 的備份輪替做法已被取代)**:PD-137 設計的 `session.json.bak.tmp` 中間檔——把有效 primary `copy_file` 到該檔、跑第二次 durability hook、再 rename 成 `session.json.bak`——已改為**直接 `rename(session.json → session.json.bak)`**。舊做法把當初已 flush 過的位元組再複製並再 flush 一次,買不到任何保證;新做法每次寫入只有一次 `FlushFileBuffers`、零資料複製、磁碟上少一個檔案。PD-137 要保護的兩個不變式都保留:寫入仍是「temp ＋ flush ＋ rename」的原子替換,且「損壞的 primary 不得覆蓋 last known-good backup」的驗證閘門仍在(改為以 `read_file(primary)` 的結果直接判斷,取代原本多餘的 `exists()`)。
+
+rename 輪替在兩個 rename 之間存在「primary 暫時不存在」的視窗期;為此 `read_session` 的候選順序改為 **primary → tmp → backup**,`.tmp` 只在 primary 讀不到時才被採用,並回報新的 `SessionSource::interrupted_write`(`recovered_from_corruption = false`,因為沒有任何遺失,不該對使用者發警告)。採用 `.tmp` 的安全性依據是實測:把一份 513 bytes 的真實文件在每個位元組截斷(512 種)與從每個位置起填零(513 種),`deserialize_session` 全部拒絕——嚴格 JSON parser 要求括號成對且吃完整個輸入,加上欄位型別檢查與 `is_valid`,已足以擋掉未寫完的 `.tmp`。唯一擋不到的是值內部單一位元組被改(結構仍合法),其後果是單一 location 解析失敗,已由 FR-012 的 tab 內可復原錯誤覆蓋,因此**不採用** header/footer signature 或 CRC(signature 攔不到那個情況,CRC 的代價換不到對應價值)。
+
 **2026-08-24 註記(PD-024 撰寫時的界線確認)**:PD-024「診斷模式:抑制第三方 shell extension」**沒有**重開上表最後一列,也沒有重開 `docs/design-spec.md` §3.2／§14 的「以獨立 process 隔離第三方 shell extension」。兩者目標不同:NFR-006 要的是「可**抑制**」——讓 extension 不要載入本 process,用來歸因崩潰;被否決的是「**隔離**」——讓 extension 在另一個 process 崩潰而不影響我們。PD-024 的手段是同一 process 內的 `SetProcessMitigationPolicy(ProcessSignaturePolicy)` `MicrosoftSignedOnly`,不新增 process、不新增 IPC、不寫 registry。若日後真的累積到實際的 extension 崩潰紀錄,要開的是另一張獨立 process 的票,並依本節規則寫出覆寫與新證據。
 
 ### 建議實作順序(open tickets)

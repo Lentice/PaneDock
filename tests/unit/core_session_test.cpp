@@ -53,12 +53,12 @@ std::string read_text(const std::filesystem::path& path) {
     return {std::istreambuf_iterator<char>(stream), {}};
 }
 
-enum class DurabilityFailure { none, temporary, backup };
+enum class DurabilityFailure { none, temporary };
 
 struct DurabilityProbe final {
     std::filesystem::path primary;
-    std::array<std::filesystem::path, 2> calls{};
-    std::array<std::string, 2> primary_snapshots{};
+    std::array<std::filesystem::path, 1> calls{};
+    std::array<std::string, 1> primary_snapshots{};
     std::size_t call_count{};
     DurabilityFailure failure{DurabilityFailure::none};
 };
@@ -73,11 +73,9 @@ bool fake_durability_hook(const std::filesystem::path& path) {
         active_probe->primary_snapshots[index] =
             read_text(active_probe->primary);
     }
-    const auto name = path.filename();
-    if (active_probe->failure == DurabilityFailure::temporary &&
-        name == std::filesystem::path(kSessionTemporaryFileName)) return false;
-    return active_probe->failure != DurabilityFailure::backup ||
-           name != std::filesystem::path(kSessionBackupTemporaryFileName);
+    return !(active_probe->failure == DurabilityFailure::temporary &&
+             path.filename() ==
+                 std::filesystem::path(kSessionTemporaryFileName));
 }
 
 void test_round_trip_and_plain_json() {
@@ -380,12 +378,11 @@ void test_durability_hook_order_and_failure() {
     active_probe = &probe;
     EXPECT(write_session(directory.path, document, fake_durability_hook));
     active_probe = nullptr;
-    EXPECT(probe.call_count == 2);
+    // One flush per write: the old primary becomes the backup by rename, so
+    // its already-flushed bytes are never copied and never flushed again.
+    EXPECT(probe.call_count == 1);
     EXPECT(probe.calls[0] == std::filesystem::path(kSessionTemporaryFileName));
-    EXPECT(probe.calls[1] ==
-           std::filesystem::path(kSessionBackupTemporaryFileName));
     EXPECT(probe.primary_snapshots[0] == old_primary);
-    EXPECT(probe.primary_snapshots[1] == old_primary);
     const std::string new_primary = read_text(primary);
     EXPECT(new_primary != old_primary);
 
@@ -399,18 +396,6 @@ void test_durability_hook_order_and_failure() {
     EXPECT(!std::filesystem::exists(
         directory.path / kSessionTemporaryFileName));
 
-    DurabilityProbe backup_failure{primary};
-    backup_failure.failure = DurabilityFailure::backup;
-    document.application.window_placement.width = 1600;
-    active_probe = &backup_failure;
-    EXPECT(!write_session(directory.path, document, fake_durability_hook));
-    active_probe = nullptr;
-    EXPECT(backup_failure.call_count == 2);
-    EXPECT(read_text(primary) == new_primary);
-    EXPECT(!std::filesystem::exists(
-        directory.path / kSessionTemporaryFileName));
-    EXPECT(!std::filesystem::exists(
-        directory.path / kSessionBackupTemporaryFileName));
 }
 
 void test_backup_replace_failure_preserves_primary() {
@@ -433,7 +418,49 @@ void test_backup_replace_failure_preserves_primary() {
     EXPECT(std::filesystem::is_directory(backup));
     EXPECT(read_text(backup / "keep") == "do not replace");
     EXPECT(!std::filesystem::exists(
-        directory.path / kSessionBackupTemporaryFileName));
+        directory.path / kSessionTemporaryFileName));
+}
+
+// write_session rotates by rename, so a crash between its two renames leaves
+// no primary, a complete temporary and the previous backup. The temporary is
+// the newest complete document there, so it is what read_session must return,
+// with nothing to warn the user about.
+void test_interrupted_write_recovers_from_temporary() {
+    TemporaryDirectory directory;
+    SessionDocument document{sample(), {}, true};
+    EXPECT(write_session(directory.path, document));
+    document.application.window_placement.width = 1440;
+    EXPECT(write_session(directory.path, document));
+
+    const auto primary = directory.path / kSessionFileName;
+    const auto backup = directory.path / kSessionBackupFileName;
+    const auto temporary = directory.path / kSessionTemporaryFileName;
+    const std::string previous = read_text(backup);
+
+    // Reproduce the window by hand: rename1 done, rename2 never happened.
+    document.application.window_placement.width = 1600;
+    write_text(temporary, serialize_session({document.application, {}, false}));
+    std::filesystem::rename(primary, backup);
+    EXPECT(!std::filesystem::exists(primary));
+
+    const auto recovered = read_session(directory.path);
+    EXPECT(recovered.source == SessionSource::interrupted_write);
+    EXPECT(!recovered.recovered_from_corruption);
+    EXPECT(recovered.document.application == document.application);
+    EXPECT(!recovered.document.clean_shutdown);
+    EXPECT(read_text(backup) != previous);
+
+    // A temporary torn mid-write does not parse, so the backup is used and
+    // the user is told changes may be missing.
+    write_text(temporary, read_text(backup).substr(0, 40));
+    const auto torn = read_session(directory.path);
+    EXPECT(torn.source == SessionSource::backup);
+    EXPECT(torn.recovered_from_corruption);
+
+    // The next successful write must not leave a stale recovery candidate.
+    EXPECT(write_session(directory.path, document));
+    EXPECT(!std::filesystem::exists(temporary));
+    EXPECT(read_session(directory.path).source == SessionSource::primary);
 }
 
 }  // namespace
@@ -452,6 +479,7 @@ int main() {
     test_atomic_write_and_backup();
     test_backup_replace_failure_preserves_primary();
     test_corrupt_primary_does_not_replace_good_backup();
+    test_interrupted_write_recovers_from_temporary();
     test_durability_hook_order_and_failure();
     return panedock::test::summary("core_session");
 }
