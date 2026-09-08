@@ -239,7 +239,7 @@ if ($chromeBody -notmatch 'ShellCall shell_call\(pane_host\(\)\);[\s\S]*panedock
     throw 'Shell re-entry invariant failed: Pane address display lost its Shell gate or binding check'
 }
 if ($statusBody -notmatch 'ShellCall shell_call\(pane_host\(\)\);[\s\S]*item_counts\(counts\)' -or
-    $statusBody -notmatch 'item_counts\(counts\);\s*}\s*if \(pane_host\(\)->is_shutting_down\(\)\) return;') {
+    $statusBody -notmatch 'item_counts\(counts\);\s*}\s*if \(!active\(\)\) return;') {
     throw 'Shell re-entry invariant failed: Pane status counts lost their Shell gate or shutdown check'
 }
 
@@ -252,7 +252,7 @@ if ($commandStart -lt 0 -or $commandEnd -lt $commandStart) {
 }
 $commandBody = $paneSource.Substring($commandStart, $commandEnd - $commandStart)
 if ([regex]::Matches($commandBody, 'ShellCall shell_call\(pane_host\(\)\);\s*\(void\)navigate_to\(').Count -ne 2 -or
-    $commandBody -notmatch 'pane_host\(\)->is_shutting_down\(\)' -or
+    $commandBody -notmatch '!active\(\)' -or
     $commandBody -match 'show_pinned_locations_manager') {
     throw 'Shell re-entry invariant failed: Pane pinned options lost their gate or own the app dialog'
 }

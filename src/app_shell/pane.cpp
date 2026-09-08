@@ -500,7 +500,7 @@ bool Pane::handle_command(int id) {
     const int pinned_base =
         kPinnedMenuIdBase + static_cast<int>(index_ * kPinnedMenuSlotsPerPane);
     if (id >= pinned_base && id < pinned_base + kPinnedMenuManageOffset) {
-        if (pane_host() == nullptr || pane_host()->is_shutting_down() ||
+        if (!active() ||
             pane_state() == nullptr) return true;
         const int item = id - pinned_base;
         const auto locations = pane_host()->pinned_locations();
@@ -631,7 +631,7 @@ void Pane::refresh_status_bar() noexcept {
         ShellCall shell_call(pane_host());
         hr = host().item_counts(counts);
     }
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (FAILED(hr)) {
         SetWindowTextW(status_bar(), L"");
         return;
@@ -657,6 +657,10 @@ void Pane::refresh_status_bar() noexcept {
         }
     }
     SetWindowTextW(status_bar(), text.c_str());
+}
+
+bool Pane::active() const noexcept {
+    return host_ != nullptr && !host_->is_shutting_down();
 }
 
 bool Pane::register_window_class(HINSTANCE instance) noexcept {
@@ -800,7 +804,7 @@ bool Pane::navigation_request_is_current(
 void Pane::navigation_complete(
     NavigationGeneration generation,
     const panedock::core::ShellLocation &new_location) {
-    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (!navigation_request_is_current(generation)) return;
     auto *tab = active_tab();
     if (tab == nullptr) return;
@@ -815,9 +819,9 @@ void Pane::navigation_complete(
                                            std::move(completed_location));
     }
     apply_view_mode();
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     apply_sort();
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     tab_strip_ui().refresh();
     pane_host()->schedule_session_save();
 }
@@ -832,8 +836,7 @@ void Pane::navigation_failed(NavigationGeneration generation) {
 }
 
 void Pane::navigate_history(bool back) {
-    if (pane_host() == nullptr) return;
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     auto *pane_state = bound_state_;
     if (pane_state == nullptr || suppress_history_record_) return;
     auto *tab = active_tab();
@@ -848,14 +851,13 @@ void Pane::navigate_history(bool back) {
         ShellCall shell_call(pane_host());
         hr = explorer_host_.navigate(tab->location, generation);
     }
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (FAILED(hr)) navigation_failed(generation);
     refresh_navigation_buttons();
 }
 
 void Pane::navigate_up() {
-    if (pane_host() == nullptr) return;
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (bound_state_ == nullptr) return;
     {
         ShellCall shell_call(pane_host());
@@ -864,8 +866,7 @@ void Pane::navigate_up() {
 }
 
 void Pane::refresh_view() {
-    if (pane_host() == nullptr) return;
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (bound_state_ == nullptr) return;
     {
         ShellCall shell_call(pane_host());
@@ -874,7 +875,7 @@ void Pane::refresh_view() {
 }
 
 void Pane::capture_view_mode() {
-    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (pane_state() == nullptr || !realized()) return;
     FOLDERVIEWMODE mode{};
     int image_size = -1;
@@ -883,7 +884,7 @@ void Pane::capture_view_mode() {
         ShellCall shell_call(pane_host());
         hr = explorer_host_.get_view_mode(mode, &image_size);
     }
-    if (pane_host()->is_shutting_down() || FAILED(hr)) return;
+    if (!active() || FAILED(hr)) return;
     auto *state = pane_state();
     if (state == nullptr) return;
     const std::string name = panedock::shell_core::view_mode_name(
@@ -893,7 +894,7 @@ void Pane::capture_view_mode() {
 }
 
 void Pane::capture_sort() {
-    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (pane_state() == nullptr || !realized()) return;
     std::string column;
     bool ascending{};
@@ -902,7 +903,7 @@ void Pane::capture_sort() {
         ShellCall shell_call(pane_host());
         hr = explorer_host_.get_sort(column, ascending);
     }
-    if (pane_host()->is_shutting_down() || FAILED(hr)) return;
+    if (!active() || FAILED(hr)) return;
     if (auto *tab = active_tab(); tab != nullptr) {
         tab->sort_column = std::move(column);
         tab->sort_ascending = ascending;
@@ -910,7 +911,7 @@ void Pane::capture_sort() {
 }
 
 void Pane::apply_view_mode() {
-    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     auto *tab = active_tab();
     if (tab == nullptr || !realized()) return;
     if (const auto selection = panedock::shell_core::parse_view_mode(
@@ -923,12 +924,12 @@ void Pane::apply_view_mode() {
         ShellCall shell_call(pane_host());
         (void)explorer_host_.set_view_mode(FVM_DETAILS);
     }
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     capture_view_mode();
 }
 
 void Pane::apply_sort() {
-    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     auto *tab = active_tab();
     if (tab == nullptr || !realized() || tab->sort_column.empty()) return;
     HRESULT hr = E_UNEXPECTED;
@@ -936,7 +937,7 @@ void Pane::apply_sort() {
         ShellCall shell_call(pane_host());
         hr = explorer_host_.set_sort(tab->sort_column, tab->sort_ascending);
     }
-    if (pane_host()->is_shutting_down() || FAILED(hr)) return;
+    if (!active() || FAILED(hr)) return;
     capture_sort();
 }
 
@@ -951,16 +952,16 @@ void Pane::capture_location() {
     if (tab == nullptr) return;
     tab->location = explorer_host_.location();
     capture_view_mode();
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     capture_sort();
     tab = active_tab();
-    if (pane_host()->is_shutting_down() || tab == nullptr) return;
+    if (!active() || tab == nullptr) return;
     if (!tab->history.empty() && tab->history_index < tab->history.size())
         tab->history[tab->history_index] = tab->location;
 }
 
 void Pane::set_view_mode(const panedock::shell_core::ViewModeOption &option) {
-    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (pane_state() == nullptr) return;
     HRESULT hr = E_UNEXPECTED;
     {
@@ -968,7 +969,7 @@ void Pane::set_view_mode(const panedock::shell_core::ViewModeOption &option) {
         hr = explorer_host_.set_view_mode(option.selection.mode,
                                           option.selection.image_size);
     }
-    if (pane_host()->is_shutting_down() || FAILED(hr)) return;
+    if (!active() || FAILED(hr)) return;
     if (auto *tab = active_tab(); tab != nullptr) {
         tab->view_mode = panedock::shell_core::view_mode_name(
             option.selection.mode, option.selection.image_size);
@@ -977,7 +978,7 @@ void Pane::set_view_mode(const panedock::shell_core::ViewModeOption &option) {
 }
 
 void Pane::show_view_mode_menu(POINT screen) {
-    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     auto *tab = active_tab();
     if (tab == nullptr || window_ == nullptr) return;
 
@@ -1012,13 +1013,13 @@ void Pane::show_view_mode_menu(POINT screen) {
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0,
         window_, nullptr);
     DestroyMenu(menu);
-    if (pane_host()->is_shutting_down() || command == 0) return;
+    if (!active() || command == 0) return;
     if (const HWND owner = GetParent(window_); owner != nullptr)
         SendMessageW(owner, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
 void Pane::submit_address() {
-    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (pane_state() == nullptr || address_bar_ == nullptr) return;
     const int length = GetWindowTextLengthW(address_bar_);
     std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
@@ -1030,16 +1031,16 @@ void Pane::submit_address() {
 }
 
 void Pane::pin_current_folder() {
-    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (pane_state() == nullptr) return;
     capture_location();
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (const auto *tab = active_tab(); tab != nullptr)
         pane_host()->pin_location(tab->location);
 }
 
 void Pane::show_pinned_locations_menu(POINT screen) {
-    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (pane_state() == nullptr || window_ == nullptr) return;
 
     const auto locations = pane_host()->pinned_locations();
@@ -1079,7 +1080,7 @@ void Pane::show_pinned_locations_menu(POINT screen) {
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0, window_,
         nullptr);
     DestroyMenu(menu);
-    if (pane_host()->is_shutting_down() || command == 0) return;
+    if (!active() || command == 0) return;
     if (const HWND owner = GetParent(window_); owner != nullptr)
         SendMessageW(owner, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
@@ -1121,15 +1122,14 @@ void Pane::finish_tab_change(bool navigate_active) {
             ShellCall shell_call(pane_host());
             (void)navigate_to(tab->location);
         }
-        if (pane_host()->is_shutting_down()) return;
+        if (!active()) return;
     }
     tab_strip_ui().refresh();
     pane_host()->schedule_session_save();
 }
 
 void Pane::switch_active_tab(const std::string &tab_id) {
-    if (pane_host() == nullptr) return;
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     auto *pane_state = bound_state_;
     if (pane_state == nullptr) return;
     if (pane_state->active_tab_id == tab_id) {
@@ -1138,7 +1138,7 @@ void Pane::switch_active_tab(const std::string &tab_id) {
     }
     capture_location();
     pane_state = bound_state_;
-    if (pane_host()->is_shutting_down() || pane_state == nullptr) return;
+    if (!active() || pane_state == nullptr) return;
     if (!panedock::core::set_active_tab(*pane_state, tab_id)) {
         tab_strip_ui().refresh();
         return;
@@ -1147,8 +1147,7 @@ void Pane::switch_active_tab(const std::string &tab_id) {
 }
 
 void Pane::cycle_active_tab(bool reverse) {
-    if (pane_host() == nullptr) return;
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     auto *pane_state = bound_state_;
     if (pane_state == nullptr) return;
     const auto current = std::find_if(
@@ -1166,14 +1165,13 @@ void Pane::cycle_active_tab(bool reverse) {
 }
 
 void Pane::add_tab(panedock::core::ShellLocation initial_location) {
-    if (pane_host() == nullptr) return;
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (pane_host()->active_group_id().empty()) return;
     auto *pane_state = bound_state_;
     if (pane_state == nullptr) return;
     capture_location();
     pane_state = bound_state_;
-    if (pane_host()->is_shutting_down() || pane_state == nullptr) return;
+    if (!active() || pane_state == nullptr) return;
     const std::string id = pane_host()->make_unique_tab_id();
     if (!panedock::core::add_tab(
             *pane_state,
@@ -1184,13 +1182,12 @@ void Pane::add_tab(panedock::core::ShellLocation initial_location) {
 }
 
 void Pane::close_tab(const std::string &tab_id) {
-    if (pane_host() == nullptr) return;
-    if (pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     auto *pane_state = bound_state_;
     if (pane_state == nullptr) return;
     capture_location();
     pane_state = bound_state_;
-    if (pane_host()->is_shutting_down() || pane_state == nullptr) return;
+    if (!active() || pane_state == nullptr) return;
     const bool closed_active = pane_state->active_tab_id == tab_id;
     if (!panedock::core::close_tab(
             *pane_state, tab_id,
@@ -1200,7 +1197,7 @@ void Pane::close_tab(const std::string &tab_id) {
 }
 
 void Pane::close_tabs(const std::string &tab_id, int command) {
-    if (pane_host() == nullptr || pane_host()->is_shutting_down()) return;
+    if (!active()) return;
     if (pane_state() == nullptr) return;
     if (command != kCloseOtherTabsId && command != kCloseAllTabsId &&
         command != kCloseTabsToRightId) return;

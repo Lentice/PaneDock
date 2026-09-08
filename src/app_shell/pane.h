@@ -47,6 +47,10 @@ class Pane final {
     static bool register_window_class(HINSTANCE instance) noexcept;
     void set_host(PaneHost *host) noexcept { host_ = host; }
     PaneHost *pane_host() const noexcept { return host_; }
+    // The one guard every Shell-touching Pane method needs: a host exists and
+    // is not tearing down. Shell calls re-enter our message loop, so methods
+    // re-check this after every ShellCall, not just on entry.
+    bool active() const noexcept;
     bool create(HWND parent, int pane_index) noexcept;
     void destroy() noexcept;
     void window_destroyed(HWND window) noexcept;
