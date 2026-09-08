@@ -58,14 +58,6 @@ std::pair<int, int> split(int size, double ratio, int minimum,
 
 std::vector<PaneRect> compute_layout_rects(
     int client_width, int client_height, LayoutTemplate layout_template,
-    const std::vector<double>& divider_ratios) {
-    return compute_layout_rects(client_width, client_height, layout_template,
-                                divider_ratios, kMinimumPaneWidth,
-                                kMinimumPaneHeight, kDividerThickness);
-}
-
-std::vector<PaneRect> compute_layout_rects(
-    int client_width, int client_height, LayoutTemplate layout_template,
     const std::vector<double>& divider_ratios, int minimum_pane_width,
     int minimum_pane_height, int divider_thickness) {
     const int width = std::max(client_width, minimum_pane_width);
