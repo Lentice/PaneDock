@@ -63,7 +63,7 @@ moving; tabs, address bars and Shell views must continue updating smoothly.
 
 ## What is deliberately not automated
 
-`explorer_host`, `shell_core` and `file_operations` have no automated tests.
+`explorer_host`、`shell_core` 與 `file_operations` 中需要 live Shell 的整合路徑不做自動測試；其中不依賴 Shell 的純邏輯仍依前述規則測試。
 
 Their behavior is defined by `shell32`, by whichever shell extensions are installed on the machine, and by undocumented view internals. A test double for `IExplorerBrowser` would assert our assumptions about the COM host contract rather than the contract itself — it would pass while the real integration is broken, which is worse than no test at all.
 

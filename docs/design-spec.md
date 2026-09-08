@@ -250,7 +250,7 @@ Per-Monitor-V2 DPI awareness。視窗跨越不同 DPI 的螢幕時,全部 pane �
 | `shell_core` | `IShellItem`、PIDL、Shell location identity、Shell 變更通知 | 對外傳遞原始 COM 指標 |
 | `file_operations` | `IFileOperation`、剪貼簿、OLE 拖放 | 直接檔案系統呼叫 |
 
-`core` 刻意不含 COM——它是本專案唯一的自動測試 seam。`shell_core` 對外提供 location 與 identity 這類值,而非原始 COM 指標,這同時保留一條退路:若 `IExplorerBrowser` 的宿主契約證明不可行,改為在 `IShellFolder`／`IContextMenu`／`IFileOperation` 之上自建清單檢視時,其上層無須重寫。
+`core` 刻意不含 COM——它是本專案主要的自動測試 seam。`shell_core` 對外提供 location 與 identity 這類值,而非原始 COM 指標,這同時保留一條退路:若 `IExplorerBrowser` 的宿主契約證明不可行,改為在 `IShellFolder`／`IContextMenu`／`IFileOperation` 之上自建清單檢視時,其上層無須重寫。
 
 ### 9.2 執行緒模型
 
@@ -306,25 +306,7 @@ notification，不 disable 主視窗與 pane。deferred realize 可在 notificat
 
 ## 12 測試策略
 
-### 12.1 唯一 seam
-
-全部自動測試只針對 `core` 模組。理由與被否決的替代方案見 `docs/testing.md`。
-
-### 12.2 core 的測試範圍
-
-資料模型不變式、版型矩形計算、session 序列化往返、schema 遷移、損壞文件處理、Group 變更操作。
-
-### 12.3 刻意不做自動測試者
-
-`explorer_host`、`shell_core`、`file_operations`。為 `IExplorerBrowser` 做 test double 只會驗證我們對 COM 契約的假設而非契約本身,會出現測試通過而真實整合已壞的情況。
-
-### 12.4 人工驗證
-
-以 `docs/testing.md` 的原型驗收清單執行,至少涵蓋一台裝有第三方 shell extension 的機器,以及一個已儲存但無法連線的網路路徑。
-
-### 12.5 端到端 UI 自動化
-
-否決。對 live Shell view 進行 UIAutomation／WinAppDriver 測試極易 flaky,維護成本高於其訊號價值。
+`core` 是主要自動測試 seam，且必須保持不含 HWND、COM 與 `windows.h`。其他不需 live Shell view、可透過公開介面驅動的單元也應測試。由 `shell32` 定義的整合行為改在真實桌面人工驗證，不以假的 `IExplorerBrowser` 或易 flaky 的端到端 UI 自動化取代。範圍、環境與驗收流程見 `docs/testing.md`。
 
 ## 13 驗收標準
 

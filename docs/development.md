@@ -23,7 +23,7 @@ Priority order when two goals conflict:
 | `shell_core` | `IShellItem`, PIDL, Shell location identity, change notification | Handing raw COM pointers to callers above it |
 | `file_operations` | `IFileOperation`, clipboard, OLE drag and drop | Direct filesystem calls, path string assembly |
 
-The `core` boundary is load-bearing, not stylistic. It is the only automated test seam in the project (`docs/testing.md` §Single seam). A COM type that leaks into `core` costs the seam and cannot be undone cheaply.
+The `core` boundary is load-bearing, not stylistic. It is the primary automated test seam (`docs/testing.md`); a COM type leaking into it destroys that seam.
 
 ## COM lifetime rules
 
