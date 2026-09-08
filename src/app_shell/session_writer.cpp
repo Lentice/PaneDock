@@ -1,5 +1,7 @@
 #include "app_shell/session_writer.h"
 
+#include <stdexcept>
+
 namespace panedock::app_shell {
 namespace {
 
@@ -22,9 +24,13 @@ bool flush_session_file(const std::filesystem::path& path) noexcept {
 bool SessionWriter::write(const core::ApplicationState& application,
                           bool clean_shutdown, HWND timer_owner) noexcept {
     dirty_ = true;
-    document_.application = application;
-    document_.clean_shutdown = clean_shutdown;
-    if (!core::write_session(directory_, document_, flush_session_file)) {
+    try {
+        document_.application = application;
+        document_.clean_shutdown = clean_shutdown;
+        if (!core::write_session(directory_, document_, flush_session_file))
+            throw std::runtime_error("write_session failed");
+    } catch (...) {
+        // noexcept: a failed session write must not terminate the process.
         OutputDebugStringW(L"PaneDock: session persistence failed\n");
         return false;
     }
@@ -35,9 +41,12 @@ bool SessionWriter::write(const core::ApplicationState& application,
 
 bool SessionWriter::write_clean_marker(
     const core::ApplicationState& application) noexcept {
-    document_.application = application;
-    document_.clean_shutdown = true;
-    if (!core::write_session(directory_, document_, flush_session_file)) {
+    try {
+        document_.application = application;
+        document_.clean_shutdown = true;
+        if (!core::write_session(directory_, document_, flush_session_file))
+            throw std::runtime_error("write_session failed");
+    } catch (...) {
         OutputDebugStringW(
             L"PaneDock: final clean-shutdown marker write failed\n");
         return false;

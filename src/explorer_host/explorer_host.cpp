@@ -976,6 +976,11 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
             }
         }
     }
+    // Every exit below still ends this navigation. Leave the generation
+    // recorded, or view-mode/sort calls keep returning E_PENDING forever.
+    if (generation == latest_navigation_generation_)
+        completed_navigation_generation_ = generation;
+
     if (pidl == nullptr) {
         return;
     }
@@ -1002,7 +1007,6 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
     // reach the app model.
     if (generation != latest_navigation_generation_) return;
     location_ = completed_location;
-    completed_navigation_generation_ = generation;
 
     error_overlay_.hide();
     if (navigation_callback_) {
