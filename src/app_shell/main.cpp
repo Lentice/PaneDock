@@ -403,6 +403,14 @@ struct Splitter {
     bool vertical;
 };
 
+// apply_layout already knew which pane failed and dropped the index on the
+// way out, leaving every caller with a bare HRESULT. Keeping it is what lets
+// a user-visible warning name the pane.
+struct LayoutFailure final {
+    HRESULT result;
+    std::size_t pane_index;
+};
+
 struct AppState : public panedock::app_shell::PaneHost {
     bool is_shutting_down() const noexcept override;
     void shell_call_entered() noexcept override;
@@ -427,6 +435,9 @@ struct AppState : public panedock::app_shell::PaneHost {
     // The legacy names below are references into the reducer state. Keeping
     // them avoids a second pane-wide mechanical rewrite while making the
     // reducer the only owner of shutdown transition data.
+    // The last apply_layout failure, so a warning shown after the fact can
+    // still say which pane and which HRESULT.
+    std::optional<LayoutFailure> last_layout_failure;
     panedock::core::ShutdownSequence shutdown_sequence;
     bool& quit_requested = shutdown_sequence.state().quit_requested;
     bool& closing_ = shutdown_sequence.state().closing_;
@@ -1438,6 +1449,39 @@ void append_startup_warning(AppState& state, std::wstring_view warning) {
     state.startup_notification.append_warning(warning);
 }
 
+// The pane index and HRESULT of the last layout failure, for a warning that
+// is shown after apply_layout has already returned.
+std::optional<std::size_t> last_failed_pane(const AppState& state) noexcept {
+    if (!state.last_layout_failure.has_value()) return std::nullopt;
+    return state.last_layout_failure->pane_index;
+}
+
+// Two audiences, two amounts of detail. The debugger channel gets the call
+// site and the folder that failed, which is what actually attributes a
+// third-party Shell extension fault; the user-visible notification gets only
+// the short detail line (see format_shell_failure_detail).
+void report_shell_failure(const AppState& state, const wchar_t* site,
+                          HRESULT result) noexcept try {
+    std::wstring message = L"PaneDock: Shell view realization failed site=";
+    message += site;
+    message += L' ';
+    message += panedock::app_shell::format_shell_failure_detail(
+        result, last_failed_pane(state));
+    if (const auto pane = last_failed_pane(state);
+        pane.has_value() && has_active_group(state)) {
+        const auto& panes = active_group(state).panes;
+        if (*pane < panes.size()) {
+            message += L" location=";
+            message += active_tab(panes[*pane]).location.parsing_name;
+        }
+    }
+    message += L'\n';
+    OutputDebugStringW(message.c_str());
+} catch (...) {
+    // Never let diagnostics be the thing that breaks a message handler.
+    OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
+}
+
 bool save_now(AppState& state, bool clean_shutdown = false,
               bool force_during_transition = false) noexcept {
     // Shutdown must still persist dirty model state if Shell re-entry leaves
@@ -1620,10 +1664,6 @@ HRESULT apply_layout(HWND window, AppState& state,
     };
     const UINT dpi = GetDpiForWindow(window);
     const int container_radius = panedock::app_shell::pane_card_radius(dpi);
-    struct LayoutFailure final {
-        HRESULT result;
-        std::size_t pane_index;
-    };
     std::optional<LayoutFailure> first_failure;
     std::array<bool, kExplorerCount> changed_panes{};
     std::array<std::optional<RECT>, kExplorerCount> pending_shell_rects{};
@@ -1834,6 +1874,7 @@ HRESULT apply_layout(HWND window, AppState& state,
     // count means one of them re-entered a Group mutation and the reference
     // was dangling.
     assert(state.application.groups.size() == group_count_on_entry);
+    state.last_layout_failure = first_failure;
     return first_failure.has_value() ? first_failure->result : S_OK;
 }
 
@@ -1918,9 +1959,9 @@ void perform_group_transition(HWND window, AppState& state,
                     return;
                 break;
             case Step::apply_layout:
-                if (FAILED(apply_layout(window, state)))
-                    OutputDebugStringW(
-                        L"PaneDock: Shell view realization failed\n");
+                if (const HRESULT hr = apply_layout(window, state);
+                    FAILED(hr))
+                    report_shell_failure(state, L"group_transition", hr);
                 break;
             case Step::focus_active_pane: {
                 if (!has_active_group(state)) break;
@@ -2269,8 +2310,10 @@ void update_sidebar_drag(HWND window, AppState& state, POINT point,
         point.x - state.sidebar_drag->start_x, 96, dpi);
     state.application.sidebar_width = panedock::core::clamp_sidebar_width(
         state.sidebar_drag->start_width, delta);
-    if (FAILED(apply_layout(window, state, false, recompute_content)))
-        OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
+    if (const HRESULT hr =
+            apply_layout(window, state, false, recompute_content);
+        FAILED(hr))
+        report_shell_failure(state, L"sidebar_drag", hr);
 }
 
 void update_splitter_drag(HWND window, AppState& state, POINT point,
@@ -2288,8 +2331,10 @@ void update_splitter_drag(HWND window, AppState& state, POINT point,
         layout_metrics(window).divider_thickness);
     if (!ratio.has_value()) return;
     group.divider_ratios[drag.ratio_index] = *ratio;
-    if (FAILED(apply_layout(window, state, false, recompute_content)))
-        OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
+    if (const HRESULT hr =
+            apply_layout(window, state, false, recompute_content);
+        FAILED(hr))
+        report_shell_failure(state, L"splitter_drag", hr);
 }
 
 std::size_t pane_at_point(HWND window, int stored_sidebar_width,
@@ -3048,15 +3093,18 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
     rebind_panes(state);
     refresh_ui_font(window, state);
     refresh_sidebar(state);
-    if (FAILED(apply_layout(window, state))) {
+    if (const HRESULT hr = apply_layout(window, state); FAILED(hr)) {
         // A single unreachable pane (offline drive, permission or AV block,
         // invalid stored location) must not prevent the app from opening. Keep
         // the window; the failing pane stays unrealized (blank) and the user is
         // told after create.
+        report_shell_failure(state, L"create", hr);
         append_startup_warning(
             state,
             L"PaneDock could not open the Shell view for one or more panes. "
-            L"Some panes may be empty.");
+            L"Some panes may be empty. " +
+                panedock::app_shell::format_shell_failure_detail(
+                    hr, last_failed_pane(state)));
     }
     if (state.is_shutting_down()) return 0;
     if (!register_tab_drag_hover_targets(window, state)) {
@@ -3497,10 +3545,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 // A pane whose Shell view could not be realized stays blank;
                 // update the non-blocking startup notification instead of
                 // entering a modal loop after the app is already usable.
+                report_shell_failure(*state, L"deferred_realize", hr);
                 append_startup_warning(
                     *state,
                     L"PaneDock could not open the Shell view for one or more "
-                    L"panes. Some panes may be empty.");
+                    L"panes. Some panes may be empty. " +
+                        panedock::app_shell::format_shell_failure_detail(
+                            hr, last_failed_pane(*state)));
                 show_startup_notification(window, *state);
             }
             return 0;
@@ -3646,9 +3697,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             return 0;
         case WM_SIZE:
-            if (state != nullptr &&
-                FAILED(apply_layout(window, *state, false, false)))
-                OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
+            if (state != nullptr) {
+                if (const HRESULT hr =
+                        apply_layout(window, *state, false, false);
+                    FAILED(hr))
+                    report_shell_failure(*state, L"WM_SIZE", hr);
+            }
             return 0;
         case WM_DPICHANGED: {
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);
@@ -3663,8 +3717,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     pane.laid_out_pane_rect().reset();
             }
             if (state != nullptr) refresh_ui_font(window, *state);
-            if (state != nullptr && FAILED(apply_layout(window, *state)))
-                OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
+            if (state != nullptr) {
+                if (const HRESULT hr = apply_layout(window, *state);
+                    FAILED(hr))
+                    report_shell_failure(*state, L"WM_DPICHANGED", hr);
+            }
             return 0;
         }
         case WM_LBUTTONDOWN:
@@ -4076,10 +4133,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 L"PaneDock: could not queue deferred Shell view realization\n");
             const HRESULT hr = realize_startup_panes(window, state);
             if (FAILED(hr) && !state.is_shutting_down()) {
+                report_shell_failure(state, L"startup_realize", hr);
                 append_startup_warning(
                     state,
                     L"PaneDock could not open the Shell view for one or more "
-                    L"panes. Some panes may be empty.");
+                    L"panes. Some panes may be empty. " +
+                        panedock::app_shell::format_shell_failure_detail(
+                            hr, last_failed_pane(state)));
             }
         }
     }

@@ -8,7 +8,33 @@
 #endif
 #include <windows.h>
 
+#include <optional>
+#include <string>
+
 namespace panedock::app_shell {
+
+// A failure the user has to be told about carries two audiences in one
+// string: the plain sentence the caller writes for the user, and this
+// detail, which is the smallest pair of values that makes the failure
+// attributable -- which pane, and the HRESULT to look up.
+//
+// The failing folder's parsing name is deliberately not here. It is the most
+// useful value for a developer, so it goes to the debugger channel, but it
+// is user data and can be arbitrarily long, and a notification the user has
+// to read is the wrong place for either property.
+inline std::wstring format_shell_failure_detail(
+    HRESULT result, std::optional<std::size_t> pane_index) {
+    wchar_t code[11]{};
+    swprintf(code, std::size(code), L"0x%08lX",
+             static_cast<unsigned long>(result));
+    std::wstring detail = L"Details: ";
+    if (pane_index.has_value())
+        detail += L"pane " + std::to_wstring(*pane_index + 1) + L", ";
+    detail += L"HRESULT ";
+    detail += code;
+    detail += L'.';
+    return detail;
+}
 
 template <typename T>
 T* window_state_from_create(HWND window, LPARAM lparam) noexcept {
