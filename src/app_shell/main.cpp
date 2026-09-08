@@ -104,8 +104,8 @@ constexpr UINT kDeferredLayoutMessage = WM_APP + 55;
 // PD-171: replay model-changing commands after an app-owned Shell call.
 constexpr UINT kDeferredCommandMessage = WM_APP + 56;
 constexpr UINT kDeferredTabSelectionMessage = WM_APP + 57;
-constexpr int kSidebarMinimumWidth = 160;
-constexpr int kSidebarMaximumWidth = 420;
+using panedock::core::kSidebarMaximumWidth;
+using panedock::core::kSidebarMinimumWidth;
 constexpr std::size_t kExplorerCount = 4;
 using NavigationGeneration =
     panedock::explorer_host::ExplorerHost::NavigationGeneration;
@@ -779,10 +779,13 @@ void fill_rounded_rect(HDC dc, const RECT& rect, int radius, COLORREF fill,
     if (brush != nullptr) DeleteObject(brush);
 }
 
-int current_sidebar_width(HWND window, const AppState& state) noexcept {
+// These eight take the stored sidebar width rather than the whole AppState.
+// Every one of them reads that single int, so the parameter is the
+// documentation: nothing else about the application can reach them.
+int current_sidebar_width(HWND window, int stored_sidebar_width) noexcept {
     const RECT client = client_rect(window);
     return std::min(static_cast<int>(client.right - client.left),
-                    scaled_value(window, state.application.sidebar_width));
+                    scaled_value(window, stored_sidebar_width));
 }
 
 class WindowPositionBatch final {
@@ -1004,10 +1007,11 @@ void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
     if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
 }
 
-RECT pane_area(HWND window, const AppState& state) noexcept {
+RECT pane_area(HWND window, int stored_sidebar_width) noexcept {
     RECT area = client_rect(window);
-    area.left = std::min(area.right,
-                         area.left + current_sidebar_width(window, state));
+    area.left = std::min(
+        area.right, area.left + current_sidebar_width(window,
+                                                      stored_sidebar_width));
     area.top = std::min(area.bottom,
                         area.top + scaled_value(window, kLayoutBarHeight));
     return area;
@@ -1023,40 +1027,32 @@ LayoutMetrics layout_metrics(HWND window) noexcept {
             scaled(kPaneDividerThickness)};
 }
 
-bool sidebar_boundary_at_point(HWND window, const AppState& state,
+bool sidebar_boundary_at_point(HWND window, int stored_sidebar_width,
                                POINT point) noexcept {
     const RECT client = client_rect(window);
-    const int boundary = client.left + current_sidebar_width(window, state);
-    const int thickness = layout_metrics(window).divider_thickness;
-    const int left = std::max(static_cast<int>(client.left),
-                              boundary - thickness / 2);
-    const int right = std::min(static_cast<int>(client.right),
-                               boundary + thickness - thickness / 2);
-    const RECT hit{left, client.top, right, client.bottom};
-    return hit.right > hit.left && PtInRect(&hit, point);
+    return point.y >= client.top && point.y < client.bottom &&
+           panedock::core::sidebar_boundary_contains(
+               point.x,
+               client.left + current_sidebar_width(window,
+                                                   stored_sidebar_width),
+               layout_metrics(window).divider_thickness, client.left,
+               client.right);
 }
 
-RECT pane_content_area(HWND window, const AppState& state) noexcept {
-    RECT area = pane_area(window, state);
+RECT pane_content_area(HWND window, int stored_sidebar_width) noexcept {
+    const RECT area = pane_area(window, stored_sidebar_width);
     const LayoutMetrics metrics = layout_metrics(window);
-    const int padding = scaled_value(window, kSpaceRoomy);
-    const int width = area.right - area.left;
-    const int height = area.bottom - area.top;
-    if (width < metrics.minimum_pane_width + 2 * padding ||
-        height < metrics.minimum_pane_height + 2 * padding) {
-        return area;
-    }
-    area.left += padding;
-    area.top += padding;
-    area.right -= padding;
-    area.bottom -= padding;
-    return area;
+    const auto content = panedock::core::pane_content_rect(
+        {area.left, area.top, area.right - area.left, area.bottom - area.top},
+        scaled_value(window, kSpaceRoomy), metrics.minimum_pane_width,
+        metrics.minimum_pane_height);
+    return to_win32_rect(content);
 }
 
 std::vector<panedock::core::PaneRect> layout_rects(
-    HWND window, const AppState& state,
+    HWND window, int stored_sidebar_width,
     const panedock::core::GroupState& group) {
-    const RECT client = pane_content_area(window, state);
+    const RECT client = pane_content_area(window, stored_sidebar_width);
     const LayoutMetrics metrics = layout_metrics(window);
     auto rects = panedock::core::compute_layout_rects(
         client.right - client.left, client.bottom - client.top,
@@ -1073,10 +1069,9 @@ std::vector<panedock::core::PaneRect> layout_rects(
 // The divider geometry itself is pure and unit-tested in
 // core::compute_splitter_rects; this only supplies the window's metrics and
 // converts to RECT.
-std::vector<Splitter> splitters(HWND window,
-                                const AppState& state,
+std::vector<Splitter> splitters(HWND window, int stored_sidebar_width,
                                 const panedock::core::GroupState& group) {
-    const auto rects = layout_rects(window, state, group);
+    const auto rects = layout_rects(window, stored_sidebar_width, group);
     const auto bars = panedock::core::compute_splitter_rects(
         rects, group.layout_template,
         layout_metrics(window).divider_thickness);
@@ -1089,9 +1084,10 @@ std::vector<Splitter> splitters(HWND window,
 }
 
 std::optional<Splitter> splitter_at_point(
-    HWND window, const AppState& state,
+    HWND window, int stored_sidebar_width,
     const panedock::core::GroupState& group, POINT point) {
-    for (const Splitter& splitter : splitters(window, state, group)) {
+    for (const Splitter& splitter :
+         splitters(window, stored_sidebar_width, group)) {
         if (PtInRect(&splitter.rect, point)) return splitter;
     }
     return std::nullopt;
@@ -1149,7 +1145,7 @@ void layout_sidebar(HWND window, AppState& state,
                     WindowPositionBatch* batch = nullptr,
                     RECT* list_rect_out = nullptr) noexcept {
     const RECT client = client_rect(window);
-    const int width = current_sidebar_width(window, state);
+    const int width = current_sidebar_width(window, state.application.sidebar_width);
     const int margin = scaled_value(window, kSpaceSnug);
     const int gap = scaled_value(window, kSpaceTight);
     const int brand_height = scaled_value(window, kBrandBarHeight);
@@ -1180,7 +1176,7 @@ void layout_sidebar(HWND window, AppState& state,
                         SWP_NOZORDER | SWP_NOACTIVATE);
         y += button_height + gap;
     }
-    const RECT panes = pane_area(window, state);
+    const RECT panes = pane_area(window, state.application.sidebar_width);
     position_window(batch, state.empty_message, panes,
                     SWP_NOZORDER | SWP_NOACTIVATE);
 }
@@ -1189,7 +1185,7 @@ void layout_header(HWND window, AppState& state,
                    WindowPositionBatch* batch = nullptr,
                    bool update_selection = true) noexcept {
     const RECT client = client_rect(window);
-    const int sidebar_width = current_sidebar_width(window, state);
+    const int sidebar_width = current_sidebar_width(window, state.application.sidebar_width);
     const int margin = scaled_value(window, kSpaceBase);
     const int segment_gap = scaled_value(window, 1);
     const int header_height = std::min(
@@ -1197,23 +1193,14 @@ void layout_header(HWND window, AppState& state,
         std::max(0, static_cast<int>(client.bottom - client.top)));
     const int button_height = std::min(
         scaled_value(window, kLayoutButtonHeight), header_height);
-    const int button_width = std::max(
-        1, std::min(scaled_value(window, kLayoutButtonWidth),
-                    std::max(0, static_cast<int>(client.right) -
-                                    sidebar_width - 2 * margin -
-                                    (static_cast<int>(kLayoutButtonIds.size()) -
-                                     1) * segment_gap) /
-                        static_cast<int>(kLayoutButtonIds.size())));
-    const int total_width =
-        static_cast<int>(kLayoutButtonIds.size()) * button_width +
-        (static_cast<int>(kLayoutButtonIds.size()) - 1) * segment_gap;
-    // Right-align the whole group; if the window is too narrow to fit it
-    // with room to spare on the left of the sidebar, fall back to the
-    // original left-aligned start position instead of overlapping it.
-    const int x_start = std::max(sidebar_width + margin,
-                                 static_cast<int>(client.right) - margin -
-                                     total_width);
-    int x = x_start;
+    // Right-alignment, the shrink-to-fit width and the no-overlap fallback
+    // are pure and unit-tested in core::compute_layout_button_strip.
+    const auto strip = panedock::core::compute_layout_button_strip(
+        static_cast<int>(client.right), sidebar_width, margin, segment_gap,
+        scaled_value(window, kLayoutButtonWidth),
+        static_cast<int>(kLayoutButtonIds.size()));
+    const int button_width = strip.button_width;
+    int x = strip.x;
     for (HWND button : state.layout_buttons) {
         position_window(
             batch, button,
@@ -1605,7 +1592,7 @@ HRESULT apply_layout(HWND window, AppState& state,
     }
     ShowWindow(state.empty_message, SW_HIDE);
     auto& group = active_group(state);
-    const auto rects = layout_rects(window, state, group);
+    const auto rects = layout_rects(window, state.application.sidebar_width, group);
     const auto realization_mode =
         state.startup_frame_only
             ? panedock::core::RealizationMode::startup_frame
@@ -2244,9 +2231,8 @@ void update_sidebar_drag(HWND window, AppState& state, POINT point,
     const int dpi = std::max(1, static_cast<int>(GetDpiForWindow(window)));
     const int delta = MulDiv(
         point.x - state.sidebar_drag->start_x, 96, dpi);
-    state.application.sidebar_width = std::clamp(
-        state.sidebar_drag->start_width + delta, kSidebarMinimumWidth,
-        kSidebarMaximumWidth);
+    state.application.sidebar_width = panedock::core::clamp_sidebar_width(
+        state.sidebar_drag->start_width, delta);
     if (FAILED(apply_layout(window, state, false, recompute_content)))
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
 }
@@ -2258,7 +2244,7 @@ void update_splitter_drag(HWND window, AppState& state, POINT point,
     const Splitter& drag = *state.splitter_drag;
     if (drag.ratio_index >= group.divider_ratios.size()) return;
 
-    const RECT client = pane_content_area(window, state);
+    const RECT client = pane_content_area(window, state.application.sidebar_width);
     const auto ratio = panedock::core::divider_ratio_at(
         drag.vertical ? point.x - client.left : point.y - client.top,
         drag.vertical ? client.right - client.left
@@ -2270,15 +2256,23 @@ void update_splitter_drag(HWND window, AppState& state, POINT point,
         OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
 }
 
-std::size_t pane_at_point(HWND window, const AppState& state,
+std::size_t pane_at_point(HWND window, int stored_sidebar_width,
+                          const panedock::core::GroupState& group,
                           POINT point) noexcept {
-    if (!has_active_group(state)) return kExplorerCount;
-    const auto rects = layout_rects(window, state, active_group(state));
+    const auto rects = layout_rects(window, stored_sidebar_width, group);
     for (std::size_t index = 0; index < rects.size(); ++index) {
         const RECT rect = to_win32_rect(rects[index]);
         if (PtInRect(&rect, point)) return index;
     }
     return kExplorerCount;
+}
+
+// The coordinator's guard: no active Group means no pane under any point.
+std::size_t pane_at_point(HWND window, const AppState& state,
+                          POINT point) noexcept {
+    if (!has_active_group(state)) return kExplorerCount;
+    return pane_at_point(window, state.application.sidebar_width,
+                         active_group(state), point);
 }
 
 void capture_window_placement(HWND window, AppState& state) noexcept {
@@ -3235,17 +3229,19 @@ std::optional<LRESULT> handle_global_mouse_message(
     switch (message) {
         case WM_LBUTTONDOWN: {
             const POINT point = point_from_lparam(lparam);
-            if (sidebar_boundary_at_point(window, state, point)) {
+            if (sidebar_boundary_at_point(window, state.application.sidebar_width,
+                                         point)) {
                 state.sidebar_drag = AppState::SidebarDrag{
                     point.x,
-                    std::clamp(state.application.sidebar_width,
-                               kSidebarMinimumWidth, kSidebarMaximumWidth)};
+                    panedock::core::clamp_sidebar_width(
+                        state.application.sidebar_width, 0)};
                 SetCapture(window);
                 return 0;
             }
             if (has_active_group(state)) {
                 state.splitter_drag =
-                    splitter_at_point(window, state, active_group(state), point);
+                    splitter_at_point(window, state.application.sidebar_width,
+                                      active_group(state), point);
                 if (state.splitter_drag.has_value()) {
                     SetCapture(window);
                     return 0;
@@ -3290,8 +3286,8 @@ std::optional<LRESULT> handle_global_mouse_message(
         case WM_LBUTTONDBLCLK:
             if (has_active_group(state)) {
                 const auto splitter = splitter_at_point(
-                    window, state, active_group(state),
-                    point_from_lparam(lparam));
+                    window, state.application.sidebar_width,
+                    active_group(state), point_from_lparam(lparam));
                 if (splitter.has_value()) {
                     active_group(state)
                         .divider_ratios[splitter->ratio_index] = 0.5;
@@ -3307,13 +3303,15 @@ std::optional<LRESULT> handle_global_mouse_message(
                 GetCursorPos(&point);
                 ScreenToClient(window, &point);
                 if (state.sidebar_drag.has_value() ||
-                    sidebar_boundary_at_point(window, state, point)) {
+                    sidebar_boundary_at_point(window, state.application.sidebar_width,
+                                         point)) {
                     SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
                     return TRUE;
                 }
                 if (has_active_group(state)) {
                     const auto splitter = splitter_at_point(
-                        window, state, active_group(state), point);
+                        window, state.application.sidebar_width,
+                        active_group(state), point);
                     if (splitter.has_value()) {
                         SetCursor(LoadCursorW(
                             nullptr,
@@ -3555,7 +3553,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                       paint.rcPaint.top, paint.rcPaint.right,
                                       paint.rcPaint.bottom);
                     paint_client_background(
-                        window, dc, current_sidebar_width(window, *state),
+                        window, dc, current_sidebar_width(window, state->application.sidebar_width),
                         state->layout_buttons);
                     RestoreDC(dc, saved);
                     EndPaint(window, &paint);
@@ -3567,7 +3565,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state != nullptr && (lparam & PRF_CLIENT) != 0) {
                 paint_client_background(
                     window, reinterpret_cast<HDC>(wparam),
-                    current_sidebar_width(window, *state),
+                    current_sidebar_width(window, state->application.sidebar_width),
                     state->layout_buttons);
                 return 0;
             }

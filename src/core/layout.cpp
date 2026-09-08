@@ -5,6 +5,45 @@
 #include <utility>
 
 namespace panedock::core {
+
+PaneRect pane_content_rect(const PaneRect& area, int padding,
+                           int minimum_pane_width,
+                           int minimum_pane_height) noexcept {
+    if (area.width < minimum_pane_width + 2 * padding ||
+        area.height < minimum_pane_height + 2 * padding)
+        return area;
+    return {area.x + padding, area.y + padding, area.width - 2 * padding,
+            area.height - 2 * padding};
+}
+
+bool sidebar_boundary_contains(int x, int boundary, int thickness,
+                               int client_left, int client_right) noexcept {
+    const int left = (std::max)(client_left, boundary - thickness / 2);
+    const int right =
+        (std::min)(client_right, boundary + thickness - thickness / 2);
+    return right > left && x >= left && x < right;
+}
+
+int clamp_sidebar_width(int start_width, int delta) noexcept {
+    return std::clamp(start_width + delta, kSidebarMinimumWidth,
+                      kSidebarMaximumWidth);
+}
+
+LayoutButtonStrip compute_layout_button_strip(
+    int client_width, int sidebar_width, int margin, int gap,
+    int preferred_button_width, int button_count) noexcept {
+    if (button_count <= 0) return {};
+    const int gaps = (button_count - 1) * gap;
+    const int available =
+        (std::max)(0, client_width - sidebar_width - 2 * margin - gaps);
+    const int button_width =
+        (std::max)(1, (std::min)(preferred_button_width,
+                                 available / button_count));
+    const int total_width = button_count * button_width + gaps;
+    const int x =
+        (std::max)(sidebar_width + margin, client_width - margin - total_width);
+    return {x, button_width, total_width};
+}
 namespace {
 
 std::pair<int, int> split(int size, double ratio, int minimum,

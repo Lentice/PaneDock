@@ -11,6 +11,8 @@ namespace panedock::core {
 inline constexpr int kMinimumPaneWidth = 120;
 inline constexpr int kMinimumPaneHeight = 80;
 inline constexpr int kDividerThickness = 4;
+inline constexpr int kSidebarMinimumWidth = 160;
+inline constexpr int kSidebarMaximumWidth = 420;
 
 struct PaneRect final {
     int x{};
@@ -75,5 +77,42 @@ std::optional<double> divider_ratio_at(int position, int size,
 RealizationPlan plan_realization(
     const GroupState& group, LayoutTemplate layout_template,
     std::span<const bool> currently_realized, RealizationMode mode);
+
+// The pane area inset by `padding` on every side -- the FR-004a degenerate
+// rule. An area that could not hold one minimum-sized pane plus the padding
+// keeps its full extent instead: losing the padding is better than losing the
+// pane. compute_layout_rects never sees this decision, so it lives here
+// beside it rather than in the caller that happens to own an HWND.
+PaneRect pane_content_rect(const PaneRect& area, int padding,
+                           int minimum_pane_width,
+                           int minimum_pane_height) noexcept;
+
+// Whether `x` falls in the draggable strip straddling the sidebar boundary.
+// The strip is centred on `boundary` and clipped to the client edges, so a
+// boundary sitting on an edge yields a narrower strip rather than one that
+// reaches outside the window.
+bool sidebar_boundary_contains(int x, int boundary, int thickness,
+                               int client_left, int client_right) noexcept;
+
+// The sidebar width a drag means. `delta` is already normalised to 96 DPI,
+// so the same physical drag distance produces the same stored width on every
+// monitor.
+int clamp_sidebar_width(int start_width, int delta) noexcept;
+
+// Where the layout-template button strip goes. The group is right-aligned in
+// the header, but never at the cost of overlapping the sidebar: a window too
+// narrow to fit it falls back to the left-aligned start, and the buttons
+// shrink to whatever room is left.
+struct LayoutButtonStrip final {
+    int x{};
+    int button_width{};
+    int total_width{};
+
+    bool operator==(const LayoutButtonStrip&) const = default;
+};
+
+LayoutButtonStrip compute_layout_button_strip(
+    int client_width, int sidebar_width, int margin, int gap,
+    int preferred_button_width, int button_count) noexcept;
 
 }  // namespace panedock::core
