@@ -220,15 +220,12 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
     if (glyph_kind < kNavigationGlyphs.size() &&
         draw_navigation_font_glyph(item, kNavigationGlyphs[glyph_kind],
                                    color)) {
-        if ((item.itemState & ODS_FOCUS) != 0)
-            DrawFocusRect(item.hDC, &item.rcItem);
         return;
     }
 
     // The font-failure path keeps all navigation controls visible without the
     // platform icon font.
     draw_navigation_fallback_glyph(item, glyph_kind, color, size);
-    if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
 }
 
 void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi) noexcept {
