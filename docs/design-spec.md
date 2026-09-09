@@ -131,6 +131,8 @@ host-level 入口：PaneDock 只觸發同一個 Shell view 的 background `ICont
 
 使用者可新增、重新命名、複製、刪除、重新排序 Group。刪除需二次確認。複製會複製完整狀態但產生新的 identity。
 
+Group 右鍵選單的每個操作皆搭配簡潔的單色線條圖示：重新命名用鉛筆、複製用重疊文件、刪除用垃圾桶、排序用向上／向下箭頭。保留英文文字標籤，圖示隨 DPI 縮放，停用項目以灰色呈現。
+
 當鍵盤焦點在 sidebar 的 Group row 時，按 `F2` 開始該 Group 的 inline rename；鍵盤焦點在 Shell view 時，`F2` 維持 Windows 原生檔案 rename 行為。
 
 以拖曳重新排序時採 **remove source，再 insert at target index** 的語意。拖曳中的 placeholder 必須顯示被拖曳 Group 的淡化內容；來源 Group 不再留在原列，插入位置起的其他 Group 依最終順序位移，不得以 placeholder 覆蓋或隱藏原本位於目標位置的 Group。此預覽順序必須與放開後的實際順序一致，包含單一 Group、原位放開、第一個移到最後一個、最後一個移到第一個，以及任何中間位置的雙向拖曳。

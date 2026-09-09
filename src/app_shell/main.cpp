@@ -34,6 +34,7 @@
 #include <wrl/client.h>
 
 #include "app_shell/diagnostic_mode.h"
+#include "app_shell/menu_icon.h"
 #include "app_shell/pane.h"
 #include "app_shell/pane_control_id.h"
 #include "app_shell/pane_host.h"
@@ -3298,10 +3299,34 @@ bool handle_context_menu(HWND target, AppState& state, POINT screen) {
                     (index + 1 >= state.application.groups.size() ? MF_GRAYED
                                                                   : 0),
                 static_cast<UINT_PTR>(kMoveDownId), L"Move Down");
+    const std::array<std::pair<UINT, wchar_t>, 5> icons{{
+        {kRenameGroupId, L'\uE70F'},
+        {kDuplicateGroupId, L'\uE8C8'},
+        {kDeleteGroupId, L'\uE74D'},
+        {kMoveUpId, L'\uE74A'},
+        {kMoveDownId, L'\uE74B'},
+    }};
+    std::array<HBITMAP, icons.size()> bitmaps{};
+    for (std::size_t i = 0; i < icons.size(); ++i) {
+        const auto [id, glyph] = icons[i];
+        const bool disabled = (GetMenuState(menu, id, MF_BYCOMMAND) &
+                               (MF_DISABLED | MF_GRAYED)) != 0;
+        bitmaps[i] = panedock::app_shell::create_menu_icon(
+            glyph, GetDpiForWindow(window),
+            GetSysColor(disabled ? COLOR_GRAYTEXT : COLOR_MENUTEXT));
+        MENUITEMINFOW item{};
+        item.cbSize = sizeof(item);
+        item.fMask = MIIM_BITMAP;
+        item.hbmpItem = bitmaps[i];
+        SetMenuItemInfoW(menu, id, FALSE, &item);
+    }
     SetForegroundWindow(window);
     const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                        point.x, point.y, 0, window, nullptr);
     DestroyMenu(menu);
+    for (const auto bitmap : bitmaps) {
+        if (bitmap != nullptr) DeleteObject(bitmap);
+    }
     if (state.is_shutting_down()) return true;
     if (command != 0)
         SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);

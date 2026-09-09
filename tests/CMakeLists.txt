@@ -8,6 +8,7 @@
 # Add a row here rather than writing another add_executable block.
 
 set(PANEDOCK_TESTS
+    "menu_icon|unit/menu_icon_test.cpp|gdi32 user32"
     "diagnostic_flag|unit/diagnostic_flag_check.cpp|"
     "tab_overflow|unit/tab_overflow_test.cpp|"
     "window_placement|unit/window_placement_test.cpp|"

@@ -72,6 +72,14 @@ moving; tabs, address bars and Shell views must continue updating smoothly.
 
 ## What is deliberately not automated
 
+Group menu icons: `ctest --test-dir build -R '^panedock_menu_icon$' --output-on-failure`
+checks all five glyphs at 96/144/192 DPI for visible pixels, transparent background,
+dimensions and premultiplied color. This is a GDI rendering check and belongs
+outside `core`. Manual follow-up: right-click the first, middle and last Group;
+check pencil/copy/trash/up/down icons, gray disabled arrows, hover contrast and
+alignment at each monitor DPI. The native popup's final appearance is not
+established by the pixel check.
+
 `explorer_host`、`shell_core` 與 `file_operations` 中需要 live Shell 的整合路徑不做自動測試；其中不依賴 Shell 的純邏輯仍依前述規則測試。
 
 Their behavior is defined by `shell32`, by whichever shell extensions are installed on the machine, and by undocumented view internals. A test double for `IExplorerBrowser` would assert our assumptions about the COM host contract rather than the contract itself — it would pass while the real integration is broken, which is worse than no test at all.
