@@ -67,7 +67,6 @@ public:
     HRESULT navigate_up() noexcept;
     HRESULT navigate_up(NavigationGeneration generation) noexcept;
     HRESULT refresh();
-    HRESULT refresh(NavigationGeneration generation);
     HRESULT set_view_mode(FOLDERVIEWMODE mode, int image_size = -1) noexcept;
     HRESULT get_view_mode(FOLDERVIEWMODE& mode,
                           int* image_size = nullptr) const noexcept;

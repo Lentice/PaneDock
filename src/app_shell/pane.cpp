@@ -870,7 +870,7 @@ void Pane::refresh_view() {
     if (bound_state_ == nullptr) return;
     {
         ShellCall shell_call(pane_host());
-        (void)explorer_host_.refresh(begin_navigation());
+        (void)explorer_host_.refresh();
     }
 }
 

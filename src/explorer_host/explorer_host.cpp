@@ -650,11 +650,18 @@ HRESULT ExplorerHost::navigate(const core::ShellLocation& location,
 }
 
 HRESULT ExplorerHost::refresh() {
+    // BrowseToObject on the location we are already showing is a no-op inside
+    // IExplorerBrowser, so re-navigating never re-enumerated the folder. Ask
+    // the live view to re-read it instead; only fall back to a navigation when
+    // there is no live view to ask.
+    if (browser_ != nullptr) {
+        Microsoft::WRL::ComPtr<IShellView> view;
+        if (SUCCEEDED(browser_->GetCurrentView(IID_PPV_ARGS(&view))) &&
+            view != nullptr) {
+            return view->Refresh();
+        }
+    }
     return navigate(location_);
-}
-
-HRESULT ExplorerHost::refresh(NavigationGeneration generation) {
-    return navigate(location_, generation);
 }
 
 HRESULT ExplorerHost::set_view_mode(FOLDERVIEWMODE mode,
