@@ -16,12 +16,27 @@ Priority order when two goals conflict:
 
 | Module | Owns | Must not own |
 |---|---|---|
-| `app_shell` | WinMain, STA init, message loop, main window, command routing to the active pane | Model computation, Shell calls, persistence format |
+| `app_shell` | WinMain, STA init, message loop, main window, cross-pane coordination (active pane, layout rects, splitter and cross-pane tab drag), the shutdown and Shell re-entry gates | Model computation, Shell calls, persistence format, **anything that affects one pane only** |
+| `app_shell::Pane` (and `PaneTabStrip`) | Everything scoped to one pane: its tab strip hit-testing, tab activation/creation/close, its tab context menu, its navigation chrome, address bar and status bar | Cross-pane state (which pane is active, cross-pane tab drag, whole-window layout) |
 | `core` | Group/pane/tab model, layout rectangle computation, session serialization and migration | **Any HWND, COM type, or `windows.h` include** |
 | `sidebar` | Group list rendering, selection input | Authoritative Group state (that is `core`) |
 | `explorer_host` | `IExplorerBrowser` instances, site objects, view lifetime, browser events | Product decisions, persistence, layout math |
 | `shell_core` | `IShellItem`, PIDL, Shell location identity, change notification | Handing raw COM pointers to callers above it |
 | `file_operations` | `IFileOperation`, clipboard, OLE drag and drop | Direct filesystem calls, path string assembly |
+
+A pane-only feature is implemented in `Pane` or one of its sub-modules, not in the
+coordinator. The coordinator may still route to it -- resolving *which* pane a click
+landed in spans panes -- and it still supplies the shutdown and Shell re-entry gates
+every pane child message passes through, but the behaviour itself belongs to the pane.
+Cross-pane tab drag is the deliberate exception: the coordinator owns the drag because
+the move spans two panes.
+
+For a child window, `DefWindowProc` forwards an unhandled `WM_CONTEXTMENU` to its
+parent; forwarding can continue through child ancestors (see the
+[Win32 contract](https://learn.microsoft.com/en-us/windows/win32/menurc/wm-contextmenu)).
+The pane window proc handles its tab strip menu (`pane.cpp`, `case WM_CONTEXTMENU`)
+because the feature belongs to the pane, not because Win32 prevents forwarding it
+to the main window.
 
 The `core` boundary is load-bearing, not stylistic. It is the primary automated test seam (`docs/testing.md`); a COM type leaking into it destroys that seam.
 

@@ -37,8 +37,19 @@ Assert-Source 'case kDeferredCommandMessage:' `
     'deferred commands return through the message loop'
 Assert-Source 'message == WM_COMMAND[\s\S]*kDeferredCommandMessage' `
     'model-changing commands are deferred during Shell re-entry'
-Assert-Source 'message == kTabStripSelectionMessage[\s\S]*kDeferredTabSelectionMessage' `
-    'tab mutations are deferred during Shell re-entry'
+# Tab activation and creation are the pane's own: its strip acts on itself,
+# and the mouse message that triggers it is what carries the re-entry gate.
+if ($paneSource -notmatch 'void Pane::activate_tab_at\(std::size_t item\)' -or
+    $paneSource -notmatch 'void Pane::add_default_tab\(\)' -or
+    $paneSource -notmatch 'void Pane::close_tab_at_screen\(POINT screen\)') {
+    throw 'Shell re-entry invariant failed: tab activation/creation/close must live in Pane'
+}
+$stripSource = Get-Content -LiteralPath (
+    Join-Path $PSScriptRoot '..\..\src\app_shell\pane_tab_strip.cpp') -Raw
+if ($stripSource -match 'SendMessageW\(GetParent\(GetParent\(tab_strip_\)\)' -or
+    $stripSource -notmatch 'owner_->add_default_tab\(\)') {
+    throw 'Shell re-entry invariant failed: the tab strip must act on its own pane, not the coordinator'
+}
 Assert-Source 'defer_shell_reentry_mouse_message' `
     'Group/tab drag completion is deferred during Shell re-entry'
 
@@ -257,8 +268,17 @@ if ([regex]::Matches($commandBody, 'ShellCall shell_call\(pane_host\(\)\);\s*\(v
     throw 'Shell re-entry invariant failed: Pane pinned options lost their gate or own the app dialog'
 }
 Assert-Source 'state\.panes\[command\.pane\]\.handle_command\(id\)' 'popup commands dispatch to the decoded pane'
-Assert-Source 'state\.tab_context_menu_tab_id = tabs\[\*item\]\.id;\s*const int command = state\.panes\[\*pane_index\]\.show_tab_context_menu\([\s\S]*?if \(command != 0\) \{\s*SendMessageW\(window, WM_COMMAND,[\s\S]*?else \{\s*state\.tab_context_menu_pane.reset\(\);\s*state\.tab_context_menu_tab_id.clear\(\);' `
-    'tab popup keeps singleton setup, main dispatch and cancel cleanup'
+# The tab strip menu is the pane's own feature: the pane hit-tests, shows it
+# and closes the tabs itself. The coordinator only supplies the re-entry gate,
+# so WM_CONTEXTMENU must be on the deferral list and reach the pane through it.
+Assert-Source 'message != WM_LBUTTONUP && message != WM_CONTEXTMENU' `
+    'pane context menus are deferred during Shell re-entry'
+if ($paneSource -notmatch 'case WM_CONTEXTMENU: \{[\s\S]*?pane->tab_strip\(\)[\s\S]*?handle_pane_control_message\([\s\S]*?pane->handle_tab_context_menu\(screen\);') {
+    throw 'Shell re-entry invariant failed: the pane must run its own tab popup behind the host gate'
+}
+if ($paneSource -notmatch 'void Pane::handle_tab_context_menu\(POINT screen\)[\s\S]*?tab_at_screen\(screen\)[\s\S]*?TrackPopupMenu\([\s\S]*?close_tab\(tab_id\);[\s\S]*?close_tabs\(tab_id, command\);') {
+    throw 'Shell re-entry invariant failed: Pane must own tab popup hit-test, display and close'
+}
 
 # main.cpp has no standalone behavioral seam. This checks the empty-state
 # teardown wiring; the live lifetime check separately exercises Destroy.

@@ -110,9 +110,17 @@ class Pane final {
     void switch_active_tab(const std::string &tab_id);
     void cycle_active_tab(bool reverse);
     void add_tab(panedock::core::ShellLocation initial_location);
+    // Activating, adding and closing a tab by strip position is this pane's
+    // own strip: the pane resolves the index or the point itself instead of
+    // routing it through the coordinator.
+    void activate_tab_at(std::size_t item);
+    void add_default_tab();
+    void close_tab_at_screen(POINT screen);
     void close_tab(const std::string &tab_id);
     void close_tabs(const std::string &tab_id, int command);
-    int show_tab_context_menu(const std::string &tab_id, POINT screen);
+    // A right-click on this pane's tab strip is this pane's own business:
+    // it hit-tests, shows the menu and closes the tabs itself.
+    void handle_tab_context_menu(POINT screen);
 
     // Enable/disable back, forward, up and folder-context from the bound
     // tab's history. Needs no coordinator state, so it lives here.

@@ -101,7 +101,8 @@ This replaces automated coverage for the COM layers. Run manually, on a real des
 6. **Restore.** Close and reopen. Expected: layout and every tab's location are restored exactly.
 7. **Unreachable path.** Save a Group containing a disconnected network path, then restart. Expected: UI responsive throughout, that tab shows a recoverable error, its configuration intact.
 8. **Selection restoration feasibility.** Attempt to read and restore the selection in a pane. Expected: a written verdict on whether it is achievable at acceptable risk. A negative verdict is a valid result and cuts the feature.
-9. **Idle resources.** Leave the app open and untouched for 10 minutes, then sample. Expected: CPU below the NFR-001 threshold, zero disk I/O, memory and handle count flat.
+9. **Pane chrome menus.** Right-click a tab in each realized pane. Expected: the tab menu appears anchored at the cursor, `Close Other Tabs` / `Close Tabs to the Right` are greyed exactly when they have no effect, and the chosen entry acts on the tab that was clicked -- not on the active one. Existing source checks do not exercise actual right-click delivery or popup interaction, so this step verifies the complete UI path.
+10. **Idle resources.** Leave the app open and untouched for 10 minutes, then sample. Expected: CPU below the NFR-001 threshold, zero disk I/O, memory and handle count flat.
 
 ## Required test environments
 

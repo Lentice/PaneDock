@@ -536,9 +536,7 @@ std::optional<LRESULT> PaneTabStrip::handle_message(UINT message, WPARAM wparam,
         const RECT add = to_win32_rect(tab_geometry().add_rect);
         if (!scroll_button_at(point) && !tab_at(point) &&
             !PtInRect(&add, point)) {
-            SendMessageW(GetParent(GetParent(tab_strip_)),
-                         kTabStripSelectionMessage,
-                         static_cast<WPARAM>(owner_->index()), -1);
+            owner_->add_default_tab();
             return 0;
         }
     }

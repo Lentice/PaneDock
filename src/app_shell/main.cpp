@@ -105,7 +105,6 @@ constexpr UINT_PTR kSessionSaveTimerId =
 constexpr UINT kDeferredLayoutMessage = WM_APP + 55;
 // PD-171: replay model-changing commands after an app-owned Shell call.
 constexpr UINT kDeferredCommandMessage = WM_APP + 56;
-constexpr UINT kDeferredTabSelectionMessage = WM_APP + 57;
 using panedock::core::kSidebarMaximumWidth;
 using panedock::core::kSidebarMinimumWidth;
 constexpr std::size_t kExplorerCount = 4;
@@ -122,7 +121,6 @@ constexpr int kSpaceBase = 12;
 constexpr int kSpaceRoomy = 16;
 constexpr int kPaneDividerThickness = 8;
 constexpr int kSidebarHeadingHeight = 20;
-using panedock::app_shell::kTabStripSelectionMessage;
 // The pane chrome metrics (tab strip, navigation row, address bar, footer)
 // live in app_shell/pane_chrome_geometry.h with the rect computation that
 // consumes them.
@@ -522,8 +520,6 @@ struct AppState : public panedock::app_shell::PaneHost {
     // view and its parent HWND, so PD-183 can make destroy ordering a
     // constructor/destructor invariant instead of a call-site convention.
     std::array<panedock::app_shell::Pane, kExplorerCount> panes{};
-    std::optional<std::size_t> tab_context_menu_pane;
-    std::string tab_context_menu_tab_id;
     panedock::app_shell::PinnedLocationsDialog pinned_locations_dialog;
     std::array<std::wstring, kPinnedFixedParsingNames.size()>
         pinned_fixed_labels{};
@@ -587,7 +583,7 @@ bool defer_shell_reentry_mouse_message(HWND window, AppState& state,
                                        LPARAM lparam) noexcept {
     if (state.shell_call_depth == 0 ||
         (message != WM_LBUTTONDOWN && message != WM_LBUTTONDBLCLK &&
-         message != WM_LBUTTONUP))
+         message != WM_LBUTTONUP && message != WM_CONTEXTMENU))
         return false;
     defer_shell_reentry_message(window, message, wparam, lparam);
     return true;
@@ -2231,28 +2227,17 @@ AppState::tab_drag_layout(const Pane &pane, HWND strip, int min_width,
     return std::nullopt;
 }
 
-std::optional<std::size_t> tab_item_at_point(
-    const std::array<panedock::app_shell::Pane, kExplorerCount>& panes,
-    HWND strip, POINT point) noexcept;
-
 bool register_tab_drag_hover_targets(HWND window, AppState& state) {
     for (std::size_t pane_index = 0;
          pane_index < state.panes.size(); ++pane_index) {
-        const HWND strip = state.panes[pane_index].tab_strip();
-        auto hit_test = [&state, strip,
+        auto hit_test = [&state,
                          pane_index](POINT screen) -> std::optional<std::size_t> {
             if (state.panes[pane_index].pane_state() == nullptr)
                 return std::nullopt;
-            POINT client = screen;
-            ScreenToClient(strip, &client);
-            return tab_item_at_point(state.panes, strip, client);
+            return state.panes[pane_index].tab_strip_ui().tab_at_screen(screen);
         };
         auto hover_callback = [&state, pane_index](std::size_t item) {
-            auto* pane_state = state.panes[pane_index].pane_state();
-            if (pane_state == nullptr) return;
-            auto& tabs = pane_state->tabs;
-            if (item >= tabs.size()) return;
-            state.panes[pane_index].switch_active_tab(tabs[item].id);
+            state.panes[pane_index].activate_tab_at(item);
         };
         auto target = make_drag_hover_target(
             window, kDragHoverTabTimerIdBase + pane_index,
@@ -2385,46 +2370,12 @@ POINT point_from_lparam(LPARAM lparam) noexcept {
             static_cast<short>(HIWORD(lparam))};
 }
 
-std::optional<std::size_t> tab_strip_index(
-    const std::array<panedock::app_shell::Pane, kExplorerCount>& panes,
-    HWND strip) noexcept {
-    for (std::size_t index = 0; index < panes.size(); ++index)
-        if (panes[index].tab_strip() == strip) return index;
-    return std::nullopt;
-}
-
 bool address_bar_has_focus(
     const std::array<panedock::app_shell::Pane, kExplorerCount>& panes) noexcept {
     const HWND focused = GetFocus();
     for (const auto& chrome : panes)
         if (chrome.address_bar() == focused) return true;
     return false;
-}
-
-void close_tab_at_point(HWND window, AppState& state, POINT point) {
-    const std::size_t pane_index = pane_at_point(window, state, point);
-    if (pane_index >= state.panes.size()) return;
-    auto* pane_state = state.panes[pane_index].pane_state();
-    if (pane_state == nullptr) return;
-    POINT client = point;
-    const HWND strip = state.panes[pane_index].tab_strip();
-    MapWindowPoints(window, strip, &client, 1);
-    const auto item = tab_item_at_point(state.panes, strip, client);
-    const auto& tabs = pane_state->tabs;
-    if (!item.has_value() || *item >= tabs.size()) return;
-    const std::string id = tabs[*item].id;
-    state.panes[pane_index].close_tab(id);
-}
-
-std::optional<std::size_t> tab_item_at_point(
-    const std::array<panedock::app_shell::Pane, kExplorerCount>& panes,
-    HWND strip, POINT point) noexcept {
-    const auto pane_index = tab_strip_index(panes, strip);
-    if (!pane_index.has_value() ||
-        panes[*pane_index].pane_state() == nullptr) {
-        return std::nullopt;
-    }
-    return panes[*pane_index].tab_strip_ui().tab_at(point);
 }
 
 void cancel_tab_drag(AppState& state, HWND strip) noexcept {
@@ -2593,7 +2544,8 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
         if (message == WM_LBUTTONDOWN &&
             state->panes[pane_index].pane_state() != nullptr) {
             const POINT point = point_from_lparam(lparam);
-            const auto item = tab_item_at_point(state->panes, window, point);
+            const auto item =
+                state->panes[pane_index].tab_strip_ui().tab_at(point);
             const RECT add = to_win32_rect(
                 state->panes[pane_index].tab_strip_ui().tab_geometry().add_rect);
             if (item.has_value()) {
@@ -2610,14 +2562,11 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
                 state->tab_drag =
                     AppState::TabDrag{window, tabs[*item].id, drag};
                 SetCapture(window);
-                SendMessageW(GetParent(GetParent(window)),
-                             kTabStripSelectionMessage,
-                             static_cast<WPARAM>(pane_index),
-                             static_cast<LPARAM>(*item));
+                // Only the drag bookkeeping above spans panes; selecting the
+                // tab is the pane's own business.
+                state->panes[pane_index].activate_tab_at(*item);
             } else if (PtInRect(&add, point)) {
-                SendMessageW(GetParent(GetParent(window)),
-                             kTabStripSelectionMessage,
-                             static_cast<WPARAM>(pane_index), -1);
+                state->panes[pane_index].add_default_tab();
             }
             return 0;
         }
@@ -3166,22 +3115,6 @@ bool handle_global_command(HWND window, AppState& state, int id,
             state.main_window, anchor);
         return true;
     }
-    if (command.kind == CommandKind::tab_close) {
-        const auto pane_index = state.tab_context_menu_pane;
-        const std::string tab_id = state.tab_context_menu_tab_id;
-        state.tab_context_menu_pane.reset();
-        state.tab_context_menu_tab_id.clear();
-        if (!pane_index.has_value() ||
-            state.panes[*pane_index].pane_state() == nullptr)
-            return true;
-        if (id == kCloseTabId) {
-            state.panes[*pane_index].close_tab(tab_id);
-            return true;
-        }
-
-        state.panes[*pane_index].close_tabs(tab_id, id);
-        return true;
-    }
     if (command.kind == CommandKind::view_mode ||
         command.kind == CommandKind::pinned_location) {
         if (command.pane < state.panes.size())
@@ -3236,30 +3169,6 @@ bool draw_global_control(const DRAWITEMSTRUCT& item, AppState& state) {
 
 bool handle_context_menu(HWND target, AppState& state, POINT screen) {
     const HWND window = state.main_window;
-    const auto pane_index = tab_strip_index(state.panes, target);
-    if (pane_index.has_value()) {
-        if (screen.x == -1 && screen.y == -1) return true;
-        if (state.panes[*pane_index].pane_state() == nullptr)
-            return true;
-
-        POINT client = screen;
-        ScreenToClient(target, &client);
-        const auto item = tab_item_at_point(state.panes, target, client);
-        const auto& tabs = state.panes[*pane_index].pane_state()->tabs;
-        if (!item.has_value() || *item >= tabs.size()) return true;
-
-        state.tab_context_menu_pane = *pane_index;
-        state.tab_context_menu_tab_id = tabs[*item].id;
-        const int command = state.panes[*pane_index].show_tab_context_menu(
-            state.tab_context_menu_tab_id, screen);
-        if (command != 0) {
-            SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
-        } else {
-            state.tab_context_menu_pane.reset();
-            state.tab_context_menu_tab_id.clear();
-        }
-        return true;
-    }
     if (target != state.sidebar.window()) return false;
 
     POINT point = screen;
@@ -3452,7 +3361,14 @@ std::optional<LRESULT> handle_global_mouse_message(
                 POINT point{};
                 GetCursorPos(&point);
                 ScreenToClient(window, &point);
-                close_tab_at_point(window, state, point);
+                // Which pane the click landed in is coordinator work; the
+                // tab under it is the pane's own.
+                if (const std::size_t pane = pane_at_point(window, state, point);
+                    pane < state.panes.size()) {
+                    POINT screen = point;
+                    ClientToScreen(window, &screen);
+                    state.panes[pane].close_tab_at_screen(screen);
+                }
                 return 0;
             }
             if (LOWORD(wparam) == WM_LBUTTONDOWN) {
@@ -3502,11 +3418,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                         wparam, lparam);
             return 0;
         }
-        if (message == kTabStripSelectionMessage) {
-            defer_shell_reentry_message(window, kDeferredTabSelectionMessage,
-                                        wparam, lparam);
-            return 0;
-        }
         if (message == kDragHoverMessage) {
             defer_shell_reentry_message(window, message, wparam, lparam);
             return 0;
@@ -3535,17 +3446,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                         window, kDeferredCommandMessage, wparam, lparam);
                 } else if (!state->is_shutting_down()) {
                     SendMessageW(window, WM_COMMAND, wparam, lparam);
-                }
-            }
-            return 0;
-        case kDeferredTabSelectionMessage:
-            if (state != nullptr) {
-                if (state->shell_call_depth != 0) {
-                    defer_shell_reentry_message(
-                        window, kDeferredTabSelectionMessage, wparam, lparam);
-                } else if (!state->is_shutting_down()) {
-                    SendMessageW(window, kTabStripSelectionMessage, wparam,
-                                 lparam);
                 }
             }
             return 0;
@@ -3579,20 +3479,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             }
             return 0;
         }
-        case kTabStripSelectionMessage:
-            if (state != nullptr && wparam < state->panes.size() &&
-                state->panes[wparam].pane_state() != nullptr) {
-                auto& pane = *state->panes[wparam].pane_state();
-                if (lparam == -1) {
-                    state->panes[wparam].add_tab(default_shell_location());
-                } else if (lparam >= 0 &&
-                           static_cast<std::size_t>(lparam) < pane.tabs.size()) {
-                    state->panes[wparam].switch_active_tab(
-                        pane.tabs[static_cast<std::size_t>(lparam)].id);
-                }
-                return 0;
-            }
-            break;
         case kDragHoverMessage: {
             if (state == nullptr) return 0;
             const UINT_PTR timer = static_cast<UINT_PTR>(wparam);
@@ -4357,6 +4243,7 @@ std::optional<LRESULT> AppState::handle_pane_control_message(
         defer_shell_reentry_message(pane_window, message, wparam, lparam);
         return LRESULT{0};
     }
+
 
     switch (message) {
         case WM_COMMAND: {

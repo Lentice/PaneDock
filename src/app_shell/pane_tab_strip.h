@@ -23,7 +23,6 @@ namespace panedock::app_shell {
 
 class Pane;
 
-inline constexpr UINT kTabStripSelectionMessage = WM_APP + 49;
 
 // Dispatch surface for the drag-hover delay timer. `PaneTabStrip` stores a drag
 // target as `IDropTarget` (RegisterDragDrop/RevokeDragDrop lifetime) plus this

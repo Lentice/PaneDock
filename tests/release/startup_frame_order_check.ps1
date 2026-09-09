@@ -77,7 +77,7 @@ if ($startupPrologue -match 'refresh_startup_chrome\(state\)|state\.pinned_fixed
 }
 
 $deferredStart = $source.IndexOf('case kDeferredRealizeMessage:')
-$deferredEnd = $source.IndexOf('case kTabStripSelectionMessage:', $deferredStart)
+$deferredEnd = $source.IndexOf('case kDragHoverMessage:', $deferredStart)
 if ($deferredStart -lt 0 -or $deferredEnd -lt 0) {
     throw 'startup frame order check failed: deferred realization case missing'
 }

@@ -406,6 +406,23 @@ rename 輪替在兩個 rename 之間存在「primary 暫時不存在」的視窗
 
 ## 計畫決策紀錄
 
+### 2026-09-09 — pane tab 右鍵選單修正與 Pane 權責調整；更正訊息傳遞的根因判斷
+
+使用者回報 pane tab 的右鍵選單失效(完全沒有反應)。未另開票,經使用者當場授權直接修正。
+
+**觀察與根因判斷更正**：先前實機紀錄為「對 process post `WM_CONTEXTMENU` 到 pane HWND 沒有 `#32768` 選單視窗出現，post 到主視窗則會出現」，但這不足以證明訊息只傳一層。[Microsoft 文件](https://learn.microsoft.com/en-us/windows/win32/menurc/wm-contextmenu) 明定子視窗的 `DefWindowProc` 會將訊息送給父視窗；審查時以三層隱藏 Win32 視窗、各層 proc 委派給 `DefWindowProcW`，向最內層送出 `WM_CONTEXTMENU`，確認 strip、pane、root 三層 handler 均收到訊息。撤回「不會越過 pane」的根因判斷；原始失效原因尚未由現有紀錄確認。
+
+**依使用者原則調整權責**:「只要是 pane 自己的功能、不屬於跨 panes 的功能,都應該由 pane 或 pane 的子模組自己處理」。依此架構原則調整如下:
+
+- `Pane::handle_tab_context_menu(POINT)`(原 `show_tab_context_menu`)自己 hit-test(`PaneTabStrip::tab_at_screen`)、自己開選單、自己呼叫 `close_tab`／`close_tabs`。
+- `pane_window_proc` 新增 `case WM_CONTEXTMENU`,先向 `PaneHost` 取一次「關閉中／Shell 再進入」閘門(與其他 pane 子控制項訊息同一條),沒被延後才自己執行。
+- 新增 `Pane::activate_tab_at`／`add_default_tab`／`close_tab_at_screen`,取代 `kTabStripSelectionMessage` 這條「strip → 主視窗 → 回頭呼叫 pane」的來回。該自訂訊息與其 deferred 變體(`kDeferredTabSelectionMessage`)、`AppState::tab_context_menu_pane`／`tab_context_menu_tab_id` 兩個單例欄位、`CommandKind::tab_close` 的繞路、`close_tab_at_point`／`tab_item_at_point`／`tab_strip_index` 三個協調者輔助函式全部刪除。
+- 保留在協調者的是真正跨 pane 的部分:點擊落在哪個 pane、跨 pane tab 拖曳的 drag 狀態與 capture、以及 Shell 再進入延後(`WM_CONTEXTMENU` 新增進延後清單)。跨 pane tab 拖曳依使用者指示維持由外層處理。
+
+**測試面的取捨**:`shell_reentry_gate_check.ps1` 原本逐字鎖住「tab 選單經由主視窗 `WM_COMMAND` 分派」這個舊形狀,改為斷言新的不變量(pane 自持選單、strip 不再回呼協調者、`WM_CONTEXTMENU` 在延後清單內)。這正是 `docs/testing.md` 記過的「原始碼掃描不是測試」的代價——行為不變的改寫會讓它失敗。現有原始碼檢查未執行實際右鍵訊息傳遞與選單互動，因此在 `docs/testing.md` 的原型驗收協定補了一條人工步驟。
+
+**實機驗證**:對 tab strip post `WM_RBUTTONDOWN/UP` 會出現選單;雙擊空白 strip 區域新增分頁(session 由 `[9,1,1,1]` 變 `[9,2,1,1]`);再用該選單的 `Close Tab` 關掉它(回到 `[9,1,1,1]`),使用者原有 session 資料未被留下變更。CTest 32/32 通過。
+
 ### 2026-08-27 — 三個 agent(Claude/Codex/OpenCode)平行執行 `improve-codebase-architecture`,新增 PD-085
 
 在同一份 codebase 上同時開三個 Herdr tab,分別以 Claude、Codex、OpenCode 各自執行架構審查(Claude/Codex 用各自的 skill/custom-prompt 機制,OpenCode 沒有對應命令,改用等價的純文字指示)。三份報告(存於系統 Temp 目錄,不進 repo)獨立得出同一個結論:`src/app_shell/main.cpp`(4051 行,81/150 個 source commit 集中於此)是專案的 god module,且都點名同一個最高槓桿切片——chrome 繪製函式把「純幾何計算」與「HDC 繪製」揉在一起,PD-073/080/081 這類像素微調 commit 正是這個缺陷的直接證據。三份報告都引用專案既有的 `tab_overflow.h`(`tab_strip_viewport`/`clamp_tab_scroll_offset`,已有 `static_assert` 測試)作為已驗證可行的正確模式,建議推廣到其餘 chrome 幾何計算。開票時刻意只取其中最小、最低風險的一塊(`draw_tab_scroll_button` 的視覺矩形/圓角/箭頭端點計算)為 [PD-085](tickets/PD-085-tab-scroll-button-geometry-to-pure-module.md),其餘候選(layout-button glyph 幾何、status-bar compartments、pane-card 圓角、拖曳排序 slot 計算、`AppState` 拆分)留待後續個別開票,避免單票過大。本票明確定調為**純重構,不改變任何視覺輸出數值**。

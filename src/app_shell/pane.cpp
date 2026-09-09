@@ -16,6 +16,9 @@ namespace {
 constexpr std::array<const wchar_t *, 6> kButtonLabels{
     L"<", L">", L"Up", L"Refresh", L"View", L"Pinned"};
 constexpr wchar_t kWindowClassName[] = L"PaneDock.Pane";
+// This PC: where a new tab starts and where the last closed tab falls back to.
+constexpr wchar_t kDefaultTabParsingName[] =
+    L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
 
 constexpr std::array<const wchar_t *, 8> kViewModeLabels{
     L"Extra large icons", L"Large icons", L"Medium icons", L"Small icons",
@@ -446,6 +449,21 @@ LRESULT CALLBACK pane_window_proc(HWND window, UINT message, WPARAM wparam,
             point.y >= client.bottom - trailing)
             return HTTRANSPARENT;
         break;
+    }
+    // Handle the tab strip menu here because it belongs to this pane.
+    // The host supplies the shutdown and Shell re-entry gates.
+    case WM_CONTEXTMENU: {
+        if (pane == nullptr || pane->pane_host() == nullptr) break;
+        if (reinterpret_cast<HWND>(wparam) != pane->tab_strip()) break;
+        const POINT screen{static_cast<short>(LOWORD(lparam)),
+                           static_cast<short>(HIWORD(lparam))};
+        // Keyboard-invoked (Shift+F10): no anchor to hit-test against.
+        if (screen.x == -1 && screen.y == -1) break;
+        const auto gated = pane->pane_host()->handle_pane_control_message(
+            *pane, message, wparam, lparam);
+        if (gated.has_value()) return *gated;
+        pane->handle_tab_context_menu(screen);
+        return 0;
     }
     case WM_NOTIFY:
         return SendMessageW(GetParent(window), message, wparam, lparam);
@@ -1082,15 +1100,16 @@ void Pane::show_pinned_locations_menu(POINT screen) {
         SendMessageW(owner, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
-int Pane::show_tab_context_menu(const std::string &tab_id, POINT screen) {
-    if (pane_state() == nullptr || window_ == nullptr) return 0;
+void Pane::handle_tab_context_menu(POINT screen) {
+    if (pane_state() == nullptr || window_ == nullptr) return;
+    const auto item = tab_strip_ui_.tab_at_screen(screen);
     const auto &tabs = pane_state()->tabs;
-    const auto target_tab = std::find_if(
-        tabs.begin(), tabs.end(), [&](const auto &tab) { return tab.id == tab_id; });
-    if (target_tab == tabs.end()) return 0;
+    if (!item.has_value() || *item >= tabs.size()) return;
+    const std::string tab_id = tabs[*item].id;
+    const auto target_tab = tabs.begin() + static_cast<std::ptrdiff_t>(*item);
     const HWND window = GetParent(window_);
     HMENU menu = CreatePopupMenu();
-    if (menu == nullptr) return 0;
+    if (menu == nullptr) return;
     AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(kCloseTabId),
                 L"Close Tab");
     AppendMenuW(menu, MF_STRING | (tabs.size() == 1 ? MF_GRAYED : 0),
@@ -1108,7 +1127,11 @@ int Pane::show_tab_context_menu(const std::string &tab_id, POINT screen) {
                                        screen.x, screen.y, 0, window,
                                        nullptr);
     DestroyMenu(menu);
-    return command;
+    if (command == kCloseTabId) {
+        close_tab(tab_id);
+    } else if (command != 0) {
+        close_tabs(tab_id, command);
+    }
 }
 
 void Pane::finish_tab_change(bool navigate_active) {
@@ -1178,6 +1201,22 @@ void Pane::add_tab(panedock::core::ShellLocation initial_location) {
     finish_tab_change(true);
 }
 
+void Pane::activate_tab_at(std::size_t item) {
+    const auto *pane_state = this->pane_state();
+    if (pane_state == nullptr || item >= pane_state->tabs.size()) return;
+    switch_active_tab(pane_state->tabs[item].id);
+}
+
+void Pane::add_default_tab() { add_tab({kDefaultTabParsingName, {}, {}}); }
+
+void Pane::close_tab_at_screen(POINT screen) {
+    const auto *pane_state = this->pane_state();
+    if (pane_state == nullptr) return;
+    const auto item = tab_strip_ui_.tab_at_screen(screen);
+    if (!item.has_value() || *item >= pane_state->tabs.size()) return;
+    close_tab(pane_state->tabs[*item].id);
+}
+
 void Pane::close_tab(const std::string &tab_id) {
     if (!active()) return;
     auto *pane_state = bound_state_;
@@ -1188,7 +1227,7 @@ void Pane::close_tab(const std::string &tab_id) {
     const bool closed_active = pane_state->active_tab_id == tab_id;
     if (!panedock::core::close_tab(
             *pane_state, tab_id,
-            {L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", {}, {}}))
+            {kDefaultTabParsingName, {}, {}}))
         return;
     finish_tab_change(closed_active);
 }
