@@ -980,7 +980,6 @@ void draw_layout_button(const DRAWITEMSTRUCT& item,
         }
     }
     draw_layout_glyph(item.hDC, item.rcItem, index, glyph);
-    if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &button);
 }
 
 void draw_layout_segment_background(HDC dc, RECT rect, UINT dpi) noexcept {
@@ -1016,7 +1015,6 @@ void draw_sidebar_action_button(const DRAWITEMSTRUCT& item,
     DrawTextW(item.hDC, label, -1, &text_rect,
               DT_CENTER | DT_SINGLELINE | DT_VCENTER);
     if (old_font != nullptr) SelectObject(item.hDC, old_font);
-    if ((item.itemState & ODS_FOCUS) != 0) DrawFocusRect(item.hDC, &item.rcItem);
 }
 
 RECT pane_area(HWND window, int stored_sidebar_width) noexcept {

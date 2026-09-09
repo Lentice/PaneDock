@@ -256,7 +256,6 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item) const noexcept {
     if (old_font != nullptr) SelectObject(item->hDC, old_font);
     if (name_font != nullptr) DeleteObject(name_font);
     if (subtitle_font != nullptr) DeleteObject(subtitle_font);
-    if ((item->itemState & ODS_FOCUS) != 0) DrawFocusRect(item->hDC, &pill);
     return true;
 }
 
