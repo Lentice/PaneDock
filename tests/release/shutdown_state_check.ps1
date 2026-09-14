@@ -118,8 +118,6 @@ Assert-Source 'case WM_ENDSESSION:[\s\S]*?ShutdownEvent::end_session' `
 # returns to the message loop because Windows terminates the process.
 Assert-Source 'void finalize_process\(AppState& state\) noexcept \{[\s\S]*?OleUninitialize\(\);[\s\S]*?write_clean_marker\(state\.application\)' `
     'clean marker is written after OleUninitialize'
-Assert-Source 'void run_end_session_shutdown\(HWND window, AppState& state\) noexcept \{(?:(?!return;)[\s\S])*?session\.write\(state\.application, true, window\)' `
-    'WM_ENDSESSION checkpoints a clean session before any gate can return'
 if ($source -match 'save_now\(\s*(?:state|\*state),\s*true') {
     throw 'shutdown state invariant failed: save_now writes true before teardown'
 }
@@ -138,6 +136,73 @@ function Get-FunctionSource([string] $Start, [string] $Name) {
         throw "session save debounce check failed: $Name body end is missing"
     }
     return $source.Substring($startIndex, $bodyStart + $end.Index - $startIndex)
+}
+
+# PD-203: at an OS session end the durable checkpoint must be written before
+# anything that can block or bail, because Windows kills the process partway
+# through the Shell teardown that follows. These are scoped to the function
+# body: an inline regex over the whole file can be satisfied by a match that
+# straddles two functions.
+$endSession = Get-FunctionSource `
+    'void run_end_session_shutdown(HWND window, AppState& state) noexcept {' `
+    'run_end_session_shutdown'
+$checkpoint = $endSession.IndexOf('session.write(state.application, true, window)')
+if ($checkpoint -lt 0) {
+    throw 'shutdown state invariant failed: run_end_session_shutdown does not write a clean checkpoint'
+}
+# Comments on this path deliberately discuss returning and teardown; scan code.
+$prologue = [regex]::Replace(
+    $endSession.Substring(0, $checkpoint), '//[^
+]*', '')
+# Anything that can leave the function, skip the write, or reach Shell/COM.
+foreach ($escape in @('return', 'goto', 'destroy', 'capture_locations',
+                      'run_shutdown_action', 'finalize_process')) {
+    if ($prologue -match ('(?<![A-Za-z_])' + [regex]::Escape($escape) + '(?![A-Za-z_])')) {
+        throw ("shutdown state invariant failed: '$escape' precedes the " +
+               'clean checkpoint in run_end_session_shutdown')
+    }
+}
+$prologueOrder = [regex]::Match(
+    $prologue,
+    'capture_window_placement\(window, state\)[\s\S]*ShutdownEvent::save_started')
+if (-not $prologueOrder.Success) {
+    throw ('shutdown state invariant failed: run_end_session_shutdown must ' +
+           'capture placement and record save_started before the checkpoint')
+}
+# The teardown after the checkpoint is best effort and must stay gated.
+foreach ($gate in @('state\.closing_', 'ShutdownAction::defer',
+                    'shell_call_depth != 0', 'drag_in_progress')) {
+    if ($endSession.Substring($checkpoint) -notmatch $gate) {
+        throw ("shutdown state invariant failed: run_end_session_shutdown " +
+               "lost its '$gate' teardown gate")
+    }
+}
+
+# finalize_process is the single COM-then-marker tail, run once.
+$finalize = Get-FunctionSource `
+    'void finalize_process(AppState& state) noexcept {' 'finalize_process'
+if ($finalize -notmatch 'if \(state\.ole_finalized\) return;[\s\S]*?state\.ole_finalized = true;[\s\S]*?OleUninitialize\(\);[\s\S]*?write_clean_marker\(state\.application\)') {
+    throw ('shutdown state invariant failed: finalize_process must guard on ' +
+           'ole_finalized and write the marker after OleUninitialize')
+}
+$finalizeCalls = ([regex]::Matches($source, '(?<![A-Za-z_])finalize_process\(state\);')).Count
+if ($finalizeCalls -ne 2) {
+    throw ("shutdown state invariant failed: expected 2 finalize_process call " +
+           "sites (wWinMain tail and end-session path), found $finalizeCalls")
+}
+
+# The "Closing..." caption is for a user who is watching; an OS session end
+# has none, and its synchronous non-client repaint is spent against the one
+# path with a kill timeout.
+$finish = Get-FunctionSource `
+    'void finish_shutdown(HWND window, AppState& state) noexcept {' 'finish_shutdown'
+if ($finish -notmatch 'const bool ending = state\.end_session_pending;[\s\S]*?ShutdownEvent::teardown_started') {
+    throw ('shutdown state invariant failed: finish_shutdown must read ' +
+           'end_session_pending before teardown_started clears it')
+}
+if ($finish -notmatch 'if \(!ending\) set_main_window_title\(window, state\.diagnostic_mode, true\);') {
+    throw ('shutdown state invariant failed: finish_shutdown must skip the ' +
+           'closing caption only at an OS session end')
 }
 
 function Assert-DebouncedFunction([string] $Start, [string] $Name) {

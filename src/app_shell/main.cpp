@@ -2843,8 +2843,10 @@ void run_end_session_shutdown(HWND window, AppState& state) noexcept {
     // genuine session end Explorer is being torn down concurrently, so
     // Destroy and capture_location's per-pane Shell reads are cross-process
     // calls into a dying server and can outlast the kill timeout. This write
-    // touches no COM and no window, so it is the one step that cannot be the
-    // thing that blocks.
+    // reaches no Shell and no COM -- it serializes the model and replaces two
+    // local files, and the KillTimer/SetTimer it does on the way out are
+    // local to our own thread. Storage can still be slow, so this is the
+    // cheapest step available, not a guaranteed-fast one.
     //
     // Nothing may come between here and the write. Not the gates below, and
     // not closing_: a normal close that is already stuck in Shell teardown
