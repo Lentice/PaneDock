@@ -99,6 +99,13 @@ bool navigate_tab_forward(TabState& tab) noexcept {
     return true;
 }
 
+bool restore_tab_history_index(TabState& tab, std::size_t index) noexcept {
+    if (index >= tab.history.size()) return false;
+    tab.history_index = index;
+    tab.location = tab.history[index];
+    return true;
+}
+
 bool is_valid(const GroupState& group) noexcept {
     // Panes are stable identities (up to kMaxPaneCount) that persist across
     // layout switches; the template only decides which of them are visible,

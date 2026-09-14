@@ -110,6 +110,11 @@ bool can_navigate_tab_back(const TabState& tab) noexcept;
 bool can_navigate_tab_forward(const TabState& tab) noexcept;
 bool navigate_tab_back(TabState& tab) noexcept;
 bool navigate_tab_forward(TabState& tab) noexcept;
+// The inverse of navigate_tab_back/forward, for a move the Shell then
+// refused. Both of those rewrite location and history_index before the
+// navigation is attempted, so a failure has to put them back or the tab keeps
+// a location its view never showed -- and the session persists it.
+bool restore_tab_history_index(TabState& tab, std::size_t index) noexcept;
 
 bool is_valid(const GroupState& group) noexcept;
 bool is_valid(const ApplicationState& application) noexcept;

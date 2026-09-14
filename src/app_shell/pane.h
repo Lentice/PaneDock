@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <optional>
+#include <utility>
 #include <span>
 #include <string>
 #include <vector>
@@ -225,6 +226,12 @@ class Pane final {
     panedock::explorer_host::ExplorerHost explorer_host_;
     bool realized_{};
     bool suppress_history_record_{};
+    // The history slot navigate_history left, kept until that navigation is
+    // resolved so navigation_failed can put the tab back. Carries the
+    // generation it belongs to: a later navigation that fails must not roll
+    // back a history move that already completed.
+    std::optional<std::pair<NavigationGeneration, std::size_t>>
+        history_rollback_;
     RECT navigation_background_{};
     UINT paint_dpi_{96};
     HDC paint_dc_{nullptr};

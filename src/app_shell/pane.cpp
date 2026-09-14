@@ -833,6 +833,7 @@ void Pane::navigation_complete(
         panedock::core::record_navigation(*tab,
                                            std::move(completed_location));
     }
+    history_rollback_.reset();
     apply_view_mode();
     if (!active()) return;
     apply_sort();
@@ -847,6 +848,17 @@ void Pane::navigation_failed(NavigationGeneration generation) {
     // A pending back/forward navigation that fails asynchronously must still
     // release the suppression flag, or those buttons stay disabled forever.
     set_suppress_history(false);
+    // ...and the model move it made up front has to come back out, or the tab
+    // holds a location its view never showed and the session persists it.
+    if (history_rollback_.has_value() &&
+        history_rollback_->first == generation) {
+        auto* const tab = active_tab();
+        if (tab != nullptr &&
+            panedock::core::restore_tab_history_index(
+                *tab, history_rollback_->second))
+            tab_strip_ui().refresh();
+    }
+    history_rollback_.reset();
     refresh_navigation_buttons();
 }
 
@@ -856,10 +868,14 @@ void Pane::navigate_history(bool back) {
     if (pane_state == nullptr || suppress_history_record_) return;
     auto *tab = active_tab();
     if (tab == nullptr) return;
+    const std::size_t previous_index = tab->history_index;
     const bool moved = back ? panedock::core::navigate_tab_back(*tab)
                             : panedock::core::navigate_tab_forward(*tab);
     if (!moved) return;
     const auto generation = begin_navigation();
+    // Both helpers above already rewrote location and history_index. Nothing
+    // has asked the Shell yet, so remember where to put them back.
+    history_rollback_ = std::pair{generation, previous_index};
     set_suppress_history(true);
     HRESULT hr = E_UNEXPECTED;
     {

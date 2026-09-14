@@ -93,6 +93,43 @@ void test_invariants_reject_deliberate_breakage() {
     EXPECT(!is_valid(application));
 }
 
+// A back/forward move rewrites location and history_index before the Shell is
+// asked, so a refused navigation has to be undone or the tab keeps a location
+// its view never showed -- and a session save persists it.
+void test_restore_tab_history_index() {
+    TabState value = tab("tab", L"one");
+    record_navigation(value, {L"two", {}, L"fallback"});
+    record_navigation(value, {L"three", {}, L"fallback"});
+
+    const std::size_t before = value.history_index;
+    EXPECT(navigate_tab_back(value));
+    EXPECT(value.location.parsing_name == L"two");
+    EXPECT(value.history_index != before);
+
+    EXPECT(restore_tab_history_index(value, before));
+    EXPECT(value.history_index == before);
+    EXPECT(value.location.parsing_name == L"three");
+
+    // Forward moves undo the same way.
+    EXPECT(navigate_tab_back(value));
+    EXPECT(navigate_tab_forward(value));
+    EXPECT(value.location.parsing_name == L"three");
+    EXPECT(restore_tab_history_index(value, 0));
+    EXPECT(value.history_index == 0);
+    EXPECT(value.location.parsing_name == L"one");
+
+    // Out of range leaves the tab untouched rather than clamping.
+    const auto unchanged = value;
+    EXPECT(!restore_tab_history_index(value, value.history.size()));
+    EXPECT(value.history_index == unchanged.history_index);
+    EXPECT(value.location.parsing_name == unchanged.location.parsing_name);
+
+    TabState empty = tab("empty", L"only");
+    empty.history.clear();
+    empty.history_index = 0;
+    EXPECT(!restore_tab_history_index(empty, 0));
+}
+
 void test_tab_navigation_history() {
     TabState value = tab("tab", L"one");
     EXPECT(is_valid(group()));
@@ -432,6 +469,7 @@ int main() {
     test_layout_metadata();
     test_invariants_reject_deliberate_breakage();
     test_tab_navigation_history();
+    test_restore_tab_history_index();
     test_group_mutations();
     test_reorder_projection();
     test_tab_and_pane_mutations();
