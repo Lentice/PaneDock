@@ -113,13 +113,13 @@ Assert-Shutdown 'case ShutdownEvent::save_keep_open:[\s\S]*?state_\.shutdown_sav
 Assert-Source 'case WM_ENDSESSION:[\s\S]*?ShutdownEvent::end_session' `
     'WM_ENDSESSION records confirmation'
 
-$lastOleUninitialize = $source.LastIndexOf('OleUninitialize();')
-$finalCleanMarker = $source.LastIndexOf(
-    'state.session.write_clean_marker(state.application)')
-
-if ($lastOleUninitialize -lt 0 -or $finalCleanMarker -lt $lastOleUninitialize) {
-    throw 'shutdown state invariant failed: clean marker is not after OleUninitialize'
-}
+# The marker-after-COM ordering now lives inside finalize_process, the single
+# tail both exits run: wWinMain's, and the WM_ENDSESSION handler, which never
+# returns to the message loop because Windows terminates the process.
+Assert-Source 'void finalize_process\(AppState& state\) noexcept \{[\s\S]*?OleUninitialize\(\);[\s\S]*?write_clean_marker\(state\.application\)' `
+    'clean marker is written after OleUninitialize'
+Assert-Source 'void run_end_session_shutdown\(HWND window, AppState& state\) noexcept \{(?:(?!return;)[\s\S])*?session\.write\(state\.application, true, window\)' `
+    'WM_ENDSESSION checkpoints a clean session before any gate can return'
 if ($source -match 'save_now\(\s*(?:state|\*state),\s*true') {
     throw 'shutdown state invariant failed: save_now writes true before teardown'
 }

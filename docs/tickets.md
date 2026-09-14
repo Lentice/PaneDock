@@ -240,6 +240,7 @@
 | PD-200 | group list 重排手勢收進 `sidebar::Sidebar` | 7 | `done` | PD-057, PD-196 | [PD-200](tickets/PD-200-sidebar-owns-the-group-reorder-gesture.md) |
 | PD-201 | session 存檔時機收進 `app_shell::SessionWriter` | 7 | `done` | PD-091, PD-200 | [PD-201](tickets/PD-201-session-writer-owns-persistence-timing.md) |
 | PD-202 | pane chrome 幾何抽為純函式並補測試 | 7 | `done` | PD-197, PD-201 | [PD-202](tickets/PD-202-pane-chrome-geometry-is-a-pure-tested-unit.md) |
+| PD-203 | OS session end 先寫 durable checkpoint，Shell teardown 改 best-effort（覆寫 PD-143 排序） | 7 | `done` | PD-025, PD-032, PD-132, PD-143 | [PD-203](tickets/PD-203-endsession-checkpoint-before-shell-teardown.md) |
 
 
 ## Dependency lanes

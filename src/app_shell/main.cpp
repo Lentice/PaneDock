@@ -529,6 +529,8 @@ struct AppState : public panedock::app_shell::PaneHost {
     // remaining panes still display the outgoing Group's folders.
     bool suppress_location_capture{};
     Microsoft::WRL::ComPtr<DragHoverTarget> sidebar_drag_target;
+    // finalize_process runs once, from whichever exit gets there first.
+    bool ole_finalized{};
 };
 
 void begin_shutdown(HWND window, AppState& state, bool allow_keep_open) noexcept;
@@ -2701,14 +2703,21 @@ void show_startup_notification(HWND owner, AppState& state) noexcept {
 }
 
 void finish_shutdown(HWND window, AppState& state) noexcept {
+    // teardown_started clears end_session_pending, so read it first.
+    const bool ending = state.end_session_pending;
     if (state.shutdown_sequence.step(
             panedock::core::ShutdownEvent::teardown_started) !=
         panedock::core::ShutdownAction::destroy_views)
         return;
-    // Keep the owner window visible while the synchronous Shell teardown runs.
-    // The caption is the smallest truthful progress surface; do not destroy
-    // the parent before every initialized ExplorerBrowser has been destroyed.
-    set_main_window_title(window, state.diagnostic_mode, true);
+    // Keep the owner window visible while the synchronous Shell teardown runs:
+    // do not destroy the parent before every initialized ExplorerBrowser has
+    // been destroyed.
+    // The caption is a progress surface for a user who is watching. At an OS
+    // session end nobody is, and RedrawWindow(RDW_UPDATENOW | RDW_FRAME)
+    // forces a synchronous non-client paint while DWM is itself shutting
+    // down -- cost on the one path that has a kill timeout, for a string no
+    // one reads.
+    if (!ending) set_main_window_title(window, state.diagnostic_mode, true);
     state.startup_realize_pending = false;
     ++state.startup_realize_generation;
     state.transfer_close_dialog.destroy();
@@ -2800,6 +2809,78 @@ void run_shutdown_action(HWND window, AppState& state,
         default:
             return;
     }
+}
+
+// The teardown tail: COM, then the durable clean-shutdown marker. Both exits
+// run it -- wWinMain's, and run_end_session_shutdown, which never returns to
+// the message loop. The ordering is the whole point: keep the marker false
+// until Shell, the parent HWND and COM have all gone away, so a teardown that
+// dies partway through still reports an incomplete shutdown. If the write
+// blocks or fails the false marker simply remains.
+void finalize_process(AppState& state) noexcept {
+    if (state.ole_finalized) return;
+    state.ole_finalized = true;
+    OleUninitialize();
+    if (state.shutdown_clean_marker_armed && state.main_window_destroyed)
+        (void)state.session.write_clean_marker(state.application);
+}
+
+// WM_ENDSESSION cannot defer. Windows terminates the process as soon as the
+// handler returns, so a posted kDeferredShutdownMessage is never pumped: the
+// session save, the ExplorerBrowser teardown and the clean-shutdown marker
+// would every one of them be skipped on an OS restart, and the next startup
+// reports an unclean shutdown. Drive the states the posted continuation would
+// have driven, synchronously, while the handler still owns the thread.
+void run_end_session_shutdown(HWND window, AppState& state) noexcept {
+    const auto action = state.shutdown_sequence.step(
+        panedock::core::ShutdownEvent::end_session);
+
+    // The durable checkpoint comes first, unconditionally, and deliberately
+    // without capture_locations. Traced on a real reboot: the teardown below
+    // reached the second pane and never returned from its
+    // IExplorerBrowser::Destroy, and the process was killed there -- while
+    // the identical messages driven by SendMessage complete in 59ms. At a
+    // genuine session end Explorer is being torn down concurrently, so
+    // Destroy and capture_location's per-pane Shell reads are cross-process
+    // calls into a dying server and can outlast the kill timeout. This write
+    // touches no COM and no window, so it is the one step that cannot be the
+    // thing that blocks.
+    //
+    // Nothing may come between here and the write. Not the gates below, and
+    // not closing_: a normal close that is already stuck in Shell teardown
+    // when the real WM_ENDSESSION arrives would otherwise be killed with the
+    // marker still false, which is the exact false warning this fixes.
+    //
+    // This overrides the "marker only after Shell, the HWND and COM are gone"
+    // ordering, on this path only. That ordering exists to report a teardown
+    // that crashed, and it is unreachable inside the time Windows grants; an
+    // OS-initiated session end is not the crash the marker warns about. Read
+    // the marker here as "a restorable checkpoint exists", not "teardown
+    // finished". What the skipped live read would have refreshed is each
+    // pane's current location and any view state not yet mirrored into the
+    // model -- the last few hundred milliseconds of a session that is ending.
+    capture_window_placement(window, state);
+    state.shutdown_sequence.step(panedock::core::ShutdownEvent::save_started);
+    const bool saved = state.session.write(state.application, true, window);
+
+    // Teardown only. A nested Shell pump or a live OLE drag still owns the
+    // stack, and tearing views down under it is the crash the spec warns
+    // about; an already-running close owns the sequence itself. The session
+    // is durable either way, so skipping this costs a leak in a process the
+    // OS is about to end.
+    if (state.closing_) return;
+    if (action != panedock::core::ShutdownAction::defer ||
+        state.shell_call_depth != 0 ||
+        state.shutdown_sequence.state().drag_in_progress)
+        return;
+    // Best effort from here: whatever Windows lets us finish. Nothing below
+    // can make the recorded outcome worse.
+    run_shutdown_action(
+        window, state,
+        state.shutdown_sequence.step(
+            saved ? panedock::core::ShutdownEvent::save_succeeded
+                  : panedock::core::ShutdownEvent::save_failed));
+    if (state.main_window_destroyed) finalize_process(state);
 }
 
 void begin_shutdown(HWND window, AppState& state,
@@ -3735,10 +3816,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         case WM_ENDSESSION:
             if (state != nullptr) {
                 if (wparam) {
-                    run_shutdown_action(
-                        window, *state,
-                        state->shutdown_sequence.step(
-                            panedock::core::ShutdownEvent::end_session));
+                    run_end_session_shutdown(window, *state);
                 } else {
                     state->shutdown_sequence.step(
                         panedock::core::ShutdownEvent::end_session_cancelled);
@@ -4200,14 +4278,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     // launch smoke test checks. See finish_shutdown.
     write_live_view_count(state.diagnostic_mode);
     assert(panedock::explorer_host::live_view_count() == 0);
-    OleUninitialize();
-    if (state.shutdown_clean_marker_armed && state.main_window_destroyed) {
-        // Keep the durable marker false until Shell, the parent HWND and COM
-        // have all gone away. If this write blocks or fails, the false marker
-        // remains and the next startup can report the incomplete shutdown.
-        (void)state.session.write_clean_marker(state.application);
-
-    }
+    finalize_process(state);
     CloseHandle(single_instance_mutex);
     return exit_code;
 }
