@@ -1047,9 +1047,18 @@ void Pane::show_view_mode_menu(POINT screen) {
                 1,
             checked_id, MF_BYCOMMAND);
     SetForegroundWindow(window_);
-    const int command = TrackPopupMenu(
-        menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0,
-        window_, nullptr);
+    // TrackPopupMenu pumps our message loop, so it has to raise the Shell call
+    // depth exactly as a Shell call does -- that depth is what makes the window
+    // proc defer interactions, and without it a deferred command can replay
+    // *inside* this menu (PD-211). The scope covers the menu only: the command
+    // below must run normally.
+    int command = 0;
+    {
+        ShellCall shell_call(pane_host());
+        command = TrackPopupMenu(
+            menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0,
+            window_, nullptr);
+    }
     DestroyMenu(menu);
     if (!active() || command == 0) return;
     if (const HWND owner = GetParent(window_); owner != nullptr)
@@ -1114,9 +1123,14 @@ void Pane::show_pinned_locations_menu(POINT screen) {
         static_cast<UINT_PTR>(menu_id_base + kPinnedMenuManageOffset),
         L"Manage Pinned Locations...");
     SetForegroundWindow(window_);
-    const int command = TrackPopupMenu(
-        menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0, window_,
-        nullptr);
+    // See the view-mode menu above: the menu pumps, so it holds the depth.
+    int command = 0;
+    {
+        ShellCall shell_call(pane_host());
+        command = TrackPopupMenu(
+            menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0,
+            window_, nullptr);
+    }
     DestroyMenu(menu);
     if (!active() || command == 0) return;
     if (const HWND owner = GetParent(window_); owner != nullptr)
@@ -1146,10 +1160,17 @@ void Pane::handle_tab_context_menu(POINT screen) {
                 static_cast<UINT_PTR>(kCloseTabsToRightId),
                 L"Close Tabs to the Right");
     SetForegroundWindow(window);
-    const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                                       screen.x, screen.y, 0, window,
-                                       nullptr);
+    // See the view-mode menu above: the menu pumps, so it holds the depth.
+    int command = 0;
+    {
+        ShellCall shell_call(pane_host());
+        command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                                 screen.x, screen.y, 0, window, nullptr);
+    }
     DestroyMenu(menu);
+    // The menu may have pumped a WM_CLOSE or a Group switch; `tabs` and
+    // `target_tab` above are dead from here on, and tab_id is a value copy.
+    if (!active()) return;
     if (command == kCloseTabId) {
         close_tab(tab_id);
     } else if (command != 0) {

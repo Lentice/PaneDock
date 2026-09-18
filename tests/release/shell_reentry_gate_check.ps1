@@ -373,4 +373,37 @@ if ($applyStart -lt 0 -or
     throw 'Shell re-entry invariant failed: apply_layout must assert the groups vector did not move under its GroupState&'
 }
 
+# PD-211: TrackPopupMenu pumps our message loop, so every one of our own popup
+# menus must raise the Shell call depth -- that depth is the whole basis of the
+# window proc's deferral, and apply_layout's "add_group/delete_group can be
+# reached solely through WM_COMMAND" invariant rests on it. This is a static
+# gate because a modal menu cannot be driven from a test, and because the
+# failure mode of forgetting it on menu number five is silent.
+$menuSources = @(
+    (Join-Path $PSScriptRoot '..\..\src\app_shell\main.cpp'),
+    (Join-Path $PSScriptRoot '..\..\src\app_shell\pane.cpp')
+)
+$menuCallSites = 0
+foreach ($menuSource in $menuSources) {
+    $text = Get-Content -LiteralPath $menuSource -Raw
+    $matches = [regex]::Matches($text, 'TrackPopupMenu(Ex)?\(')
+    foreach ($match in $matches) {
+        $menuCallSites++
+        # The scope must be opened close above the call, not anywhere in the file.
+        $from = [Math]::Max(0, $match.Index - 400)
+        $preamble = $text.Substring($from, $match.Index - $from)
+        if ($preamble -notmatch '(ShellCallScope|ShellCall)\s+shell_call\(') {
+            throw ("Shell re-entry invariant failed: TrackPopupMenu at " +
+                   "$menuSource offset $($match.Index) is not inside a Shell " +
+                   'call scope. A menu pumps the message loop, so it must ' +
+                   'raise shell_call_depth or the deferral list stops working.')
+        }
+    }
+}
+if ($menuCallSites -lt 4) {
+    throw ("Shell re-entry invariant failed: expected at least 4 of our own " +
+           "popup menus, found $menuCallSites. If a menu was removed, update " +
+           'this count; if the call moved, the gate above stopped covering it.')
+}
+
 Write-Output 'PASSED: shell_reentry_gate_check'

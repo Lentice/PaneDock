@@ -616,8 +616,15 @@ private:
 
 void defer_shell_reentry_message(HWND window, AppState& state, UINT message,
                                  WPARAM wparam, LPARAM lparam) noexcept try {
+    // kDragHoverMessage is ours, so this header cannot classify it; its lparam
+    // is a hover generation that changes every time, and DragHoverTarget
+    // already discards all but the newest.
+    const bool replaces =
+        message == kDragHoverMessage ||
+        panedock::app_shell::deferred_message_replaces_previous(message);
     (void)panedock::app_shell::hold_deferred_message(
-        state.deferred_shell_messages, {window, message, wparam, lparam});
+        state.deferred_shell_messages, {window, message, wparam, lparam},
+        replaces);
 } catch (...) {
     OutputDebugStringW(
         L"PaneDock: could not hold Shell re-entry interaction\n");
@@ -3413,8 +3420,18 @@ bool handle_context_menu(HWND target, AppState& state, POINT screen) {
         SetMenuItemInfoW(menu, id, FALSE, &item);
     }
     SetForegroundWindow(window);
-    const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                                       point.x, point.y, 0, window, nullptr);
+    // TrackPopupMenu pumps our message loop, so it has to raise the Shell call
+    // depth exactly as a Shell call does -- that depth is what makes this very
+    // window proc defer WM_COMMAND. Without it a deferred sidebar click can
+    // replay inside this menu and move the selection, and the command below
+    // resolves the selection *again* -- so Delete would hit another Group
+    // (PD-211). The scope covers the menu only.
+    int command = 0;
+    {
+        ShellCallScope shell_call(state);
+        command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                                 point.x, point.y, 0, window, nullptr);
+    }
     DestroyMenu(menu);
     for (const auto bitmap : bitmaps) {
         if (bitmap != nullptr) DeleteObject(bitmap);

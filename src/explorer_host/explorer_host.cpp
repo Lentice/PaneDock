@@ -251,69 +251,41 @@ void ExplorerHost::set_shell_call_callback(
 }
 
 ExplorerHost::NavigationGeneration ExplorerHost::begin_navigation() noexcept {
-    return ++next_navigation_generation_;
+    return navigation_ledger_.begin();
 }
 
 ExplorerHost::NavigationGeneration ExplorerHost::enqueue_navigation(
     NavigationGeneration generation) noexcept {
-    if (generation == 0) generation = begin_navigation();
-    if (generation > next_navigation_generation_)
-        next_navigation_generation_ = generation;
-    try {
-        navigation_requests_.push_back({generation, false});
-    } catch (...) {
+    const NavigationGeneration enqueued =
+        navigation_ledger_.enqueue(generation);
+    if (enqueued == 0)
         log_message(L"ExplorerHost: navigation request allocation failed");
-        return 0;
-    }
-    latest_navigation_generation_ =
-        std::max(latest_navigation_generation_, generation);
-    return generation;
+    return enqueued;
 }
 
 void ExplorerHost::fail_enqueued_navigation(
     NavigationGeneration generation) noexcept {
-    // Withdraw this request's own record. take_navigation_generation() pops
-    // the front, which belongs to whichever navigation is still in flight;
-    // consuming it here would make that navigation's later completion answer
-    // to *this* generation -- the failure would be dropped as stale and the
-    // old folder recorded as this request's destination.
-    for (auto request = navigation_requests_.rbegin();
-         request != navigation_requests_.rend(); ++request) {
-        if (request->generation != generation) continue;
-        navigation_requests_.erase(std::next(request).base());
-        break;
-    }
+    // Withdraw this request's own record. take() pops the front, which belongs
+    // to whichever navigation is still in flight; consuming it here would make
+    // that navigation's later completion answer to *this* generation -- the
+    // failure would be dropped as stale and the old folder recorded as this
+    // request's destination. withdraw() also hands `latest` back to the newest
+    // surviving request (PD-210).
+    navigation_ledger_.withdraw(generation);
     report_navigation_failed(generation);
 }
 
 ExplorerHost::NavigationGeneration
 ExplorerHost::take_navigation_generation() noexcept {
-    if (navigation_requests_.empty()) {
-        const auto generation = begin_navigation();
-        latest_navigation_generation_ =
-            std::max(latest_navigation_generation_, generation);
-        return generation;
-    }
-    const auto generation = navigation_requests_.front().generation;
-    navigation_requests_.pop_front();
-    return generation;
+    return navigation_ledger_.take();
 }
 
 void ExplorerHost::navigation_pending() noexcept {
-    for (auto& request : navigation_requests_) {
-        if (!request.pending_notified) {
-            request.pending_notified = true;
-            return;
-        }
-    }
-
-    const auto generation = begin_navigation();
-    try {
-        navigation_requests_.push_back({generation, true});
-        latest_navigation_generation_ = generation;
-    } catch (...) {
+    if (navigation_ledger_.mark_pending()) return;
+    // The Shell started a navigation we never asked for (a double-click inside
+    // the view). Give it a generation so its completion is still identifiable.
+    if (!navigation_ledger_.adopt_pending(navigation_ledger_.begin()))
         log_message(L"ExplorerHost: navigation request allocation failed");
-    }
 }
 
 void ExplorerHost::enter_shell_call() noexcept {
@@ -667,7 +639,7 @@ HRESULT ExplorerHost::refresh() {
 HRESULT ExplorerHost::set_view_mode(FOLDERVIEWMODE mode,
                                      int image_size) noexcept {
     if (browser_ == nullptr) return E_UNEXPECTED;
-    if (completed_navigation_generation_ != latest_navigation_generation_)
+    if (navigation_ledger_.in_flight())
         return E_PENDING;
     Microsoft::WRL::ComPtr<IFolderView2> folder_view;
     const HRESULT hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
@@ -686,7 +658,7 @@ HRESULT ExplorerHost::get_view_mode(FOLDERVIEWMODE& mode,
     if (browser_ == nullptr) return E_UNEXPECTED;
     // A live view can still belong to the previous folder after a pending or
     // failed navigation. Never persist its settings under the new location.
-    if (completed_navigation_generation_ != latest_navigation_generation_)
+    if (navigation_ledger_.in_flight())
         return E_PENDING;
     Microsoft::WRL::ComPtr<IFolderView2> folder_view;
     HRESULT hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
@@ -700,7 +672,7 @@ HRESULT ExplorerHost::get_view_mode(FOLDERVIEWMODE& mode,
 HRESULT ExplorerHost::set_sort(std::string_view column,
                                bool ascending) noexcept {
     if (browser_ == nullptr) return E_UNEXPECTED;
-    if (completed_navigation_generation_ != latest_navigation_generation_)
+    if (navigation_ledger_.in_flight())
         return E_PENDING;
     if (column.empty() || column.size() >= PKEYSTR_MAX) return E_INVALIDARG;
     wchar_t column_text[PKEYSTR_MAX]{};
@@ -730,7 +702,7 @@ HRESULT ExplorerHost::set_sort(std::string_view column,
 HRESULT ExplorerHost::get_sort(std::string& column,
                                bool& ascending) const noexcept {
     if (browser_ == nullptr) return E_UNEXPECTED;
-    if (completed_navigation_generation_ != latest_navigation_generation_)
+    if (navigation_ledger_.in_flight())
         return E_PENDING;
     Microsoft::WRL::ComPtr<IFolderView2> folder_view;
     HRESULT hr = browser_->GetCurrentView(IID_PPV_ARGS(&folder_view));
@@ -815,7 +787,7 @@ HRESULT ExplorerHost::item_counts(ItemCounts& counts) const noexcept {
     // flight, so counting now costs a synchronous Shell call and returns a
     // number that belongs to the folder the user just left (PD-207). The same
     // guard already protects get_view_mode/get_sort.
-    if (completed_navigation_generation_ != latest_navigation_generation_)
+    if (navigation_ledger_.in_flight())
         return E_PENDING;
     if (item_counts_cache_.has_value()) {
         counts = *item_counts_cache_;
@@ -991,8 +963,7 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
     }
     // Every exit below still ends this navigation. Leave the generation
     // recorded, or view-mode/sort calls keep returning E_PENDING forever.
-    if (generation == latest_navigation_generation_)
-        completed_navigation_generation_ = generation;
+    navigation_ledger_.complete(generation);
 
     if (pidl == nullptr) {
         return;
@@ -1018,7 +989,7 @@ void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept {
     // The Shell event has no request identity of its own. Do not let a
     // completion from an older queued request replace the latest location or
     // reach the app model.
-    if (generation != latest_navigation_generation_) return;
+    if (!navigation_ledger_.is_latest(generation)) return;
     location_ = completed_location;
 
     error_overlay_.hide();
@@ -1039,11 +1010,16 @@ void ExplorerHost::navigation_failed() noexcept {
 void ExplorerHost::report_navigation_failed(
     NavigationGeneration generation) noexcept {
     ShellCallScope shell_call(*this);
-    if (parent_ == nullptr || generation != latest_navigation_generation_) {
-        return;
-    }
+    if (parent_ == nullptr) return;
 
-    (void)error_overlay_.show(parent_, rect_, location_.parsing_name);
+    // The overlay describes what the view is showing *now*, so it must not
+    // cover a navigation that is still loading and may well succeed (PD-210).
+    // The callback is not optional the same way: Pane::navigation_failed
+    // releases the history suppression and rolls back the model move a
+    // back/forward made up front, and it does its own staleness check on the
+    // generation. Skipping it would leave that pane's history wedged.
+    if (navigation_ledger_.is_latest(generation))
+        (void)error_overlay_.show(parent_, rect_, location_.parsing_name);
     if (navigation_failed_callback_) {
         try {
             navigation_failed_callback_(generation);
@@ -1112,7 +1088,7 @@ void ExplorerHost::destroy() noexcept {
     browser_.Reset();
     parent_ = nullptr;
     location_ = {};
-    navigation_requests_.clear();
+    navigation_ledger_.clear();
     navigation_callback_ = {};
     navigation_failed_callback_ = {};
     selection_changed_callback_ = {};

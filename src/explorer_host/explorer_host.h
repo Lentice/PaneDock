@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <optional>
 #include <string>
@@ -20,6 +19,7 @@
 #include <wrl/client.h>
 
 #include "core/model.h"
+#include "core/navigation.h"
 #include "explorer_host/live_view_count.h"
 #include "explorer_host/pane_error_overlay.h"
 
@@ -94,11 +94,6 @@ public:
     void navigation_pending() noexcept;
 
 private:
-    struct NavigationRequestRecord final {
-        NavigationGeneration generation{};
-        bool pending_notified{};
-    };
-
     // Returns the generation actually enqueued, or 0 if the record could not
     // be allocated. Callers keep the returned value so a synchronous failure
     // can withdraw its own record instead of consuming the queue front.
@@ -146,12 +141,11 @@ private:
     mutable std::optional<ItemCounts> item_counts_cache_;
     Microsoft::WRL::ComPtr<IShellFolderViewCB> previous_view_callback_;
     Microsoft::WRL::ComPtr<IShellFolderViewCB> view_callback_;
-    // IExplorerBrowserEvents has no request token; preserve start order so a
-    // completion can carry the generation assigned when its navigation began.
-    std::deque<NavigationRequestRecord> navigation_requests_;
-    NavigationGeneration next_navigation_generation_{0};
-    NavigationGeneration latest_navigation_generation_{0};
-    NavigationGeneration completed_navigation_generation_{0};
+    // IExplorerBrowserEvents has no request token; core::NavigationLedger
+    // preserves start order so a completion can carry the generation assigned
+    // when its navigation began. It owns all four of the counters that used to
+    // live here, which is what gives that state machine a test seam.
+    core::NavigationLedger navigation_ledger_;
     NavigationGeneration prepared_navigation_generation_{0};
     HWND context_menu_view_window_{nullptr};
     Microsoft::WRL::ComPtr<IContextMenu> context_menu_;

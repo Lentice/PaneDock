@@ -247,6 +247,10 @@
 | PD-207 | 移除切換熱路徑上的冗餘 Shell 呼叫與重繪 | 7 | `done` | PD-206 | [PD-207](tickets/PD-207-drop-redundant-work-from-the-switching-hot-path.md) |
 | PD-208 | Group 切換時 realize 失敗必須有使用者可見提示 | 7 | `done` | PD-093 | [PD-208](tickets/PD-208-group-switch-realization-failure-is-user-visible.md) |
 | PD-209 | Group 切換／tab realize 的延遲計時儀器（覆寫 PD-026 的儀器排除） | 7 | `in_progress` | PD-024, PD-026 | [PD-209](tickets/PD-209-switching-latency-instrumentation.md) |
+| PD-210 | 同步失敗的導覽必須把 `latest_navigation_generation_` 還給仍在飛的請求 | 7 | `done` | PD-199, PD-207 | [PD-210](tickets/PD-210-restore-latest-generation-when-a-navigation-fails-synchronously.md) |
+| PD-211 | PaneDock 自己的 popup 選單必須持有 `ShellCallScope` | 7 | `done` | PD-171, PD-205 | [PD-211](tickets/PD-211-our-own-popup-menus-must-hold-a-shell-call-scope.md) |
+| PD-212 | 延遲的指標／hover 訊息只保留最後一筆意圖 | 7 | `done` | PD-205 | [PD-212](tickets/PD-212-deferred-pointer-messages-keep-only-the-latest-intent.md) |
+| PD-213 | 把「單執行緒訊息迴圈」寫成明示的不變量，並移除為並行而存在的機制 | 7 | `done` | — | [PD-213](tickets/PD-213-single-threaded-message-loop-is-a-stated-invariant.md) |
 
 
 ## Dependency lanes
@@ -400,6 +404,7 @@ rename 輪替在兩個 rename 之間存在「primary 暫時不存在」的視窗
 | 移除 `AppState` 的 14 個 shutdown reference alias（`main.cpp:506-528`） | **2026-09-03 查證後主動撤案，不列為待辦。** 原本被誤判為 PD-162 遺留的技術債。實測 `closing_` 用於 91 處、`shutdown_deferred` 88 處，移除後約 200 個呼叫點會從 `state.closing_` 變成 `state.shutdown_sequence.state().closing_`，更長更難讀；且它們是 reference，不存在「兩份真相會不同步」的風險。要重開必須先舉出一個因這些 alias 而實際發生的缺陷。 |
 | 拆 `explorer_host.cpp` 剩餘三塊職責（COM 回呼 shim、reentrancy／navigation generation queue、context menu hosting） | PD-181 只抽 error window（約 200 行 + 4 個 header 成員），因為那是一個與 host `IExplorerBrowser` 完全無關的第二 UI。其餘三塊都與 COM 契約糾纏，而 `docs/testing.md` 明訂 `explorer_host` 無自動化測試，拆錯沒有測試網。觸發條件：出現一個具體的、可歸因到這三塊之一的實機缺陷。 |
 | 統一 `{ ShellCallScope } + if (closing_ \|\| shutdown_deferred) return X;` 慣用法（30+ 處，約 120 行） | 2026-09-03 重構掃描發現，但**刻意排除**。回傳值分別是 `void`／`E_ABORT`／`0`，統一時錯一個就破一條 reentrancy 路徑；PD-172／PD-173／PD-177 剛修完這一區，是本專案最貴的崩潰面。觸發條件：先有一個因這個慣用法被複製錯而產生的實際缺陷。 |
+| `IExplorerBrowserEvents` 沒有 request token：FIFO 歸屬可能錯配 | 2026-09-18 第二輪稽核由兩個 agent 從不同方向指到同一根源。Codex：`NavigationLedger` 的 FIFO 假設「被 supersede 的導覽一定會收到 complete 或 failed」，若 Shell 省略該事件就出現 queue hole，之後所有回呼持續錯位、`completed_` 追不上 `latest_`。Claude：`NavigationLedger::take()` 在 queue 空時鑄新 generation，而 `Pane::navigation_request_is_current`（`pane.cpp:811-815`）對`generation > pending_navigation_.generation` 的反應是**收養**——改寫成當下的 active group 與 tab 並回 `true`；若 `BrowseToObject` 的 pump 期間 view 自己起了一次導覽，`mark_pending()` 會把那個 pending 錯記到我們的 record 上，第二個完成事件就走鑄新 generation ＋ 收養的路，把舊 Group 的位置寫進新 Group 的 tab。**兩者皆標 PLAUSIBLE**：`IExplorerBrowserEvents` 沒有請求身分可比對，純靜態追蹤無法證明該交錯真的會發生。**觸發條件**：先加一個 `--diagnostic` 的 event trace（記錄 `OnNavigationPending`／complete／failed 的序列與當時的 ledger 狀態），在實機上快速切換慢速位置，證實 queue hole 或錯配確實出現。屆時的落點是 `panedock::core::NavigationLedger`（PD-210 已把這個狀態機收斂成單一、可測的型別），修法方向是「新的 host-issued navigation 取代尚未開始／已被 supersede 的舊 record」加上「`Pane` 側收養前先確認 `pending_navigation_.group_id` 仍等於當前 group」。不要只在 `Pane` 層再加 generation 判斷——錯配發生在 `ExplorerHost`。 |
 | Group 切換的導覽改為非阻塞（逐 pane posted message，不再序列化四次同步 `BrowseToObject`） | 2026-09-18 雙方稽核一致認定為最大效能問題：`navigate_realized_panes`(`main.cpp:732-751`)在 UI 執行緒逐一等待，而 `BrowseToObject`(`explorer_host.cpp:638`)沒有時限，1000 ms 的 `dwTickCountDeadline`(`explorer_host.cpp:24,55`)只掛在 `SHCreateItemFromParsingName` 上，網路 provider 常無視 `BIND_OPTS`。四個 pane 都指向不可達網路路徑時UI 阻塞無上限，違反 NFR-003。**修法方向已收斂**：Codex 主張把解析搬到 thread-pool，**不採用**——`IExplorerBrowser` 是 STA-bound，`BrowseToObject` 仍要回到 UI 執行緒排隊，換不到對應價值；Claude 的方向較小：把迴圈改成「issue 第一個 pane 後，其餘透過 `kDeferredLayoutMessage` 式的 posted message 逐一觸發」，讓每次 Shell 呼叫之間迴圈能回到 idle。**觸發條件**：PD-209 的實測數字填入 `docs/performance-baseline.md:14-16`，且「one unreachable network path」一列確認為 FAIL——`docs/performance-baseline.md` 規定任何優化提案必須先有本表的數字。屆時開票並依該數字定驗收門檻。 |
 | `IShellFolder` 自建清單檢視(fallback) | 僅在 PD-001 判定 No-Go 時開。 |
 | 統一 header 版型按鈕圖示與導覽列圖示的筆畫粗細 | PD-075(2026-08-26)刻意排除:版型按鈕的五個圖示是**版面示意圖**(一格／雙欄／上下／2×2／更多),沒有任何 `Segoe MDL2 Assets` 字符能表達「這個版型長什麼樣」,只能手繪。但 `draw_layout_glyph` 用 `CreatePen(PS_SOLID, 1, ...)` 而 `draw_navigation_icon_button` 是 2px,兩者並列時粗細不同是真的。觸發條件:PD-075 完成後若使用者仍覺得 header 與 pane 的圖示不成套,再開票調整手繪線寬(注意 1px 是 `RoundRect` 版面示意圖能保持清晰的實際上限,加粗可能反而糊掉,屆時需先截圖比對)。 |
@@ -1115,3 +1120,42 @@ HWND、Group 切換無重複 realize、session 存檔在切換路徑只 mark dir
 **刻意不開票的一項**：`finish_tab_change` 與 `navigation_complete` 各做一次
 `tab_strip_ui().refresh()`（Claude finding 8）。第一次是選取態的即時回饋，有其
 道理；其成本在 PD-207 的 display-name memo 之後就消失，不值得單獨改。
+
+### 2026-09-18（同日稍晚）— 第二輪切換路徑稽核：慢系統／快速切換，開 PD-210～PD-213
+
+使用者在 PD-205～PD-209 之後要求第二輪：「確保系統或網路比較卡頓的時候，快速切換
+path 不應該導致 APP hang or crash」。兩個 agent 各自唯讀稽核並被要求先讀
+PD-205～209 以免重複回報，每條 finding 標 CONFIRMED 或 PLAUSIBLE；作者再逐條
+複驗原始碼，只把成立的開票。
+
+**結論：沒有 deadlock、沒有 use-after-free、沒有 double-destroy。** 兩邊都確認
+`Destroy` 順序與 exactly-once 正確、堆積的切換是序列重播而非交錯、stale 完成
+事件不會寫進新 Group／tab、PD-206 的抑制窗口覆蓋完整。
+
+**開票的四項**：
+
+- PD-210（Claude finding 2，CONFIRMED）：`fail_enqueued_navigation` 不把
+  `latest_` 還給仍在飛的請求 → 該 pane 永久 `E_PENDING`。這是本輪唯一會留下
+  **持續性錯誤狀態**的一項（View mode 選單靜默失敗、view mode／sort 不再存檔）。
+- PD-211（Claude finding 3）：四個 `TrackPopupMenu` 沒有包 `ShellCallScope` →
+  選單 modal pump 期間 `shell_call_depth` 是 0，延遲機制失效 → 最壞是**刪錯
+  Group**。對照組 `ExplorerHost::show_folder_context_menu_at` 本來就包對了。
+- PD-212（**Codex finding 2 與 Claude finding 4 是同一項**，兩邊獨立得到同一
+  修法方向）：PD-205 的佇列去重對滑鼠訊息無效，因為 `lparam` 是座標 → 慢導覽
+  期間連點會放大成 N 次慢導覽。
+- PD-213（使用者提出的原則）：把「單執行緒訊息迴圈 ⇒ 危險是重入而非並行」
+  寫成 `AGENTS.md` 的明示規則並加靜態把關。它讓 PD-212 採取代語意而非
+  「上限 + 驅逐」、讓 PD-210／PD-211 不需要任何鎖。
+
+**已排除、確認無問題**（記錄以免重查）：`activate_group` 持有 `GroupState&`
+的舊候選**現已不可達**（`activate_group` 只留 `target_id`，
+`perform_group_transition` 每步重查）；`perform_group_transition` 無自身重入
+guard 但所有 Group mutation 入口都只能經 `WM_COMMAND`／`WM_LBUTTONUP` 抵達，
+兩者在 `depth != 0` 時皆被延遲——唯一破口就是 PD-211 的四個選單。
+
+**未開票、留為候選**：`IExplorerBrowserEvents` 沒有 request token（見 §候選，
+需先有實機 event trace）。`BrowseToObject` 的無界阻塞仍在既有候選，等 PD-209
+的數字；Codex 另補一項重要判斷——在不得搬動 STA view、不得隔離 process 的前提
+下，**沒有安全的 in-process timeout 能中止卡住的 COM 呼叫**，逐 pane posted
+dispatch 只消除序列放大，NFR-003 的絕對保證無法由現行架構滿足。這一點要寫進
+那張票的驗收條件，不要承諾做不到的門檻。
