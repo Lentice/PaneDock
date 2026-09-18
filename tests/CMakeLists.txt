@@ -28,6 +28,7 @@ set(PANEDOCK_TESTS
     "pane|unit/pane_test.cpp|panedock_pane panedock_explorer_host panedock_core"
     "pane_tab_strip|unit/pane_tab_strip_test.cpp|panedock_pane panedock_explorer_host panedock_core"
     "pane_control_id|unit/pane_control_id_test.cpp|"
+    "deferred_messages|unit/deferred_messages_test.cpp|user32"
     "shell_core_view_mode|unit/shell_core_view_mode_test.cpp|panedock_shell_core"
     "file_operation_effect|unit/file_operation_effect_test.cpp|panedock_file_operations"
 )

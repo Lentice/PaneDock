@@ -811,6 +811,12 @@ void ExplorerHost::set_selection_changed_callback(
 HRESULT ExplorerHost::item_counts(ItemCounts& counts) const noexcept {
     counts = {};
     if (current_view_ == nullptr) return E_UNEXPECTED;
+    // The live view still lists the previous folder while a navigation is in
+    // flight, so counting now costs a synchronous Shell call and returns a
+    // number that belongs to the folder the user just left (PD-207). The same
+    // guard already protects get_view_mode/get_sort.
+    if (completed_navigation_generation_ != latest_navigation_generation_)
+        return E_PENDING;
     if (item_counts_cache_.has_value()) {
         counts = *item_counts_cache_;
         return S_OK;

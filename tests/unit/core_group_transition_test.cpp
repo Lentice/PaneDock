@@ -109,6 +109,35 @@ void test_the_ordering_invariants_hold_for_every_plan() {
         }
     }
 }
+
+// PD-206 rebinds the panes at rebind_panes but the live views only follow at
+// navigate_realized_panes, so the coordinator suppresses location capture from
+// the first step. If rebind ever stopped preceding navigate, that suppression
+// would be guarding the wrong window.
+void test_rebind_precedes_navigation_so_the_capture_guard_covers_the_gap() {
+    for (const bool has_group : {true, false}) {
+        for (const bool changed : {true, false}) {
+            for (const auto transition :
+                 {GroupTransition::activate, GroupTransition::relayout,
+                  GroupTransition::remove}) {
+                const auto steps =
+                    plan_group_transition(transition, has_group, changed);
+                std::size_t rebind = steps.size();
+                std::size_t navigate = steps.size();
+                for (std::size_t i = 0; i < steps.size(); ++i) {
+                    if (steps[i] == Step::rebind_panes) rebind = i;
+                    if (steps[i] == Step::navigate_realized_panes) navigate = i;
+                }
+                EXPECT(rebind != steps.size());
+                EXPECT(navigate == steps.size() || rebind < navigate);
+                // save_session is last, so releasing the suppression there
+                // cannot leave a later step unguarded.
+                if (!steps.empty())
+                    EXPECT(steps.back() == Step::save_session);
+            }
+        }
+    }
+}
 }  // namespace
 
 int main() {
@@ -118,5 +147,6 @@ int main() {
     test_deleting_the_active_group_re_navigates_but_an_inactive_one_does_not();
     test_the_empty_state_still_saves_and_refreshes();
     test_the_ordering_invariants_hold_for_every_plan();
+    test_rebind_precedes_navigation_so_the_capture_guard_covers_the_gap();
     return panedock::test::summary("core_group_transition");
 }

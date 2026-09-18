@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <functional>
 #include <limits>
+#include <map>
 #include <new>
 #include <numeric>
 #include <optional>
@@ -33,6 +34,7 @@
 #include <windowsx.h>
 #include <wrl/client.h>
 
+#include "app_shell/deferred_messages.h"
 #include "app_shell/diagnostic_mode.h"
 #include "app_shell/menu_icon.h"
 #include "app_shell/pane.h"
@@ -373,22 +375,10 @@ Microsoft::WRL::ComPtr<DragHoverTarget> make_drag_hover_target(
 
 void write_live_view_count(bool diagnostic_mode) noexcept {
     if (!diagnostic_mode) return;
-    const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (output == nullptr || output == INVALID_HANDLE_VALUE) return;
-
-    constexpr char prefix[] = "panedock.live_view_count=";
-    std::array<char, 64> line{};
-    std::copy_n(prefix, sizeof(prefix) - 1, line.begin());
-    const auto converted = std::to_chars(
-        line.data() + (sizeof(prefix) - 1), line.data() + line.size() - 1,
-        panedock::explorer_host::live_view_count());
-    if (converted.ec != std::errc{}) return;
-    *converted.ptr = '\n';
-    DWORD written = 0;
-    (void)WriteFile(output, line.data(),
-                    static_cast<DWORD>(converted.ptr - line.data() + 1),
-                    &written, nullptr);
+    panedock::app_shell::write_diagnostic_line("live_view_count",
+                          panedock::explorer_host::live_view_count());
 }
+
 
 struct LayoutMetrics {
     int minimum_pane_width;
@@ -424,6 +414,7 @@ struct AppState : public panedock::app_shell::PaneHost {
     pinned_locations() const noexcept override;
     void pin_location(panedock::core::ShellLocation location) override;
     bool location_capture_suppressed() const noexcept override;
+    bool diagnostic_timing_enabled() const noexcept override;
     std::wstring tab_display_text(std::wstring_view parsing_name) override;
     HFONT chrome_font() const noexcept override;
     HWND tooltip() const noexcept override;
@@ -531,14 +522,36 @@ struct AppState : public panedock::app_shell::PaneHost {
     Microsoft::WRL::ComPtr<DragHoverTarget> sidebar_drag_target;
     // finalize_process runs once, from whichever exit gets there first.
     bool ole_finalized{};
+    // Interactions refused while shell_call_depth != 0, released by
+    // finish_shell_call once the depth reaches zero (PD-205).
+    panedock::app_shell::DeferredMessages deferred_shell_messages;
+    // Memoized ::{GUID} display names for the lifetime of the process
+    // (PD-207). Never persisted.
+    std::map<std::wstring, std::wstring> display_name_cache;
 };
 
 void begin_shutdown(HWND window, AppState& state, bool allow_keep_open) noexcept;
 void drag_state_changed(AppState& state, bool entering) noexcept;
 
+void flush_deferred_shell_messages(AppState& state) noexcept {
+    if (state.deferred_shell_messages.empty()) return;
+    const auto pending = panedock::app_shell::take_deferred_messages(
+        state.deferred_shell_messages);
+    if (state.is_shutting_down()) return;
+    for (const panedock::app_shell::DeferredMessage& deferred : pending) {
+        if (!IsWindow(deferred.target)) continue;
+        if (PostMessageW(deferred.target, deferred.message, deferred.wparam,
+                         deferred.lparam))
+            continue;
+        OutputDebugStringW(
+            L"PaneDock: could not queue Shell re-entry interaction\n");
+    }
+}
+
 void finish_shell_call(AppState& state) noexcept {
     const auto action = state.shutdown_sequence.step(
         panedock::core::ShutdownEvent::shell_call_left);
+    if (state.shell_call_depth == 0) flush_deferred_shell_messages(state);
     if (action != panedock::core::ShutdownAction::defer ||
         state.shutdown_message_queued || state.main_window == nullptr)
         return;
@@ -573,11 +586,41 @@ private:
     AppState& state_;
 };
 
-void defer_shell_reentry_message(HWND window, UINT message, WPARAM wparam,
-                                 LPARAM lparam) noexcept {
-    if (PostMessageW(window, message, wparam, lparam)) return;
+// PD-206: activate_group writes active_group_id, then rebind_panes points the
+// panes at the incoming Group's PaneState -- but the live IExplorerBrowsers
+// still show the outgoing Group until navigate_realized_panes runs. Anything
+// that captures a live view's location in between would write the outgoing
+// Group's folders into the incoming Group's tabs. refresh_tab_strips sits in
+// that window and pumps the loop (virtual folders need a Shell display-name
+// lookup), so a WM_CLOSE arriving there used to reach shutdown's
+// capture_locations with the panes already rebound.
+class LocationCaptureSuppression final {
+public:
+    explicit LocationCaptureSuppression(AppState& state) noexcept
+        : state_(state), previous_(state.suppress_location_capture) {
+        state_.suppress_location_capture = true;
+    }
+
+    ~LocationCaptureSuppression() noexcept {
+        state_.suppress_location_capture = previous_;
+    }
+
+    LocationCaptureSuppression(const LocationCaptureSuppression&) = delete;
+    LocationCaptureSuppression& operator=(const LocationCaptureSuppression&) =
+        delete;
+
+private:
+    AppState& state_;
+    bool previous_;
+};
+
+void defer_shell_reentry_message(HWND window, AppState& state, UINT message,
+                                 WPARAM wparam, LPARAM lparam) noexcept try {
+    (void)panedock::app_shell::hold_deferred_message(
+        state.deferred_shell_messages, {window, message, wparam, lparam});
+} catch (...) {
     OutputDebugStringW(
-        L"PaneDock: could not queue Shell re-entry interaction\n");
+        L"PaneDock: could not hold Shell re-entry interaction\n");
 }
 
 bool defer_shell_reentry_mouse_message(HWND window, AppState& state,
@@ -587,7 +630,7 @@ bool defer_shell_reentry_mouse_message(HWND window, AppState& state,
         (message != WM_LBUTTONDOWN && message != WM_LBUTTONDBLCLK &&
          message != WM_LBUTTONUP && message != WM_CONTEXTMENU))
         return false;
-    defer_shell_reentry_message(window, message, wparam, lparam);
+    defer_shell_reentry_message(window, state, message, wparam, lparam);
     return true;
 }
 
@@ -616,12 +659,28 @@ panedock::core::ShellLocation default_shell_location() {
     return location(std::wstring(kPinnedFixedParsingNames[1]));
 }
 
+// A ::{GUID} display name needs a Shell call that pumps our message loop, and
+// one Group switch asks for it once per tab of every pane plus once per
+// address bar. The name of a known folder does not change inside one process
+// run, so memoize it (PD-207). A lookup that came back empty is not cached --
+// that is a transient Shell failure, not an answer.
 std::wstring display_text_for_parsing_name(
     AppState& state, std::wstring_view parsing_name) {
     if (!parsing_name.starts_with(L"::")) return std::wstring(parsing_name);
 
-    ShellCallScope shell_call(state);
-    return panedock::shell_core::display_text_for_parsing_name(parsing_name);
+    const std::wstring key(parsing_name);
+    if (const auto cached = state.display_name_cache.find(key);
+        cached != state.display_name_cache.end())
+        return cached->second;
+
+    std::wstring text;
+    {
+        ShellCallScope shell_call(state);
+        text = panedock::shell_core::display_text_for_parsing_name(
+            parsing_name);
+    }
+    if (!text.empty()) state.display_name_cache.try_emplace(key, text);
+    return text;
 }
 
 panedock::core::ApplicationState default_application_state() {
@@ -734,20 +793,19 @@ bool navigate_realized_panes(
     const auto plan = panedock::core::plan_realization(
         group, group.layout_template, realized_flags(state),
         panedock::core::RealizationMode::group_switch);
-    const bool previous_suppression = state.suppress_location_capture;
-    state.suppress_location_capture = true;
+    panedock::app_shell::ScopedTiming timing(state.diagnostic_mode,
+                                             "group_switch_navigate_ms");
+    // Nested inside perform_group_transition's own suppression; kept here so
+    // any other caller is covered too.
+    LocationCaptureSuppression suppression(state);
     for (const std::size_t pane : plan.navigate) {
         {
             ShellCallScope shell_call(state);
             (void)state.panes[pane].navigate_to(
                 active_tab(group.panes[pane]).location);
         }
-        if (state.is_shutting_down()) {
-            state.suppress_location_capture = previous_suppression;
-            return false;
-        }
+        if (state.is_shutting_down()) return false;
     }
-    state.suppress_location_capture = previous_suppression;
     return true;
 }
 
@@ -1837,8 +1895,10 @@ HRESULT apply_layout(HWND window, AppState& state,
     const std::size_t visible_panes =
         panedock::core::pane_count(group.layout_template);
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
-        if (index < visible_panes &&
-            (changed_panes[index] || recompute_content))
+        // PaneTabStrip::refresh() already applies the item size whenever the
+        // tabs themselves changed, so recompute_content would only repeat it
+        // (PD-207). Geometry is the one thing refresh() does not know about.
+        if (index < visible_panes && changed_panes[index])
             state.panes[index].tab_strip_ui().apply_item_size();
     }
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
@@ -1865,7 +1925,15 @@ HRESULT apply_layout(HWND window, AppState& state,
         if (index >= panedock::core::pane_count(group.layout_template))
             state.panes[index].laid_out_pane_rect().reset();
     }
-    InvalidateRect(window, nullptr, FALSE);
+    // A pass where nothing moved and the batch committed has repainted
+    // everything it changed already; an unconditional whole-window invalidate
+    // makes every no-op kDeferredLayoutMessage a full repaint (PD-207).
+    // !committed means the batch fell back to per-window SetWindowPos, which
+    // leaves the frame needing a repaint.
+    if (!committed ||
+        std::any_of(changed_panes.begin(), changed_panes.end(),
+                    [](bool changed) noexcept { return changed; }))
+        InvalidateRect(window, nullptr, FALSE);
     if (recompute_content) write_live_view_count(state.diagnostic_mode);
     // `group` above outlived every Shell call in this pass; a changed group
     // count means one of them re-entered a Group mutation and the reference
@@ -1936,10 +2004,21 @@ panedock::core::GroupState new_group_state(const AppState& state,
 // focus call both re-enter the message loop, and a reference into
 // state.application.groups would not survive a Group being added or removed
 // during that re-entry -- so every step looks the Group up again.
+void show_startup_notification(HWND owner, AppState& state) noexcept;
+
 void perform_group_transition(HWND window, AppState& state,
                               panedock::core::GroupTransition transition,
                               bool active_group_changed) {
     using Step = panedock::core::GroupTransitionStep;
+    panedock::app_shell::ScopedTiming timing(state.diagnostic_mode, "group_switch_ms");
+    // Held across every step, including the early returns: the panes are bound
+    // to the incoming Group from rebind_panes onwards, so no capture may read a
+    // live view until the navigations have been issued (PD-206). Released
+    // before save_session, which is the last step -- save_now refuses to write
+    // while the suppression is on, so holding it there would silently drop the
+    // fallback save that arm_timer failure falls back to.
+    std::optional<LocationCaptureSuppression> suppression;
+    suppression.emplace(state);
     for (const Step step : panedock::core::plan_group_transition(
              transition, has_active_group(state), active_group_changed)) {
         if (state.is_shutting_down()) return;
@@ -1957,8 +2036,24 @@ void perform_group_transition(HWND window, AppState& state,
                 break;
             case Step::apply_layout:
                 if (const HRESULT hr = apply_layout(window, state);
-                    FAILED(hr))
+                    FAILED(hr)) {
                     report_shell_failure(state, L"group_transition", hr);
+                    // E_ABORT is apply_layout's shutdown bail-out, not a
+                    // failure the user can act on. Anything else leaves a
+                    // blank pane, which used to be reported only to a
+                    // debugger (PD-208); reuse the startup path's modeless
+                    // notification rather than adding a second mechanism.
+                    if (hr != E_ABORT) {
+                        append_startup_warning(
+                            state,
+                            L"PaneDock could not open the Shell view for one "
+                            L"or more panes. Some panes may be empty. " +
+                                panedock::app_shell::
+                                    format_shell_failure_detail(
+                                        hr, last_failed_pane(state)));
+                        show_startup_notification(window, state);
+                    }
+                }
                 break;
             case Step::focus_active_pane: {
                 if (!has_active_group(state)) break;
@@ -1972,6 +2067,7 @@ void perform_group_transition(HWND window, AppState& state,
                 refresh_sidebar(state);
                 break;
             case Step::save_session:
+                suppression.reset();
                 // Group switches can be triggered from the OLE drag-hover
                 // message. Keep the session flush out of that interaction
                 // path; shutdown still forces the dirty state through a
@@ -2144,6 +2240,10 @@ const std::string &AppState::active_group_id() const noexcept {
 
 bool AppState::location_capture_suppressed() const noexcept {
     return suppress_location_capture;
+}
+
+bool AppState::diagnostic_timing_enabled() const noexcept {
+    return diagnostic_mode;
 }
 
 std::span<const panedock::app_shell::PinnedLocation>
@@ -3497,17 +3597,18 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
 
     if (state != nullptr && state->shell_call_depth != 0) {
         if (message == WM_COMMAND) {
-            defer_shell_reentry_message(window, kDeferredCommandMessage,
-                                        wparam, lparam);
+            defer_shell_reentry_message(window, *state,
+                                        kDeferredCommandMessage, wparam,
+                                        lparam);
             return 0;
         }
         if (message == kDragHoverMessage) {
-            defer_shell_reentry_message(window, message, wparam, lparam);
+            defer_shell_reentry_message(window, *state, message, wparam, lparam);
             return 0;
         }
         if (message == WM_PARENTNOTIFY || message == WM_LBUTTONDOWN ||
             message == WM_LBUTTONDBLCLK || message == WM_LBUTTONUP) {
-            defer_shell_reentry_message(window, message, wparam, lparam);
+            defer_shell_reentry_message(window, *state, message, wparam, lparam);
             return 0;
         }
     }
@@ -3526,7 +3627,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state != nullptr) {
                 if (state->shell_call_depth != 0) {
                     defer_shell_reentry_message(
-                        window, kDeferredCommandMessage, wparam, lparam);
+                        window, *state, kDeferredCommandMessage, wparam,
+                        lparam);
                 } else if (!state->is_shutting_down()) {
                     SendMessageW(window, WM_COMMAND, wparam, lparam);
                 }
@@ -4313,7 +4415,8 @@ std::optional<LRESULT> AppState::handle_pane_control_message(
     // loop, advancing the navigation generation under the in-flight request.
     // Replay it at the pane so handle_command still knows which pane it is.
     if (state->shell_call_depth != 0 && message == WM_COMMAND) {
-        defer_shell_reentry_message(pane_window, message, wparam, lparam);
+        defer_shell_reentry_message(pane_window, *state, message, wparam,
+                                    lparam);
         return LRESULT{0};
     }
 

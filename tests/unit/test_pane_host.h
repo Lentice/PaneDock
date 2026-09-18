@@ -51,6 +51,7 @@ class TestPaneHost : public panedock::app_shell::PaneHost {
     bool location_capture_suppressed() const noexcept override {
         return suppress_location_capture;
     }
+    bool diagnostic_timing_enabled() const noexcept override { return false; }
     std::wstring tab_display_text(std::wstring_view name) override {
         if (++lookups == 2 && mutate_on_second_lookup != nullptr)
             mutate_on_second_lookup->tabs.erase(

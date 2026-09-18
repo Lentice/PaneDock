@@ -242,6 +242,11 @@
 | PD-202 | pane chrome 幾何抽為純函式並補測試 | 7 | `done` | PD-197, PD-201 | [PD-202](tickets/PD-202-pane-chrome-geometry-is-a-pure-tested-unit.md) |
 | PD-203 | OS session end 先寫 durable checkpoint，Shell teardown 改 best-effort（覆寫 PD-143 排序） | 7 | `done` | PD-025, PD-032, PD-132, PD-143 | [PD-203](tickets/PD-203-endsession-checkpoint-before-shell-teardown.md) |
 | PD-204 | back/forward 導航失敗時回滾 model，避免保存從未顯示過的位置 | 7 | `done` | PD-203 | [PD-204](tickets/PD-204-rollback-failed-history-navigation.md) |
+| PD-205 | Shell 呼叫期間的延遲訊息改為 pending flush，消除 PostMessage 自旋 | 7 | `done` | PD-171, PD-204 | [PD-205](tickets/PD-205-deferred-shell-reentry-messages-stop-spinning.md) |
+| PD-206 | Group transition 全程抑制 location capture，避免半切換狀態污染新 Group | 7 | `done` | PD-203, PD-204 | [PD-206](tickets/PD-206-suppress-location-capture-across-the-whole-group-transition.md) |
+| PD-207 | 移除切換熱路徑上的冗餘 Shell 呼叫與重繪 | 7 | `done` | PD-206 | [PD-207](tickets/PD-207-drop-redundant-work-from-the-switching-hot-path.md) |
+| PD-208 | Group 切換時 realize 失敗必須有使用者可見提示 | 7 | `done` | PD-093 | [PD-208](tickets/PD-208-group-switch-realization-failure-is-user-visible.md) |
+| PD-209 | Group 切換／tab realize 的延遲計時儀器（覆寫 PD-026 的儀器排除） | 7 | `in_progress` | PD-024, PD-026 | [PD-209](tickets/PD-209-switching-latency-instrumentation.md) |
 
 
 ## Dependency lanes
@@ -380,7 +385,7 @@ rename 輪替在兩個 rename 之間存在「primary 暫時不存在」的視窗
 |---|---|
 | ~~診斷模式:抑制第三方 shell extension~~ | **已於 2026-08-24 開票(PD-024),不再是候選。** 手段為同一 process 內的 `MicrosoftSignedOnly` binary signature policy ＋ `--diagnostic` 命令列旗標;與被否決的「獨立 process 隔離」是不同方向,見上節 2026-08-24 註記。 |
 | 以獨立 process 隔離第三方 shell extension | `docs/design-spec.md` §14 保留的方向,目前明確不在範圍。觸發條件不變:**先有實際的 extension 崩潰紀錄**。PD-024 的診斷模式正是產生那份紀錄(「一般模式崩潰、`--diagnostic` 不崩潰」)的工具;累積到具體案例再依 §已否決的方向 的規則開票。 |
-| 產品內的計時儀器(Group 切換／tab realize／cold start 延遲) | PD-026(2026-08-24)刻意排除:三者都沒有 blocking 門檻,加儀器要動產品程式碼。若使用者實際回報切換有感延遲,再開票加 `QueryPerformanceCounter` 量測點,屆時 `docs/performance-baseline.md` 對應列才有數字可填。 |
+| ~~產品內的計時儀器(Group 切換／tab realize／cold start 延遲)~~ | **已於 2026-09-18 開票(PD-209)，不再是候選（cold start 一項仍在候選外，未開票）。** 觸發條件「使用者實際回報切換有感延遲」已由使用者當日直接要求改善切換速度成立；同日雙方稽核另證明 `BrowseToObject`(`explorer_host.cpp:638`)完全沒有時限。原始描述：PD-026(2026-08-24)刻意排除：三者都沒有 blocking 門檻，加儀器要動產品程式碼。 |
 | 崩潰迴圈的自動安全模式(連續 N 次不乾淨關閉即自動以 `--diagnostic` 啟動) | PD-025(2026-08-24)刻意排除:沒有真實崩潰資料前 N 是憑空調的,且自動重啟需要 `CreateProcess`,會在單一 process 架構上開一個口子。若使用者實際遇到崩潰迴圈再開票。 |
 | 縮圖 pipeline 的快取與尺寸上限 | 待 PD-003 量出縮圖對記憶體的實際貢獻後再開,避免憑估計調參數。PD-003 2026-08-29 的自動化量測跑出差值 0 bytes,但兩個組態都重用同一次 run 內已導覽過的資料夾(縮圖早已快取),不是有效讀數;要開票前需先用全新啟動的 process 分別量測純文字與縮圖資料夾。 |
 | ~~診斷閒置磁碟 I/O 的來源~~ | **已於 2026-09-03 開票(PD-176),不再是候選。** PD-003 2026-08-29 量到閒置 10 分鐘期間有 307294 bytes 磁碟 I/O(NFR-001 磁碟門檻 FAIL,零 bytes 才算過),觸發條件早已成立;2026-09-03 三方稽核在原始碼層面排除了 app 自身的 busy-spin 與輪詢計時器,把範圍收斂為「歸因到 app 之外的來源」。 |
@@ -395,6 +400,7 @@ rename 輪替在兩個 rename 之間存在「primary 暫時不存在」的視窗
 | 移除 `AppState` 的 14 個 shutdown reference alias（`main.cpp:506-528`） | **2026-09-03 查證後主動撤案，不列為待辦。** 原本被誤判為 PD-162 遺留的技術債。實測 `closing_` 用於 91 處、`shutdown_deferred` 88 處，移除後約 200 個呼叫點會從 `state.closing_` 變成 `state.shutdown_sequence.state().closing_`，更長更難讀；且它們是 reference，不存在「兩份真相會不同步」的風險。要重開必須先舉出一個因這些 alias 而實際發生的缺陷。 |
 | 拆 `explorer_host.cpp` 剩餘三塊職責（COM 回呼 shim、reentrancy／navigation generation queue、context menu hosting） | PD-181 只抽 error window（約 200 行 + 4 個 header 成員），因為那是一個與 host `IExplorerBrowser` 完全無關的第二 UI。其餘三塊都與 COM 契約糾纏，而 `docs/testing.md` 明訂 `explorer_host` 無自動化測試，拆錯沒有測試網。觸發條件：出現一個具體的、可歸因到這三塊之一的實機缺陷。 |
 | 統一 `{ ShellCallScope } + if (closing_ \|\| shutdown_deferred) return X;` 慣用法（30+ 處，約 120 行） | 2026-09-03 重構掃描發現，但**刻意排除**。回傳值分別是 `void`／`E_ABORT`／`0`，統一時錯一個就破一條 reentrancy 路徑；PD-172／PD-173／PD-177 剛修完這一區，是本專案最貴的崩潰面。觸發條件：先有一個因這個慣用法被複製錯而產生的實際缺陷。 |
+| Group 切換的導覽改為非阻塞（逐 pane posted message，不再序列化四次同步 `BrowseToObject`） | 2026-09-18 雙方稽核一致認定為最大效能問題：`navigate_realized_panes`(`main.cpp:732-751`)在 UI 執行緒逐一等待，而 `BrowseToObject`(`explorer_host.cpp:638`)沒有時限，1000 ms 的 `dwTickCountDeadline`(`explorer_host.cpp:24,55`)只掛在 `SHCreateItemFromParsingName` 上，網路 provider 常無視 `BIND_OPTS`。四個 pane 都指向不可達網路路徑時UI 阻塞無上限，違反 NFR-003。**修法方向已收斂**：Codex 主張把解析搬到 thread-pool，**不採用**——`IExplorerBrowser` 是 STA-bound，`BrowseToObject` 仍要回到 UI 執行緒排隊，換不到對應價值；Claude 的方向較小：把迴圈改成「issue 第一個 pane 後，其餘透過 `kDeferredLayoutMessage` 式的 posted message 逐一觸發」，讓每次 Shell 呼叫之間迴圈能回到 idle。**觸發條件**：PD-209 的實測數字填入 `docs/performance-baseline.md:14-16`，且「one unreachable network path」一列確認為 FAIL——`docs/performance-baseline.md` 規定任何優化提案必須先有本表的數字。屆時開票並依該數字定驗收門檻。 |
 | `IShellFolder` 自建清單檢視(fallback) | 僅在 PD-001 判定 No-Go 時開。 |
 | 統一 header 版型按鈕圖示與導覽列圖示的筆畫粗細 | PD-075(2026-08-26)刻意排除:版型按鈕的五個圖示是**版面示意圖**(一格／雙欄／上下／2×2／更多),沒有任何 `Segoe MDL2 Assets` 字符能表達「這個版型長什麼樣」,只能手繪。但 `draw_layout_glyph` 用 `CreatePen(PS_SOLID, 1, ...)` 而 `draw_navigation_icon_button` 是 2px,兩者並列時粗細不同是真的。觸發條件:PD-075 完成後若使用者仍覺得 header 與 pane 的圖示不成套,再開票調整手繪線寬(注意 1px 是 `RoundRect` 版面示意圖能保持清晰的實際上限,加粗可能反而糊掉,屆時需先截圖比對)。 |
 | 側邊欄寬度的全域設定持久化 | 若使用者回報每次啟動都要重拖再開;目前預設值可接受。 |
@@ -1075,3 +1081,37 @@ PD-201 留下的 `SessionWriter` 是本輪最深的模組，其「寫入失敗�
   的入口，不同步的那一瞬間現在只是少畫一格。若日後要真正消除該視窗，方向是讓
   strip 直接由模型取得標籤數，而非快取一份長度。
 - 本輪 sidebar 的 reorder／rename／drag 狀態機逐項核對後沒有缺陷，未做任何更動。
+
+### 2026-09-18 — tab／Group 切換路徑雙方稽核：開 PD-205～PD-209，留下一個候選
+
+使用者要求「用 claude、codex 稽核切換路徑（切 tab／切 Group），改善速度與健壯性」。
+兩個 agent 各自唯讀稽核同一批檔案，作者再逐項在原始碼層面複驗，只把複驗成立的
+項目開票。
+
+**雙方一致的發現**（皆成立）：
+
+- 導覽在 UI 執行緒序列化四次，且 `BrowseToObject` 沒有時限 → 見 §候選，
+  受 PD-209 的實測數字閘住。
+- 虛擬資料夾顯示名稱每次重整都重新向 Shell 查詢 → PD-207 範圍 4。
+
+**衝突且已裁決的一項**：Codex 指出 `active_group_id` 改寫後、
+`navigate_realized_panes` 開啟抑制之前存在一段視窗期，reentrant shutdown 會把舊
+Group 的 view 狀態寫進新 Group；Claude 把同一區判為「已查核正確」。**Codex 正確**
+——Claude 只看到 `navigate_realized_panes` 內部的抑制，漏掉 `rebind_panes` 與
+`refresh_tab_strips` 落在抑制之外，而後者會因 `::{GUID}` 的 display-name 查詢泵
+訊息迴圈。已開 PD-206。
+
+**只有 Claude 抓到、複驗成立的三項**：`defer_shell_reentry_message` 的
+PostMessage 自旋（PD-205，優先度最高，因為它直接打破 `AGENTS.md` 的 0% CPU idle
+規則）、realize 失敗只寫 `OutputDebugStringW`（PD-208）、
+`refresh_status_bar`／`apply_item_size`／整窗 invalidate 的冗餘（PD-207）。
+
+**兩份稽核一致排除、複驗後確認無問題**（不開票，記錄以免重查）：無重建 pane
+HWND、Group 切換無重複 realize、session 存檔在切換路徑只 mark dirty 並走 debounce、
+無漏 `IExplorerBrowser::Destroy`、stale navigation completion 已由
+`NavigationRequest`（generation ＋ group_id ＋ tab_id）擋住、`src/core` 純度乾淨、
+`PaneState` 位址穩定性由 `model.h:66-81` 的 `static_assert` 守住。
+
+**刻意不開票的一項**：`finish_tab_change` 與 `navigation_complete` 各做一次
+`tab_strip_ui().refresh()`（Claude finding 8）。第一次是選取態的即時回饋，有其
+道理；其成本在 PD-207 的 display-name memo 之後就消失，不值得單獨改。

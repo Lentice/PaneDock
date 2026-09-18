@@ -88,10 +88,30 @@ if ($navigationHelperStart -lt 0 -or $navigationHelperEnd -lt 0) {
 }
 $navigationHelperBody = $source.Substring(
     $navigationHelperStart, $navigationHelperEnd - $navigationHelperStart)
-if ($navigationHelperBody -notmatch 'state\.suppress_location_capture\s*=\s*true' -or
+if ($navigationHelperBody -notmatch 'LocationCaptureSuppression suppression\(state\)' -or
     $navigationHelperBody -notmatch 'ShellCallScope shell_call\(state\)' -or
         $navigationHelperBody -notmatch 'state\.panes\[pane\]\.navigate_to\(') {
     throw 'Shell re-entry invariant failed: realized-pane navigation helper is incomplete'
+}
+
+# PD-206: the panes are bound to the incoming Group from rebind_panes onwards,
+# so the suppression has to be held by perform_group_transition itself. Holding
+# it only inside navigate_realized_panes leaves refresh_tab_strips -- which
+# pumps the loop for virtual-folder display names -- able to reach shutdown's
+# capture_locations with the panes already rebound.
+Assert-Source 'suppress_location_capture\s*=\s*previous_;' `
+    'location capture suppression restores the previous value on scope exit'
+$transitionStart = $source.IndexOf('void perform_group_transition(HWND window, AppState& state,')
+$transitionEnd = $source.IndexOf('void activate_group(HWND window, AppState& state,', $transitionStart)
+if ($transitionStart -lt 0 -or $transitionEnd -lt 0) {
+    throw 'Shell re-entry invariant failed: group transition script body missing'
+}
+$transitionBody = $source.Substring($transitionStart, $transitionEnd - $transitionStart)
+if ($transitionBody -notmatch 'suppression\.emplace\(state\)') {
+    throw 'Shell re-entry invariant failed: group transition does not suppress location capture for the whole script'
+}
+if ($transitionBody -notmatch 'case Step::save_session:\s*suppression\.reset\(\);') {
+    throw 'Shell re-entry invariant failed: group transition must release the capture suppression before save_session'
 }
 $navigationCallSiteSource = $source.Remove(
     $navigationHelperStart, $navigationHelperEnd - $navigationHelperStart)
@@ -308,7 +328,7 @@ $paneControlGate = $source.IndexOf(
 if ($paneControlSwitch -lt 0 -or $paneControlGate -lt 0 -or
     $paneControlGate -gt $paneControlSwitch -or
     $source.Substring($paneControlGate, $paneControlSwitch - $paneControlGate) -notmatch
-        'defer_shell_reentry_message\(pane_window, message, wparam, lparam\)') {
+        'defer_shell_reentry_message\(\s*pane_window, \*state, message, wparam,') {
     throw 'Shell re-entry invariant failed: pane child WM_COMMAND must be deferred during Shell re-entry'
 }
 

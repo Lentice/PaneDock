@@ -1,5 +1,6 @@
 #include "app_shell/pane.h"
 
+#include "app_shell/diagnostic_mode.h"
 #include "app_shell/pane_host.h"
 #include "app_shell/window_helpers.h"
 
@@ -647,6 +648,7 @@ void Pane::refresh_status_bar() noexcept {
         hr = host().item_counts(counts);
     }
     if (!active()) return;
+    if (hr == E_PENDING) return;  // keep the last counts until this navigation lands
     if (FAILED(hr)) {
         SetWindowTextW(status_bar(), L"");
         return;
@@ -839,6 +841,11 @@ void Pane::navigation_complete(
     apply_sort();
     if (!active()) return;
     tab_strip_ui().refresh();
+    // item_counts() refused while this navigation was in flight (PD-207), so
+    // the counts on screen still belong to the previous folder. Do not rely on
+    // a selection-changed callback arriving for the new one.
+    refresh_status_bar();
+    if (!active()) return;
     pane_host()->schedule_session_save();
 }
 
@@ -1155,6 +1162,8 @@ void Pane::finish_tab_change(bool navigate_active) {
         auto *tab = active_tab();
         if (tab == nullptr) return;
         {
+            ScopedTiming timing(pane_host()->diagnostic_timing_enabled(),
+                                "tab_realize_ms");
             ShellCall shell_call(pane_host());
             (void)navigate_to(tab->location);
         }
