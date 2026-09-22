@@ -42,10 +42,16 @@ Tickets live in `docs/tickets/` and are tracked in `docs/tickets.md`.
 - Write each ticket to be self-contained, so a low-capability agent can pick it up and finish it without prior context or further questions.
 - Quote the binding constraints into the ticket itself: the relevant `docs/design-spec.md` clauses, the `docs/development.md` rules, and the applicable rules from this file. Do not rely on the agent finding them.
 - List the exact files to read and trace, the concrete scope (signatures, constants, call sites), the non-goals, the acceptance criteria, and the runnable Agent checks.
-- When a ticket overrides an earlier decision, state the override inside the new ticket. Never edit a completed ticket's document — that rule protects its scope, decisions and 交接區, which are the historical record. It does not protect tracker metadata that has since become false.
+- When a ticket overrides an earlier decision, state the override inside the new ticket. Never edit a completed ticket's document — that rule protects its scope, decisions and 交接區, which are the historical record. It does not protect tracker metadata that has since become false. The rule is why the narrowing below applies only to new tickets: the existing 交接區 sections stay exactly as written, mixed content and all.
 - **Status and dependencies live only in the Ticket 總覽 table of `docs/tickets.md`.** A ticket document must not declare its own status. The same status stored in two places will diverge.
 - Before writing a new ticket, read the 「已否決的方向」 section of `docs/tickets.md`. Reopening a rejected direction is allowed, but the new ticket must state the override and present new evidence.
 - Anything a later session needs must live in the repository, not in a scratchpad handoff. Candidate tickets and rejected directions go in `docs/tickets.md`; measured numbers go in `docs/performance-baseline.md` or the ticket's 交接區.
+- A 交接區 holds exactly two things: **unresolved risks** (what is still unmeasured, unverified, or assumed) and **conclusions a later session must not re-derive** (a constant verified the hard way, a cause already ruled out). Nothing else. It is not a retrospective, and it is the last resort — prefer the destination that the reader will actually be standing in:
+  - a constant or invariant that must not be "corrected" from memory → a comment at that line in the code
+  - a measured number → `docs/performance-baseline.md`
+  - a direction that was tried and rejected → the 「已否決的方向」 section of `docs/tickets.md`
+  - a superseded decision → the Overrides section of the ticket that supersedes it
+- Do not put these in a 交接區, in any ticket: a list of the files or `file.cpp:123` lines that changed (git holds it, and the line numbers rot the next time anyone edits above them), a restatement of the diff or of the ticket's own scope, process notes and comparison scratch work whose purpose ended when the ticket landed, or an unfilled "（實作者填寫：…）" template. In this repository all 213 tickets grew a 交接區 and most of what accumulated there was one of those four.
 - Do not reserve ticket numbers in advance. Take the highest number in the Ticket 總覽 table and add one at the moment you write the file, and confirm `docs/tickets/` has no file with that number: another agent may be authoring tickets in this repository at the same time.
 
 ## Current baseline
