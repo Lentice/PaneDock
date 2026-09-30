@@ -160,4 +160,19 @@ target_link_libraries(panedock_explorer_host_lifetime_check PRIVATE
 )
 panedock_set_warnings(panedock_explorer_host_lifetime_check)
 
+# Manual Shell timing probe. It reads two supplied folders and is intentionally
+# not a CTest gate: desktop, storage, and installed extensions affect timings.
+add_executable(panedock_tab_switch_probe EXCLUDE_FROM_ALL
+    tests/perf/tab_switch_probe.cpp
+)
+target_include_directories(panedock_tab_switch_probe PRIVATE src)
+target_compile_definitions(panedock_tab_switch_probe PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
+)
+target_link_options(panedock_tab_switch_probe PRIVATE -municode)
+target_link_libraries(panedock_tab_switch_probe PRIVATE
+    panedock_explorer_host ole32 shell32 user32
+)
+panedock_set_warnings(panedock_tab_switch_probe)
+
 add_subdirectory(tests)

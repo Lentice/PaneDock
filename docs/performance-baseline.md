@@ -17,6 +17,30 @@ Rows that still read **Not measured** are estimates or unobserved planning conte
 | Cold start to first painted pane | — | — | Not measured | Requires visible-paint instrumentation, outside PD-026. |
 | Thumbnail pipeline memory contribution | — | — | 0 bytes (not a reliable reading) | PD-003 2026-08-29: WorkingSet64(thumbnail folder) − WorkingSet64(text-only folder), but both folders had already been visited earlier in the same run, so thumbnails were pre-cached before this comparison. Not usable as evidence for a thumbnail-cache ticket; a fresh-process comparison is needed. |
 
+## Local tab-switch Shell probe (2026-09-29)
+
+`panedock_tab_switch_probe` reuses the product's `ExplorerHost` in a separate
+visible window. It navigates between the reported E: and D: local folders,
+then leaves the E: view idle before switching to D: again. E: had 25 visible
+items; D: had one visible file and three hidden files. `complete_ms` ends at
+the Shell navigation callback; `all_items_ms` ends when `IFolderView2::ItemCount`
+reports every expected visible item. Both times start before `navigate()`.
+The probe waits on window messages while idle and makes no periodic folder
+queries during that interval.
+
+| Idle period | E→D phase | `navigate()` call | Navigation complete | All visible items |
+|---|---|---:|---:|---:|
+| 120 s | warm | 0.56 ms | 57.49 ms | 133.02 ms |
+| 120 s | after idle | 1.22 ms | 42.99 ms | 107.15 ms |
+| 600 s | warm | 0.51 ms | 52.21 ms | 123.84 ms |
+| 600 s | after idle | 4.57 ms | 46.84 ms | 114.66 ms |
+
+These runs did not reproduce the reported long delay. This is a Shell-host
+measurement, not a PaneDock tab-click or pixel-paint measurement, so the
+"Tab realize latency on activation" row remains **Not measured**. Run the
+probe with `cmake --build build --target panedock_tab_switch_probe`, then
+`build\panedock_tab_switch_probe.exe <from> <to> <visible-from-count> <visible-to-count> <idle-seconds>`.
+
 ## Release evidence contract
 
 `tests/release/release_evidence.ps1` regenerates `docs/release-evidence.md`. The contract is fail-closed:
