@@ -8,10 +8,37 @@
 #endif
 #include <windows.h>
 
+#include <array>
 #include <optional>
 #include <string>
 
 namespace panedock::app_shell {
+
+class WindowPositionBatch final {
+public:
+    WindowPositionBatch() noexcept;
+    ~WindowPositionBatch();
+    WindowPositionBatch(const WindowPositionBatch&) = delete;
+    WindowPositionBatch& operator=(const WindowPositionBatch&) = delete;
+
+    void position(HWND window, HWND insert_after, const RECT& rect,
+                  UINT flags) noexcept;
+    bool active() const noexcept { return handle_ != nullptr; }
+    HDWP* handle() noexcept { return handle_ == nullptr ? nullptr : &handle_; }
+    bool commit() noexcept;
+
+private:
+    static constexpr std::size_t kCapacity = 128;
+    struct Entry final {
+        HWND window{nullptr};
+        HWND insert_after{nullptr};
+        RECT rect{};
+        UINT flags{};
+    };
+    HDWP handle_{};
+    std::array<Entry, kCapacity> entries_{};
+    std::size_t entry_count_{};
+};
 
 // A failure the user has to be told about carries two audiences in one
 // string: the plain sentence the caller writes for the user, and this

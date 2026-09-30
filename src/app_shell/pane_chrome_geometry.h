@@ -19,8 +19,8 @@
 // which only bite at small pane sizes had no test at all, while the same class
 // of defect was reported three times from the desktop (PD-107, PD-152,
 // PD-154). The clamps are the interesting part, so they now live where they
-// can be driven without a window: apply_layout still owns placement, batching
-// and the parent-scoped DeferWindowPos contract, and only reads these rects.
+// can be driven without a window: Pane stages its own child placement, while
+// apply_layout keeps the parent-scoped DeferWindowPos commit order.
 namespace panedock::app_shell {
 
 constexpr int kPaneCardOutset = 2;
@@ -76,7 +76,7 @@ inline RECT inset_rect(RECT rect, int inset) noexcept {
 }
 
 // All rects are in main-window coordinates, the same space as the pane rect
-// handed in; apply_layout offsets them into each parent's client space itself.
+// handed in; Pane offsets them into its child-parent client space.
 struct PaneChromeRects final {
     // The pane's own HWND: the content rect grown by the card outset plus the
     // drop shadow, which is the space draw_pane_card paints into.

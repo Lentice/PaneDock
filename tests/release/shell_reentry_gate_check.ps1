@@ -63,13 +63,18 @@ if ($windowProcStart -lt 0 -or $windowSwitch -lt 0 -or
 }
 Assert-Source 'ShellCallScope shell_call\(state\)' `
     'ExplorerHost callers use the shared Shell-call gate'
-Assert-Source 'set_shell_call_callback\(\s*&state,\s*app_shell_call_state_changed\)' `
-    'ExplorerHost receives the app Shell-call gate before initialization'
+$realizeStart = $paneSource.IndexOf('HRESULT Pane::realize(')
+$realizeEnd = $paneSource.IndexOf('HRESULT Pane::configure_realized_view()', $realizeStart)
+if ($realizeStart -lt 0 -or $realizeEnd -lt 0 -or
+    $paneSource.Substring($realizeStart, $realizeEnd - $realizeStart) -notmatch
+        'set_shell_call_callback\([\s\S]*pane_host\(\)->shell_call_entered\(\)[\s\S]*pane_host\(\)->shell_call_left\(\)[\s\S]*explorer_host_\.initialize') {
+    throw 'Shell re-entry invariant failed: Pane must connect the app Shell-call gate before initialization'
+}
 Assert-Source 'void finish_shell_call\(AppState& state\)' `
     'app Shell-call leave logic is shared with callback entry'
 Assert-Source 'finish_shell_call\(state_\)' `
     'RAII ShellCallScope uses the shared leave logic'
-Assert-Source 'finish_shell_call\(state\)' `
+Assert-Source 'void AppState::shell_call_left\(\) noexcept\s*\{\s*finish_shell_call\(\*this\);' `
     'ExplorerHost callback leave uses the shared leave logic'
 Assert-Source 'bool\s+navigate_realized_panes\(\s*AppState& state,\s*const panedock::core::GroupState& group\)\s*noexcept' `
     'Group transitions share realized-pane navigation'

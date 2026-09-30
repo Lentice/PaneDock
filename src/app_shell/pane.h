@@ -28,6 +28,7 @@
 namespace panedock::app_shell {
 
 class PaneHost;
+class WindowPositionBatch;
 
 // The pane card metrics and the whole pane-chrome rect computation live in
 // pane_chrome_geometry.h, which is pure and unit-tested.
@@ -39,6 +40,11 @@ inline RECT to_win32_rect(const TabStripRect &rect) noexcept {
 // A stable identity slot owning its Shell view, child windows and tab strip.
 class Pane final {
   public:
+    struct LayoutResult final {
+        bool changed{};
+        RECT shell_rect{};
+        RECT container_rect{};
+    };
     Pane() noexcept : tab_strip_ui_(this) {}
     ~Pane() { destroy(); }
 
@@ -136,12 +142,15 @@ class Pane final {
     // Shared icon font: the coordinator releases it on DPI change/shutdown.
     static void release_navigation_icon_font() noexcept;
 
-    void apply_container_region(int width, int height, int radius) noexcept;
     bool set_rect(const RECT &rect) noexcept;
-    void set_paint_geometry(const RECT &navigation_background,
-                            const RECT &pane_window_rect, UINT dpi) noexcept;
     void paint_background(HDC target) noexcept;
-    void repaint_chrome() noexcept;
+    LayoutResult stage_layout(const RECT& pane_rect, UINT dpi,
+                              WindowPositionBatch& outer,
+                              WindowPositionBatch& children) noexcept;
+    void finish_layout(const LayoutResult& layout, UINT dpi) noexcept;
+    void set_shell_rect(const RECT& rect, HDWP* deferred) noexcept;
+    void set_shell_visible(bool visible) noexcept;
+    HRESULT configure_realized_view() noexcept;
     void set_visible(bool visible) noexcept;
     void apply_font(HFONT font) noexcept;
 
@@ -202,6 +211,10 @@ class Pane final {
     }
 
   private:
+    void apply_container_region(int width, int height, int radius) noexcept;
+    void set_paint_geometry(const RECT& navigation_background,
+                            const RECT& pane_window_rect, UINT dpi) noexcept;
+    void repaint_chrome() noexcept;
     // Called after a successful tab mutation. Closing an inactive tab only
     // refreshes chrome and saves; replacing the last tab still navigates.
     void finish_tab_change(bool navigate_active);

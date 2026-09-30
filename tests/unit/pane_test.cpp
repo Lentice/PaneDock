@@ -1,5 +1,6 @@
 #include "unit/test_pane_host.h"
 #include "unit/test_util.h"
+#include "app_shell/window_helpers.h"
 
 namespace {
 
@@ -181,6 +182,45 @@ void test_button_erase_preserves_pixels_until_owner_draw() {
     SelectObject(dc, old_bitmap);
     DeleteObject(bitmap);
     DeleteDC(dc);
+    pane.destroy();
+    DestroyWindow(parent);
+}
+
+void test_pane_stages_its_child_layout() {
+    using panedock::app_shell::WindowPositionBatch;
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    EXPECT(panedock::app_shell::Pane::register_window_class(instance));
+    const HWND parent = CreateWindowExW(
+        0, L"STATIC", nullptr, 0, 0, 0, 400, 300, nullptr, nullptr,
+        instance, nullptr);
+    EXPECT(parent != nullptr);
+    panedock::app_shell::Pane pane;
+    EXPECT(pane.create(parent, 0));
+    const RECT target{10, 20, 310, 220};
+    WindowPositionBatch outer;
+    WindowPositionBatch children;
+    const auto layout = pane.stage_layout(target, 96, outer, children);
+    EXPECT(layout.changed);
+    EXPECT(outer.commit());
+    EXPECT(children.commit());
+    const auto rects = panedock::app_shell::pane_chrome_rects(target, 96);
+    RECT pane_window{};
+    RECT tab_strip{};
+    RECT address_bar{};
+    GetWindowRect(pane.window(), &pane_window);
+    GetWindowRect(pane.tab_strip(), &tab_strip);
+    GetWindowRect(pane.address_bar(), &address_bar);
+    EXPECT(tab_strip.left - pane_window.left ==
+           rects.tab_strip.left - rects.pane_window.left);
+    EXPECT(tab_strip.top - pane_window.top ==
+           rects.tab_strip.top - rects.pane_window.top);
+    EXPECT(address_bar.left - pane_window.left ==
+           rects.address_bar.left - rects.pane_window.left);
+    EXPECT(address_bar.top - pane_window.top ==
+           rects.address_bar.top - rects.pane_window.top);
+    EXPECT(layout.shell_rect.right ==
+           rects.explorer_container.right - rects.explorer_container.left);
+    pane.finish_layout(layout, 96);
     pane.destroy();
     DestroyWindow(parent);
 }
@@ -498,6 +538,7 @@ int main() {
     test_replacement_navigation_does_not_inherit_history_suppression();
     test_pane_without_host_is_constructible();
     test_rect_cache_reports_only_real_changes();
+    test_pane_stages_its_child_layout();
     test_set_tabs_replaces_visuals_without_owning_tab_state();
     test_tab_at_delegates_to_geometry_hit_test();
     test_pane_state_binding_uses_the_original_object();

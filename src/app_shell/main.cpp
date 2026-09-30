@@ -30,7 +30,6 @@
 #include <ole2.h>
 #include <shlobj.h>
 #include <shellapi.h>
-#include <shlwapi.h>
 #include <windowsx.h>
 #include <wrl/client.h>
 
@@ -110,8 +109,6 @@ constexpr UINT kDeferredCommandMessage = WM_APP + 56;
 using panedock::core::kSidebarMaximumWidth;
 using panedock::core::kSidebarMinimumWidth;
 constexpr std::size_t kExplorerCount = 4;
-using NavigationGeneration =
-    panedock::explorer_host::ExplorerHost::NavigationGeneration;
 constexpr int kLayoutBarHeight = 44;
 constexpr int kLayoutButtonHeight = 30;
 constexpr int kLayoutButtonWidth = 30;
@@ -641,17 +638,6 @@ bool defer_shell_reentry_mouse_message(HWND window, AppState& state,
     return true;
 }
 
-void app_shell_call_state_changed(void* context, bool entering) noexcept {
-    if (context == nullptr) return;
-    auto& state = *static_cast<AppState*>(context);
-    if (entering) {
-        state.shutdown_sequence.step(
-            panedock::core::ShutdownEvent::shell_call_entered);
-    } else {
-        finish_shell_call(state);
-    }
-}
-
 void revoke_drag_hover_targets(AppState& state) noexcept {
     state.sidebar.revoke_drag_drop();
     state.sidebar_drag_target.Reset();
@@ -864,72 +850,7 @@ int current_sidebar_width(HWND window, int stored_sidebar_width) noexcept {
                     scaled_value(window, stored_sidebar_width));
 }
 
-class WindowPositionBatch final {
-public:
-    WindowPositionBatch() noexcept
-        : handle_(BeginDeferWindowPos(static_cast<int>(kCapacity))) {
-    }
-
-    ~WindowPositionBatch() {
-        if (handle_ != nullptr) (void)EndDeferWindowPos(handle_);
-    }
-
-    WindowPositionBatch(const WindowPositionBatch&) = delete;
-    WindowPositionBatch& operator=(const WindowPositionBatch&) = delete;
-
-    void position(HWND window, HWND insert_after, const RECT& rect,
-                  UINT flags) noexcept {
-        if (window == nullptr) return;
-        if (entry_count_ == entries_.size()) {
-            handle_ = nullptr;
-            (void)SetWindowPos(window, insert_after, rect.left, rect.top,
-                               rect.right - rect.left, rect.bottom - rect.top,
-                               flags);
-            return;
-        }
-        entries_[entry_count_++] = {window, insert_after, rect, flags};
-        if (handle_ == nullptr) return;
-        const HDWP next = DeferWindowPos(
-            handle_, window, insert_after, rect.left, rect.top,
-            rect.right - rect.left, rect.bottom - rect.top, flags);
-        if (next == nullptr) handle_ = nullptr;
-        else handle_ = next;
-    }
-
-    bool active() const noexcept { return handle_ != nullptr; }
-    HDWP* handle() noexcept {
-        return handle_ == nullptr ? nullptr : &handle_;
-    }
-
-    bool commit() noexcept {
-        if (handle_ != nullptr) {
-            const HDWP handle = handle_;
-            handle_ = nullptr;
-            if (EndDeferWindowPos(handle) != FALSE) return true;
-        }
-        for (std::size_t index = 0; index < entry_count_; ++index) {
-            const Entry& entry = entries_[index];
-            (void)SetWindowPos(
-                entry.window, entry.insert_after, entry.rect.left,
-                entry.rect.top, entry.rect.right - entry.rect.left,
-                entry.rect.bottom - entry.rect.top, entry.flags);
-        }
-        return false;
-    }
-
-private:
-    static constexpr std::size_t kCapacity = 128;
-    struct Entry final {
-        HWND window{nullptr};
-        HWND insert_after{nullptr};
-        RECT rect{};
-        UINT flags{};
-    };
-
-    HDWP handle_{};
-    std::array<Entry, kCapacity> entries_{};
-    std::size_t entry_count_{};
-};
+using panedock::app_shell::WindowPositionBatch;
 
 void position_window(WindowPositionBatch* batch, HWND window,
                      const RECT& rect, UINT flags) noexcept {
@@ -1725,91 +1646,25 @@ HRESULT apply_layout(HWND window, AppState& state,
                indexes.end();
     };
     const UINT dpi = GetDpiForWindow(window);
-    const int container_radius = panedock::app_shell::pane_card_radius(dpi);
     std::optional<LayoutFailure> first_failure;
     std::array<bool, kExplorerCount> changed_panes{};
+    std::array<Pane::LayoutResult, kExplorerCount> pane_layouts{};
     std::array<std::optional<RECT>, kExplorerCount> pending_shell_rects{};
     std::array<bool, kExplorerCount> shell_positions_deferred{};
-    std::array<RECT, kExplorerCount> container_rects{};
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
         auto& chrome = state.panes[index];
         const bool visible =
             index < panedock::core::pane_count(group.layout_template);
-        RECT pane_rect{};
-        bool pane_geometry_changed = false;
         if (visible) {
-            pane_rect = to_win32_rect(rects[index]);
-            pane_geometry_changed = chrome.set_rect(pane_rect);
+            pane_positions[index].emplace();
+            const auto layout = chrome.stage_layout(
+                to_win32_rect(rects[index]), dpi, main_positions,
+                *pane_positions[index]);
+            pane_layouts[index] = layout;
+            const bool pane_geometry_changed = layout.changed;
             changed_panes[index] = pane_geometry_changed;
-            const auto chrome_rects =
-                panedock::app_shell::pane_chrome_rects(pane_rect, dpi);
-            const auto pane_local =
-                [origin = chrome_rects.pane_window](RECT rect) noexcept {
-                    OffsetRect(&rect, -origin.left, -origin.top);
-                    return rect;
-                };
-            if (pane_geometry_changed) {
-                position_window(&main_positions, chrome.window(),
-                                chrome_rects.pane_window,
-                                SWP_NOZORDER | SWP_NOACTIVATE);
-                pane_positions[index].emplace();
-                position_window(&*pane_positions[index], chrome.tab_strip(),
-                                pane_local(chrome_rects.tab_strip),
-                                SWP_NOZORDER | SWP_NOACTIVATE);
-            }
-            chrome.set_paint_geometry(chrome_rects.address_background,
-                                      chrome_rects.pane_window, dpi);
-            if (pane_geometry_changed) {
-                const std::array<HWND, 6> buttons{
-                    chrome.back_button(), chrome.forward_button(),
-                    chrome.up_button(), chrome.refresh_button(),
-                    chrome.view_mode_button(), chrome.pinned_button()};
-                for (std::size_t button = 0; button < buttons.size();
-                     ++button) {
-                    position_window(
-                        &*pane_positions[index], buttons[button],
-                        pane_local(chrome_rects.navigation_buttons[button]),
-                        SWP_NOZORDER | SWP_NOACTIVATE);
-                }
-                position_window(&*pane_positions[index], chrome.address_bar(),
-                                pane_local(chrome_rects.address_bar),
-                                SWP_NOZORDER | SWP_NOACTIVATE);
-                position_window(&*pane_positions[index], chrome.status_bar(),
-                                pane_local(chrome_rects.status_bar),
-                                SWP_NOZORDER | SWP_NOACTIVATE);
-                position_window(&*pane_positions[index],
-                                chrome.folder_context_button(),
-                                pane_local(chrome_rects.folder_context_button),
-                                SWP_NOZORDER | SWP_NOACTIVATE);
-            }
-            chrome.set_visible(true);
-            ShowWindow(chrome.folder_context_button(), SW_SHOW);
-            // The status bar spans the full footer for its separator; keep
-            // the inset action above that sibling so it remains drawable.
-            SetWindowPos(chrome.folder_context_button(), HWND_TOP, 0, 0,
-                         0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            EnableWindow(chrome.folder_context_button(), chrome.realized());
-            // PD-040: the container is the real parent HWND passed to
-            // ExplorerHost::initialize now, positioned/sized in main-window
-            // coordinates; the browser itself is initialized with a
-            // container-local, zero-based rect. SetWindowRgn on the container
-            // (not on IExplorerBrowser's own HWND) is what gives the real
-            // Shell view rounded corners that line up with draw_pane_card's
-            // background - see pane_card_radius/apply_container_region.
-            const RECT& container_rect = chrome_rects.explorer_container;
-            if (pane_geometry_changed) {
-                position_window(&*pane_positions[index],
-                                chrome.explorer_container(),
-                                pane_local(container_rect),
-                                SWP_NOZORDER | SWP_NOACTIVATE);
-                container_rects[index] = pane_local(container_rect);
-            }
-            const RECT local_rect{0, 0,
-                                  container_rect.right - container_rect.left,
-                                  container_rect.bottom - container_rect.top};
+            const RECT local_rect = layout.shell_rect;
             if (plan_contains(realization_plan.realize, index)) {
-                chrome.host().set_shell_call_callback(
-                    &state, app_shell_call_state_changed);
                 HRESULT hr = E_UNEXPECTED;
                 {
                     ShellCallScope shell_call(state);
@@ -1822,46 +1677,18 @@ HRESULT apply_layout(HWND window, AppState& state,
                         first_failure = LayoutFailure{hr, index};
                     continue;
                 }
-                state.panes[index].refresh_navigation_buttons();
-                {
-                    ShellCallScope shell_call(state);
-                    (void)SHAutoComplete(chrome.address_bar(),
-                                         SHACF_FILESYS_DIRS);
-                }
-                if (state.is_shutting_down()) return E_ABORT;
-                try {
-                    chrome.host().set_navigation_callback(
-                        [&state, index](NavigationGeneration generation,
-                            const panedock::core::ShellLocation& new_location) {
-                            state.panes[index].navigation_complete(
-                                generation, new_location);
-                        });
-                    chrome.host().set_navigation_failed_callback(
-                        [&state, index](NavigationGeneration generation) {
-                            state.panes[index].navigation_failed(generation);
-                        });
-                    chrome.host().set_selection_changed_callback(
-                        [&state, index]() { state.panes[index].refresh_status_bar(); });
-                    chrome.apply_view_mode();
-                    if (state.is_shutting_down())
-                        return E_ABORT;
-                    chrome.apply_sort();
-                    if (state.is_shutting_down())
-                        return E_ABORT;
-                } catch (...) {
-                    return E_OUTOFMEMORY;
-                }
+                if (const HRESULT configured = chrome.configure_realized_view();
+                    FAILED(configured))
+                    return configured;
             } else if (pane_geometry_changed) {
                 pending_shell_rects[index] = local_rect;
                 explorer_positions[index].emplace();
                 if (explorer_positions[index]->active()) {
                     shell_positions_deferred[index] = true;
-                    ShellCallScope shell_call(state);
-                    chrome.host().set_rect(
+                    chrome.set_shell_rect(
                         local_rect, explorer_positions[index]->handle());
                 } else {
-                    ShellCallScope shell_call(state);
-                    chrome.host().set_rect(local_rect, nullptr);
+                    chrome.set_shell_rect(local_rect, nullptr);
                 }
                 if (state.is_shutting_down()) return E_ABORT;
             }
@@ -1883,10 +1710,7 @@ HRESULT apply_layout(HWND window, AppState& state,
             ShowWindow(chrome.folder_context_button(), SW_HIDE);
             EnableWindow(chrome.folder_context_button(), FALSE);
         }
-        {
-            ShellCallScope shell_call(state);
-            chrome.host().set_visible(visible);
-        }
+        chrome.set_shell_visible(visible);
         if (state.is_shutting_down()) return E_ABORT;
     }
     const bool committed = main_positions.commit();
@@ -1912,23 +1736,14 @@ HRESULT apply_layout(HWND window, AppState& state,
         if (!explorer_positions[index].has_value()) continue;
         const bool explorer_committed = explorer_positions[index]->commit();
         if (!explorer_committed && shell_positions_deferred[index]) {
-            ShellCallScope shell_call(state);
-            state.panes[index].host().set_rect(
+            state.panes[index].set_shell_rect(
                 *pending_shell_rects[index], nullptr);
             if (state.is_shutting_down()) return E_ABORT;
         }
     }
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
-        if (changed_panes[index]) {
-            state.panes[index].apply_container_region(
-                container_rects[index].right - container_rects[index].left,
-                container_rects[index].bottom - container_rects[index].top,
-                container_radius);
-            RedrawWindow(state.panes[index].explorer_container(),
-                         nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_NOERASE | RDW_ALLCHILDREN);
-            state.panes[index].repaint_chrome();
-        }
+        if (changed_panes[index])
+            state.panes[index].finish_layout(pane_layouts[index], dpi);
         if (index >= panedock::core::pane_count(group.layout_template))
             state.panes[index].laid_out_pane_rect().reset();
     }

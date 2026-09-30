@@ -1372,10 +1372,46 @@ void Pane::destroy() noexcept {
 
 HRESULT Pane::realize(const RECT &local_rect,
                       const panedock::core::ShellLocation &location) noexcept {
+    explorer_host_.set_shell_call_callback(
+        this, [](void* context, bool entering) noexcept {
+            auto* pane = static_cast<Pane*>(context);
+            if (pane->pane_host() == nullptr) return;
+            if (entering) pane->pane_host()->shell_call_entered();
+            else pane->pane_host()->shell_call_left();
+        });
     const HRESULT hr =
         explorer_host_.initialize(explorer_container_, local_rect, location);
     realized_ = SUCCEEDED(hr);
     return hr;
+}
+
+HRESULT Pane::configure_realized_view() noexcept {
+    if (!active() || !realized_) return E_ABORT;
+    refresh_navigation_buttons();
+    {
+        ShellCall shell_call(pane_host());
+        (void)SHAutoComplete(address_bar_, SHACF_FILESYS_DIRS);
+    }
+    if (!active()) return E_ABORT;
+    try {
+        explorer_host_.set_navigation_callback(
+            [this](NavigationGeneration generation,
+                   const panedock::core::ShellLocation& location) {
+                navigation_complete(generation, location);
+            });
+        explorer_host_.set_navigation_failed_callback(
+            [this](NavigationGeneration generation) {
+                navigation_failed(generation);
+            });
+        explorer_host_.set_selection_changed_callback(
+            [this]() { refresh_status_bar(); });
+        apply_view_mode();
+        if (!active()) return E_ABORT;
+        apply_sort();
+        return active() ? S_OK : E_ABORT;
+    } catch (...) {
+        return E_OUTOFMEMORY;
+    }
 }
 
 void Pane::derealize() noexcept {
@@ -1439,13 +1475,81 @@ void Pane::repaint_chrome() noexcept {
 }
 
 bool Pane::set_rect(const RECT &rect) noexcept {
-    // The pane's children have different sub-rectangles (tab, navigation,
-    // footer and Shell container), so the app-shell layout pass owns their
-    // parent-scoped batch. This method owns the committed outer-rect cache.
+    // The coordinator tracks the outer rect; pane-local placement uses it.
     const bool changed = !laid_out_pane_rect_.has_value() ||
                          !EqualRect(&laid_out_pane_rect_.value(), &rect);
     laid_out_pane_rect_ = rect;
     return changed;
+}
+
+Pane::LayoutResult Pane::stage_layout(const RECT& pane_rect, UINT dpi,
+                                      WindowPositionBatch& outer,
+                                      WindowPositionBatch& children) noexcept {
+    const bool changed = set_rect(pane_rect);
+    const auto rects = pane_chrome_rects(pane_rect, dpi);
+    const auto local = [origin = rects.pane_window](RECT rect) noexcept {
+        OffsetRect(&rect, -origin.left, -origin.top);
+        return rect;
+    };
+    if (changed) {
+        outer.position(window_, nullptr, rects.pane_window,
+                       SWP_NOZORDER | SWP_NOACTIVATE);
+        children.position(tab_strip(), nullptr, local(rects.tab_strip),
+                          SWP_NOZORDER | SWP_NOACTIVATE);
+        const std::array<HWND, 6> buttons{
+            back_button_, forward_button_, up_button_, refresh_button_,
+            view_mode_button_, pinned_button_};
+        for (std::size_t i = 0; i < buttons.size(); ++i)
+            children.position(buttons[i], nullptr,
+                              local(rects.navigation_buttons[i]),
+                              SWP_NOZORDER | SWP_NOACTIVATE);
+        children.position(address_bar_, nullptr, local(rects.address_bar),
+                          SWP_NOZORDER | SWP_NOACTIVATE);
+        children.position(status_bar_, nullptr, local(rects.status_bar),
+                          SWP_NOZORDER | SWP_NOACTIVATE);
+        children.position(folder_context_button_, nullptr,
+                          local(rects.folder_context_button),
+                          SWP_NOZORDER | SWP_NOACTIVATE);
+        children.position(explorer_container_, nullptr,
+                          local(rects.explorer_container),
+                          SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    set_paint_geometry(rects.address_background, rects.pane_window, dpi);
+    set_visible(true);
+    // Keep the footer action above its status-bar sibling.
+    SetWindowPos(folder_context_button_, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    EnableWindow(folder_context_button_, realized_);
+    const RECT container = local(rects.explorer_container);
+    return {changed,
+            {0, 0, rects.explorer_container.right -
+                       rects.explorer_container.left,
+             rects.explorer_container.bottom - rects.explorer_container.top},
+            container};
+}
+
+void Pane::finish_layout(const LayoutResult& layout, UINT dpi) noexcept {
+    if (!layout.changed) return;
+    apply_container_region(layout.container_rect.right -
+                               layout.container_rect.left,
+                           layout.container_rect.bottom -
+                               layout.container_rect.top,
+                           pane_card_radius(dpi));
+    RedrawWindow(explorer_container_, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_NOERASE | RDW_ALLCHILDREN);
+    repaint_chrome();
+}
+
+void Pane::set_shell_rect(const RECT& rect, HDWP* deferred) noexcept {
+    if (pane_host() == nullptr) return;
+    ShellCall shell_call(pane_host());
+    explorer_host_.set_rect(rect, deferred);
+}
+
+void Pane::set_shell_visible(bool visible) noexcept {
+    if (pane_host() == nullptr) return;
+    ShellCall shell_call(pane_host());
+    explorer_host_.set_visible(visible);
 }
 
 void Pane::set_paint_geometry(const RECT &navigation_background,
