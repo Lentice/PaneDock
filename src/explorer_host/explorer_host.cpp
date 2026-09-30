@@ -630,7 +630,9 @@ HRESULT ExplorerHost::refresh() {
         Microsoft::WRL::ComPtr<IShellView> view;
         if (SUCCEEDED(browser_->GetCurrentView(IID_PPV_ARGS(&view))) &&
             view != nullptr) {
-            return view->Refresh();
+            const HRESULT hr = view->Refresh();
+            item_counts_cache_.reset();
+            return hr;
         }
     }
     return navigate(location_);

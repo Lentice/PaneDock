@@ -910,6 +910,8 @@ void Pane::refresh_view() {
         ShellCallScope shell_call(reentry_guard());
         (void)explorer_host_.refresh();
     }
+    if (!active() || bound_state_ == nullptr) return;
+    refresh_status_bar();
 }
 
 void Pane::capture_view_mode() {
