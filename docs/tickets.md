@@ -251,6 +251,7 @@
 | PD-211 | PaneDock 自己的 popup 選單必須持有 `ShellCallScope` | 7 | `done` | PD-171, PD-205 | [PD-211](tickets/PD-211-our-own-popup-menus-must-hold-a-shell-call-scope.md) |
 | PD-212 | 延遲的指標／hover 訊息只保留最後一筆意圖 | 7 | `done` | PD-205 | [PD-212](tickets/PD-212-deferred-pointer-messages-keep-only-the-latest-intent.md) |
 | PD-213 | 把「單執行緒訊息迴圈」寫成明示的不變量，並移除為並行而存在的機制 | 7 | `done` | — | [PD-213](tickets/PD-213-single-threaded-message-loop-is-a-stated-invariant.md) |
+| PD-214 | 一個 `ShellReentryGuard` 擁有 Shell re-entry 的暫存、重播與欠下的關閉 | 7 | `ready` | PD-205, PD-211, PD-212, PD-213 | [PD-214](tickets/PD-214-one-shell-reentry-guard-owns-hold-replay-and-owed-shutdown.md) |
 
 
 ## Dependency lanes

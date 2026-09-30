@@ -54,6 +54,10 @@ _Avoid_: path (when the location may be virtual), folder, directory
 A Shell location that cannot currently be resolved — a disconnected network drive, a removed USB volume, a deleted folder. It produces a recoverable error state in the tab and never causes the saved configuration to be discarded.
 _Avoid_: missing path, broken path, invalid folder
 
+**Shell re-entry**:
+A user interaction (a click, a command, a hover) that Windows dispatches to PaneDock while a Shell call is still in progress and pumping our message loop. It is held rather than handled, and replayed once the outermost Shell call has returned; for a pointer or hover interaction only the latest one is replayed, because an earlier position no longer reflects the user's intent. A close requested during a Shell call is likewise owed until the call returns. It is a nesting hazard on one thread, never a concurrency one.
+_Avoid_: race, concurrent call, lock
+
 ## State terms
 
 **session document**:
