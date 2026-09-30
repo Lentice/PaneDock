@@ -207,3 +207,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 ## 交接區
+
+- 未驗證：沒有在真機上重現「慢速 Shell 呼叫期間連點」來觀察重播與延後關閉；
+  行為等價只由 `shell_reentry_guard_test` 的 6 個 case、既有 unit test 與
+  `panedock_launch_smoke` 支撐。

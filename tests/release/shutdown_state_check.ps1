@@ -171,7 +171,7 @@ if (-not $prologueOrder.Success) {
 }
 # The teardown after the checkpoint is best effort and must stay gated.
 foreach ($gate in @('state\.closing_', 'ShutdownAction::defer',
-                    'shell_call_depth != 0', 'drag_in_progress')) {
+                    'reentry_guard\.in_shell_call\(\)', 'drag_in_progress')) {
     if ($endSession.Substring($checkpoint) -notmatch $gate) {
         throw ("shutdown state invariant failed: run_end_session_shutdown " +
                "lost its '$gate' teardown gate")

@@ -30,8 +30,6 @@ class PaneHost {
     virtual ~PaneHost() = default;
 
     virtual bool is_shutting_down() const noexcept = 0;
-    virtual void shell_call_entered() noexcept = 0;
-    virtual void shell_call_left() noexcept = 0;
     virtual void schedule_session_save() noexcept = 0;
     virtual const std::string &active_group_id() const noexcept = 0;
     virtual std::string make_unique_tab_id() const = 0;
@@ -64,21 +62,6 @@ class PaneHost {
     virtual std::optional<LRESULT>
     handle_pane_control_message(Pane &pane, UINT message, WPARAM wparam,
                                 LPARAM lparam) = 0;
-};
-
-class ShellCall final {
-  public:
-    explicit ShellCall(PaneHost *host) noexcept : host_(host) {
-        host_->shell_call_entered();
-    }
-
-    ~ShellCall() noexcept { host_->shell_call_left(); }
-
-    ShellCall(const ShellCall &) = delete;
-    ShellCall &operator=(const ShellCall &) = delete;
-
-  private:
-    PaneHost *host_;
 };
 
 } // namespace panedock::app_shell

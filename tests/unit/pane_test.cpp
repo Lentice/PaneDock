@@ -11,6 +11,7 @@ void test_replacement_navigation_does_not_inherit_history_suppression() {
         TestPaneHost host;
         panedock::app_shell::Pane pane;
         pane.set_host(&host);
+        pane.set_reentry_guard(&host.guard);
         const panedock::core::ShellLocation a{L"A", {}, {}};
         const panedock::core::ShellLocation b{L"B", {}, {}};
         const panedock::core::ShellLocation c{L"C", {}, {}};
@@ -268,6 +269,7 @@ void test_navigation_request_identity_survives_group_switch() {
 
     pane.bind(&state);
     pane.set_host(&host);
+    pane.set_reentry_guard(&host.guard);
     const auto generation = pane.begin_navigation();
     EXPECT(generation != 0);
     EXPECT(pane.navigation_request_is_current(generation));
@@ -305,6 +307,7 @@ void test_submit_address_is_a_no_op_while_shutting_down() {
 
     pane.bind(&state);
     pane.set_host(&host);
+    pane.set_reentry_guard(&host.guard);
     pane.submit_address();
 
     EXPECT(state.tabs.front().location.parsing_name == L"before");
@@ -319,6 +322,7 @@ void test_navigation_completion_rejects_stale_results_and_refreshes_chrome() {
     state.tabs.front().location.parsing_name = L"before";
     state.active_tab_id = "tab-a";
     pane.set_host(&host);
+    pane.set_reentry_guard(&host.guard);
     pane.bind(&state);
     const auto generation = pane.begin_navigation();
     const panedock::core::ShellLocation completed{L"after", {}, {}};
@@ -366,6 +370,7 @@ void test_capture_location_respects_suppression() {
 
     pane.bind(&state);
     pane.set_host(&host);
+    pane.set_reentry_guard(&host.guard);
     pane.capture_location();
 
     EXPECT(state.tabs.front().location.parsing_name == L"before");
@@ -378,6 +383,7 @@ void test_tab_commands_schedule_only_successful_changes() {
                  {"b", {L"B", {}, {}}, {}, {}, true, {}, 0}}, "a"};
     panedock::app_shell::Pane pane;
     pane.set_host(&host);
+    pane.set_reentry_guard(&host.guard);
     pane.bind(&state);
 
     pane.switch_active_tab("a");
@@ -426,6 +432,7 @@ void test_add_tab_does_not_reuse_stale_tab_pointer() {
 
     pane.bind(&state);
     pane.set_host(&host);
+    pane.set_reentry_guard(&host.guard);
     pane.add_tab({{L"new-location"}, {}, {}});
 
     EXPECT(state.tabs.size() == 4);
@@ -443,6 +450,7 @@ void test_close_last_tab_leaves_pane_consistent() {
 
     pane.bind(&state);
     pane.set_host(&host);
+    pane.set_reentry_guard(&host.guard);
     pane.close_tab("tab-only");
 
     EXPECT(state.tabs.size() == 1);
@@ -466,6 +474,7 @@ void test_close_tabs_preserves_the_requested_set_and_last_tab_fallback() {
         state.active_tab_id = "c";
         Pane pane;
         pane.set_host(&host);
+        pane.set_reentry_guard(&host.guard);
         pane.bind(&state);
         const auto original = state;
         host.shutting_down = true;

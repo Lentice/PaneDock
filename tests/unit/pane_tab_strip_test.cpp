@@ -29,6 +29,7 @@ void test_refresh_bails_when_tab_list_changes_mid_scan() {
     EXPECT(pane.create(parent, 0));
     auto state = tab_state(3);
     pane.set_host(&host);
+    pane.set_reentry_guard(&host.guard);
     pane.bind(&state);
     auto &strip = pane.tab_strip_ui();
     strip.refresh();
@@ -71,6 +72,7 @@ void test_scroll_offset_clamps_at_both_ends() {
     TestPaneHost host;
     panedock::app_shell::Pane pane;
     pane.set_host(&host);
+    pane.set_reentry_guard(&host.guard);
     EXPECT(pane.create(parent, 0));
     auto state = tab_state(12);
     pane.bind(&state);

@@ -107,6 +107,7 @@ panedock_set_warnings(panedock_sidebar)
 
 add_library(panedock_pane STATIC
     src/app_shell/pane_host.h
+    src/app_shell/shell_reentry_guard.h
     src/app_shell/pane.cpp
     src/app_shell/pane_tab_strip.h
     src/app_shell/pane_tab_strip.cpp
@@ -115,7 +116,7 @@ target_include_directories(panedock_pane PUBLIC src)
 target_compile_definitions(panedock_pane PRIVATE
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
 )
-target_link_libraries(panedock_pane PUBLIC user32 ole32)
+target_link_libraries(panedock_pane PUBLIC panedock_core user32 ole32)
 panedock_set_warnings(panedock_pane)
 
 # Its own library so the unit test can link it. Nothing else moved.

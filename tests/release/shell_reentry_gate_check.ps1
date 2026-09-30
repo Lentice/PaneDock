@@ -12,6 +12,8 @@ $paneSource = Get-Content -LiteralPath $PaneSourcePath -Raw
 $shellCoreSource = Get-Content -LiteralPath $ShellCoreSourcePath -Raw
 $explorerHostSource = Get-Content -LiteralPath $ExplorerHostSourcePath -Raw
 $explorerHostHeader = Get-Content -LiteralPath $ExplorerHostHeaderPath -Raw
+$guardSource = Get-Content -LiteralPath (
+    Join-Path $PSScriptRoot '..\..\src\app_shell\shell_reentry_guard.h') -Raw
 
 function Assert-Source([string] $Pattern, [string] $Name) {
     if ($source -notmatch $Pattern) {
@@ -19,14 +21,18 @@ function Assert-Source([string] $Pattern, [string] $Name) {
     }
 }
 
-Assert-Source 'unsigned&\s+shell_call_depth\s*=\s*shutdown_sequence\.state\(\)\.shell_call_depth;' `
-    'Shell call depth is owned by the reducer'
+Assert-Source 'ShellReentryGuard reentry_guard\{\s*shutdown_sequence,' `
+    'the app Shell re-entry guard is built on the reducer'
+if ($guardSource -notmatch 'return shutdown_\.state\(\)\.shell_call_depth != 0;') {
+    throw 'Shell re-entry invariant failed: Shell call depth is owned by the reducer'
+}
 Assert-Source 'constexpr UINT kDeferredShutdownMessage' `
     'shutdown has a posted continuation message'
-Assert-Source 'state\.shell_call_depth != 0' `
+Assert-Source 'state\.reentry_guard\.in_shell_call\(\)' `
     'close defers while a Shell call is active'
-Assert-Source 'PostMessageW\(state\.main_window, kDeferredShutdownMessage' `
-    'Shell scope queues deferred shutdown after re-entry'
+if ($guardSource -notmatch 'effects_\.post\(window, deferred_shutdown_message_, 0, 0\)') {
+    throw 'Shell re-entry invariant failed: Shell scope queues deferred shutdown after re-entry'
+}
 Assert-Source 'child_message_blocked_while_closing\(\s*state->is_shutting_down\(\),\s*message\)' `
     'child procs share one teardown allowlist'
 Assert-Source 'case kDeferredShutdownMessage:' `
@@ -56,26 +62,27 @@ Assert-Source 'defer_shell_reentry_mouse_message' `
 $windowProcStart = $source.IndexOf('LRESULT CALLBACK window_proc(')
 $windowSwitch = $source.IndexOf('switch (message)', $windowProcStart)
 $windowReentryGate = $source.IndexOf(
-    'if (state != nullptr && state->shell_call_depth != 0)', $windowProcStart)
+    'if (state != nullptr && state->reentry_guard.in_shell_call())', $windowProcStart)
 if ($windowProcStart -lt 0 -or $windowSwitch -lt 0 -or
     $windowReentryGate -lt 0 -or $windowReentryGate -gt $windowSwitch) {
     throw 'Shell re-entry invariant failed: interaction gate must precede main dispatch'
 }
-Assert-Source 'ShellCallScope shell_call\(state\)' `
+Assert-Source 'ShellCallScope shell_call\(state\.reentry_guard\)' `
     'ExplorerHost callers use the shared Shell-call gate'
 $realizeStart = $paneSource.IndexOf('HRESULT Pane::realize(')
 $realizeEnd = $paneSource.IndexOf('HRESULT Pane::configure_realized_view()', $realizeStart)
 if ($realizeStart -lt 0 -or $realizeEnd -lt 0 -or
     $paneSource.Substring($realizeStart, $realizeEnd - $realizeStart) -notmatch
-        'set_shell_call_callback\([\s\S]*pane_host\(\)->shell_call_entered\(\)[\s\S]*pane_host\(\)->shell_call_left\(\)[\s\S]*explorer_host_\.initialize') {
+        'set_shell_call_callback\([\s\S]*reentry_guard_->enter\(\)[\s\S]*reentry_guard_->leave\(\)[\s\S]*explorer_host_\.initialize') {
     throw 'Shell re-entry invariant failed: Pane must connect the app Shell-call gate before initialization'
 }
-Assert-Source 'void finish_shell_call\(AppState& state\)' `
-    'app Shell-call leave logic is shared with callback entry'
-Assert-Source 'finish_shell_call\(state_\)' `
-    'RAII ShellCallScope uses the shared leave logic'
-Assert-Source 'void AppState::shell_call_left\(\) noexcept\s*\{\s*finish_shell_call\(\*this\);' `
-    'ExplorerHost callback leave uses the shared leave logic'
+# PD-214: one guard owns the leave logic; the RAII scope and the ExplorerHost
+# callback both reach it, so there is no second leave path to drift.
+if ($guardSource -notmatch '~ShellCallScope\(\) noexcept \{ guard_\.leave\(\); \}') {
+    throw 'Shell re-entry invariant failed: RAII ShellCallScope uses the shared leave logic'
+}
+Assert-Source 'chrome\.set_reentry_guard\(&state\.reentry_guard\);' `
+    'every pane shares the app Shell re-entry guard'
 Assert-Source 'bool\s+navigate_realized_panes\(\s*AppState& state,\s*const panedock::core::GroupState& group\)\s*noexcept' `
     'Group transitions share realized-pane navigation'
 Assert-Source 'ShutdownEvent::file_operation_call_started[\s\S]*paste_from_clipboard' `
@@ -94,7 +101,7 @@ if ($navigationHelperStart -lt 0 -or $navigationHelperEnd -lt 0) {
 $navigationHelperBody = $source.Substring(
     $navigationHelperStart, $navigationHelperEnd - $navigationHelperStart)
 if ($navigationHelperBody -notmatch 'LocationCaptureSuppression suppression\(state\)' -or
-    $navigationHelperBody -notmatch 'ShellCallScope shell_call\(state\)' -or
+    $navigationHelperBody -notmatch 'ShellCallScope shell_call\(state\.reentry_guard\)' -or
         $navigationHelperBody -notmatch 'state\.panes\[pane\]\.navigate_to\(') {
     throw 'Shell re-entry invariant failed: realized-pane navigation helper is incomplete'
 }
@@ -204,7 +211,7 @@ if ($helperStart -lt 0 -or $helperEnd -lt 0) {
 }
 $helperBody = $source.Substring($helperStart, $helperEnd - $helperStart)
 if ($helperBody -notmatch 'AppState& state' -or
-    $helperBody -notmatch 'ShellCallScope shell_call\(state\);[\s\S]*panedock::shell_core::display_text_for_parsing_name') {
+    $helperBody -notmatch 'ShellCallScope shell_call\(state\.reentry_guard\);[\s\S]*panedock::shell_core::display_text_for_parsing_name') {
     throw 'Shell re-entry invariant failed: display-name Shell calls are unguarded'
 }
 if ($shellCoreSource -notmatch 'SHCreateItemFromParsingName[\s\S]*GetDisplayName') {
@@ -270,11 +277,11 @@ if ($chromeStart -lt 0 -or $statusStart -lt $chromeStart -or $statusEnd -lt $sta
 }
 $chromeBody = $paneSource.Substring($chromeStart, $statusStart - $chromeStart)
 $statusBody = $paneSource.Substring($statusStart, $statusEnd - $statusStart)
-if ($chromeBody -notmatch 'ShellCall shell_call\(pane_host\(\)\);[\s\S]*panedock::shell_core::display_text_for_parsing_name' -or
+if ($chromeBody -notmatch 'ShellCallScope shell_call\(reentry_guard\(\)\);[\s\S]*panedock::shell_core::display_text_for_parsing_name' -or
     $chromeBody -notmatch 'current != bound') {
     throw 'Shell re-entry invariant failed: Pane address display lost its Shell gate or binding check'
 }
-if ($statusBody -notmatch 'ShellCall shell_call\(pane_host\(\)\);[\s\S]*item_counts\(counts\)' -or
+if ($statusBody -notmatch 'ShellCallScope shell_call\(reentry_guard\(\)\);[\s\S]*item_counts\(counts\)' -or
     $statusBody -notmatch 'item_counts\(counts\);\s*}\s*if \(!active\(\)\) return;') {
     throw 'Shell re-entry invariant failed: Pane status counts lost their Shell gate or shutdown check'
 }
@@ -287,7 +294,7 @@ if ($commandStart -lt 0 -or $commandEnd -lt $commandStart) {
     throw 'Shell re-entry invariant failed: Pane command body missing'
 }
 $commandBody = $paneSource.Substring($commandStart, $commandEnd - $commandStart)
-if ([regex]::Matches($commandBody, 'ShellCall shell_call\(pane_host\(\)\);\s*\(void\)navigate_to\(').Count -ne 2 -or
+if ([regex]::Matches($commandBody, 'ShellCallScope shell_call\(reentry_guard\(\)\);\s*\(void\)navigate_to\(').Count -ne 2 -or
     $commandBody -notmatch '!active\(\)' -or
     $commandBody -match 'show_pinned_locations_manager') {
     throw 'Shell re-entry invariant failed: Pane pinned options lost their gate or own the app dialog'
@@ -313,13 +320,13 @@ $emptyLayoutEnd = $source.IndexOf('ShowWindow(state.empty_message, SW_HIDE)',
     $emptyLayoutStart)
 if ($emptyLayoutStart -lt 0 -or $emptyLayoutEnd -lt $emptyLayoutStart -or
     $source.Substring($emptyLayoutStart, $emptyLayoutEnd - $emptyLayoutStart) -notmatch
-        'ShellCallScope shell_call\(state\);\s*state\.panes\[index\]\.derealize\(\)') {
+        'ShellCallScope shell_call\(state\.reentry_guard\);\s*state\.panes\[index\]\.derealize\(\)') {
     throw 'Empty Group state must release every realized view before reuse'
 }
 
 # A pane's buttons are its children, so only their BN_CLICKED WM_COMMAND
 # reaches us -- at the pane window, which is not the main window that gates
-# WM_COMMAND on shell_call_depth. Without this the nav/tab buttons mutate the
+# WM_COMMAND during Shell re-entry. Without this the nav/tab buttons mutate the
 # model re-entrantly inside a pumping Shell call.
 $paneControlStart = $source.IndexOf(
     'std::optional<LRESULT> AppState::handle_pane_control_message(')
@@ -328,7 +335,7 @@ if ($paneControlStart -lt 0) {
 }
 $paneControlSwitch = $source.IndexOf('switch (message)', $paneControlStart)
 $paneControlGate = $source.IndexOf(
-    'if (state->shell_call_depth != 0 && message == WM_COMMAND)',
+    'if (state->reentry_guard.in_shell_call() && message == WM_COMMAND)',
     $paneControlStart)
 if ($paneControlSwitch -lt 0 -or $paneControlGate -lt 0 -or
     $paneControlGate -gt $paneControlSwitch -or
@@ -345,11 +352,11 @@ if ($timerStart -lt 0) {
     throw 'Shell re-entry invariant failed: session save timer branch missing'
 }
 $timerBody = $source.Substring($timerStart, 900)
-if ($timerBody -notmatch 'if \(state->shell_call_depth != 0\) return 0;[\s\S]*state->session\.cancel_timer\(window\)') {
+if ($timerBody -notmatch 'if \(state->reentry_guard\.in_shell_call\(\)\) return 0;[\s\S]*state->session\.cancel_timer\(window\)') {
     throw 'Shell re-entry invariant failed: session save must not run inside a Shell call'
 }
 
-# MessageBoxW pumps with shell_call_depth at 0, so queued deferred commands
+# MessageBoxW pumps with no Shell call in progress, so queued deferred commands
 # replay inside the box and can delete or add Groups. delete_group therefore
 # must carry the Group id across the box, never the selected index.
 $deleteStart = $source.IndexOf('void delete_group(HWND window, AppState& state)')
@@ -397,11 +404,11 @@ foreach ($menuSource in $menuSources) {
         # The scope must be opened close above the call, not anywhere in the file.
         $from = [Math]::Max(0, $match.Index - 400)
         $preamble = $text.Substring($from, $match.Index - $from)
-        if ($preamble -notmatch '(ShellCallScope|ShellCall)\s+shell_call\(') {
+        if ($preamble -notmatch 'ShellCallScope\s+shell_call\(') {
             throw ("Shell re-entry invariant failed: TrackPopupMenu at " +
                    "$menuSource offset $($match.Index) is not inside a Shell " +
                    'call scope. A menu pumps the message loop, so it must ' +
-                   'raise shell_call_depth or the deferral list stops working.')
+                   'enter the Shell re-entry guard or the deferral list stops working.')
         }
     }
 }

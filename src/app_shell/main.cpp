@@ -34,6 +34,7 @@
 #include <wrl/client.h>
 
 #include "app_shell/deferred_messages.h"
+#include "app_shell/shell_reentry_guard.h"
 #include "app_shell/diagnostic_mode.h"
 #include "app_shell/menu_icon.h"
 #include "app_shell/pane.h"
@@ -397,10 +398,27 @@ struct LayoutFailure final {
     std::size_t pane_index;
 };
 
+struct AppState;
+
+// The Win32 adapter for ShellReentryGuard's effects.
+struct AppReentryEffects final : panedock::app_shell::ShellReentryEffects {
+    explicit AppReentryEffects(AppState& state) noexcept : state_(state) {}
+    bool window_alive(HWND window) noexcept override {
+        return IsWindow(window) != FALSE;
+    }
+    bool post(HWND window, UINT message, WPARAM wparam,
+              LPARAM lparam) noexcept override {
+        return PostMessageW(window, message, wparam, lparam) != FALSE;
+    }
+    HWND shutdown_window() const noexcept override;
+    void begin_shutdown_now() noexcept override;
+
+private:
+    AppState& state_;
+};
+
 struct AppState : public panedock::app_shell::PaneHost {
     bool is_shutting_down() const noexcept override;
-    void shell_call_entered() noexcept override;
-    void shell_call_left() noexcept override;
     void schedule_session_save() noexcept override;
     const std::string &active_group_id() const noexcept override;
     std::string make_unique_tab_id() const override;
@@ -426,6 +444,9 @@ struct AppState : public panedock::app_shell::PaneHost {
     // still say which pane and which HRESULT.
     std::optional<LayoutFailure> last_layout_failure;
     panedock::core::ShutdownSequence shutdown_sequence;
+    AppReentryEffects reentry_effects{*this};
+    panedock::app_shell::ShellReentryGuard reentry_guard{
+        shutdown_sequence, reentry_effects, kDeferredShutdownMessage};
     bool& quit_requested = shutdown_sequence.state().quit_requested;
     bool& closing_ = shutdown_sequence.state().closing_;
     bool& shutdown_prompt_active =
@@ -437,7 +458,6 @@ struct AppState : public panedock::app_shell::PaneHost {
     bool& main_window_destroyed =
         shutdown_sequence.state().main_window_destroyed;
     bool& end_session_pending = shutdown_sequence.state().end_session_pending;
-    unsigned& shell_call_depth = shutdown_sequence.state().shell_call_depth;
     bool& shutdown_deferred = shutdown_sequence.state().shutdown_deferred;
     bool& shutdown_message_queued =
         shutdown_sequence.state().shutdown_message_queued;
@@ -519,9 +539,6 @@ struct AppState : public panedock::app_shell::PaneHost {
     Microsoft::WRL::ComPtr<DragHoverTarget> sidebar_drag_target;
     // finalize_process runs once, from whichever exit gets there first.
     bool ole_finalized{};
-    // Interactions refused while shell_call_depth != 0, released by
-    // finish_shell_call once the depth reaches zero (PD-205).
-    panedock::app_shell::DeferredMessages deferred_shell_messages;
     // Memoized ::{GUID} display names for the lifetime of the process
     // (PD-207). Never persisted.
     std::map<std::wstring, std::wstring> display_name_cache;
@@ -530,58 +547,17 @@ struct AppState : public panedock::app_shell::PaneHost {
 void begin_shutdown(HWND window, AppState& state, bool allow_keep_open) noexcept;
 void drag_state_changed(AppState& state, bool entering) noexcept;
 
-void flush_deferred_shell_messages(AppState& state) noexcept {
-    if (state.deferred_shell_messages.empty()) return;
-    const auto pending = panedock::app_shell::take_deferred_messages(
-        state.deferred_shell_messages);
-    if (state.is_shutting_down()) return;
-    for (const panedock::app_shell::DeferredMessage& deferred : pending) {
-        if (!IsWindow(deferred.target)) continue;
-        if (PostMessageW(deferred.target, deferred.message, deferred.wparam,
-                         deferred.lparam))
-            continue;
-        OutputDebugStringW(
-            L"PaneDock: could not queue Shell re-entry interaction\n");
-    }
+using panedock::app_shell::ShellCallScope;
+
+HWND AppReentryEffects::shutdown_window() const noexcept {
+    return state_.main_window;
 }
 
-void finish_shell_call(AppState& state) noexcept {
-    const auto action = state.shutdown_sequence.step(
-        panedock::core::ShutdownEvent::shell_call_left);
-    if (state.shell_call_depth == 0) flush_deferred_shell_messages(state);
-    if (action != panedock::core::ShutdownAction::defer ||
-        state.shutdown_message_queued || state.main_window == nullptr)
-        return;
-    state.shutdown_sequence.step(
-        panedock::core::ShutdownEvent::deferred_shutdown_queued);
-    if (PostMessageW(state.main_window, kDeferredShutdownMessage, 0, 0))
-        return;
-    OutputDebugStringW(
-        L"PaneDock: could not queue deferred shutdown\n");
-    state.shutdown_sequence.step(
-        panedock::core::ShutdownEvent::deferred_shutdown_queue_failed);
-    if (IsWindow(state.main_window))
-        begin_shutdown(state.main_window, state,
-                       !state.end_session_pending);
+void AppReentryEffects::begin_shutdown_now() noexcept {
+    if (IsWindow(state_.main_window))
+        begin_shutdown(state_.main_window, state_,
+                       !state_.end_session_pending);
 }
-
-class ShellCallScope final {
-public:
-    explicit ShellCallScope(AppState& state) noexcept : state_(state) {
-        state_.shutdown_sequence.step(
-            panedock::core::ShutdownEvent::shell_call_entered);
-    }
-
-    ~ShellCallScope() noexcept {
-        finish_shell_call(state_);
-    }
-
-    ShellCallScope(const ShellCallScope&) = delete;
-    ShellCallScope& operator=(const ShellCallScope&) = delete;
-
-private:
-    AppState& state_;
-};
 
 // PD-206: activate_group writes active_group_id, then rebind_panes points the
 // panes at the incoming Group's PaneState -- but the live IExplorerBrowsers
@@ -612,25 +588,20 @@ private:
 };
 
 void defer_shell_reentry_message(HWND window, AppState& state, UINT message,
-                                 WPARAM wparam, LPARAM lparam) noexcept try {
+                                 WPARAM wparam, LPARAM lparam) noexcept {
     // kDragHoverMessage is ours, so this header cannot classify it; its lparam
     // is a hover generation that changes every time, and DragHoverTarget
     // already discards all but the newest.
     const bool replaces =
         message == kDragHoverMessage ||
         panedock::app_shell::deferred_message_replaces_previous(message);
-    (void)panedock::app_shell::hold_deferred_message(
-        state.deferred_shell_messages, {window, message, wparam, lparam},
-        replaces);
-} catch (...) {
-    OutputDebugStringW(
-        L"PaneDock: could not hold Shell re-entry interaction\n");
+    state.reentry_guard.hold(window, message, wparam, lparam, replaces);
 }
 
 bool defer_shell_reentry_mouse_message(HWND window, AppState& state,
                                        UINT message, WPARAM wparam,
                                        LPARAM lparam) noexcept {
-    if (state.shell_call_depth == 0 ||
+    if (!state.reentry_guard.in_shell_call() ||
         (message != WM_LBUTTONDOWN && message != WM_LBUTTONDBLCLK &&
          message != WM_LBUTTONUP && message != WM_CONTEXTMENU))
         return false;
@@ -668,7 +639,7 @@ std::wstring display_text_for_parsing_name(
 
     std::wstring text;
     {
-        ShellCallScope shell_call(state);
+        ShellCallScope shell_call(state.reentry_guard);
         text = panedock::shell_core::display_text_for_parsing_name(
             parsing_name);
     }
@@ -793,7 +764,7 @@ bool navigate_realized_panes(
     LocationCaptureSuppression suppression(state);
     for (const std::size_t pane : plan.navigate) {
         {
-            ShellCallScope shell_call(state);
+            ShellCallScope shell_call(state.reentry_guard);
             (void)state.panes[pane].navigate_to(
                 active_tab(group.panes[pane]).location);
         }
@@ -1540,7 +1511,7 @@ void rebuild_pinned_location_menu(AppState& state) {
 // perform a Shell call (ExplorerHost::destroy()).
 void destroy_panes(AppState& state) noexcept {
     for (auto& chrome : state.panes) {
-        ShellCallScope shell_call(state);
+        ShellCallScope shell_call(state.reentry_guard);
         chrome.destroy();
     }
     write_live_view_count(state.diagnostic_mode);
@@ -1601,7 +1572,7 @@ HRESULT apply_layout(HWND window, AppState& state,
     if (!has_active_group(state)) {
         for (std::size_t index = 0; index < state.panes.size(); ++index) {
             {
-                ShellCallScope shell_call(state);
+                ShellCallScope shell_call(state.reentry_guard);
                 state.panes[index].derealize();
             }
             if (state.is_shutting_down()) return E_ABORT;
@@ -1623,7 +1594,7 @@ HRESULT apply_layout(HWND window, AppState& state,
     // the message loop (realization does Shell calls), which
     // perform_group_transition deliberately does not. It is sound only
     // because add_group/delete_group can be reached solely through WM_COMMAND,
-    // and the main window defers WM_COMMAND while shell_call_depth != 0 --
+    // and the main window defers WM_COMMAND while a Shell call is in progress --
     // nothing can grow or shrink the groups vector inside this pass and
     // relocate what `group` points at. If that deferral ever narrows, this
     // reference has to be looked up per step instead. The assert at the end of
@@ -1667,7 +1638,7 @@ HRESULT apply_layout(HWND window, AppState& state,
             if (plan_contains(realization_plan.realize, index)) {
                 HRESULT hr = E_UNEXPECTED;
                 {
-                    ShellCallScope shell_call(state);
+                    ShellCallScope shell_call(state.reentry_guard);
                     hr = chrome.realize(
                         local_rect, active_tab(group.panes[index]).location);
                 }
@@ -1701,7 +1672,7 @@ HRESULT apply_layout(HWND window, AppState& state,
         } else {
             if (plan_contains(realization_plan.derealize, index)) {
                 {
-                    ShellCallScope shell_call(state);
+                    ShellCallScope shell_call(state.reentry_guard);
                     chrome.derealize();
                 }
                 if (state.is_shutting_down()) return E_ABORT;
@@ -1766,7 +1737,7 @@ HRESULT apply_layout(HWND window, AppState& state,
 }
 
 void refresh_startup_chrome(AppState& state) {
-    ShellCallScope shell_call(state);
+    ShellCallScope shell_call(state.reentry_guard);
     for (std::size_t index = 0; index < kPinnedFixedParsingNames.size();
          ++index) {
         if (state.is_shutting_down()) break;
@@ -1787,7 +1758,7 @@ HRESULT realize_startup_panes(HWND window, AppState& state) {
     if (has_active_group(state)) {
         const std::size_t active = active_pane_index(active_group(state));
         {
-            ShellCallScope shell_call(state);
+            ShellCallScope shell_call(state.reentry_guard);
             state.panes[active].host().focus();
         }
         if (state.is_shutting_down()) return E_ABORT;
@@ -1881,7 +1852,7 @@ void perform_group_transition(HWND window, AppState& state,
                 if (!has_active_group(state)) break;
                 const std::size_t active =
                     active_pane_index(active_group(state));
-                ShellCallScope shell_call(state);
+                ShellCallScope shell_call(state.reentry_guard);
                 state.panes[active].host().focus();
                 break;
             }
@@ -1974,7 +1945,7 @@ void duplicate_group(HWND window, AppState& state) {
 void delete_group(HWND window, AppState& state) {
     const auto selected = state.sidebar.selected_index();
     if (!selected.has_value() || *selected >= state.application.groups.size()) return;
-    // MessageBoxW pumps this thread's message loop with shell_call_depth at 0,
+    // MessageBoxW pumps this thread's message loop with no Shell call in progress,
     // so every kDeferredCommandMessage still queued from a burst of clicks
     // replays *inside* the box -- including another add_group or delete_group.
     // The selected index therefore does not survive the box; the Group id
@@ -2027,7 +1998,7 @@ void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
     if (previous == pane ||
         !panedock::core::set_active_pane(group, group.panes[pane].id)) return;
     {
-        ShellCallScope shell_call(state);
+        ShellCallScope shell_call(state.reentry_guard);
         state.panes[pane].host().focus();
     }
     if (state.is_shutting_down()) return;
@@ -2040,15 +2011,6 @@ void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
 
 bool AppState::is_shutting_down() const noexcept {
     return shutdown_sequence.is_shutting_down();
-}
-
-void AppState::shell_call_entered() noexcept {
-    shutdown_sequence.step(
-        panedock::core::ShutdownEvent::shell_call_entered);
-}
-
-void AppState::shell_call_left() noexcept {
-    finish_shell_call(*this);
 }
 
 void AppState::schedule_session_save() noexcept {
@@ -2172,7 +2134,7 @@ bool register_tab_drag_hover_targets(HWND window, AppState& state) {
         if (target == nullptr) return false;
         bool registered = false;
         {
-            ShellCallScope shell_call(state);
+            ShellCallScope shell_call(state.reentry_guard);
             registered =
                 state.panes[pane_index]
                     .tab_strip_ui()
@@ -2353,7 +2315,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
             default_shell_location(), retained_tab_id)) return;
     if (source_active && state.panes[drop.source_pane].realized()) {
         {
-            ShellCallScope shell_call(state);
+            ShellCallScope shell_call(state.reentry_guard);
             state.panes[drop.source_pane].navigate_to(
                 active_tab(source).location);
         }
@@ -2361,7 +2323,7 @@ void finish_tab_drag(AppState& state, HWND strip) {
     }
     if (state.panes[drop.target_pane].realized()) {
         {
-            ShellCallScope shell_call(state);
+            ShellCallScope shell_call(state.reentry_guard);
             state.panes[drop.target_pane].navigate_to(
                 active_tab(target).location);
         }
@@ -2666,7 +2628,7 @@ void run_shutdown_action(HWND window, AppState& state,
     switch (action) {
         case panedock::core::ShutdownAction::defer:
             set_main_window_title(window, state.diagnostic_mode, true);
-            if (state.shell_call_depth != 0 || state.shutdown_message_queued ||
+            if (state.reentry_guard.in_shell_call() || state.shutdown_message_queued ||
                 window == nullptr)
                 return;
             state.shutdown_sequence.step(
@@ -2794,7 +2756,7 @@ void run_end_session_shutdown(HWND window, AppState& state) noexcept {
     // OS is about to end.
     if (state.closing_) return;
     if (action != panedock::core::ShutdownAction::defer ||
-        state.shell_call_depth != 0 ||
+        state.reentry_guard.in_shell_call() ||
         state.shutdown_sequence.state().drag_in_progress)
         return;
     // Best effort from here: whatever Windows lets us finish. Nothing below
@@ -2887,7 +2849,7 @@ bool perform_clipboard_paste(HWND window, AppState& state,
         panedock::core::ShutdownEvent::file_operation_call_started);
     panedock::file_operations::PasteResult result;
     {
-        ShellCallScope shell_call(state);
+        ShellCallScope shell_call(state.reentry_guard);
         result = panedock::file_operations::paste_from_clipboard(
             window, parsing_name,
             {&state, file_operation_started, file_operation_finished,
@@ -2919,7 +2881,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
     state.sidebar_drag_target = make_sidebar_drag_hover_target(window, state);
     bool sidebar_created = false;
     {
-        ShellCallScope shell_call(state);
+        ShellCallScope shell_call(state.reentry_guard);
         sidebar_created = state.sidebar.create(
             window, kGroupListId, state.sidebar_drag_target.Get());
     }
@@ -2995,6 +2957,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
         // PaneDock.Pane owns this pane's chrome. Its explorer container stays
         // a plain STATIC used only for clipping and ExplorerHost parenting.
         chrome.set_host(&state);
+        chrome.set_reentry_guard(&state.reentry_guard);
         if (!chrome.create(window, static_cast<int>(index))) return -1;
         if (!SetWindowSubclass(chrome.tab_strip(), tab_strip_proc, index,
                                reinterpret_cast<DWORD_PTR>(&state)))
@@ -3114,7 +3077,7 @@ bool handle_global_command(HWND window, AppState& state, int id,
         if (!GetWindowRect(folder_context_button, &button_rect))
             return true;
         const POINT anchor{button_rect.left, button_rect.top};
-        ShellCallScope shell_call(state);
+        ShellCallScope shell_call(state.reentry_guard);
         pane.host().focus();
         (void)pane.host().show_folder_context_menu(
             state.main_window, anchor);
@@ -3243,7 +3206,7 @@ bool handle_context_menu(HWND target, AppState& state, POINT screen) {
     // (PD-211). The scope covers the menu only.
     int command = 0;
     {
-        ShellCallScope shell_call(state);
+        ShellCallScope shell_call(state.reentry_guard);
         command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                  point.x, point.y, 0, window, nullptr);
     }
@@ -3427,7 +3390,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         message != WM_NCPAINT && message != kDeferredShutdownMessage)
         return 0;
 
-    if (state != nullptr && state->shell_call_depth != 0) {
+    if (state != nullptr && state->reentry_guard.in_shell_call()) {
         if (message == WM_COMMAND) {
             defer_shell_reentry_message(window, *state,
                                         kDeferredCommandMessage, wparam,
@@ -3457,7 +3420,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         case kDeferredCommandMessage:
             if (state != nullptr) {
-                if (state->shell_call_depth != 0) {
+                if (state->reentry_guard.in_shell_call()) {
                     defer_shell_reentry_message(
                         window, *state, kDeferredCommandMessage, wparam,
                         lparam);
@@ -3669,13 +3632,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             if (state == nullptr) break;
             const UINT_PTR timer = static_cast<UINT_PTR>(wparam);
             if (timer == kSessionSaveTimerId) {
-                // WM_TIMER is not on the shell_call_depth deferral list, so
+                // WM_TIMER is not on the Shell re-entry deferral list, so
                 // this can fire inside a Shell call that is pumping the loop.
                 // save_now captures live pane locations, which mid-navigation
                 // reads the outgoing folder. Leave the timer armed instead of
                 // deferring by hand: it refires after the call unwinds, and a
                 // 500ms retry cannot become a PostMessage spin.
-                if (state->shell_call_depth != 0) return 0;
+                if (state->reentry_guard.in_shell_call()) return 0;
                 state->session.cancel_timer(window);
                 if (state->session.dirty()) (void)save_now(*state);
 
@@ -3954,7 +3917,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     state.diagnostic_mode = diagnostic_mode;
     std::optional<std::filesystem::path> directory;
     {
-        ShellCallScope shell_call(state);
+        ShellCallScope shell_call(state.reentry_guard);
         directory = panedock::shell_core::session_directory();
     }
     if (state.is_shutting_down()) {
@@ -4134,7 +4097,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             const auto offer_to_shell = [&]() -> Accelerator {
                 HRESULT result = S_FALSE;
                 {
-                    ShellCallScope shell_call(state);
+                    ShellCallScope shell_call(state.reentry_guard);
                     result = state.panes[active].host().translate_accelerator(
                         &message);
                 }
@@ -4242,11 +4205,11 @@ std::optional<LRESULT> AppState::handle_pane_control_message(
     // A pane's buttons are its children, so their own mouse messages never
     // reach us -- only the BN_CLICKED WM_COMMAND does, and it arrives at the
     // pane window rather than the main window that gates WM_COMMAND on
-    // shell_call_depth (PD-171). Without this the back/up/new-tab buttons run
+    // Shell re-entry (PD-171). Without this the back/up/new-tab buttons run
     // model-changing work re-entrantly inside a Shell call that is pumping the
     // loop, advancing the navigation generation under the in-flight request.
     // Replay it at the pane so handle_command still knows which pane it is.
-    if (state->shell_call_depth != 0 && message == WM_COMMAND) {
+    if (state->reentry_guard.in_shell_call() && message == WM_COMMAND) {
         defer_shell_reentry_message(pane_window, *state, message, wparam,
                                     lparam);
         return LRESULT{0};

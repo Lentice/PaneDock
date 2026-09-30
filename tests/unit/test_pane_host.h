@@ -10,6 +10,8 @@
 
 #include "app_shell/pane.h"
 #include "app_shell/pane_host.h"
+#include "core/shutdown.h"
+#include "unit/test_reentry_effects.h"
 
 namespace panedock::test {
 
@@ -24,10 +26,14 @@ class TestPaneHost : public panedock::app_shell::PaneHost {
     // the model mid-scan.
     panedock::core::PaneState* mutate_on_second_lookup{};
     int lookups{};
+    // A real guard, so a pane under test goes through real Shell re-entry
+    // bookkeeping; tests hand it to the pane with set_reentry_guard.
+    panedock::core::ShutdownSequence shutdown;
+    RecordingReentryEffects reentry_effects;
+    panedock::app_shell::ShellReentryGuard guard{shutdown, reentry_effects,
+                                                 WM_APP};
 
     bool is_shutting_down() const noexcept override { return shutting_down; }
-    void shell_call_entered() noexcept override {}
-    void shell_call_left() noexcept override {}
     void schedule_session_save() noexcept override { ++session_saves; }
     const std::string& active_group_id() const noexcept override {
         return group_id;

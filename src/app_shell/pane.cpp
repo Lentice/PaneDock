@@ -523,7 +523,7 @@ bool Pane::handle_command(int id) {
         if (locations.size() < kPinnedMenuFixedLocationCount) return true;
         if (item == kPinnedMenuDesktopOffset ||
             item == kPinnedMenuThisPcOffset) {
-            ShellCall shell_call(pane_host());
+            ShellCallScope shell_call(reentry_guard());
             (void)navigate_to(
                 locations[static_cast<std::size_t>(item)].location);
             return true;
@@ -534,7 +534,7 @@ bool Pane::handle_command(int id) {
             const std::size_t record_index =
                 kPinnedMenuFixedLocationCount + location_index;
             if (record_index < locations.size()) {
-                ShellCall shell_call(pane_host());
+                ShellCallScope shell_call(reentry_guard());
                 (void)navigate_to(locations[record_index].location);
             }
             return true;
@@ -624,7 +624,7 @@ void Pane::refresh_navigation_chrome() {
         const std::wstring parsing_name =
             active_tab()->location.parsing_name;
         if (parsing_name.starts_with(L"::")) {
-            ShellCall shell_call(pane_host());
+            ShellCallScope shell_call(reentry_guard());
             text = panedock::shell_core::display_text_for_parsing_name(
                 parsing_name);
         } else {
@@ -644,7 +644,7 @@ void Pane::refresh_status_bar() noexcept {
     panedock::explorer_host::ExplorerHost::ItemCounts counts;
     HRESULT hr = E_UNEXPECTED;
     {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         hr = host().item_counts(counts);
     }
     if (!active()) return;
@@ -886,7 +886,7 @@ void Pane::navigate_history(bool back) {
     set_suppress_history(true);
     HRESULT hr = E_UNEXPECTED;
     {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         hr = explorer_host_.navigate(tab->location, generation);
     }
     if (!active()) return;
@@ -898,7 +898,7 @@ void Pane::navigate_up() {
     if (!active()) return;
     if (bound_state_ == nullptr) return;
     {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         (void)navigate_up_one_level();
     }
 }
@@ -907,7 +907,7 @@ void Pane::refresh_view() {
     if (!active()) return;
     if (bound_state_ == nullptr) return;
     {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         (void)explorer_host_.refresh();
     }
 }
@@ -919,7 +919,7 @@ void Pane::capture_view_mode() {
     int image_size = -1;
     HRESULT hr = E_UNEXPECTED;
     {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         hr = explorer_host_.get_view_mode(mode, &image_size);
     }
     if (!active() || FAILED(hr)) return;
@@ -938,7 +938,7 @@ void Pane::capture_sort() {
     bool ascending{};
     HRESULT hr = E_UNEXPECTED;
     {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         hr = explorer_host_.get_sort(column, ascending);
     }
     if (!active() || FAILED(hr)) return;
@@ -955,11 +955,11 @@ void Pane::apply_view_mode() {
     if (const auto selection = panedock::shell_core::parse_view_mode(
             tab->view_mode);
         selection.has_value()) {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         (void)explorer_host_.set_view_mode(selection->mode,
                                            selection->image_size);
     } else if (tab->view_mode.empty()) {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         (void)explorer_host_.set_view_mode(FVM_DETAILS);
     }
     if (!active()) return;
@@ -972,7 +972,7 @@ void Pane::apply_sort() {
     if (tab == nullptr || !realized() || tab->sort_column.empty()) return;
     HRESULT hr = E_UNEXPECTED;
     {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         hr = explorer_host_.set_sort(tab->sort_column, tab->sort_ascending);
     }
     if (!active() || FAILED(hr)) return;
@@ -1003,7 +1003,7 @@ void Pane::set_view_mode(const panedock::shell_core::ViewModeOption &option) {
     if (pane_state() == nullptr) return;
     HRESULT hr = E_UNEXPECTED;
     {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         hr = explorer_host_.set_view_mode(option.selection.mode,
                                           option.selection.image_size);
     }
@@ -1054,7 +1054,7 @@ void Pane::show_view_mode_menu(POINT screen) {
     // below must run normally.
     int command = 0;
     {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         command = TrackPopupMenu(
             menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0,
             window_, nullptr);
@@ -1073,7 +1073,7 @@ void Pane::submit_address() {
     GetWindowTextW(address_bar_, text.data(), length + 1);
     text.resize(static_cast<std::size_t>(length));
     const panedock::core::ShellLocation target{std::move(text), {}, {}};
-    ShellCall shell_call(pane_host());
+    ShellCallScope shell_call(reentry_guard());
     (void)navigate_to(target);
 }
 
@@ -1126,7 +1126,7 @@ void Pane::show_pinned_locations_menu(POINT screen) {
     // See the view-mode menu above: the menu pumps, so it holds the depth.
     int command = 0;
     {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         command = TrackPopupMenu(
             menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0,
             window_, nullptr);
@@ -1163,7 +1163,7 @@ void Pane::handle_tab_context_menu(POINT screen) {
     // See the view-mode menu above: the menu pumps, so it holds the depth.
     int command = 0;
     {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                  screen.x, screen.y, 0, window, nullptr);
     }
@@ -1185,7 +1185,7 @@ void Pane::finish_tab_change(bool navigate_active) {
         {
             ScopedTiming timing(pane_host()->diagnostic_timing_enabled(),
                                 "tab_realize_ms");
-            ShellCall shell_call(pane_host());
+            ShellCallScope shell_call(reentry_guard());
             (void)navigate_to(tab->location);
         }
         if (!active()) return;
@@ -1375,9 +1375,9 @@ HRESULT Pane::realize(const RECT &local_rect,
     explorer_host_.set_shell_call_callback(
         this, [](void* context, bool entering) noexcept {
             auto* pane = static_cast<Pane*>(context);
-            if (pane->pane_host() == nullptr) return;
-            if (entering) pane->pane_host()->shell_call_entered();
-            else pane->pane_host()->shell_call_left();
+            if (pane->reentry_guard_ == nullptr) return;
+            if (entering) pane->reentry_guard_->enter();
+            else pane->reentry_guard_->leave();
         });
     const HRESULT hr =
         explorer_host_.initialize(explorer_container_, local_rect, location);
@@ -1389,7 +1389,7 @@ HRESULT Pane::configure_realized_view() noexcept {
     if (!active() || !realized_) return E_ABORT;
     refresh_navigation_buttons();
     {
-        ShellCall shell_call(pane_host());
+        ShellCallScope shell_call(reentry_guard());
         (void)SHAutoComplete(address_bar_, SHACF_FILESYS_DIRS);
     }
     if (!active()) return E_ABORT;
@@ -1542,13 +1542,13 @@ void Pane::finish_layout(const LayoutResult& layout, UINT dpi) noexcept {
 
 void Pane::set_shell_rect(const RECT& rect, HDWP* deferred) noexcept {
     if (pane_host() == nullptr) return;
-    ShellCall shell_call(pane_host());
+    ShellCallScope shell_call(reentry_guard());
     explorer_host_.set_rect(rect, deferred);
 }
 
 void Pane::set_shell_visible(bool visible) noexcept {
     if (pane_host() == nullptr) return;
-    ShellCall shell_call(pane_host());
+    ShellCallScope shell_call(reentry_guard());
     explorer_host_.set_visible(visible);
 }
 

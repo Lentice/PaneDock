@@ -20,6 +20,7 @@
 #include "app_shell/pane_chrome_geometry.h"
 #include "app_shell/pane_control_id.h"
 #include "app_shell/pane_tab_strip.h"
+#include "app_shell/shell_reentry_guard.h"
 #include "core/model.h"
 #include "core/navigation.h"
 #include "explorer_host/explorer_host.h"
@@ -54,9 +55,17 @@ class Pane final {
     static bool register_window_class(HINSTANCE instance) noexcept;
     void set_host(PaneHost *host) noexcept { host_ = host; }
     PaneHost *pane_host() const noexcept { return host_; }
+    // Set with set_host, before create(); every Shell call the pane makes
+    // holds a ShellCallScope on it.
+    void set_reentry_guard(ShellReentryGuard *guard) noexcept {
+        reentry_guard_ = guard;
+    }
+    ShellReentryGuard &reentry_guard() const noexcept {
+        return *reentry_guard_;
+    }
     // The one guard every Shell-touching Pane method needs: a host exists and
     // is not tearing down. Shell calls re-enter our message loop, so methods
-    // re-check this after every ShellCall, not just on entry.
+    // re-check this after every ShellCallScope, not just on entry.
     bool active() const noexcept;
     bool create(HWND parent, int pane_index) noexcept;
     void destroy() noexcept;
@@ -220,6 +229,7 @@ class Pane final {
     void finish_tab_change(bool navigate_active);
 
     PaneHost *host_{nullptr};
+    ShellReentryGuard *reentry_guard_{nullptr};
     panedock::core::PaneState *bound_state_{nullptr};
     std::size_t index_{};
     panedock::core::NavigationRequest pending_navigation_{};
