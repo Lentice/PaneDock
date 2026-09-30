@@ -77,7 +77,7 @@ public:
         return state_.closing_ || state_.shutdown_deferred;
     }
 
-    State& state() noexcept { return state_; }
+    // Read-only: every transition goes through step() (PD-216).
     const State& state() const noexcept { return state_; }
 
 private:

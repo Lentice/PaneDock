@@ -34,19 +34,24 @@ Assert-Shutdown 'bool\s+shutdown_save_attempted\{\};' 'final save attempt flag e
 Assert-Shutdown 'bool\s+shutdown_clean_marker_armed\{\};' 'clean marker arm flag exists'
 Assert-Shutdown 'bool\s+main_window_destroyed\{\};' 'main window destruction flag exists'
 Assert-Shutdown 'bool\s+end_session_pending\{\};' 'confirmed session-end flag exists'
-Assert-Source 'bool&\s+shutdown_save_attempted\s*=\s*shutdown_sequence\.state\(\)\.shutdown_save_attempted;' `
+Assert-Source 'const bool&\s+shutdown_save_attempted\s*=\s*shutdown_coordinator\.state\(\)\.shutdown_save_attempted;' `
     'app shell forwards the final save attempt flag'
-Assert-Source 'bool&\s+shutdown_clean_marker_armed\s*=\s*shutdown_sequence\.state\(\)\.shutdown_clean_marker_armed;' `
+Assert-Source 'const bool&\s+shutdown_clean_marker_armed\s*=\s*shutdown_coordinator\.state\(\)\.shutdown_clean_marker_armed;' `
     'app shell forwards the clean marker flag'
-Assert-Source 'bool&\s+main_window_destroyed\s*=\s*shutdown_sequence\.state\(\)\.main_window_destroyed;' `
+Assert-Source 'const bool&\s+main_window_destroyed\s*=\s*shutdown_coordinator\.state\(\)\.main_window_destroyed;' `
     'app shell forwards the window destruction flag'
-Assert-Source 'bool&\s+end_session_pending\s*=\s*shutdown_sequence\.state\(\)\.end_session_pending;' `
+Assert-Source 'const bool&\s+end_session_pending\s*=\s*shutdown_coordinator\.state\(\)\.end_session_pending;' `
     'app shell forwards the confirmed session-end flag'
 Assert-Source 'session\.dirty\(\)\s*&&\s*!state->shutdown_save_attempted' `
     'WM_DESTROY only saves before a final attempt'
 
-Assert-Source 'const bool save_succeeded = save_now\(state, false, true\);[\s\S]*?ShutdownEvent::save_succeeded' `
-    'shutdown save result is routed through the reducer'
+# PD-216: the order of the shutdown effects -- caption before the posted
+# continuation, save before views, views before the window, keep-open only on
+# an explicit No, a session end inside the prompt winning -- is executed by
+# core_shutdown_coordinator_test against ShutdownCoordinator. What is left here
+# is what the Win32 adapter itself must do inside each effect.
+Assert-Source 'bool AppShutdownEffects::save_session\(\) noexcept \{[\s\S]*?capture_window_placement\(state_\.main_window, state_\);[\s\S]*?return save_now\(state_, false, true\);' `
+    'the shutdown save captures placement and overrides capture suppression'
 Assert-Source 'ShutdownEvent::window_destroyed[\s\S]*?ShutdownEvent::save_started[\s\S]*?save_now\(\*state, false, true\)' `
     'unexpected destroy fallback keeps marker false'
 Assert-Shutdown 'case ShutdownEvent::save_prompt_finished:[\s\S]*?state_\.end_session_pending\s*\?\s*ShutdownAction::destroy_views' `
@@ -58,14 +63,14 @@ Assert-Source 'void\s+set_main_window_title\(HWND window, bool diagnostic_mode,\
 # title-then-destroy_panes regex only pinned two of them: moving DestroyWindow
 # ahead of destroy_panes, or dropping the drag-target revoke, still passed.
 # Assert the whole order instead.
-$finishStart = $source.IndexOf('void finish_shutdown(HWND window, AppState& state) noexcept {')
+$finishStart = $source.IndexOf('void AppShutdownEffects::destroy_views(bool session_ending) noexcept {')
 if ($finishStart -lt 0) {
-    throw 'shutdown state invariant failed: finish_shutdown is missing'
+    throw 'shutdown state invariant failed: AppShutdownEffects::destroy_views is missing'
 }
 $finishEnd = $source.IndexOf(
-    'void run_shutdown_action(HWND window, AppState& state,', $finishStart)
+    'void AppShutdownEffects::destroy_window() noexcept {', $finishStart)
 if ($finishEnd -lt 0) {
-    throw 'shutdown state invariant failed: finish_shutdown body end is missing'
+    throw 'shutdown state invariant failed: destroy_views body end is missing'
 }
 $finishBody = $source.Substring($finishStart, $finishEnd - $finishStart)
 $finishOrder = @(
@@ -80,37 +85,35 @@ $finishOrder = @(
     @{ Pattern = 'destroy_panes\(state\);'
        Name = 'panes destroyed' },
     @{ Pattern = 'write_live_view_count\(state\.diagnostic_mode\);'
-       Name = 'live view count emitted after teardown' },
-    @{ Pattern = 'DestroyWindow\(window\);'
-       Name = 'parent window destroyed last' }
+       Name = 'live view count emitted after teardown' }
 )
 $previousIndex = -1
-$previousName = 'start of finish_shutdown'
+$previousName = 'start of destroy_views'
 foreach ($step in $finishOrder) {
     $match = [regex]::Match($finishBody, $step.Pattern)
     if (-not $match.Success) {
-        throw "shutdown state invariant failed: finish_shutdown is missing '$($step.Name)'"
+        throw "shutdown state invariant failed: destroy_views is missing '$($step.Name)'"
     }
     if ($match.Index -lt $previousIndex) {
         throw ("shutdown state invariant failed: '$($step.Name)' must come " +
-               "after '$previousName' in finish_shutdown")
+               "after '$previousName' in destroy_views")
     }
     $previousIndex = $match.Index
     $previousName = $step.Name
 }
 Assert-Shutdown 'state_\.shutdown_deferred\s*=\s*true;' `
     'reducer records deferred shutdown'
-Assert-Source 'set_main_window_title\(window, state\.diagnostic_mode, true\);[\s\S]*?PostMessageW\(window, kDeferredShutdownMessage' `
+Assert-Source 'bool AppShutdownEffects::post_deferred_shutdown\(\) noexcept \{[\s\S]*?PostMessageW\(state_\.main_window, kDeferredShutdownMessage' `
     'closing state yields to the message loop before teardown'
-Assert-Source 'state\.transfer_close_dialog\.show\(window\)' `
+Assert-Source 'state_\.transfer_close_dialog\.show\(state_\.main_window\)' `
     'transfer prompt is owned by its dialog module'
-Assert-Source 'void\s+handle_transfer_close_dialog_result\(HWND window, AppState& state\)[\s\S]*?take_result\(\)' `
+Assert-Source 'void\s+handle_transfer_close_dialog_result\(AppState& state\)[\s\S]*?take_result\(\)' `
     'transfer choice is reduced by the app shell coordinator'
-Assert-Source 'if \(answer != IDNO\)\s*\{[\s\S]*?ShutdownEvent::save_keep_open[\s\S]*?return;' `
+Assert-Source 'return answer != IDNO;' `
     'only explicit No closes after an interactive failure'
 Assert-Shutdown 'case ShutdownEvent::save_keep_open:[\s\S]*?state_\.shutdown_save_attempted = false;' `
     'keeping the window open resets the failed save attempt'
-Assert-Source 'case WM_ENDSESSION:[\s\S]*?ShutdownEvent::end_session' `
+Assert-Source 'case WM_ENDSESSION:[\s\S]*?run_end_session_shutdown\(\*state\)' `
     'WM_ENDSESSION records confirmation'
 
 # The marker-after-COM ordering now lives inside finalize_process, the single
@@ -140,42 +143,24 @@ function Get-FunctionSource([string] $Start, [string] $Name) {
 
 # PD-203: at an OS session end the durable checkpoint must be written before
 # anything that can block or bail, because Windows kills the process partway
-# through the Shell teardown that follows. These are scoped to the function
-# body: an inline regex over the whole file can be satisfied by a match that
-# straddles two functions.
-$endSession = Get-FunctionSource `
-    'void run_end_session_shutdown(HWND window, AppState& state) noexcept {' `
-    'run_end_session_shutdown'
-$checkpoint = $endSession.IndexOf('session.write(state.application, true, window)')
-if ($checkpoint -lt 0) {
-    throw 'shutdown state invariant failed: run_end_session_shutdown does not write a clean checkpoint'
-}
-# Comments on this path deliberately discuss returning and teardown; scan code.
-$prologue = [regex]::Replace(
-    $endSession.Substring(0, $checkpoint), '//[^
+# through the Shell teardown that follows. That the checkpoint comes first and
+# the teardown after it stays gated is executed by core_shutdown_coordinator_
+# test (PD-216); what is left is that the checkpoint itself reaches no Shell.
+$checkpoint = Get-FunctionSource `
+    'bool AppShutdownEffects::write_end_session_checkpoint() noexcept {' `
+    'write_end_session_checkpoint'
+$checkpointCode = [regex]::Replace($checkpoint, '//[^
 ]*', '')
-# Anything that can leave the function, skip the write, or reach Shell/COM.
-foreach ($escape in @('return', 'goto', 'destroy', 'capture_locations',
-                      'run_shutdown_action', 'finalize_process')) {
-    if ($prologue -match ('(?<![A-Za-z_])' + [regex]::Escape($escape) + '(?![A-Za-z_])')) {
-        throw ("shutdown state invariant failed: '$escape' precedes the " +
-               'clean checkpoint in run_end_session_shutdown')
+foreach ($escape in @('destroy', 'capture_locations', 'save_now',
+                      'finalize_process')) {
+    if ($checkpointCode -match ('(?<![A-Za-z_])' + [regex]::Escape($escape) + '(?![A-Za-z_])')) {
+        throw ("shutdown state invariant failed: '$escape' is reached by " +
+               'the end-session checkpoint')
     }
 }
-$prologueOrder = [regex]::Match(
-    $prologue,
-    'capture_window_placement\(window, state\)[\s\S]*ShutdownEvent::save_started')
-if (-not $prologueOrder.Success) {
-    throw ('shutdown state invariant failed: run_end_session_shutdown must ' +
-           'capture placement and record save_started before the checkpoint')
-}
-# The teardown after the checkpoint is best effort and must stay gated.
-foreach ($gate in @('state\.closing_', 'ShutdownAction::defer',
-                    'reentry_guard\.in_shell_call\(\)', 'drag_in_progress')) {
-    if ($endSession.Substring($checkpoint) -notmatch $gate) {
-        throw ("shutdown state invariant failed: run_end_session_shutdown " +
-               "lost its '$gate' teardown gate")
-    }
+if ($checkpointCode -notmatch 'capture_window_placement\(state_\.main_window, state_\);[\s\S]*session\.write\(state_\.application, true, state_\.main_window\)') {
+    throw ('shutdown state invariant failed: the end-session checkpoint must ' +
+           'capture placement and write a clean checkpoint')
 }
 
 # finalize_process is the single COM-then-marker tail, run once.
@@ -193,15 +178,11 @@ if ($finalizeCalls -ne 2) {
 
 # The "Closing..." caption is for a user who is watching; an OS session end
 # has none, and its synchronous non-client repaint is spent against the one
-# path with a kill timeout.
-$finish = Get-FunctionSource `
-    'void finish_shutdown(HWND window, AppState& state) noexcept {' 'finish_shutdown'
-if ($finish -notmatch 'const bool ending = state\.end_session_pending;[\s\S]*?ShutdownEvent::teardown_started') {
-    throw ('shutdown state invariant failed: finish_shutdown must read ' +
-           'end_session_pending before teardown_started clears it')
-}
-if ($finish -notmatch 'if \(!ending\) set_main_window_title\(window, state\.diagnostic_mode, true\);') {
-    throw ('shutdown state invariant failed: finish_shutdown must skip the ' +
+# path with a kill timeout. The coordinator passes session_ending (tested).
+$destroyViews = Get-FunctionSource `
+    'void AppShutdownEffects::destroy_views(bool session_ending) noexcept {' 'destroy_views'
+if ($destroyViews -notmatch 'if \(!session_ending\) set_main_window_title\(window, state\.diagnostic_mode, true\);') {
+    throw ('shutdown state invariant failed: destroy_views must skip the ' +
            'closing caption only at an OS session end')
 }
 

@@ -24,6 +24,7 @@ set(PANEDOCK_TESTS
     "core_group_transition|unit/core_group_transition_test.cpp|panedock_core"
     "core_tab_drag|unit/core_tab_drag_test.cpp|panedock_core"
     "core_shutdown|unit/core_shutdown_test.cpp|panedock_core"
+    "core_shutdown_coordinator|unit/core_shutdown_coordinator_test.cpp|panedock_core"
     "session_writer|unit/session_writer_test.cpp|panedock_session_writer panedock_core"
     "pane|unit/pane_test.cpp|panedock_pane panedock_explorer_host panedock_session_writer panedock_core"
     "pane_tab_strip|unit/pane_tab_strip_test.cpp|panedock_pane panedock_explorer_host panedock_session_writer panedock_core"

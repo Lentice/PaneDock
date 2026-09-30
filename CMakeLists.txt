@@ -40,6 +40,7 @@ add_library(panedock_core STATIC
     src/core/model.cpp
     src/core/session.cpp
     src/core/shutdown.cpp
+    src/core/shutdown_coordinator.cpp
     src/core/tab_drag.cpp
 )
 target_include_directories(panedock_core PUBLIC src)

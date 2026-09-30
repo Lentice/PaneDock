@@ -103,7 +103,7 @@ if ($postWindowStartup -match 'MessageBoxW' -or
     throw 'startup frame order check failed: recoverable warning path is modal'
 }
 
-$shutdownStart = $source.IndexOf('void finish_shutdown(HWND window, AppState& state)')
+$shutdownStart = $source.IndexOf('void AppShutdownEffects::destroy_views(bool session_ending)')
 $explorerDestroy = $source.IndexOf('destroy_panes(state);', $shutdownStart)
 $notificationDestroy = $source.IndexOf('state.startup_notification.destroy();', $shutdownStart)
 if ($shutdownStart -lt 0 -or $notificationDestroy -lt 0 -or

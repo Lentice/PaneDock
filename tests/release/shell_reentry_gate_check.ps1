@@ -21,7 +21,7 @@ function Assert-Source([string] $Pattern, [string] $Name) {
     }
 }
 
-Assert-Source 'ShellReentryGuard reentry_guard\{\s*shutdown_sequence,' `
+Assert-Source 'ShellReentryGuard reentry_guard\{\s*shutdown_coordinator\.sequence\(\),' `
     'the app Shell re-entry guard is built on the reducer'
 if ($guardSource -notmatch 'return shutdown_\.state\(\)\.shell_call_depth != 0;') {
     throw 'Shell re-entry invariant failed: Shell call depth is owned by the reducer'
@@ -89,7 +89,7 @@ Assert-Source 'ShutdownEvent::file_operation_call_started[\s\S]*paste_from_clipb
     'clipboard setup is not reported as an active transfer'
 Assert-Source 'file_operation_setup_aborted[\s\S]*state\.is_shutting_down\(\)' `
     'clipboard setup observes deferred shutdown'
-Assert-Source 'case WM_CLOSE:\s*if \(state != nullptr\)\s*run_shutdown_action\([\s\S]*?ShutdownEvent::close_requested' `
+Assert-Source 'case WM_CLOSE:[\s\S]*?if \(state != nullptr\) state->shutdown_coordinator\.request_close\(\);' `
     'close decisions are routed through the shutdown reducer'
 
 $navigationHelperStart = $source.IndexOf('bool navigate_realized_panes(')
