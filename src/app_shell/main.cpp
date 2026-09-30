@@ -400,6 +400,15 @@ struct LayoutFailure final {
 
 struct AppState;
 
+// Reads every realized pane's live location into the model for SessionWriter.
+struct AppLiveLocationCapture final : panedock::app_shell::LiveLocationCapture {
+    explicit AppLiveLocationCapture(AppState& state) noexcept : state_(state) {}
+    void capture_live_locations() noexcept override;
+
+private:
+    AppState& state_;
+};
+
 // The Win32 adapter for ShellReentryGuard's effects.
 struct AppReentryEffects final : panedock::app_shell::ShellReentryEffects {
     explicit AppReentryEffects(AppState& state) noexcept : state_(state) {}
@@ -428,7 +437,6 @@ struct AppState : public panedock::app_shell::PaneHost {
     std::span<const panedock::app_shell::PinnedLocation>
     pinned_locations() const noexcept override;
     void pin_location(panedock::core::ShellLocation location) override;
-    bool location_capture_suppressed() const noexcept override;
     bool diagnostic_timing_enabled() const noexcept override;
     std::wstring tab_display_text(std::wstring_view parsing_name) override;
     HFONT chrome_font() const noexcept override;
@@ -478,6 +486,7 @@ struct AppState : public panedock::app_shell::PaneHost {
     UINT_PTR startup_realize_generation{};
     panedock::core::ApplicationState application;
     panedock::app_shell::SessionWriter session;
+    AppLiveLocationCapture live_location_capture{*this};
     HWND main_window{nullptr};
     bool diagnostic_mode{};
 
@@ -535,7 +544,6 @@ struct AppState : public panedock::app_shell::PaneHost {
         pinned_location_menu_items;
     // BrowseToObject may synchronously re-enter navigation_complete while the
     // remaining panes still display the outgoing Group's folders.
-    bool suppress_location_capture{};
     Microsoft::WRL::ComPtr<DragHoverTarget> sidebar_drag_target;
     // finalize_process runs once, from whichever exit gets there first.
     bool ole_finalized{};
@@ -567,25 +575,8 @@ void AppReentryEffects::begin_shutdown_now() noexcept {
 // that window and pumps the loop (virtual folders need a Shell display-name
 // lookup), so a WM_CLOSE arriving there used to reach shutdown's
 // capture_locations with the panes already rebound.
-class LocationCaptureSuppression final {
-public:
-    explicit LocationCaptureSuppression(AppState& state) noexcept
-        : state_(state), previous_(state.suppress_location_capture) {
-        state_.suppress_location_capture = true;
-    }
-
-    ~LocationCaptureSuppression() noexcept {
-        state_.suppress_location_capture = previous_;
-    }
-
-    LocationCaptureSuppression(const LocationCaptureSuppression&) = delete;
-    LocationCaptureSuppression& operator=(const LocationCaptureSuppression&) =
-        delete;
-
-private:
-    AppState& state_;
-    bool previous_;
-};
+using LocationCaptureSuppression =
+    panedock::app_shell::SessionWriter::CaptureSuppression;
 
 void defer_shell_reentry_message(HWND window, AppState& state, UINT message,
                                  WPARAM wparam, LPARAM lparam) noexcept {
@@ -761,7 +752,7 @@ bool navigate_realized_panes(
                                              "group_switch_navigate_ms");
     // Nested inside perform_group_transition's own suppression; kept here so
     // any other caller is covered too.
-    LocationCaptureSuppression suppression(state);
+    LocationCaptureSuppression suppression(state.session);
     for (const std::size_t pane : plan.navigate) {
         {
             ShellCallScope shell_call(state.reentry_guard);
@@ -1071,12 +1062,18 @@ void refresh_tab_strips(AppState& state) {
     for (auto& pane : state.panes) pane.tab_strip_ui().refresh();
 }
 
-void capture_locations(AppState& state) {
-    if (state.suppress_location_capture || !has_active_group(state)) return;
-    for (std::size_t index = 0; index < active_group(state).panes.size();
+void AppLiveLocationCapture::capture_live_locations() noexcept {
+    if (!has_active_group(state_)) return;
+    for (std::size_t index = 0; index < active_group(state_).panes.size();
          ++index) {
-        state.panes[index].capture_location();
+        state_.panes[index].capture_location();
     }
+}
+
+// Every capture goes through SessionWriter, which refuses while a Group
+// transition suppresses it (PD-206).
+void capture_locations(AppState& state) {
+    state.session.capture_live_locations();
 }
 
 void refresh_sidebar(AppState& state) {
@@ -1436,27 +1433,15 @@ void report_shell_failure(const AppState& state, const wchar_t* site,
     OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
 }
 
+// The call-site vocabulary the release checks police (which paths may write
+// synchronously and which only schedule); SessionWriter owns the rules.
 bool save_now(AppState& state, bool clean_shutdown = false,
               bool force_during_transition = false) noexcept {
-    // Shutdown must still persist dirty model state if Shell re-entry leaves
-    // the Group-switch capture guard active.
-    if (state.suppress_location_capture && !force_during_transition)
-        return false;
-    state.session.mark_dirty();
-    capture_locations(state);
-    return state.session.write(state.application, clean_shutdown,
-                               state.main_window);
+    return state.session.save_now(clean_shutdown, force_during_transition);
 }
 
-
 void schedule_session_save(AppState& state) noexcept {
-    state.session.mark_dirty();
-    if (state.main_window == nullptr) return;
-    if (!state.session.arm_timer(state.main_window)) {
-
-        OutputDebugStringW(L"PaneDock: session save timer failed\n");
-        (void)save_now(state);
-    }
+    state.session.schedule();
 }
 
 void rebuild_pinned_location_menu(AppState& state);
@@ -1807,11 +1792,11 @@ void perform_group_transition(HWND window, AppState& state,
     // Held across every step, including the early returns: the panes are bound
     // to the incoming Group from rebind_panes onwards, so no capture may read a
     // live view until the navigations have been issued (PD-206). Released
-    // before save_session, which is the last step -- save_now refuses to write
-    // while the suppression is on, so holding it there would silently drop the
-    // fallback save that arm_timer failure falls back to.
+    // before save_session, which is the last step, so that save captures the
+    // incoming Group's live locations. A save refused while it is held is
+    // rescheduled on release by SessionWriter itself (PD-215).
     std::optional<LocationCaptureSuppression> suppression;
-    suppression.emplace(state);
+    suppression.emplace(state.session);
     for (const Step step : panedock::core::plan_group_transition(
              transition, has_active_group(state), active_group_changed)) {
         if (state.is_shutting_down()) return;
@@ -2020,10 +2005,6 @@ void AppState::schedule_session_save() noexcept {
 const std::string &AppState::active_group_id() const noexcept {
     static const std::string kEmptyGroupId;
     return has_active_group(*this) ? active_group(*this).id : kEmptyGroupId;
-}
-
-bool AppState::location_capture_suppressed() const noexcept {
-    return suppress_location_capture;
 }
 
 bool AppState::diagnostic_timing_enabled() const noexcept {
@@ -2958,6 +2939,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
         // a plain STATIC used only for clipping and ExplorerHost parenting.
         chrome.set_host(&state);
         chrome.set_reentry_guard(&state.reentry_guard);
+        chrome.set_capture_gate(&state.session.capture_gate());
         if (!chrome.create(window, static_cast<int>(index))) return -1;
         if (!SetWindowSubclass(chrome.tab_strip(), tab_strip_proc, index,
                                reinterpret_cast<DWORD_PTR>(&state)))
@@ -3371,6 +3353,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             window, lparam);
         if (state == nullptr) return FALSE;
         state->main_window = window;
+        state->session.set_timer_owner(window);
     }
 
     const bool close_request =
@@ -3933,6 +3916,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         return exit_code;
     }
     state.session.set_directory(*directory);
+    state.session.bind(state.application, state.live_location_capture);
     auto loaded = panedock::core::read_session(
         state.session.directory(), default_application_state());
 

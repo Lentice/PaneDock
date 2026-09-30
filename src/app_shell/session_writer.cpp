@@ -43,6 +43,27 @@ bool SessionWriter::write(const core::ApplicationState& application,
     return true;
 }
 
+void SessionWriter::schedule() noexcept {
+    mark_dirty();
+    if (timer_owner_ == nullptr) return;
+    if (arm_timer(timer_owner_)) return;
+    OutputDebugStringW(L"PaneDock: session save timer failed\n");
+    (void)save_now();
+}
+
+bool SessionWriter::save_now(bool clean_shutdown,
+                             bool force_during_capture_suppression) noexcept {
+    if (gate_.suppressed() && !force_during_capture_suppression) {
+        mark_dirty();
+        save_refused_ = true;
+        return false;
+    }
+    if (application_ == nullptr) return false;
+    mark_dirty();
+    capture_live_locations();
+    return write(*application_, clean_shutdown, timer_owner_);
+}
+
 bool SessionWriter::write_clean_marker(
     const core::ApplicationState& application) noexcept {
     try {

@@ -22,12 +22,29 @@ namespace panedock::app_shell {
 // dirty means a write is owed; a successful write clears both the flag and
 // the pending timer -- was re-stated at every call site.
 //
-// It deliberately does NOT own two things that look adjacent:
-//   * capturing live pane locations into the model before a write, which
-//     touches panes and the Shell, and
-//   * the Group-switch capture guard and the shutdown reducer events,
-// both of which are coordinator work. The coordinator calls in with a model
-// snapshot it has already prepared.
+// PD-214/PD-215: it also owns the Group-switch capture guard and the decision
+// to capture before a write, because "a save refused while capture is
+// suppressed is still owed" is a rule about when to write. Reading the live
+// Shell views is not its business: that goes through LiveLocationCapture.
+// The shutdown reducer events stay with the coordinator.
+class LiveLocationCapture {
+public:
+    virtual ~LiveLocationCapture() = default;
+    // Copies every realized pane's live location into the model.
+    virtual void capture_live_locations() noexcept = 0;
+};
+
+// Whether live locations may be read into the model right now (PD-206). Only
+// SessionWriter::CaptureSuppression changes it; panes only ask.
+class LocationCaptureGate final {
+public:
+    bool suppressed() const noexcept { return depth_ != 0; }
+
+private:
+    friend class SessionWriter;
+    unsigned depth_{};
+};
+
 class SessionWriter final {
 public:
     static constexpr UINT_PTR kTimerId = 0xD050;
@@ -57,6 +74,55 @@ public:
 
     void mark_dirty() noexcept { dirty_ = true; }
     bool dirty() const noexcept { return dirty_; }
+    bool timer_armed() const noexcept { return armed_; }
+
+    // The model the scheduled and immediate saves write, and who reads the
+    // live Shell views into it. Both must outlive the writer's use.
+    void bind(const core::ApplicationState& application,
+              LiveLocationCapture& capture) noexcept {
+        application_ = &application;
+        capture_ = &capture;
+    }
+    // The window that owns the debounce timer; nullptr until it exists.
+    void set_timer_owner(HWND owner) noexcept { timer_owner_ = owner; }
+
+    const LocationCaptureGate& capture_gate() const noexcept { return gate_; }
+
+    // Held across a Group transition: no live location may be read while the
+    // panes point at a Group their views do not show yet. A save refused
+    // while it is held is rescheduled when the outermost one is released, so
+    // releasing it before the transition's own save is no longer load-bearing.
+    class CaptureSuppression final {
+    public:
+        explicit CaptureSuppression(SessionWriter& writer) noexcept
+            : writer_(writer) {
+            ++writer_.gate_.depth_;
+        }
+        ~CaptureSuppression() noexcept {
+            if (--writer_.gate_.depth_ != 0 || !writer_.save_refused_) return;
+            writer_.save_refused_ = false;
+            writer_.schedule();
+        }
+        CaptureSuppression(const CaptureSuppression&) = delete;
+        CaptureSuppression& operator=(const CaptureSuppression&) = delete;
+
+    private:
+        SessionWriter& writer_;
+    };
+
+    // A model change: a write is owed, debounced by the timer. If the timer
+    // cannot be armed the write happens now instead.
+    void schedule() noexcept;
+    // Captures live locations (unless suppressed) and writes the bound model.
+    // While capture is suppressed it refuses -- the save stays owed -- unless
+    // `force_during_capture_suppression`, which shutdown uses to write the
+    // model as it stands without reading a live view.
+    bool save_now(bool clean_shutdown = false,
+                  bool force_during_capture_suppression = false) noexcept;
+    void capture_live_locations() noexcept {
+        if (gate_.suppressed() || capture_ == nullptr) return;
+        capture_->capture_live_locations();
+    }
 
     // Arms the debounce timer. Returns false when the timer could not be set,
     // which is the caller's signal to fall back to an immediate write.
@@ -94,6 +160,11 @@ public:
 private:
     core::SessionDocument document_;
     std::filesystem::path directory_;
+    const core::ApplicationState* application_{nullptr};
+    LiveLocationCapture* capture_{nullptr};
+    HWND timer_owner_{nullptr};
+    LocationCaptureGate gate_;
+    bool save_refused_{};
     ULONGLONG dirty_since_{};
     bool dirty_{};
     bool armed_{};

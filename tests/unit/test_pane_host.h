@@ -10,6 +10,7 @@
 
 #include "app_shell/pane.h"
 #include "app_shell/pane_host.h"
+#include "app_shell/session_writer.h"
 #include "core/shutdown.h"
 #include "unit/test_reentry_effects.h"
 
@@ -19,7 +20,6 @@ class TestPaneHost : public panedock::app_shell::PaneHost {
   public:
     bool shutting_down{};
     std::string group_id{"group-a"};
-    bool suppress_location_capture{};
     int session_saves{};
     // Set to a bound PaneState to have the second display-name lookup mutate
     // the tab list, standing in for a Shell call that re-enters and changes
@@ -32,6 +32,9 @@ class TestPaneHost : public panedock::app_shell::PaneHost {
     RecordingReentryEffects reentry_effects;
     panedock::app_shell::ShellReentryGuard guard{shutdown, reentry_effects,
                                                  WM_APP};
+    // Owns the capture gate a pane asks; hold a CaptureSuppression on it to
+    // stand in for a Group transition.
+    panedock::app_shell::SessionWriter session;
 
     bool is_shutting_down() const noexcept override { return shutting_down; }
     void schedule_session_save() noexcept override { ++session_saves; }
@@ -53,9 +56,6 @@ class TestPaneHost : public panedock::app_shell::PaneHost {
     std::optional<LRESULT> handle_pane_control_message(
         panedock::app_shell::Pane&, UINT, WPARAM, LPARAM) override {
         return std::nullopt;
-    }
-    bool location_capture_suppressed() const noexcept override {
-        return suppress_location_capture;
     }
     bool diagnostic_timing_enabled() const noexcept override { return false; }
     std::wstring tab_display_text(std::wstring_view name) override {

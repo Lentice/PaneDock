@@ -100,7 +100,7 @@ if ($navigationHelperStart -lt 0 -or $navigationHelperEnd -lt 0) {
 }
 $navigationHelperBody = $source.Substring(
     $navigationHelperStart, $navigationHelperEnd - $navigationHelperStart)
-if ($navigationHelperBody -notmatch 'LocationCaptureSuppression suppression\(state\)' -or
+if ($navigationHelperBody -notmatch 'LocationCaptureSuppression suppression\(state\.session\)' -or
     $navigationHelperBody -notmatch 'ShellCallScope shell_call\(state\.reentry_guard\)' -or
         $navigationHelperBody -notmatch 'state\.panes\[pane\]\.navigate_to\(') {
     throw 'Shell re-entry invariant failed: realized-pane navigation helper is incomplete'
@@ -111,15 +111,18 @@ if ($navigationHelperBody -notmatch 'LocationCaptureSuppression suppression\(sta
 # it only inside navigate_realized_panes leaves refresh_tab_strips -- which
 # pumps the loop for virtual-folder display names -- able to reach shutdown's
 # capture_locations with the panes already rebound.
-Assert-Source 'suppress_location_capture\s*=\s*previous_;' `
-    'location capture suppression restores the previous value on scope exit'
+$writerHeader = Get-Content -LiteralPath (
+    Join-Path $PSScriptRoot '..\..\src\app_shell\session_writer.h') -Raw
+if ($writerHeader -notmatch '--writer_\.gate_\.depth_ != 0') {
+    throw 'Shell re-entry invariant failed: location capture suppression nests and restores on scope exit'
+}
 $transitionStart = $source.IndexOf('void perform_group_transition(HWND window, AppState& state,')
 $transitionEnd = $source.IndexOf('void activate_group(HWND window, AppState& state,', $transitionStart)
 if ($transitionStart -lt 0 -or $transitionEnd -lt 0) {
     throw 'Shell re-entry invariant failed: group transition script body missing'
 }
 $transitionBody = $source.Substring($transitionStart, $transitionEnd - $transitionStart)
-if ($transitionBody -notmatch 'suppression\.emplace\(state\)') {
+if ($transitionBody -notmatch 'suppression\.emplace\(state\.session\)') {
     throw 'Shell re-entry invariant failed: group transition does not suppress location capture for the whole script'
 }
 if ($transitionBody -notmatch 'case Step::save_session:\s*suppression\.reset\(\);') {

@@ -20,6 +20,7 @@
 #include "app_shell/pane_chrome_geometry.h"
 #include "app_shell/pane_control_id.h"
 #include "app_shell/pane_tab_strip.h"
+#include "app_shell/session_writer.h"
 #include "app_shell/shell_reentry_guard.h"
 #include "core/model.h"
 #include "core/navigation.h"
@@ -62,6 +63,11 @@ class Pane final {
     }
     ShellReentryGuard &reentry_guard() const noexcept {
         return *reentry_guard_;
+    }
+    // Set with set_host: whether a Group transition forbids reading the live
+    // view's location into the model right now (PD-206).
+    void set_capture_gate(const LocationCaptureGate *gate) noexcept {
+        capture_gate_ = gate;
     }
     // The one guard every Shell-touching Pane method needs: a host exists and
     // is not tearing down. Shell calls re-enter our message loop, so methods
@@ -230,6 +236,7 @@ class Pane final {
 
     PaneHost *host_{nullptr};
     ShellReentryGuard *reentry_guard_{nullptr};
+    const LocationCaptureGate *capture_gate_{nullptr};
     panedock::core::PaneState *bound_state_{nullptr};
     std::size_t index_{};
     panedock::core::NavigationRequest pending_navigation_{};

@@ -148,9 +148,123 @@ void adopted_document_keeps_unrecognized_fields() {
     EXPECT(json.find("future_field") != std::string::npos);
 }
 
+class CountingCapture final : public panedock::app_shell::LiveLocationCapture {
+public:
+    int captures{};
+    void capture_live_locations() noexcept override { ++captures; }
+};
+
+using CaptureSuppression = SessionWriter::CaptureSuppression;
+
+void save_now_captures_then_writes_the_bound_model() {
+    TemporaryDirectory temporary;
+    SessionWriter writer;
+    writer.set_directory(temporary.path);
+    const ApplicationState application = sample("group-bound");
+    CountingCapture capture;
+    writer.bind(application, capture);
+
+    EXPECT(writer.save_now());
+    EXPECT(capture.captures == 1);
+    EXPECT(!writer.dirty());
+    EXPECT(read_session(temporary.path).document.application.active_group_id ==
+           "group-bound");
+}
+
+void suppressed_save_is_refused_and_stays_owed() {
+    TemporaryDirectory temporary;
+    SessionWriter writer;
+    writer.set_directory(temporary.path);
+    const ApplicationState application = sample("group-a");
+    CountingCapture capture;
+    writer.bind(application, capture);
+    {
+        CaptureSuppression suppression(writer);
+        EXPECT(writer.capture_gate().suppressed());
+        writer.capture_live_locations();
+        EXPECT(!writer.save_now());
+        EXPECT(capture.captures == 0);
+        EXPECT(writer.dirty());
+        EXPECT(!std::filesystem::exists(temporary.path / kSessionFileName));
+    }
+    EXPECT(!writer.capture_gate().suppressed());
+    // No timer owner: the release reschedules, which can only mark it owed.
+    EXPECT(writer.dirty());
+    EXPECT(writer.save_now());
+    EXPECT(capture.captures == 1);
+}
+
+void forced_save_writes_without_reading_a_live_view() {
+    TemporaryDirectory temporary;
+    SessionWriter writer;
+    writer.set_directory(temporary.path);
+    const ApplicationState application = sample("group-forced");
+    CountingCapture capture;
+    writer.bind(application, capture);
+    CaptureSuppression suppression(writer);
+    EXPECT(writer.save_now(false, true));
+    EXPECT(capture.captures == 0);
+    EXPECT(!writer.dirty());
+}
+
+void nested_suppression_lifts_only_at_the_outermost_release() {
+    SessionWriter writer;
+    {
+        CaptureSuppression outer(writer);
+        {
+            CaptureSuppression inner(writer);
+        }
+        EXPECT(writer.capture_gate().suppressed());
+    }
+    EXPECT(!writer.capture_gate().suppressed());
+}
+
+// The save a Group transition refuses must not wait for the next model
+// change: releasing the suppression arms the debounce timer again.
+void a_refused_save_is_rescheduled_when_suppression_ends() {
+    TemporaryDirectory temporary;
+    const HWND owner = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+                                       HWND_MESSAGE, nullptr, nullptr, nullptr);
+    EXPECT(owner != nullptr);
+    SessionWriter writer;
+    writer.set_directory(temporary.path);
+    const ApplicationState application = sample("group-a");
+    CountingCapture capture;
+    writer.bind(application, capture);
+    writer.set_timer_owner(owner);
+    {
+        CaptureSuppression suppression(writer);
+        EXPECT(!writer.save_now());
+        EXPECT(!writer.timer_armed());
+    }
+    EXPECT(writer.timer_armed());
+    EXPECT(writer.dirty());
+    writer.cancel_timer(owner);
+    DestroyWindow(owner);
+}
+
+void a_save_that_was_not_refused_does_not_reschedule() {
+    const HWND owner = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0,
+                                       HWND_MESSAGE, nullptr, nullptr, nullptr);
+    EXPECT(owner != nullptr);
+    SessionWriter writer;
+    writer.set_timer_owner(owner);
+    {
+        CaptureSuppression suppression(writer);
+    }
+    EXPECT(!writer.timer_armed());
+    DestroyWindow(owner);
+}
+
 }  // namespace
 
 int main() {
+    save_now_captures_then_writes_the_bound_model();
+    suppressed_save_is_refused_and_stays_owed();
+    forced_save_writes_without_reading_a_live_view();
+    nested_suppression_lifts_only_at_the_outermost_release();
+    a_refused_save_is_rescheduled_when_suppression_ends();
+    a_save_that_was_not_refused_does_not_reschedule();
     failed_write_stays_dirty_and_a_later_write_clears_it();
     mark_dirty_survives_until_a_write_succeeds();
     clean_marker_records_a_completed_shutdown();

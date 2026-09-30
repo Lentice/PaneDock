@@ -252,6 +252,7 @@
 | PD-212 | 延遲的指標／hover 訊息只保留最後一筆意圖 | 7 | `done` | PD-205 | [PD-212](tickets/PD-212-deferred-pointer-messages-keep-only-the-latest-intent.md) |
 | PD-213 | 把「單執行緒訊息迴圈」寫成明示的不變量，並移除為並行而存在的機制 | 7 | `done` | — | [PD-213](tickets/PD-213-single-threaded-message-loop-is-a-stated-invariant.md) |
 | PD-214 | 一個 `ShellReentryGuard` 擁有 Shell re-entry 的暫存、重播與欠下的關閉 | 7 | `done` | PD-205, PD-211, PD-212, PD-213 | [PD-214](tickets/PD-214-one-shell-reentry-guard-owns-hold-replay-and-owed-shutdown.md) |
+| PD-215 | `SessionWriter` 擁有擷取抑制與擷取步驟（覆寫 PD-201 的界線） | 7 | `done` | PD-201, PD-206, PD-214 | [PD-215](tickets/PD-215-session-writer-owns-capture-suppression-and-the-capture-step.md) |
 
 
 ## Dependency lanes

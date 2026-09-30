@@ -981,7 +981,7 @@ void Pane::apply_sort() {
 
 void Pane::capture_location() {
     if (pane_host() == nullptr ||
-        pane_host()->location_capture_suppressed())
+        (capture_gate_ != nullptr && capture_gate_->suppressed()))
         return;
     if (pane_state() == nullptr || !realized() ||
         explorer_host_.location().parsing_name.empty())

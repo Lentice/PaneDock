@@ -250,8 +250,9 @@ if ($groupReorderBody -notmatch 'sidebar\.take_reorder_request\(\)' -or
 }
 
 $directSaveCalls = [regex]::Matches($source, 'save_now\((?:state|\*state)')
-if ($directSaveCalls.Count -ne 5) {
-    throw "session save debounce check failed: expected 5 synchronous save sites, found $($directSaveCalls.Count)"
+# PD-215: the timer-failure fallback moved into SessionWriter::schedule.
+if ($directSaveCalls.Count -ne 4) {
+    throw "session save debounce check failed: expected 4 synchronous save sites, found $($directSaveCalls.Count)"
 }
 
 $timerStart = $source.IndexOf('if (timer == kSessionSaveTimerId)')

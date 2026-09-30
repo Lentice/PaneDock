@@ -41,7 +41,6 @@ class PaneHost {
     // Pinning updates application persistence, not one pane.
     virtual void pin_location(panedock::core::ShellLocation location) = 0;
     // Singleton coordinator state: Group switching suppresses capture for all panes.
-    virtual bool location_capture_suppressed() const noexcept = 0;
     // --diagnostic only; gates the switching-latency timing (PD-209).
     virtual bool diagnostic_timing_enabled() const noexcept = 0;
     // Shell name resolution uses the coordinator's re-entry gate.
