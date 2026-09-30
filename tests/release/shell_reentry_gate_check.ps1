@@ -122,11 +122,12 @@ if ($transitionStart -lt 0 -or $transitionEnd -lt 0) {
     throw 'Shell re-entry invariant failed: group transition script body missing'
 }
 $transitionBody = $source.Substring($transitionStart, $transitionEnd - $transitionStart)
-if ($transitionBody -notmatch 'suppression\.emplace\(state\.session\)') {
+# When the suppression ends -- on every exit, and before the save -- is
+# executed by core_group_transition_test (PD-217); the adapter must take it
+# for the whole run and end it only where the runner says.
+if ($transitionBody -notmatch 'suppression_\.emplace\(state\.session\)' -or
+    $transitionBody -notmatch 'void release_capture_suppression\(\) noexcept override \{\s*suppression_\.reset\(\);') {
     throw 'Shell re-entry invariant failed: group transition does not suppress location capture for the whole script'
-}
-if ($transitionBody -notmatch 'case Step::save_session:\s*suppression\.reset\(\);') {
-    throw 'Shell re-entry invariant failed: group transition must release the capture suppression before save_session'
 }
 $navigationCallSiteSource = $source.Remove(
     $navigationHelperStart, $navigationHelperEnd - $navigationHelperStart)
@@ -135,9 +136,9 @@ $navigationCallSiteSource = $source.Remove(
 # it looks the Group up fresh rather than holding a reference across re-entry.
 if ([regex]::Matches(
         $navigationCallSiteSource,
-        'navigate_realized_panes\(state, active_group\(state\)\)').Count -ne 1 -or
+        'navigate_realized_panes\(state_, active_group\(state_\)\)').Count -ne 1 -or
     [regex]::Matches($navigationCallSiteSource,
-        'navigate_realized_panes\(').Count -ne 1) {
+        'navigate_realized_panes\((?!\))').Count -ne 1) {
     throw 'Shell re-entry invariant failed: both Group transitions must use the shared helper'
 }
 

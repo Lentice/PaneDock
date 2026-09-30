@@ -1,6 +1,7 @@
 #include "core/group_transition.h"
 #include "unit/test_util.h"
 
+#include <string>
 #include <vector>
 
 namespace {
@@ -138,9 +139,105 @@ void test_rebind_precedes_navigation_so_the_capture_guard_covers_the_gap() {
         }
     }
 }
+
+// run_group_transition's output is the effects it performs, in order.
+class RecordingEffects final : public GroupTransitionEffects {
+  public:
+    std::vector<std::string> log;
+    bool shutting_down{};
+    bool active_group{true};
+    bool navigation_succeeds{true};
+    // Name of the effect after which shutdown starts, as a nested close
+    // dispatched inside that step's pump would.
+    std::string shutdown_after;
+    // Name of the effect after which the active Group is gone, as a queued
+    // delete_group replayed inside that step's pump would leave it.
+    std::string vanish_after;
+
+    bool is_shutting_down() const noexcept override { return shutting_down; }
+    bool has_active_group() const noexcept override { return active_group; }
+    void rebind_panes() override { record("rebind"); }
+    void refresh_tab_strips() override { record("tabs"); }
+    bool navigate_realized_panes() override {
+        record("navigate");
+        return navigation_succeeds;
+    }
+    void apply_layout() override { record("layout"); }
+    void focus_active_pane() override { record("focus"); }
+    void refresh_sidebar() override { record("sidebar"); }
+    void release_capture_suppression() noexcept override { record("release"); }
+    void schedule_session_save() noexcept override { record("save"); }
+
+  private:
+    void record(const char *name) {
+        log.push_back(name);
+        if (shutdown_after == name) shutting_down = true;
+        if (vanish_after == name) active_group = false;
+    }
+};
+
+using Log = std::vector<std::string>;
+
+void test_a_switch_runs_every_effect_and_releases_before_the_save() {
+    RecordingEffects effects;
+    run_group_transition(GroupTransition::activate, "group-a", "group-b",
+                         effects);
+    EXPECT((effects.log == Log{"rebind", "tabs", "navigate", "layout", "focus",
+                               "sidebar", "release", "save"}));
+}
+
+void test_a_shutdown_inside_a_step_stops_the_rest_and_still_releases() {
+    RecordingEffects effects;
+    effects.shutdown_after = "tabs";
+    run_group_transition(GroupTransition::activate, "group-a", "group-b",
+                         effects);
+    EXPECT((effects.log == Log{"rebind", "tabs", "release"}));
+}
+
+void test_a_failed_navigation_aborts_before_the_layout() {
+    RecordingEffects effects;
+    effects.navigation_succeeds = false;
+    run_group_transition(GroupTransition::activate, "group-a", "group-b",
+                         effects);
+    // The refused save is owed; SessionWriter reschedules it on release.
+    EXPECT((effects.log == Log{"rebind", "tabs", "navigate", "release"}));
+}
+
+void test_a_transition_that_starts_during_shutdown_does_nothing_but_release() {
+    RecordingEffects effects;
+    effects.shutting_down = true;
+    run_group_transition(GroupTransition::activate, "group-a", "group-b",
+                         effects);
+    EXPECT((effects.log == Log{"release"}));
+}
+
+void test_the_changed_group_is_derived_from_the_ids() {
+    RecordingEffects kept;
+    run_group_transition(GroupTransition::remove, "group-a", "group-a", kept);
+    EXPECT((kept.log == Log{"rebind", "tabs", "layout", "focus", "sidebar",
+                            "release", "save"}));
+    RecordingEffects moved;
+    run_group_transition(GroupTransition::remove, "group-a", "group-b", moved);
+    EXPECT(moved.log.size() == 8 && moved.log[2] == "navigate");
+}
+
+void test_a_group_removed_mid_transition_skips_navigation_and_focus() {
+    RecordingEffects effects;
+    effects.vanish_after = "tabs";
+    run_group_transition(GroupTransition::activate, "group-a", "group-b",
+                         effects);
+    EXPECT((effects.log ==
+            Log{"rebind", "tabs", "layout", "sidebar", "release", "save"}));
+}
 }  // namespace
 
 int main() {
+    test_a_switch_runs_every_effect_and_releases_before_the_save();
+    test_a_shutdown_inside_a_step_stops_the_rest_and_still_releases();
+    test_a_failed_navigation_aborts_before_the_layout();
+    test_a_transition_that_starts_during_shutdown_does_nothing_but_release();
+    test_the_changed_group_is_derived_from_the_ids();
+    test_a_group_removed_mid_transition_skips_navigation_and_focus();
     test_activating_a_group_runs_the_full_script();
     test_a_relayout_skips_the_re_navigation();
     test_every_transition_refreshes_the_sidebar();

@@ -1795,8 +1795,8 @@ panedock::core::GroupState new_group_state(const AppState& state,
 }
 
 // The ordered script every Group mutation runs once the model has changed.
-// core::plan_group_transition owns the order and which steps apply; this
-// performs them behind a single shutdown gate.
+// core::run_group_transition owns the order, which steps apply and the
+// shutdown gate between them; this supplies the Win32 side of each step.
 //
 // Nothing here holds a GroupState& across a step. apply_layout and the Shell
 // focus call both re-enter the message loop, and a reference into
@@ -1806,74 +1806,70 @@ void show_startup_notification(HWND owner, AppState& state) noexcept;
 
 void perform_group_transition(HWND window, AppState& state,
                               panedock::core::GroupTransition transition,
-                              bool active_group_changed) {
-    using Step = panedock::core::GroupTransitionStep;
+                              const std::string& previous_active_group_id) {
     panedock::app_shell::ScopedTiming timing(state.diagnostic_mode, "group_switch_ms");
-    // Held across every step, including the early returns: the panes are bound
-    // to the incoming Group from rebind_panes onwards, so no capture may read a
-    // live view until the navigations have been issued (PD-206). Released
-    // before save_session, which is the last step, so that save captures the
-    // incoming Group's live locations. A save refused while it is held is
-    // rescheduled on release by SessionWriter itself (PD-215).
-    std::optional<LocationCaptureSuppression> suppression;
-    suppression.emplace(state.session);
-    for (const Step step : panedock::core::plan_group_transition(
-             transition, has_active_group(state), active_group_changed)) {
-        if (state.is_shutting_down()) return;
-        switch (step) {
-            case Step::rebind_panes:
-                rebind_panes(state);
-                break;
-            case Step::refresh_tab_strips:
-                refresh_tab_strips(state);
-                break;
-            case Step::navigate_realized_panes:
-                if (!has_active_group(state)) break;
-                if (!navigate_realized_panes(state, active_group(state)))
-                    return;
-                break;
-            case Step::apply_layout:
-                if (const HRESULT hr = apply_layout(window, state);
-                    FAILED(hr)) {
-                    report_shell_failure(state, L"group_transition", hr);
-                    // E_ABORT is apply_layout's shutdown bail-out, not a
-                    // failure the user can act on. Anything else leaves a
-                    // blank pane, which used to be reported only to a
-                    // debugger (PD-208); reuse the startup path's modeless
-                    // notification rather than adding a second mechanism.
-                    if (hr != E_ABORT) {
-                        append_startup_warning(
-                            state,
-                            L"PaneDock could not open the Shell view for one "
-                            L"or more panes. Some panes may be empty. " +
-                                panedock::app_shell::
-                                    format_shell_failure_detail(
-                                        hr, last_failed_pane(state)));
-                        show_startup_notification(window, state);
-                    }
-                }
-                break;
-            case Step::focus_active_pane: {
-                if (!has_active_group(state)) break;
-                const std::size_t active =
-                    active_pane_index(active_group(state));
-                ShellCallScope shell_call(state.reentry_guard);
-                state.panes[active].host().focus();
-                break;
-            }
-            case Step::refresh_sidebar:
-                refresh_sidebar(state);
-                break;
-            case Step::save_session:
-                suppression.reset();
-                // Group switches can be triggered from the OLE drag-hover
-                // message. Keep the session flush out of that interaction
-                // path; shutdown still forces the dirty state through a
-                // synchronous save.
-                schedule_session_save(state);
-                break;
+    // The Win32 side of each step; core::run_group_transition owns the loop,
+    // the per-step shutdown gate, the navigate-failure abort and when the
+    // capture suppression ends (PD-217).
+    struct Effects final : panedock::core::GroupTransitionEffects {
+        Effects(HWND window, AppState& state) noexcept
+            : window_(window), state_(state) {
+            suppression_.emplace(state.session);
         }
-    }
+        bool is_shutting_down() const noexcept override {
+            return state_.is_shutting_down();
+        }
+        bool has_active_group() const noexcept override {
+            return ::has_active_group(state_);
+        }
+        void rebind_panes() override { ::rebind_panes(state_); }
+        void refresh_tab_strips() override { ::refresh_tab_strips(state_); }
+        bool navigate_realized_panes() override {
+            return ::navigate_realized_panes(state_, active_group(state_));
+        }
+        void apply_layout() override {
+            const HRESULT hr = ::apply_layout(window_, state_);
+            if (SUCCEEDED(hr)) return;
+            report_shell_failure(state_, L"group_transition", hr);
+            // E_ABORT is apply_layout's shutdown bail-out, not a failure the
+            // user can act on. Anything else leaves a blank pane, which used
+            // to be reported only to a debugger (PD-208); reuse the startup
+            // path's modeless notification rather than adding a second
+            // mechanism.
+            if (hr == E_ABORT) return;
+            append_startup_warning(
+                state_,
+                L"PaneDock could not open the Shell view for one or more "
+                L"panes. Some panes may be empty. " +
+                    panedock::app_shell::format_shell_failure_detail(
+                        hr, last_failed_pane(state_)));
+            show_startup_notification(window_, state_);
+        }
+        void focus_active_pane() override {
+            const std::size_t active = active_pane_index(active_group(state_));
+            ShellCallScope shell_call(state_.reentry_guard);
+            state_.panes[active].host().focus();
+        }
+        void refresh_sidebar() override { ::refresh_sidebar(state_); }
+        void release_capture_suppression() noexcept override {
+            suppression_.reset();
+        }
+        void schedule_session_save() noexcept override {
+            // Group switches can be triggered from the OLE drag-hover
+            // message. Keep the session flush out of that interaction path;
+            // shutdown still forces the dirty state through a synchronous
+            // save.
+            ::schedule_session_save(state_);
+        }
+
+    private:
+        HWND window_;
+        AppState& state_;
+        std::optional<LocationCaptureSuppression> suppression_;
+    } effects(window, state);
+    panedock::core::run_group_transition(
+        transition, previous_active_group_id,
+        state.application.active_group_id, effects);
 }
 
 void activate_group(HWND window, AppState& state, std::size_t index) {
@@ -1888,9 +1884,11 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
     }
 
     capture_locations(state);
+    const std::string previous = state.application.active_group_id;
     state.application.active_group_id = target_id;
     perform_group_transition(window, state,
-                             panedock::core::GroupTransition::activate, true);
+                             panedock::core::GroupTransition::activate,
+                             previous);
 }
 
 Microsoft::WRL::ComPtr<DragHoverTarget> make_sidebar_drag_hover_target(
@@ -1930,7 +1928,7 @@ void add_group(HWND window, AppState& state) {
         // to switch to; run the same tail every other mutation runs.
         perform_group_transition(window, state,
                                  panedock::core::GroupTransition::activate,
-                                 true);
+                                 std::string{});
         return;
     }
     activate_group(window, state, state.application.groups.size() - 1);
@@ -1971,14 +1969,14 @@ void delete_group(HWND window, AppState& state) {
         return;
 
     capture_locations(state);
-    const bool deleted_active = id == state.application.active_group_id;
+    const std::string previous = state.application.active_group_id;
     // core::delete_group destroys PaneState objects. Drop every borrowed
     // pointer before that erase; rebind only after the surviving Group is known.
     for (auto& pane : state.panes) pane.unbind();
     if (!panedock::core::delete_group(state.application, id)) return;
     perform_group_transition(window, state,
                              panedock::core::GroupTransition::remove,
-                             deleted_active);
+                             previous);
 }
 
 // No rebind: PD-184 guarantees group reorder preserves PaneState addresses.
@@ -2170,7 +2168,8 @@ void set_layout(HWND window, AppState& state,
     // the sidebar, but the Group summary counts only the panes the current
     // layout shows, so the row went stale until the next unrelated refresh.
     perform_group_transition(window, state,
-                             panedock::core::GroupTransition::relayout, false);
+                             panedock::core::GroupTransition::relayout,
+                             state.application.active_group_id);
 }
 
 void update_sidebar_drag(HWND window, AppState& state, POINT point,

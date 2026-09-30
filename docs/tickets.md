@@ -254,6 +254,7 @@
 | PD-214 | 一個 `ShellReentryGuard` 擁有 Shell re-entry 的暫存、重播與欠下的關閉 | 7 | `done` | PD-205, PD-211, PD-212, PD-213 | [PD-214](tickets/PD-214-one-shell-reentry-guard-owns-hold-replay-and-owed-shutdown.md) |
 | PD-215 | `SessionWriter` 擁有擷取抑制與擷取步驟（覆寫 PD-201 的界線） | 7 | `done` | PD-201, PD-206, PD-214 | [PD-215](tickets/PD-215-session-writer-owns-capture-suppression-and-the-capture-step.md) |
 | PD-216 | `ShutdownCoordinator` 擁有 shutdown 的 effect 順序（覆寫 2026-09-03 F2） | 7 | `done` | PD-203, PD-214, PD-215 | [PD-216](tickets/PD-216-shutdown-coordinator-owns-the-effect-order.md) |
+| PD-217 | `run_group_transition` 在 core 執行 Group 切換的步驟 | 7 | `done` | PD-206, PD-215 | [PD-217](tickets/PD-217-group-transition-runs-its-steps-in-core.md) |
 
 
 ## Dependency lanes
