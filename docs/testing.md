@@ -157,6 +157,8 @@ For items 18–23, record `PASS`, `FAIL`, or `未驗證,需真實桌面` in PD-1
 
 ## Crash recovery acceptance protocol (Phase 5, FR-013)
 
+`panedock_launch_smoke` 使用 build 目錄下的獨立 `LOCALAPPDATA`，並檢查該處確實產生 session；它不應讀寫互動使用者的 session。測試失敗時若程序仍活著，須先正常關閉，不能略過 live Shell view 的 `Destroy`。
+
 Run manually on a real Windows desktop in a Release build. Before changing
 anything, copy `%LOCALAPPDATA%\PaneDock\session.json` and
 `session.json.bak` to a safe temporary directory so the original user state

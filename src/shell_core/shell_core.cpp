@@ -172,6 +172,22 @@ std::wstring display_text_for_parsing_name(std::wstring_view parsing_name) {
 }
 
 std::optional<std::filesystem::path> session_directory() noexcept {
+    // Honor a process-local LOCALAPPDATA override so isolated launches (such
+    // as the smoke test) never read or write the interactive user's session.
+    try {
+        const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+        if (required > 1) {
+            std::wstring local_app_data(required, L'\0');
+            const DWORD length = GetEnvironmentVariableW(
+                L"LOCALAPPDATA", local_app_data.data(), required);
+            if (length > 0 && length < required) {
+                const std::filesystem::path root(local_app_data.c_str());
+                if (root.is_absolute()) return root / L"PaneDock";
+            }
+        }
+    } catch (...) {
+        return std::nullopt;
+    }
     PWSTR local_app_data = nullptr;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr,
                                     &local_app_data))) {

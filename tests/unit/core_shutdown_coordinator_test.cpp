@@ -212,6 +212,24 @@ void a_session_end_inside_a_shell_call_writes_only_the_checkpoint() {
     EXPECT((effects.log == Log{"checkpoint"}));
 }
 
+void a_cancelled_session_end_allows_a_later_close() {
+    RecordingEffects effects;
+    ShutdownCoordinator coordinator(effects);
+    coordinator.sequence().step(ShutdownEvent::shell_call_entered);
+    coordinator.end_session_confirmed();
+    coordinator.end_session_cancelled();
+    EXPECT(!coordinator.is_shutting_down());
+    EXPECT(!coordinator.state().shutdown_save_attempted);
+    EXPECT((effects.log == Log{"checkpoint", "caption:normal"}));
+
+    coordinator.sequence().step(ShutdownEvent::shell_call_left);
+    coordinator.request_close();
+    EXPECT((effects.log == Log{"checkpoint", "caption:normal",
+                               "caption:closing", "post"}));
+    coordinator.deferred_shutdown_ready();
+    EXPECT(coordinator.state().closing_);
+}
+
 void a_session_end_during_a_running_close_still_writes_the_checkpoint() {
     RecordingEffects effects;
     ShutdownCoordinator coordinator(effects);
@@ -237,6 +255,7 @@ int main() {
     a_drag_holds_the_close_until_it_ends();
     a_session_end_writes_the_checkpoint_before_any_teardown();
     a_session_end_inside_a_shell_call_writes_only_the_checkpoint();
+    a_cancelled_session_end_allows_a_later_close();
     a_session_end_during_a_running_close_still_writes_the_checkpoint();
     return panedock::test::summary("core_shutdown_coordinator_test");
 }

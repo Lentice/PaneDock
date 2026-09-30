@@ -75,6 +75,7 @@ class ShutdownCoordinator final {
     // WM_ENDSESSION(TRUE). Windows ends the process when the handler returns,
     // so the checkpoint is written first and teardown is best effort.
     void end_session_confirmed() noexcept;
+    void end_session_cancelled() noexcept;
 
     void run(ShutdownAction action) noexcept;
 

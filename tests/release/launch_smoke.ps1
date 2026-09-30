@@ -60,6 +60,8 @@ $existing = @(Get-Process -Name $appName -ErrorAction SilentlyContinue)
 if ($existing.Count -ne 0) {
     throw "Cannot run launch smoke test while $appName is already running."
 }
+$env:LOCALAPPDATA = Join-Path (Split-Path $resolvedAppPath) 'smoke-localappdata'
+New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
 
 # --diagnostic makes the app emit "panedock.live_view_count=N". The teardown
 # path emits a final sample after destroy_panes, which is the only automated
@@ -104,6 +106,9 @@ try {
     if ($process.ExitCode -ne 0) {
         throw "$appName exited after smoke test with code $($process.ExitCode)."
     }
+    if (-not (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'PaneDock\session.json'))) {
+        throw "$appName did not write to the isolated session directory."
+    }
 
     $counts = @()
     if (Test-Path $stdoutPath) {
@@ -123,8 +128,9 @@ try {
 }
 finally {
     $process.Refresh()
-    if (-not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    if ($process.HasExited) {
+        Remove-Item $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    } else {
+        Write-Warning "$appName is still running (PID $($process.Id)); close it normally before retrying."
     }
-    Remove-Item $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
 }

@@ -33,6 +33,18 @@ ShutdownAction ShutdownSequence::step(ShutdownEvent event) noexcept {
             return ShutdownAction::defer;
 
         case ShutdownEvent::end_session:
+            if (!state_.end_session_pending) {
+                // A cancelled OS session end must not cancel a user close
+                // that was already in progress.
+                state_.end_session_owns_close =
+                    !state_.closing_ && !state_.shutdown_deferred &&
+                    !state_.shutdown_message_queued &&
+                    !state_.shutdown_prompt_active &&
+                    !state_.shutdown_save_attempted &&
+                    !state_.close_after_file_operation;
+                state_.cancel_file_operation_before_end_session =
+                    state_.cancel_file_operation;
+            }
             state_.end_session_pending = true;
             if (state_.closing_ || state_.quit_requested) return ShutdownAction::none;
             if (state_.file_operation_call_active ||
@@ -54,7 +66,19 @@ ShutdownAction ShutdownSequence::step(ShutdownEvent event) noexcept {
             return ShutdownAction::defer;
 
         case ShutdownEvent::end_session_cancelled:
-            if (!state_.closing_) state_.end_session_pending = false;
+            if (!state_.end_session_pending) return ShutdownAction::none;
+            if (!state_.closing_) {
+                state_.end_session_pending = false;
+                if (state_.end_session_owns_close) {
+                    state_.shutdown_deferred = false;
+                    state_.shutdown_message_queued = false;
+                    state_.shutdown_save_attempted = false;
+                    state_.close_after_file_operation = false;
+                }
+                state_.cancel_file_operation =
+                    state_.cancel_file_operation_before_end_session;
+                state_.end_session_owns_close = false;
+            }
             return ShutdownAction::none;
 
         case ShutdownEvent::drag_started:

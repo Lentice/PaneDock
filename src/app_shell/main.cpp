@@ -3624,8 +3624,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 if (wparam) {
                     run_end_session_shutdown(*state);
                 } else {
-                    state->shutdown_coordinator.sequence().step(
-                        panedock::core::ShutdownEvent::end_session_cancelled);
+                    state->shutdown_coordinator.end_session_cancelled();
                 }
             }
             return 0;

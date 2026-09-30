@@ -11,6 +11,8 @@
 #error "windows.h reached the core test seam"
 #endif
 
+#include <windows.h>
+
 namespace {
 using namespace panedock::core;
 
@@ -64,6 +66,14 @@ struct DurabilityProbe final {
 };
 
 DurabilityProbe* active_probe = nullptr;
+HANDLE locked_temporary = INVALID_HANDLE_VALUE;
+
+bool lock_temporary_hook(const std::filesystem::path& path) {
+    locked_temporary = CreateFileW(path.c_str(), GENERIC_READ,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    return locked_temporary != INVALID_HANDLE_VALUE;
+}
 
 bool fake_durability_hook(const std::filesystem::path& path) {
     if (active_probe == nullptr) return false;
@@ -421,6 +431,27 @@ void test_backup_replace_failure_preserves_primary() {
         directory.path / kSessionTemporaryFileName));
 }
 
+void test_final_rename_failure_restores_primary() {
+    TemporaryDirectory directory;
+    SessionDocument document{sample(), {}, false};
+    EXPECT(write_session(directory.path, document));
+    document.application.window_placement.width = 1500;
+    EXPECT(write_session(directory.path, document));
+    const auto primary = directory.path / kSessionFileName;
+    const auto backup = directory.path / kSessionBackupFileName;
+    const std::string previous_primary = read_text(primary);
+
+    document.application.window_placement.width = 1600;
+    EXPECT(!write_session(directory.path, document, lock_temporary_hook));
+    if (locked_temporary != INVALID_HANDLE_VALUE) {
+        CloseHandle(locked_temporary);
+        locked_temporary = INVALID_HANDLE_VALUE;
+    }
+    EXPECT(read_text(primary) == previous_primary);
+    EXPECT(read_session(directory.path).source == SessionSource::primary);
+    EXPECT(read_text(backup) != previous_primary);
+}
+
 // write_session rotates by rename, so a crash between its two renames leaves
 // no primary, a complete temporary and the previous backup. The temporary is
 // the newest complete document there, so it is what read_session must return,
@@ -478,6 +509,7 @@ int main() {
     test_read_fallbacks();
     test_atomic_write_and_backup();
     test_backup_replace_failure_preserves_primary();
+    test_final_rename_failure_restores_primary();
     test_corrupt_primary_does_not_replace_good_backup();
     test_interrupted_write_recovers_from_temporary();
     test_durability_hook_order_and_failure();

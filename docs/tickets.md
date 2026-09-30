@@ -255,6 +255,9 @@
 | PD-215 | `SessionWriter` 擁有擷取抑制與擷取步驟（覆寫 PD-201 的界線） | 7 | `done` | PD-201, PD-206, PD-214 | [PD-215](tickets/PD-215-session-writer-owns-capture-suppression-and-the-capture-step.md) |
 | PD-216 | `ShutdownCoordinator` 擁有 shutdown 的 effect 順序（覆寫 2026-09-03 F2） | 7 | `done` | PD-203, PD-214, PD-215 | [PD-216](tickets/PD-216-shutdown-coordinator-owns-the-effect-order.md) |
 | PD-217 | `run_group_transition` 在 core 執行 Group 切換的步驟 | 7 | `done` | PD-206, PD-215 | [PD-217](tickets/PD-217-group-transition-runs-its-steps-in-core.md) |
+| PD-218 | 取消系統結束工作階段後恢復關閉狀態 | 7 | `done` | PD-203, PD-216 | [PD-218](tickets/PD-218-cancelled-session-end-restores-close-state.md) |
+| PD-219 | session 最後改名失敗時還原主檔 | 7 | `done` | PD-137 | [PD-219](tickets/PD-219-restore-primary-after-session-rename-failure.md) |
+| PD-220 | launch smoke 使用隔離的 session 儲存位置 | 7 | `done` | PD-218 | [PD-220](tickets/PD-220-isolate-launch-smoke-session-storage.md) |
 
 
 ## Dependency lanes

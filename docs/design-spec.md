@@ -291,6 +291,7 @@ notification，不 disable 主視窗與 pane。deferred realize 可在 notificat
 ## 10 資料儲存
 
 - 位置:`%LOCALAPPDATA%\PaneDock`
+- `LOCALAPPDATA` 採用行程環境變數的絕對路徑；變數缺席或無效時退回 Windows LocalAppData Known Folder。測試可在自己的行程覆寫此變數，避免碰觸互動使用者的 session。
 - 格式:版本化 JSON,含 schema version,自首個版本即支援遷移
 - 寫入:原子替換(`session.json.tmp` 寫入並 flush,再 rename 為 `session.json`),
   保留上一版為備份。備份由舊 primary 直接 rename 成 `session.json.bak` 產生,

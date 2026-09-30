@@ -176,6 +176,39 @@ void test_end_session_paths_and_save_failure() {
     EXPECT(!save_failure.state().shutdown_clean_marker_armed);
 }
 
+void test_cancelled_session_end_unwinds_only_its_own_close() {
+    ShutdownSequence sequence;
+    sequence.step(ShutdownEvent::shell_call_entered);
+    EXPECT(sequence.step(ShutdownEvent::end_session) == ShutdownAction::defer);
+    sequence.step(ShutdownEvent::save_started);
+    sequence.step(ShutdownEvent::end_session_cancelled);
+    EXPECT(!sequence.is_shutting_down());
+    EXPECT(!sequence.state().shutdown_save_attempted);
+    EXPECT(sequence.step(ShutdownEvent::shell_call_left) == ShutdownAction::none);
+    EXPECT(sequence.step(ShutdownEvent::close_requested) == ShutdownAction::defer);
+
+    ShutdownSequence prior_close;
+    queue_shutdown(prior_close);
+    prior_close.step(ShutdownEvent::end_session);
+    prior_close.step(ShutdownEvent::end_session_cancelled);
+    EXPECT(prior_close.state().shutdown_deferred);
+    EXPECT(prior_close.state().shutdown_message_queued);
+
+    ShutdownSequence transfer_close;
+    transfer_close.step(ShutdownEvent::file_operation_started);
+    transfer_close.step(ShutdownEvent::transfer_close_after_transfer);
+    transfer_close.step(ShutdownEvent::end_session);
+    EXPECT(transfer_close.state().cancel_file_operation);
+    transfer_close.step(ShutdownEvent::end_session_cancelled);
+    EXPECT(transfer_close.state().close_after_file_operation);
+    EXPECT(!transfer_close.state().cancel_file_operation);
+
+    ShutdownSequence no_confirmed_end;
+    no_confirmed_end.step(ShutdownEvent::transfer_cancel_and_close);
+    no_confirmed_end.step(ShutdownEvent::end_session_cancelled);
+    EXPECT(no_confirmed_end.state().cancel_file_operation);
+}
+
 void test_repeated_close_does_not_repeat_teardown() {
     ShutdownSequence sequence;
     queue_shutdown(sequence);
@@ -220,6 +253,7 @@ int main() {
     test_drag_defers_close_until_all_targets_finish();
     test_transfer_decisions();
     test_end_session_paths_and_save_failure();
+    test_cancelled_session_end_unwinds_only_its_own_close();
     test_repeated_close_does_not_repeat_teardown();
     test_gate_covers_both_started_and_deferred_teardown();
     return panedock::test::summary("core_shutdown");

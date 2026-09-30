@@ -54,6 +54,8 @@ public:
         bool shutdown_clean_marker_armed{};
         bool main_window_destroyed{};
         bool end_session_pending{};
+        bool end_session_owns_close{};
+        bool cancel_file_operation_before_end_session{};
         unsigned shell_call_depth{};
         bool shutdown_deferred{};
         bool shutdown_message_queued{};

@@ -53,7 +53,6 @@ void ShutdownCoordinator::end_session_confirmed() noexcept {
     // between here and the write -- not the gates below, and not closing_. A
     // normal close already stuck in Shell teardown when WM_ENDSESSION arrives
     // would otherwise be killed with the marker still false (PD-203).
-    sequence_.step(ShutdownEvent::save_started);
     const bool saved = effects_.write_end_session_checkpoint();
 
     // Teardown only. A nested Shell pump or a live OLE drag still owns the
@@ -66,8 +65,18 @@ void ShutdownCoordinator::end_session_confirmed() noexcept {
     if (action != ShutdownAction::defer || state.shell_call_depth != 0 ||
         state.drag_in_progress)
         return;
+    // Only mark a save attempt if teardown will actually proceed. A cancelled
+    // OS session end can otherwise strand a Shell-gated close.
+    sequence_.step(ShutdownEvent::save_started);
     run(sequence_.step(saved ? ShutdownEvent::save_succeeded
                              : ShutdownEvent::save_failed));
+}
+
+void ShutdownCoordinator::end_session_cancelled() noexcept {
+    const bool was_pending = sequence_.state().end_session_pending;
+    sequence_.step(ShutdownEvent::end_session_cancelled);
+    if (was_pending && !sequence_.is_shutting_down())
+        effects_.show_closing_caption(false);
 }
 
 // The teardown order is the rule "never destroy the parent HWND while a view

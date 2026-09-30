@@ -627,7 +627,8 @@ bool write_session(const std::filesystem::path& directory,
     // A corrupt primary must never replace the last known-good backup, so
     // rotate only what parses. read_file also tells us whether a primary is
     // there at all, which makes a separate exists() call redundant.
-    if (read_file(primary)) {
+    const bool rotated_primary = read_file(primary).has_value();
+    if (rotated_primary) {
         error.clear();
         std::filesystem::rename(primary, backup, error);
         if (error) {
@@ -638,6 +639,11 @@ bool write_session(const std::filesystem::path& directory,
     error.clear();
     std::filesystem::rename(temporary, primary, error);
     if (!error) return true;
+    if (rotated_primary) {
+        std::error_code restore_error;
+        std::filesystem::rename(backup, primary, restore_error);
+        if (restore_error) return false;  // Keep the newest .tmp for recovery.
+    }
     std::filesystem::remove(temporary, error);
     return false;
 }
