@@ -1191,6 +1191,18 @@ void Pane::finish_tab_change(bool navigate_active) {
             (void)navigate_to(tab->location);
         }
         if (!active()) return;
+        // A tab change lands on the file list. Focus left in this pane's
+        // address bar would otherwise carry over to the new tab with its
+        // text unselected. Focus outside this pane (another pane, the
+        // sidebar, a drag-hover over this strip) is not taken.
+        const HWND focused = GetFocus();
+        if (focused != nullptr && IsChild(window_, focused)) {
+            {
+                ShellCallScope shell_call(reentry_guard());
+                explorer_host_.focus();
+            }
+            if (!active()) return;
+        }
     }
     tab_strip_ui().refresh();
     pane_host()->schedule_session_save();
