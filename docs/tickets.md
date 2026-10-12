@@ -258,6 +258,7 @@
 | PD-218 | 取消系統結束工作階段後恢復關閉狀態 | 7 | `done` | PD-203, PD-216 | [PD-218](tickets/PD-218-cancelled-session-end-restores-close-state.md) |
 | PD-219 | session 最後改名失敗時還原主檔 | 7 | `done` | PD-137 | [PD-219](tickets/PD-219-restore-primary-after-session-rename-failure.md) |
 | PD-220 | launch smoke 使用隔離的 session 儲存位置 | 7 | `done` | PD-218 | [PD-220](tickets/PD-220-isolate-launch-smoke-session-storage.md) |
+| PD-221 | Active pane 改用標題區淡藍底、實心 tab 與 inactive 淡化（覆寫 PD-063 頂線） | 7 | `done` | PD-063, PD-076, PD-188 | [PD-221](tickets/PD-221-active-pane-chrome-tint.md) |
 
 
 ## Dependency lanes

@@ -1622,6 +1622,11 @@ HRESULT apply_layout(HWND window, AppState& state,
                indexes.end();
     };
     const UINT dpi = GetDpiForWindow(window);
+    {
+        const std::size_t active = active_pane_index(group);
+        for (std::size_t index = 0; index < state.panes.size(); ++index)
+            state.panes[index].set_chrome_active(index == active);
+    }
     std::optional<LayoutFailure> first_failure;
     std::array<bool, kExplorerCount> changed_panes{};
     std::array<Pane::LayoutResult, kExplorerCount> pane_layouts{};
@@ -2005,8 +2010,8 @@ void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
         state.panes[pane].host().focus();
     }
     if (state.is_shutting_down()) return;
-    InvalidateRect(state.panes[previous].tab_strip(), nullptr, FALSE);
-    InvalidateRect(state.panes[pane].tab_strip(), nullptr, FALSE);
+    state.panes[previous].set_chrome_active(false);
+    state.panes[pane].set_chrome_active(true);
     InvalidateRect(window, nullptr, TRUE);
     schedule_session_save(state);
 }

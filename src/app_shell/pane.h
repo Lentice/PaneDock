@@ -10,6 +10,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <utility>
@@ -151,6 +152,10 @@ class Pane final {
     void refresh_status_bar() noexcept;
     bool handle_command(int id);
     bool draw_control(const DRAWITEMSTRUCT& item);
+    // PD-221: the coordinator decides which pane is active; the pane only
+    // paints its chrome for it. Invalidates the chrome when the flag changes.
+    void set_chrome_active(bool active) noexcept;
+    bool chrome_active() const noexcept { return chrome_active_; }
     std::optional<LRESULT> color_address_bar(HWND control, HDC dc) noexcept;
     // One shared address brush, released when the main window ends.
     static void release_address_bar_background_brush() noexcept;
@@ -227,8 +232,8 @@ class Pane final {
 
   private:
     void apply_container_region(int width, int height, int radius) noexcept;
-    void set_paint_geometry(const RECT& navigation_background,
-                            const RECT& pane_window_rect, UINT dpi) noexcept;
+    void set_paint_geometry(const PaneChromeRects& rects, UINT dpi) noexcept;
+    std::array<HWND, 10> chrome_children() const noexcept;
     void repaint_chrome() noexcept;
     // Called after a successful tab mutation. Closing an inactive tab only
     // refreshes chrome and saves; replacing the last tab still navigates.
@@ -263,6 +268,10 @@ class Pane final {
     std::optional<std::pair<NavigationGeneration, std::size_t>>
         history_rollback_;
     RECT navigation_background_{};
+    // Pane-local bottom of the navigation row: the card band tinted while the
+    // pane is active.
+    int header_bottom_{};
+    bool chrome_active_{};
     UINT paint_dpi_{96};
     HDC paint_dc_{nullptr};
     HBITMAP paint_bitmap_{nullptr};

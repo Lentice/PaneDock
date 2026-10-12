@@ -1,4 +1,5 @@
 #include "app_shell/pane.h"
+#include "app_shell/pane_chrome_palette.h"
 
 #include "app_shell/diagnostic_mode.h"
 #include "app_shell/pane_host.h"
@@ -170,14 +171,16 @@ void draw_navigation_fallback_glyph(const DRAWITEMSTRUCT& item,
 void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
                                  std::size_t glyph_kind,
                                  bool tracked_hovered,
+                                 bool pane_active,
                                  bool blend_with_footer = false) noexcept {
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
     const bool hovered = !disabled &&
                          ((item.itemState & ODS_HOTLIGHT) != 0 ||
                           tracked_hovered);
     const bool pressed = (item.itemState & ODS_SELECTED) != 0;
+    const auto chrome = pane_chrome_colors(pane_active);
     const COLORREF normal_background =
-        blend_with_footer ? kStatusBarBackground : RGB(255, 255, 255);
+        blend_with_footer ? kStatusBarBackground : chrome.background;
     if (blend_with_footer && hovered) {
         // Erasure is suppressed, so the rounded hover surface must also
         // supply its surrounding footer pixels.
@@ -205,8 +208,8 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
     } else {
         const COLORREF background_color =
             disabled ? normal_background
-            : !blend_with_footer && pressed ? RGB(226, 232, 240)
-            : !blend_with_footer && hovered ? RGB(242, 245, 248)
+            : !blend_with_footer && pressed ? chrome.button_pressed
+            : !blend_with_footer && hovered ? chrome.button_hover
                                             : normal_background;
         HBRUSH background = CreateSolidBrush(background_color);
         if (background != nullptr) {
@@ -215,10 +218,10 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
         }
     }
 
-    const COLORREF color = disabled
-                               ? RGB(190, 197, 209)
-                               : blend_with_footer ? kFooterActionGlyph
-                                                   : RGB(90, 102, 122);
+    const COLORREF color = disabled ? RGB(190, 197, 209)
+                           : pane_active && blend_with_footer
+                               ? kFooterActionGlyph
+                               : chrome.glyph;
     const int size =
         std::max(4, scaled_value(item.hwndItem, kNavigationGlyphSize));
     if (glyph_kind < kNavigationGlyphs.size() &&
@@ -232,7 +235,8 @@ void draw_navigation_icon_button(const DRAWITEMSTRUCT& item,
     draw_navigation_fallback_glyph(item, glyph_kind, color, size);
 }
 
-void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi) noexcept {
+void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi,
+                     bool pane_active) noexcept {
     const RECT rect = item.rcItem;
     HBRUSH background = CreateSolidBrush(kStatusBarBackground);
     if (background != nullptr) {
@@ -277,7 +281,7 @@ void draw_status_bar(const DRAWITEMSTRUCT& item, UINT dpi) noexcept {
     const HGDIOBJ old_font =
         font != nullptr ? SelectObject(item.hDC, font) : nullptr;
     SetBkMode(item.hDC, TRANSPARENT);
-    SetTextColor(item.hDC, RGB(100, 116, 139));
+    SetTextColor(item.hDC, pane_chrome_colors(pane_active).secondary_text);
     std::array<std::wstring_view, 3> segments{};
     std::size_t segment_count = 0;
     std::wstring_view remaining(text.data());
@@ -579,7 +583,7 @@ bool Pane::handle_command(int id) {
 bool Pane::draw_control(const DRAWITEMSTRUCT& item) {
     // The status bar is an SS_OWNERDRAW STATIC with no control id.
     if (item.hwndItem == status_bar()) {
-        draw_status_bar(item, GetDpiForWindow(item.hwndItem));
+        draw_status_bar(item, GetDpiForWindow(item.hwndItem), chrome_active_);
         return true;
     }
     if (item.CtlType != ODT_BUTTON) return false;
@@ -604,7 +608,8 @@ bool Pane::draw_control(const DRAWITEMSTRUCT& item) {
             return candidate.control == *control;
         });
     if (drawing == pane_button_drawings.end()) return false;
-    draw_navigation_icon_button(item, drawing->glyph, false, drawing->blend);
+    draw_navigation_icon_button(item, drawing->glyph, false, chrome_active_,
+                                drawing->blend);
     return true;
 }
 
@@ -612,7 +617,10 @@ std::optional<LRESULT> Pane::color_address_bar(HWND control, HDC dc) noexcept {
     if (control != address_bar()) return std::nullopt;
     SetBkMode(dc, OPAQUE);
     SetBkColor(dc, RGB(251, 252, 253));
-    SetTextColor(dc, RGB(76, 89, 107));
+    if (chrome_active_)
+        SetTextColor(dc, RGB(76, 89, 107));
+    else
+        SetTextColor(dc, pane_chrome_colors(false).text);
     return reinterpret_cast<LRESULT>(address_bar_background_brush());
 }
 
@@ -1469,6 +1477,25 @@ void Pane::apply_container_region(int width, int height, int radius) noexcept {
     }
 }
 
+std::array<HWND, 10> Pane::chrome_children() const noexcept {
+    return {tab_strip(),      address_bar_,      status_bar_,
+            back_button_,     forward_button_,   up_button_,
+            refresh_button_,  view_mode_button_, pinned_button_,
+            folder_context_button_};
+}
+
+void Pane::set_chrome_active(bool active) noexcept {
+    if (chrome_active_ == active) return;
+    chrome_active_ = active;
+    if (window_ == nullptr) return;
+    // Invalidate only: the next WM_PAINT picks the new colors up, so a layout
+    // pass that follows does not paint the chrome twice.
+    RedrawWindow(window_, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_NOCHILDREN);
+    for (HWND child : chrome_children())
+        if (child != nullptr) InvalidateRect(child, nullptr, FALSE);
+}
+
 void Pane::repaint_chrome() noexcept {
     if (window_ == nullptr) return;
     // Finish chrome painting before the next drag update, without a separate
@@ -1476,12 +1503,7 @@ void Pane::repaint_chrome() noexcept {
     RedrawWindow(window_, nullptr, nullptr,
                  RDW_INVALIDATE | RDW_ERASE | RDW_NOCHILDREN |
                      RDW_UPDATENOW);
-    const std::array<HWND, 10> chrome{
-        tab_strip(),      address_bar_,      status_bar_,
-        back_button_,     forward_button_,   up_button_,
-        refresh_button_,  view_mode_button_, pinned_button_,
-        folder_context_button_};
-    for (HWND child : chrome) {
+    for (HWND child : chrome_children()) {
         if (child != nullptr)
             RedrawWindow(child, nullptr, nullptr,
                          RDW_INVALIDATE | RDW_NOERASE | RDW_UPDATENOW);
@@ -1528,7 +1550,7 @@ Pane::LayoutResult Pane::stage_layout(const RECT& pane_rect, UINT dpi,
                           local(rects.explorer_container),
                           SWP_NOZORDER | SWP_NOACTIVATE);
     }
-    set_paint_geometry(rects.address_background, rects.pane_window, dpi);
+    set_paint_geometry(rects, dpi);
     set_visible(true);
     // Keep the footer action above its status-bar sibling.
     SetWindowPos(folder_context_button_, HWND_TOP, 0, 0, 0, 0,
@@ -1566,11 +1588,11 @@ void Pane::set_shell_visible(bool visible) noexcept {
     explorer_host_.set_visible(visible);
 }
 
-void Pane::set_paint_geometry(const RECT &navigation_background,
-                              const RECT &pane_window_rect, UINT dpi) noexcept {
-    navigation_background_ = navigation_background;
-    OffsetRect(&navigation_background_, -pane_window_rect.left,
-               -pane_window_rect.top);
+void Pane::set_paint_geometry(const PaneChromeRects &rects, UINT dpi) noexcept {
+    navigation_background_ = rects.address_background;
+    OffsetRect(&navigation_background_, -rects.pane_window.left,
+               -rects.pane_window.top);
+    header_bottom_ = rects.address_background.bottom - rects.pane_window.top;
     paint_dpi_ = dpi;
 }
 
@@ -1616,6 +1638,30 @@ void Pane::paint_background(HDC target) noexcept {
     OffsetRect(&shadow, shadow_offset, shadow_offset);
     fill_rounded_rect(paint_dc_, shadow, radius, RGB(235, 239, 244), CLR_NONE);
     fill_rounded_rect(paint_dc_, card, radius, RGB(255, 255, 255), CLR_NONE);
+    if (chrome_active_) {
+        // PD-221: tint the card under the tab strip and navigation row out to
+        // the card edge, so the card outset around those controls does not
+        // show as a white frame. Fills only, no stroke: a rounded fill whose
+        // bottom corners are squared off by a white fill. The status bar keeps
+        // its own background whether or not the pane is active.
+        const int header_bottom =
+            (std::clamp)(header_bottom_, static_cast<int>(card.top),
+                         static_cast<int>(card.bottom));
+        const RECT header{card.left, card.top, card.right,
+                          (std::min)(static_cast<int>(card.bottom),
+                                     header_bottom + radius)};
+        if (header_bottom > card.top)
+            fill_rounded_rect(paint_dc_, header, radius,
+                              kPaneActiveChromeBackground, CLR_NONE);
+        const RECT below{card.left, header_bottom, card.right,
+                         (std::min)(static_cast<int>(header.bottom),
+                                    static_cast<int>(card.bottom) - radius)};
+        if (below.bottom > below.top) {
+            SetDCBrushColor(paint_dc_, RGB(255, 255, 255));
+            FillRect(paint_dc_, &below,
+                     static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+        }
+    }
 
     if (card_border_pen_ == nullptr || card_border_pen_dpi_ != paint_dpi_) {
         if (card_border_pen_ != nullptr) DeleteObject(card_border_pen_);

@@ -1,6 +1,7 @@
 #include "app_shell/pane_tab_strip.h"
 
 #include "app_shell/pane.h"
+#include "app_shell/pane_chrome_palette.h"
 #include "app_shell/pane_host.h"
 #include "app_shell/window_helpers.h"
 #include "sidebar/sidebar.h"
@@ -38,18 +39,8 @@ constexpr int kTabCloseButtonSpace = 16;
 // PD-081: use a bold UI-font glyph so the add button keeps PD-062's larger,
 // heavier visual weight without relying on two independently capped strokes.
 constexpr int kTabPlusFontSize = 18;
-// PD-076: keep tab active colors aligned with sidebar.cpp without introducing
-// a cross-module palette; use a stronger neutral hover fill for tab contrast.
-constexpr COLORREF kTabActiveBackground = RGB(234, 241, 255);
-constexpr COLORREF kTabHoverBackground = RGB(226, 232, 240);
-constexpr COLORREF kTabActiveText = RGB(23, 75, 180);
-constexpr COLORREF kTabText = RGB(31, 41, 55);
-constexpr COLORREF kTabActiveBorder = RGB(191, 211, 245);
-constexpr COLORREF kTabBorder = RGB(232, 237, 242);
-constexpr COLORREF kTabAddHoverBackground = RGB(236, 240, 244);
-constexpr COLORREF kTabAddBorder = RGB(226, 232, 240);
-constexpr COLORREF kTabAddGlyph = RGB(31, 41, 55);
-constexpr int kActivePaneIndicatorHeight = 3;
+// PD-221: tab, add-button and strip colors come from pane_chrome_palette.h,
+// which marks the active pane by fill and text color only.
 constexpr UINT_PTR kTabAddTooltipIdBase = 1000;
 constexpr UINT_PTR kTabScrollTooltipIdBase = 1010;
 
@@ -315,7 +306,9 @@ void PaneTabStrip::paint_contents(HDC dc, const TabStripPaintState &state) noexc
     const HWND window = tab_strip_;
     RECT client{};
     GetClientRect(window, &client);
-    FillRect(dc, &client, GetSysColorBrush(COLOR_WINDOW));
+    const auto chrome = pane_chrome_colors(state.active_pane);
+    SetDCBrushColor(dc, chrome.background);
+    FillRect(dc, &client, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
     auto* pane_state = owner_->pane_state();
     if (pane_state == nullptr) return;
     const auto& pane = *pane_state;
@@ -351,14 +344,11 @@ void PaneTabStrip::paint_contents(HDC dc, const TabStripPaintState &state) noexc
         const bool active = pane.tabs[index].id == pane.active_tab_id;
         const bool hovered = !active &&
                              tab_hover_index() == index;
+        const auto colors =
+            pane_tab_colors(state.active_pane, active, hovered);
         if (rect.right > rect.left && rect.bottom > rect.top) {
-            const COLORREF fill_color =
-                active ? kTabActiveBackground
-                       : hovered ? kTabHoverBackground : RGB(244, 246, 248);
-            const COLORREF border_color =
-                active ? kTabActiveBorder : kTabBorder;
-            HBRUSH fill = CreateSolidBrush(fill_color);
-            HPEN border = CreatePen(PS_SOLID, border_width, border_color);
+            HBRUSH fill = CreateSolidBrush(colors.fill);
+            HPEN border = CreatePen(PS_SOLID, border_width, colors.border);
             if (fill != nullptr && border != nullptr) {
                 const HGDIOBJ old_brush = SelectObject(dc, fill);
                 const HGDIOBJ old_pen = SelectObject(dc, border);
@@ -375,7 +365,7 @@ void PaneTabStrip::paint_contents(HDC dc, const TabStripPaintState &state) noexc
                                   text_rect.left + text_padding);
         text_rect.right = std::max(text_rect.left,
                                    text_rect.right - text_padding);
-        SetTextColor(dc, active ? kTabActiveText : kTabText);
+        SetTextColor(dc, colors.text);
         DrawTextW(dc, visuals[index].text.c_str(), -1, &text_rect,
                   DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
@@ -426,8 +416,9 @@ void PaneTabStrip::paint_contents(HDC dc, const TabStripPaintState &state) noexc
     if (tab_hover_index().has_value() &&
         *tab_hover_index() == pane.tabs.size() &&
         add.right > add.left && add.bottom > add.top) {
-        HBRUSH background = CreateSolidBrush(kTabAddHoverBackground);
-        HPEN border = CreatePen(PS_SOLID, border_width, kTabAddBorder);
+        const auto hover = pane_add_button_hover_colors(state.active_pane);
+        HBRUSH background = CreateSolidBrush(hover.fill);
+        HPEN border = CreatePen(PS_SOLID, border_width, hover.border);
         if (background != nullptr && border != nullptr) {
             const HGDIOBJ old_brush = SelectObject(dc, background);
             const HGDIOBJ old_pen = SelectObject(dc, border);
@@ -452,27 +443,13 @@ void PaneTabStrip::paint_contents(HDC dc, const TabStripPaintState &state) noexc
         }
         const HGDIOBJ old_plus_font =
             plus_font != nullptr ? SelectObject(dc, plus_font) : nullptr;
-        SetTextColor(dc, kTabAddGlyph);
+        SetTextColor(dc, chrome.text);
         RECT plus_rect = add;
         OffsetRect(&plus_rect, 0, -scaled_value(window, 2));
         DrawTextW(dc, L"+", 1, &plus_rect,
                   DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
         if (old_plus_font != nullptr) SelectObject(dc, old_plus_font);
         if (plus_font != nullptr) DeleteObject(plus_font);
-    }
-    if (state.active_pane) {
-        const int indicator_height = std::min(
-            static_cast<int>(client.bottom),
-            scaled_value(window, kActivePaneIndicatorHeight));
-        if (indicator_height > 0) {
-            const RECT indicator{client.left, client.top, client.right,
-                                 client.top + indicator_height};
-            HBRUSH brush = CreateSolidBrush(RGB(37, 99, 235));
-            if (brush != nullptr) {
-                FillRect(dc, &indicator, brush);
-                DeleteObject(brush);
-            }
-        }
     }
     if (old_font != nullptr) SelectObject(dc, old_font);
 }
