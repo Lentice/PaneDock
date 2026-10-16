@@ -1,15 +1,15 @@
 # PaneDock Design Spec
 
-> Windows 多分割檔案總管：可切換的 Group ＋ 1–4 個原生 Shell 檔案檢視
+> Windows 多分割檔案總管：可切換的 Group ＋ 1–4 個 managed list pane
 
 | 欄位 | 內容 |
 |---|---|
-| 文件版本 | 1.0 |
+| 文件版本 | 1.1 |
 | 產品暫定名稱 | PaneDock |
-| 文件狀態 | Phase 0 可行性基準 |
+| 文件狀態 | 現行預設仍為 Shell view；Phase 8 managed-list 契約已核准 |
 | 目標平台 | Windows 10 22H2／Windows 11，x64 |
 | 技術基準 | C++20、原生 Win32、Shell COM（WRL ComPtr） |
-| 最後更新 | 2026-09-03 |
+| 最後更新 | 2026-10-16 |
 
 ## 1 文件目的
 
@@ -19,7 +19,7 @@
 
 ### 2.1 一句話定位
 
-一個視窗、左側可切換的 Group、右側 1–4 個原生 Windows Shell 檔案檢視。
+一個視窗、左側可切換的 Group、右側 1–4 個 PaneDock-managed file list；現行預設仍由 `IExplorerBrowser` 顯示 Shell view，直到 PD-241 實測 gate 通過。
 
 ### 2.2 要解決的問題
 
@@ -35,10 +35,11 @@ Q-Dir 解決了一半：一個視窗內 1–4 個 pane。但它沒有「已儲�
 
 ### 2.4 設計原則
 
-1. **不重刻檔案清單。** 檔案檢視一律承載原生 Shell view,原生行為由 Windows 提供。
-2. **閒置零成本。** 全天開著也不得消耗可量測的 CPU 或磁碟 I/O。
-3. **固定版型優於任意分割。** 八種版型涵蓋實際需求,遞迴分割只增加模型與實作複雜度。
-4. **記憶體由架構控制,不由語言控制。** 見 §6 NFR-002。
+1. **使用者體驗優先。** 清單輸入回應快、可漸進操作、選取與焦點穩定；慢 location 不凍結其他 pane。
+2. **CPU、記憶體與耗電次之。** 保留 NFR-001 閒置 gate，managed-list worker、結果佇列、列資料與影像快取都必須有界；驗收預算見 `docs/performance-baseline.md`。
+3. **架構與可維護性第三。** 在維持使用者體驗與資源門檻下，採用最小且可測的 managed-list 邊界。
+
+其他產品原則：**固定版型優於任意分割。** 八種版型涵蓋實際需求,遞迴分割只增加模型與實作複雜度。
 
 ### 2.5 目標使用者
 
@@ -55,7 +56,7 @@ Q-Dir 解決了一半：一個視窗內 1–4 個 pane。但它沒有「已儲�
 - Group 側邊欄:新增、重新命名、複製、刪除、排序
 - 八種固定版型:單一、左右、上下、左一右二、左二右一、上一下二、上二下一、四宮格
 - 每個 pane 一個以上的 tab
-- 承載原生 `IExplorerBrowser` 檔案檢視
+- 以 PaneDock-managed list 呈現 Shell namespace item；現行 `IExplorerBrowser` 路徑在 PD-241 gate 通過、PD-242 移除前仍是正式預設
 - 網址輸入與上一頁／下一頁／上層導覽
 - 原生縮圖、原生右鍵選單、跨 pane 拖放
 - 持久化並還原全部必要狀態
@@ -82,11 +83,11 @@ Q-Dir 解決了一半：一個視窗內 1–4 個 pane。但它沒有「已儲�
 
 ### 4.1 視窗結構
 
-單一頂層視窗。左側為可調整寬度的 Group 側邊欄,右側為 pane 區域。兩者之間有可拖曳的分隔線,寬度屬於全域設定而非個別 Group 的狀態。側邊欄、pane 分隔線與頂層視窗邊框的調整皆為 live resize；每個中繼尺寸的 app chrome 與 Shell view 必須同步更新,不得以節流造成階梯式跳動或以 erase 造成閃爍。
+單一頂層視窗。左側為可調整寬度的 Group 側邊欄,右側為 pane 區域。兩者之間有可拖曳的分隔線,寬度屬於全域設定而非個別 Group 的狀態。側邊欄、pane 分隔線與頂層視窗邊框的調整皆為 live resize；每個中繼尺寸的 app chrome 與 pane content 必須同步更新,不得以節流造成階梯式跳動或以 erase 造成閃爍。現行 legacy pane content 是 Shell view，目標為 managed list。
 
 ### 4.2 Group 切換
 
-側邊欄單擊即切換。切換必須感覺即時——實作上以保活既有 view 並重新導覽達成,不重建 HWND。
+側邊欄單擊即切換。切換必須感覺即時；慢 location 的列舉不得阻塞 UI。現行 Shell view 實作以保活既有 view 並重新導覽達成；managed-list path 保留穩定 pane 與 UI，先呈現可用狀態，再接收符合目前 location generation 的結果。
 
 ### 4.3 版型切換
 
@@ -110,12 +111,15 @@ pane 之間的分隔線可拖曳,比例記錄於該 Group。
 
 ### 4.8 原生行為
 
-pane 內部的一切互動由 Shell view 處理:多選手勢、右鍵選單、拖放、就地重新命名、鍵盤操作。PaneDock 不介入。
+在 managed-list path，PaneDock 負責列繪製、選取／多選、焦點、排序後的選取與可見 anchor、鍵盤導覽及 accessibility exposure。Shell 負責 Shell location/item identity、原生檔案操作與原生 context menu。右鍵選單的目標解析與相容性接線限於維持現有 Windows 選單及 shell-extension 行為；本規格不授權 custom menu、重排、過濾、timeout 或隔離策略。managed list 仍須支援既有拖放、剪貼簿與 rename/delete/copy/move 行為，透過既有 Shell `IDataObject`／`IFileOperation` 邊界完成。
+
+在 managed-list 尚未成為預設時，現行 `IExplorerBrowser` 仍負責所有 pane 內互動。兩條路徑都必須保留本節下方的 folder background context menu affordance；其中既有選單內容與外觀不在本次遷移中重新設計。
 
 每個 pane footer 提供一個 folder background context menu affordance，讓小 pane
-在 Shell view 沒有可用空白處時仍能開啟目前資料夾的原生背景選單。這是有限的
-host-level 入口：PaneDock 只觸發同一個 Shell view 的 background `IContextMenu`，
-不重建、過濾或包裝選單內容。
+在內容區沒有可用空白處時仍能開啟目前資料夾的原生背景選單。這是有限的
+host-level 入口：legacy path 觸發現有 Shell view 的 background `IContextMenu`；
+managed-list path 只解析目前 Shell location 並接上 Windows 原生背景選單。
+兩者都不重建、過濾、包裝或重新設計選單內容。
 
 ### 4.9 錯誤狀態
 
@@ -149,7 +153,7 @@ Group 右鍵選單的每個操作皆搭配簡潔的單色線條圖示：重新�
 
 pane 分隔線可拖曳,比例以 0.0–1.0 的相對值儲存於該 Group,視窗縮放時維持比例。
 
-調整 pane 分隔線、Group 側邊欄或頂層視窗時,版面幾何在同一個 layout frame 以 parent-scoped deferred-position 批次提交；導覽按鈕、網址列、分頁列、狀態列與 Shell view 不得在同一個中繼 frame 暴露不一致的位置。Win32 的 `DeferWindowPos` 要求同一批次內的視窗共用 parent,因此主視窗 child 與各 Explorer container child 各自使用一批,但在同一個 layout pass 完成提交。拖曳中的更新只重排幾何,內容重算與持久化在拖曳結束時處理。
+調整 pane 分隔線、Group 側邊欄或頂層視窗時,版面幾何在同一個 layout frame 以 parent-scoped deferred-position 批次提交；導覽按鈕、網址列、分頁列、狀態列與 pane content 不得在同一個中繼 frame 暴露不一致的位置。Win32 的 `DeferWindowPos` 要求同一批次內的視窗共用 parent,因此主視窗 child 與 pane 內容 host child 各自使用一批,但在同一個 layout pass 完成提交；legacy Explorer container 仍依其 parent 使用獨立批次。拖曳中的更新只重排幾何,內容重算與持久化在拖曳結束時處理。
 
 #### FR-004a 退化尺寸
 
@@ -161,7 +165,7 @@ pane 分隔線可拖曳,比例以 0.0–1.0 的相對值儲存於該 Group,視�
 
 ### FR-006 原生 Shell 檔案檢視
 
-每個已 realize 的 tab 透過 `IExplorerBrowser` 承載 Shell view,提供原生圖示與縮圖、原生右鍵選單與已安裝的 shell extension、多選、就地重新命名。
+PaneDock-managed list 顯示 Shell namespace item，漸進更新可操作的列，並提供目前可用的排序、selection、鍵盤及 accessibility 行為；Shell identity 不使用顯示名稱或持久化 PIDL。原生圖示／縮圖、標準 Shell context menu 與已安裝 shell extension、剪貼簿、拖放及 file operation 必須保持可用。慢 location 或 metadata enrichment 不得阻塞 list input。直到 PD-241 gate 通過前，這仍是目標契約，`IExplorerBrowser` 是現行預設實作。
 
 ### FR-007 檔案操作
 
@@ -193,7 +197,7 @@ Group 與其狀態自動儲存,無需使用者手動存檔。視窗位置、大�
 
 ### FR-014 鍵盤
 
-提供 pane 間移動焦點、切換 tab、新增／關閉 tab、上層導覽的快速鍵。快速鍵一律送往 active pane。
+提供 pane 間移動焦點、切換 tab、新增／關閉 tab、上層導覽的快速鍵。快速鍵一律送往 active pane。managed-list path 自行維持列表 focus、selection 與鍵盤導航；legacy host path 仍由 Shell view 接收其原生 accelerator。
 
 `Tab`／`Shift+Tab` 在可見 pane 間正向／反向循環，優先於 Shell accelerator，避免先將焦點移到排序欄位標題。位址列有焦點時不攔截；`Ctrl+Tab`／`Ctrl+Shift+Tab` 維持 pane 內分頁切換。此為 2026-09-07 使用者回報後對 PD-101「Shell 攔截 Tab 時不覆蓋」決策的覆寫。
 
@@ -205,11 +209,11 @@ Group 與其狀態自動儲存,無需使用者手動存檔。視窗位置、大�
 
 ### NFR-002 記憶體
 
-記憶體由架構決定,不由語言決定。恰有一個條件保證上界:**只有可見 pane 的 active tab 持有 live `IExplorerBrowser`**。其餘 tab 僅以資料存在。縮圖 pipeline 的快取與尺寸上限須明確設定,不得沿用預設。實際數字見 `docs/performance-baseline.md`,全部須以量測取代估計。
+記憶體由架構與明確上限共同決定,不由語言決定。managed-list 的列與屬性快照、worker 數與待處理工作、回傳 batch、icon／thumbnail cache 均有明確上限；inactive tabs 不持續 enumerate，保留資料也計入總額。量測場景、預算、工具及目前未驗證狀態見 `docs/performance-baseline.md`。在 legacy host 移除前仍遵守「只有可見 pane 的 active tab 持有 live `IExplorerBrowser`」；legacy 數字不代表 managed-list 已通過。
 
 ### NFR-003 反應性
 
-Group 切換、版型切換、tab 切換不得因為某個 Shell location 緩慢或無法連線而凍結 UI。
+Group／版型／tab 切換與 pane input 不得因為某個 Shell location、metadata provider 緩慢或無法連線而凍結 UI。command acknowledgement 的 p95 預算為 100 ms；本機 location 第一批可操作列的 p95 預算為 cold 250 ms、warm 100 ms。慢／不可達 location 必須先顯示 loading 或可復原錯誤，其第一列無固定 SLA；其他 pane 的操作仍須符合 100 ms acknowledgement 預算。測量按 `docs/testing.md` 的 managed-list gate 程序，未實測前均為未驗證。
 
 ### NFR-004 DPI
 
@@ -231,6 +235,7 @@ Per-Monitor-V2 DPI awareness。視窗跨越不同 DPI 的螢幕時,全部 pane �
 
 - C++20,原生 Win32,無 UI 框架層。
 - Shell COM 以 `Microsoft::WRL::ComPtr` 管理生命週期。
+- UI 與既有 Shell host 維持單一 STA。唯一核准的背景工作邊界是 managed-list worker；它只傳遞有界、擁有值型結果，並在自己的 COM apartment 建立與釋放介面。
 - 單一執行檔。使用者資料為 `%LOCALAPPDATA%\PaneDock` 下的版本化 JSON。
 
 選型理由與被否決的替代方案(Rust、C#、C++/WinRT、Delphi、Zig、C# UI + C++ DLL 混合)記錄於 `docs/adr/0001-cpp-wrl-win32-over-rust-and-csharp.md`。
@@ -248,15 +253,16 @@ Per-Monitor-V2 DPI awareness。視窗跨越不同 DPI 的螢幕時,全部 pane �
 | `app_shell` | WinMain、STA 初始化、訊息迴圈、主視窗、命令路由 | 資料模型計算、Shell 呼叫 |
 | `core` | Group／pane／tab 資料模型、版型矩形計算、session 序列化與遷移 | **任何 HWND、COM 或 `windows.h`** |
 | `sidebar` | Group 列表繪製與切換 | Group 資料的權威狀態 |
-| `explorer_host` | 每個已 realize pane 的 `IExplorerBrowser`、site 物件、生命週期、事件 | 產品層決策、持久化 |
+| `explorer_host` | 遷移完成前每個已 realize pane 的 `IExplorerBrowser`、site 物件、生命週期、事件 | 產品層決策、持久化 |
+| `managed_list`（核准目標） | 有界 item 列舉與屬性工作、排序／列狀態所需的 owned value batch、navigation generation 檢查 | HWND、`PaneState`／`AppState`、UI-owned COM 指標、session 持久化、file operations、原生選單改造 |
 | `shell_core` | `IShellItem`、PIDL、Shell location identity、Shell 變更通知 | 對外傳遞原始 COM 指標 |
 | `file_operations` | `IFileOperation`、剪貼簿、OLE 拖放 | 直接檔案系統呼叫 |
 
-`core` 刻意不含 COM——它是本專案主要的自動測試 seam。`shell_core` 對外提供 location 與 identity 這類值,而非原始 COM 指標,這同時保留一條退路:若 `IExplorerBrowser` 的宿主契約證明不可行,改為在 `IShellFolder`／`IContextMenu`／`IFileOperation` 之上自建清單檢視時,其上層無須重寫。
+`core` 刻意不含 COM——它是本專案主要的自動測試 seam。`shell_core` 對外提供 location 與 identity 這類值,而非原始 COM 指標。managed-list worker 是唯一核准的應用程式背景工作邊界：其路徑固定為 `src/managed_list/list_worker.cpp`；worker 必須自行初始化並擁有其 COM apartment／interface，不得接收 UI-owned COM pointer 或 HWND，也不得呼叫 UI、讀寫 pane／app state。輸入與輸出為自有值，輸出帶 location identity 與 generation；UI 丟棄過期結果。工作者數、排隊工作、回傳 batch、保留列與影像快取必須有界，具體預算見 `docs/performance-baseline.md`。取消可先使工作結果失效，不代表可中斷已進入 Shell／provider 的 OS 呼叫。關閉可等待時間必須有界且不得先釋放 worker 仍會使用的資源；若無法在 provider 卡住時安全通過 release gate，則維持 legacy 預設。
 
 ### 9.2 執行緒模型
 
-單一 STA UI 執行緒。所有 Shell view 與 COM 回呼都在該執行緒。不引入 async runtime。緩慢的 location 解析以 Shell 自身的非同步機制處理,不自建工作執行緒池。
+UI、`app_shell` 與 `explorer_host` 維持單一 STA；現有 `IExplorerBrowser` 與 callback 仍只在該 STA 使用。managed-list 的列舉／屬性工作可在有界 worker 執行緒進行；每個 worker 必須自行初始化符合其所用 Shell API 契約的 COM apartment，介面只在其擁有的 apartment 使用與釋放。worker 與 UI 間只交換可複製的值型請求／結果，不共享 HWND、pane state 或 COM pointer。這不是允許全程式任意多執行緒化，也不引入 async runtime 或無界 pool。取消、過期 generation、queue capacity 和 shutdown 都遵守上段契約。
 
 ### 9.3 啟動序列
 
@@ -264,10 +270,10 @@ Per-Monitor-V2 DPI awareness。視窗跨越不同 DPI 的螢幕時,全部 pane �
 2. 設定 Per-Monitor-V2 DPI awareness
 3. 讀取 session document(失敗則退回備份,再失敗則以預設 Group 啟動)
 4. 建立主視窗與側邊欄,套用視窗位置
-5. 套用 active Group 的版型,**先 realize active pane 的 active tab**
-6. 其餘 pane 延後 realize,避免被網路或離線路徑阻塞
+5. 套用 active Group 的版型；現行預設 **先 realize active pane 的 active tab**
+6. 其餘 legacy pane 延後 realize,避免被網路或離線路徑阻塞；managed-list path 只對可見 active tab 排程優先工作，並讓慢來源保持可取消／可忽略的 loading 狀態
 
-主視窗顯示後才開啟 Shell realize gate；啟動復原、不乾淨關閉、storage 或
+主視窗顯示後才開啟 legacy Shell realize gate；managed-list path 在主視窗可互動後才派送可見 tab 工作。啟動復原、不乾淨關閉、storage 或
 部分 pane／drag-and-drop 失敗屬可復原問題，使用只有 `OK` 的 modeless
 notification，不 disable 主視窗與 pane。deferred realize 可在 notification
 顯示後繼續完成，後續 warning 更新同一通知；使用者按 `OK` 後通知關閉。
@@ -277,16 +283,17 @@ notification，不 disable 主視窗與 pane。deferred realize 可在 notificat
 ### 9.4 關閉序列
 
 1. 擷取現行狀態並原子寫入 session document
-2. **destroy 全部 live `IExplorerBrowser`**(每個曾 `Initialize` 的都必須 `Destroy`)
-3. destroy pane HWND
-4. destroy 主視窗
-5. 退出訊息迴圈
-6. `CoUninitialize`
+2. **停止 managed-list 新工作並使待處理結果失效；關閉期間不得無限等待 worker**
+3. **destroy 全部 live `IExplorerBrowser`**(每個曾 `Initialize` 的都必須 `Destroy`)
+4. destroy pane HWND
+5. destroy 主視窗
+6. 退出訊息迴圈
+7. `CoUninitialize`
 
-順序不可調換。view 存活期間 destroy parent HWND 是已知的崩潰面。
+順序不可調換。legacy view 存活期間 destroy parent HWND 是已知的崩潰面。worker 請求與 result sink 必須自行擁有所需資料，shutdown 先關閉派送並使 generation 失效，不得留下指向 pane／window 的 callback；只能在有界時間內等待，亦不得強制終止卡在 provider 的 thread。若需要無界 wait 或無法安全退出，PD-241 gate 失敗，維持 legacy 預設。
 `WM_CLOSE` 先讓主視窗顯示 `PaneDock — Closing...` 並回到訊息迴圈一個 turn，
 再開始同步 Shell teardown；
-只有全部 live view destroy 且主視窗 destroy 後才退出程序。
+只有全部 live legacy view destroy 且主視窗 destroy 後才退出 UI message loop。
 
 ## 10 資料儲存
 
@@ -317,7 +324,7 @@ notification，不 disable 主視窗與 pane。deferred realize 可在 notificat
 
 ## 12 測試策略
 
-`core` 是主要自動測試 seam，且必須保持不含 HWND、COM 與 `windows.h`。其他不需 live Shell view、可透過公開介面驅動的單元也應測試。由 `shell32` 定義的整合行為改在真實桌面人工驗證，不以假的 `IExplorerBrowser` 或易 flaky 的端到端 UI 自動化取代。範圍、環境與驗收流程見 `docs/testing.md`。
+`core` 是主要自動測試 seam，且必須保持不含 HWND、COM 與 `windows.h`。managed-list 項目狀態、generation 過濾、排序／selection anchor 與有界容量應透過 Pane 可觀察的公開操作或純值結果邊界測試；不假造 `IExplorerBrowser`。Shell namespace、圖示、縮圖、原生選單／extension、file operations、OneDrive 與真正焦點／accessibility 行為須在真實桌面驗證。不能由 legacy host 測試推論 managed-list PASS，也不能由未執行的實機步驟推論 PASS。完整的功能矩陣與 gate 流程見 `docs/testing.md`。
 
 ## 13 驗收標準
 

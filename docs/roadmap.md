@@ -72,3 +72,18 @@ Delivered by PD-022 (unresolvable-location error panel with Retry, the only Phas
 - `tests/release/release_evidence.ps1` producing a PASS
 
 Done means the release evidence document reports PASS rather than INCOMPLETE. Until every blocking NFR-001 metric is measured, the gate fails closed by design.
+
+## Phase 8 — Managed file list migration (planned, 2026-10-16)
+
+The user approved managing the file list directly, with priorities UX, then CPU/memory/power, then architecture and maintainability.
+The existing application still hosts Shell views; planning these tickets does not mean the new list has shipped or earlier release gates have passed.
+
+- Align product rules and terminology, then expand Pane content entry points while retaining the current default.
+- Deliver a local batch-loaded list, tab/Group restore, bounded slow-location work, selection, sorting, icons, thumbnails and notifications.
+- Preserve virtual Shell locations, OneDrive, Shell file operations, inline rename, OLE drag/drop, accessibility and mixed-DPI behavior.
+- Keep native context menu behavior; only reconnect current item/background identities as required by replacing the view. Menu redesign, acceleration and process isolation are excluded.
+- Switch the default only after compatibility and measured resource/responsiveness gates pass, then remove the unused IExplorerBrowser path.
+
+The approved feature spec is [Managed file list](research/2026-10-16-managed-list-spec.md).
+Implementation tickets are PD-222–PD-242; individual status and blocking edges live only in the [Ticket overview](tickets.md).
+This migration explicitly reopens the old fallback-only direction through the product-contract ticket; it does not rewrite completed prototype decisions.

@@ -13,6 +13,13 @@ $ErrorActionPreference = 'Stop'
 # handed to shell32, which releases them at times we do not control.
 $exempt = (Resolve-Path -LiteralPath $ComRefCountedPath).Path
 
+# PD-222 narrows the planned worker exception to this one future file. Do not
+# exempt a directory or caller-selected SourcePath: app_shell, explorer_host,
+# core, and every other file keep the single-STA policy scan. The worker path
+# is currently absent; when it is added, only that exact source file may use
+# concurrency machinery for bounded managed-list work.
+$managedListWorker = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\src\managed_list\list_worker.cpp'))
+
 $banned = @(
     'std::thread',
     'std::jthread',
@@ -36,7 +43,7 @@ $banned = @(
 
 $hits = @()
 foreach ($file in Get-ChildItem -LiteralPath $SourcePath -File -Recurse -Include *.h, *.cpp) {
-    if ($file.FullName -eq $exempt) { continue }
+    if ($file.FullName -eq $exempt -or $file.FullName -eq $managedListWorker) { continue }
     foreach ($pattern in $banned) {
         $found = Select-String -LiteralPath $file.FullName -SimpleMatch -Pattern $pattern
         if ($found) {
@@ -60,8 +67,9 @@ if ($hits.Count -ne 0) {
            [Environment]::NewLine +
            'The hazard in this application is reentrancy, not concurrency. ' +
            'Use ShellCallScope / shell_call_depth, not a lock. ' +
-           'If a new trust boundary genuinely needs an atomic, exempt it here ' +
-           'and say why in the ticket.')
+           'Only src/managed_list/list_worker.cpp may use worker synchronization ' +
+           'for the managed-list contract; do not broaden this exemption. ' +
+           'Shell COM refcount remains the separate shell32 trust-boundary exception.')
 }
 
 if ((Get-Content -LiteralPath $ComRefCountedPath -Raw) -notmatch 'std::atomic') {

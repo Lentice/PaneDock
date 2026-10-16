@@ -13,7 +13,7 @@ One of up to four stable identity slots on the right side that host file views. 
 _Avoid_: window, view, frame, split
 
 **tab**:
-One navigable location within a pane. A tab owns its location, view mode, sort order and navigation history. Only the visible pane's active tab is realized as a live Shell view; the rest exist as persisted data.
+One navigable location within a pane. A tab owns its location, view mode, sort order and navigation history. Only the visible pane's active tab has active content work; inactive tabs retain bounded state and may retain a bounded list snapshot, but do not run enumeration continuously. During the legacy-host period, only the visible pane's active tab is realized as a live Shell view.
 _Avoid_: page, document
 
 **layout template**:
@@ -39,11 +39,18 @@ _Avoid_: group switch (that is only one of the four kinds), refresh, update
 ## Shell terms
 
 **Shell view**:
-The Windows-supplied folder view hosted inside a realized tab, obtained through `IExplorerBrowser`. Everything the Shell view draws — icons, thumbnails, columns, selection rendering — belongs to Windows, not to PaneDock.
-_Avoid_: file list, listing, explorer control
+The legacy Windows-supplied folder view hosted inside a realized tab through `IExplorerBrowser`. In this path Windows draws icons, thumbnails, columns and selection. It remains the default until the managed-list release gate passes and is removed only by the later contract step.
+_Avoid_: explorer control
+
+**managed list**:
+The PaneDock-owned presentation of items returned for a Shell location. It owns row layout, selection, focus, keyboard navigation and sorting while keeping item identity and file operations in the Windows Shell domain. Background results are copied values tagged to a location and navigation generation; stale results are discarded. It does not imply a custom file-operation engine or a redesigned context menu.
+
+**list item identity**:
+A stable value used to keep selection and the visible anchor attached to the same Shell item while results are inserted, sorted or refreshed. It is not a display name or a persisted PIDL; persistence continues to use Shell location identity and the existing session contract.
+_Avoid_: row index (as a persistent identity)
 
 **realized**:
-A tab is realized when it holds a live `IExplorerBrowser` instance with an HWND. An unrealized tab exists only as persisted state. "Realize" is the verb for the transition; it happens on activation, never in bulk.
+A tab is **realized** in the legacy implementation when it holds a live `IExplorerBrowser` instance with an HWND. An unrealized legacy tab exists only as persisted state. This term describes that host lifecycle and does not define the future managed-list lifecycle.
 _Avoid_: loaded, opened, instantiated, live (as a verb)
 
 **Shell location**:

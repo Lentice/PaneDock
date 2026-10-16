@@ -259,7 +259,39 @@
 | PD-219 | session 最後改名失敗時還原主檔 | 7 | `done` | PD-137 | [PD-219](tickets/PD-219-restore-primary-after-session-rename-failure.md) |
 | PD-220 | launch smoke 使用隔離的 session 儲存位置 | 7 | `done` | PD-218 | [PD-220](tickets/PD-220-isolate-launch-smoke-session-storage.md) |
 | PD-221 | Active pane 改用標題區淡藍底、實心 tab 與 inactive 淡化（覆寫 PD-063 頂線） | 7 | `done` | PD-063, PD-076, PD-188 | [PD-221](tickets/PD-221-active-pane-chrome-tint.md) |
+| PD-222 | 對齊自建列表的規格與工程限制 | 8 | `done` | — | [PD-222](tickets/PD-222-managed-list-product-contract.md) |
+| PD-223 | Pane 內容入口 expand，保持既有行為 | 8 | `planned` | PD-222 | [PD-223](tickets/PD-223-pane-content-expand.md) |
+| PD-224 | 單 pane 本機資料夾分批列表 | 8 | `planned` | PD-223 | [PD-224](tickets/PD-224-managed-list-local-batches.md) |
+| PD-225 | 自建列表接通 tab、Group 與 session 復原 | 8 | `planned` | PD-224 | [PD-225](tickets/PD-225-managed-list-tab-group-restore.md) |
+| PD-226 | 慢網路、容量耗盡與 pending shutdown | 8 | `planned` | PD-224 | [PD-226](tickets/PD-226-managed-list-slow-location-capacity.md) |
+| PD-227 | 列表選取、鍵盤與 accessibility | 8 | `planned` | PD-224 | [PD-227](tickets/PD-227-managed-list-selection-keyboard.md) |
+| PD-228 | 基本排序與穩定更新 | 8 | `planned` | PD-227 | [PD-228](tickets/PD-228-managed-list-basic-sort.md) |
+| PD-229 | 可見項目圖示與 overlay | 8 | `planned` | PD-224 | [PD-229](tickets/PD-229-managed-list-visible-icons.md) |
+| PD-230 | 縮圖與既有 view mode 對應 | 8 | `planned` | PD-229 | [PD-230](tickets/PD-230-managed-list-thumbnails-view-modes.md) |
+| PD-231 | 昂貴屬性欄位與排序 | 8 | `planned` | PD-228 | [PD-231](tickets/PD-231-managed-list-expensive-properties.md) |
+| PD-232 | 本機變更通知與恢復掃描 | 8 | `planned` | PD-228 | [PD-232](tickets/PD-232-managed-list-change-notifications.md) |
+| PD-233 | tab 列表 snapshot 的全域有界快取 | 8 | `planned` | PD-225, PD-228, PD-232 | [PD-233](tickets/PD-233-managed-list-tab-cache.md) |
+| PD-234 | 虛擬 Shell location 導覽 | 8 | `planned` | PD-225 | [PD-234](tickets/PD-234-managed-list-shell-namespace.md) |
+| PD-235 | OneDrive placeholder 瀏覽 | 8 | `planned` | PD-229, PD-234 | [PD-235](tickets/PD-235-managed-list-onedrive-placeholders.md) |
+| PD-236 | 自建選取接回剪貼簿與 Shell 檔案操作 | 8 | `planned` | PD-227, PD-234 | [PD-236](tickets/PD-236-managed-list-shell-file-operations.md) |
+| PD-237 | 自建列表 inline rename | 8 | `planned` | PD-232, PD-236 | [PD-237](tickets/PD-237-managed-list-inline-rename.md) |
+| PD-238 | 跨 pane 與外部 drag/drop | 8 | `planned` | PD-225, PD-236 | [PD-238](tickets/PD-238-managed-list-drag-drop.md) |
+| PD-239 | 原生選單目標相容性接線 | 8 | `planned` | PD-227, PD-234 | [PD-239](tickets/PD-239-managed-list-native-menu-compatibility.md) |
+| PD-240 | 新列表的 live resize 與 mixed DPI | 8 | `planned` | PD-224 | [PD-240](tickets/PD-240-managed-list-live-resize-dpi.md) |
+| PD-241 | 自建列表相容性及效能 gate，通過後切預設 | 8 | `planned` | PD-226, PD-230, PD-231, PD-233, PD-235, PD-237, PD-238, PD-239, PD-240 | [PD-241](tickets/PD-241-managed-list-rollout-gate.md) |
+| PD-242 | contract：移除舊 Shell view 路徑 | 8 | `planned` | PD-241 | [PD-242](tickets/PD-242-managed-list-remove-shell-view.md) |
 
+
+## 自建列表遷移（2026-10-16 使用者核准）
+
+本地 tracker 承接已核准的 21 個切片，詳見 [功能規格](research/2026-10-16-managed-list-spec.md)。
+PD-222～PD-242 的狀態與依賴只以以上 Ticket 總覽為準；先 expand 保留舊內容路徑，
+再逐項接通新列表，通過相容性與效能 gate 才切換預設，最後 contract 移除舊 Shell view。
+優先順序為 UX → CPU／memory／power → 架構與可維護性。
+右鍵選單不改造；PD-239 只做替換 view 所必要的目標／生命週期相容性接線。
+這是使用者直接變更產品方向，不再以 Phase 0 No-Go 或 PD-209 量測作為「允許規劃自建列表」的前提；
+實際效能改善仍須量測，既有 Shell 路徑未隨切票改變。舊 completed ticket 與未結案工作不在本次重寫。
+GitHub tracker／triage 尚未設定，本系列未發布為 GitHub issues；本地工作可依總覽 frontier 開始。
 
 ## Dependency lanes
 
@@ -415,7 +447,7 @@ rename 輪替在兩個 rename 之間存在「primary 暫時不存在」的視窗
 | 依消費者把 `PaneHost` 拆成多個介面（2026-09-29 架構審查候選 5） | **2026-09-30 評估後不做。** PD-214／PD-215 已把重入與擷取抑制移出 `PaneHost`，剩下 13 個方法只有 `Pane` 與 `PaneTabStrip` 兩個消費者，實作者也只有 `AppState` 與 `TestPaneHost`。拆開不搬動任何邏輯，只多出幾個指標要接線；刪除測試下沒有一個拆出的介面會變深。要重開必須先有第二個實作者，或一個因介面過寬而實際發生的缺陷。 |
 | `IExplorerBrowserEvents` 沒有 request token：FIFO 歸屬可能錯配 | 2026-09-18 第二輪稽核由兩個 agent 從不同方向指到同一根源。Codex：`NavigationLedger` 的 FIFO 假設「被 supersede 的導覽一定會收到 complete 或 failed」，若 Shell 省略該事件就出現 queue hole，之後所有回呼持續錯位、`completed_` 追不上 `latest_`。Claude：`NavigationLedger::take()` 在 queue 空時鑄新 generation，而 `Pane::navigation_request_is_current`（`pane.cpp:811-815`）對`generation > pending_navigation_.generation` 的反應是**收養**——改寫成當下的 active group 與 tab 並回 `true`；若 `BrowseToObject` 的 pump 期間 view 自己起了一次導覽，`mark_pending()` 會把那個 pending 錯記到我們的 record 上，第二個完成事件就走鑄新 generation ＋ 收養的路，把舊 Group 的位置寫進新 Group 的 tab。**兩者皆標 PLAUSIBLE**：`IExplorerBrowserEvents` 沒有請求身分可比對，純靜態追蹤無法證明該交錯真的會發生。**觸發條件**：先加一個 `--diagnostic` 的 event trace（記錄 `OnNavigationPending`／complete／failed 的序列與當時的 ledger 狀態），在實機上快速切換慢速位置，證實 queue hole 或錯配確實出現。屆時的落點是 `panedock::core::NavigationLedger`（PD-210 已把這個狀態機收斂成單一、可測的型別），修法方向是「新的 host-issued navigation 取代尚未開始／已被 supersede 的舊 record」加上「`Pane` 側收養前先確認 `pending_navigation_.group_id` 仍等於當前 group」。不要只在 `Pane` 層再加 generation 判斷——錯配發生在 `ExplorerHost`。 |
 | Group 切換的導覽改為非阻塞（逐 pane posted message，不再序列化四次同步 `BrowseToObject`） | 2026-09-18 雙方稽核一致認定為最大效能問題：`navigate_realized_panes`(`main.cpp:732-751`)在 UI 執行緒逐一等待，而 `BrowseToObject`(`explorer_host.cpp:638`)沒有時限，1000 ms 的 `dwTickCountDeadline`(`explorer_host.cpp:24,55`)只掛在 `SHCreateItemFromParsingName` 上，網路 provider 常無視 `BIND_OPTS`。四個 pane 都指向不可達網路路徑時UI 阻塞無上限，違反 NFR-003。**修法方向已收斂**：Codex 主張把解析搬到 thread-pool，**不採用**——`IExplorerBrowser` 是 STA-bound，`BrowseToObject` 仍要回到 UI 執行緒排隊，換不到對應價值；Claude 的方向較小：把迴圈改成「issue 第一個 pane 後，其餘透過 `kDeferredLayoutMessage` 式的 posted message 逐一觸發」，讓每次 Shell 呼叫之間迴圈能回到 idle。**觸發條件**：PD-209 的實測數字填入 `docs/performance-baseline.md:14-16`，且「one unreachable network path」一列確認為 FAIL——`docs/performance-baseline.md` 規定任何優化提案必須先有本表的數字。屆時開票並依該數字定驗收門檻。 |
-| `IShellFolder` 自建清單檢視(fallback) | 僅在 PD-001 判定 No-Go 時開。 |
+| `IShellFolder` 自建清單檢視(fallback) | **2026-10-16 使用者決定自行管理列表，已拆為 PD-222～PD-242。** 舊「僅 PD-001 No-Go 才開」觸發條件由 PD-222 明確覆寫；不預先指定所有位置必須使用同一個列舉 backend。 |
 | 統一 header 版型按鈕圖示與導覽列圖示的筆畫粗細 | PD-075(2026-08-26)刻意排除:版型按鈕的五個圖示是**版面示意圖**(一格／雙欄／上下／2×2／更多),沒有任何 `Segoe MDL2 Assets` 字符能表達「這個版型長什麼樣」,只能手繪。但 `draw_layout_glyph` 用 `CreatePen(PS_SOLID, 1, ...)` 而 `draw_navigation_icon_button` 是 2px,兩者並列時粗細不同是真的。觸發條件:PD-075 完成後若使用者仍覺得 header 與 pane 的圖示不成套,再開票調整手繪線寬(注意 1px 是 `RoundRect` 版面示意圖能保持清晰的實際上限,加粗可能反而糊掉,屆時需先截圖比對)。 |
 | 側邊欄寬度的全域設定持久化 | 若使用者回報每次啟動都要重拖再開;目前預設值可接受。 |
 | Group 圖示與顏色 | Spec 未列為 MVP;若 Group 數量成長到難以用文字辨識再開。 |

@@ -2,15 +2,15 @@
 
 ## Product boundary
 
-PaneDock is a file manager shell around Windows' own folder views. It is not a file manager implementation. Every behavior a user sees inside a pane belongs to Windows; every behavior outside a pane belongs to us.
+PaneDock is a file manager built around Groups and stable panes. The current pane content is the Windows Shell folder view; the approved Phase 8 direction is a PaneDock-managed list over Shell namespace items. PaneDock owns list presentation, selection and keyboard interaction. Windows Shell remains responsible for namespace identity and behavior, native context menus, and file operations. The managed list remains opt-in until PD-241's measured gate passes; PD-242 separately removes the legacy host.
 
 Priority order when two goals conflict:
 
-1. Idle resource use — it sits open all day
-2. Stability of the Shell host — a crash costs the user their arrangement
-3. Restore correctness for required state
-4. Keyboard and mouse efficiency
-5. Visual polish
+1. User experience: fast interaction, clear progressive results, correct selection and keyboard behavior
+2. CPU, memory and power use, including the existing event-driven idle requirement
+3. Architecture and maintainability
+
+Compatibility and stability remain release gates. The priority order does not waive an existing NFR or turn an unmeasured result into a pass.
 
 ## Architecture rules
 
@@ -21,6 +21,7 @@ Priority order when two goals conflict:
 | `core` | Group/pane/tab model, layout rectangle computation, session serialization and migration | **Any HWND, COM type, or `windows.h` include** |
 | `sidebar` | Group list rendering, selection input | Authoritative Group state (that is `core`) |
 | `explorer_host` | `IExplorerBrowser` instances, site objects, view lifetime, browser events | Product decisions, persistence, layout math |
+| `managed_list` (planned) | Bounded list enumeration and property work, using worker-owned COM apartments as needed; owned value batches tagged with location identity and generation | HWNDs, `PaneState` / `AppState`, UI-owned COM pointers, persistence, file operations, native-menu redesign |
 | `shell_core` | `IShellItem`, PIDL, Shell location identity, change notification | Handing raw COM pointers to callers above it |
 | `file_operations` | `IFileOperation`, clipboard, OLE drag and drop | Direct filesystem calls, path string assembly |
 
@@ -40,12 +41,14 @@ to the main window.
 
 The `core` boundary is load-bearing, not stylistic. It is the primary automated test seam (`docs/testing.md`); a COM type leaking into it destroys that seam.
 
+The UI, `app_shell`, and `explorer_host` remain single-threaded STA code. The only planned concurrency boundary is the exact future source file `src/managed_list/list_worker.cpp`, for list work only. A worker owns its COM initialization and interfaces, returns copied value data, and cannot call into UI state. Its worker count, pending requests, result batches, retained rows and image caches have explicit caps in `docs/performance-baseline.md`. Cancellation invalidates the result's interest/generation; it does not promise that a provider's in-flight OS call can be interrupted. Shutdown may not block indefinitely on a provider. `tests/release/single_threaded_check.ps1` keeps the concurrency scan active everywhere else.
+
 ## COM lifetime rules
 
-- Every `IExplorerBrowser` that was `Initialize`d must be `Destroy`ed. There is no exception and no cleanup path that covers a missed `Destroy`.
+- While the legacy host is present, every `IExplorerBrowser` that was `Initialize`d must be `Destroy`ed. There is no exception and no cleanup path that covers a missed `Destroy`.
 - Use `Microsoft::WRL::ComPtr` for every interface pointer. Raw `AddRef`/`Release` pairs are not acceptable in new code.
 - Never destroy a parent HWND while a hosted view is alive.
-- Shell APIs re-enter our message loop. Any host-side lock, and any "close the view then wait for its event" sequence, must be reentrancy-safe or it will deadlock.
+- Shell APIs re-enter our message loop. Any "close the view then wait for its event" sequence must be reentrancy-safe or it will deadlock. Do not add locks to the STA to address this; use the existing Shell-call deferral gates. Worker synchronization is confined to the managed-list worker boundary and must not be used to expose partially updated UI state.
 
 ## UI language
 

@@ -17,6 +17,26 @@ Rows that still read **Not measured** are estimates or unobserved planning conte
 | Cold start to first painted pane | — | — | Not measured | Requires visible-paint instrumentation, outside PD-026. |
 | Thumbnail pipeline memory contribution | — | — | 0 bytes (not a reliable reading) | PD-003 2026-08-29: WorkingSet64(thumbnail folder) − WorkingSet64(text-only folder), but both folders had already been visited earlier in the same run, so thumbnails were pre-cached before this comparison. Not usable as evidence for a thumbnail-cache ticket; a fresh-process comparison is needed. |
 
+## Managed-list acceptance targets (PD-222; all not measured)
+
+These are release acceptance budgets for the managed-list path, not observations. None has been measured because the managed-list implementation is not present. Do not overwrite the legacy measurements above or use them as managed-list evidence. The legacy path remains the normal default until PD-241 records a complete passing gate; PD-242 removes it separately.
+
+| Metric | Acceptance target | Measurement | Result at PD-222 |
+|---|---|---|---|
+| Pane / tab / Group command acknowledgement | p95 ≤ 100 ms, including while another pane is loading a slow source | QPC from command dispatch to UI acknowledgement; at least 30 samples per scenario, report all samples, p50 and p95 | Not measured |
+| Local first operable row, cold process | p95 ≤ 250 ms | Fresh process and first visit to a mixed 1,000-item local directory; QPC request-to-first-operable-row; ≥30 runs | Not measured |
+| Local first operable row, warm | p95 ≤ 100 ms | Repeat after one completed enumeration under the same process; QPC; ≥30 runs | Not measured |
+| Slow / disconnected location UI response | Other-pane command acknowledgement p95 ≤ 100 ms; show loading or recoverable error. First row has no fixed SLA. | Four Panes with one slow/disconnected network source; ≥30 other-pane actions while pending; record source state and all timings | Not measured |
+| Process private bytes | ≤ 256 MiB after 2 minutes settled and peak during enumeration, with Four Panes: one 100,000-item local location and three 1,000-item locations, mixed file types and images enabled | `Get-Process` `PrivateMemorySize64` samples once per second; record settled and peak, new process for each run | Not measured |
+| Managed row/property snapshots | ≤ 128 MiB across visible and inactive tabs; inactive tabs count toward the limit | Managed-list owned-byte counters or equivalent allocation accounting, recorded beside process private bytes | Not measured |
+| Icon/thumbnail cache | ≤ 96 MiB | Cache-owned byte counter while exercising the media/icon-heavy sample | Not measured |
+| Queued result batches | ≤ 16 MiB retained | Queue-owned byte counter while the large-folder and slow-source samples are active | Not measured |
+| Worker capacity | ≤ 4 active operations and ≤ 16 pending requests | Record high-water marks during four-pane navigation and rapid tab/Group changes | Not measured |
+| Idle CPU / disk I/O | Existing NFR-001 unchanged: average CPU < 0.1% over 10 minutes and 0 process I/O bytes | Managed-list-aware adaptation of `tests/release/release_evidence.ps1`; no debugger, no interaction, managed-list opt-in enabled | Not measured |
+| Idle power | No polling or continuously scheduled worker activity; zero idle CPU/disk I/O remains the blocking power proxy | Supporting Windows Performance Recorder energy trace where available; report method and trace, but do not call it a pass/fail watt measurement | Not measured |
+
+The test corpus, environments, required sample counts, future command and PASS/FAIL/UNVERIFIED rules are defined in `docs/testing.md` under “Managed-list preservation and release gate”. The future PD-241 harness must emit a complete result and fail closed on a missing sample or environment. A direct energy number is supplemental only; this repository has no validated per-process watt measurement method yet.
+
 ## Local tab-switch Shell probe (2026-09-29)
 
 `panedock_tab_switch_probe` reuses the product's `ExplorerHost` in a separate
@@ -58,10 +78,10 @@ An earlier selection review reasoned about memory by comparing language runtimes
 
 In the four-pane configuration the native host process is roughly 5–20 MB while the four Shell views plus thumbnails plus in-process third-party extensions are 150–500 MB. The runtime is about 5–8% of the total. Choosing a language to save runtime memory buys a rounding error and pays for it in integration risk.
 
-The three decisions that actually bound memory are architectural and are stated in `docs/design-spec.md` §NFR-002:
+For the legacy implementation, the decisions that bound memory are architectural and are stated in `docs/design-spec.md` §NFR-002:
 
 1. Only the visible pane's active tab holds a live `IExplorerBrowser`.
 2. The thumbnail pipeline has explicit cache and size caps.
 3. Third-party shell extensions load lazily.
 
-Any future optimization proposal must show a measured number from this table before it is written as a ticket. Reasoning from deployment size, from runtime baselines, or from another project's figures is not evidence here.
+For the managed-list implementation, use the explicit acceptance budgets above and measure them on the defined corpus. Reasoning from deployment size, runtime baselines or another project's figures is not evidence here.
