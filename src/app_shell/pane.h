@@ -7,6 +7,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <commctrl.h>
 #include <wrl/client.h>
 
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "managed_list/list_worker.h"
 #include "app_shell/pane_chrome_geometry.h"
 #include "app_shell/pane_control_id.h"
 #include "app_shell/pane_tab_strip.h"
@@ -82,9 +84,10 @@ class Pane final {
     // address is stable for the group's lifetime). Null when this slot is not
     // showing anything (no active Group, or a layout with fewer panes).
     void bind(panedock::core::PaneState *state) noexcept {
+        if (bound_state_ != state) cancel_managed_list();
         bound_state_ = state;
     }
-    void unbind() noexcept { bound_state_ = nullptr; }
+    void unbind() noexcept { cancel_managed_list(); bound_state_ = nullptr; }
     panedock::core::PaneState *pane_state() const noexcept {
         return bound_state_;
     }
@@ -119,6 +122,22 @@ class Pane final {
     void navigate_history(bool back);
     void navigate_up();
     void refresh_view();
+
+    // Process-local development content choice; set before realize(). The source
+    // seam accepts controlled owned batches in behavioral tests, never a Shell host.
+    void use_managed_list(std::unique_ptr<managed_list::Source> source = {});
+    struct ListSnapshot final {
+        managed_list::Request request;
+        std::vector<managed_list::Row> rows;
+        managed_list::Phase phase{managed_list::Phase::idle};
+        DWORD error{};
+    };
+    // Borrowed until the next Pane operation; never keep across a Shell pump.
+    const ListSnapshot& list_snapshot() const noexcept { return list_; }
+    HANDLE content_event() const noexcept;
+    void process_content_results() noexcept;
+    bool open_list_row(std::size_t row);
+    std::optional<LRESULT> list_notification(NMHDR* notification) noexcept;
 
     // Content operations stay behind Pane; callers never borrow the concrete
     // Shell host or its location across a message-pumping call.
@@ -235,6 +254,16 @@ class Pane final {
     bool suppress_history() const noexcept { return suppress_history_record_; }
 
   private:
+    void cancel_managed_list() noexcept;
+    HRESULT start_managed_list(const core::ShellLocation& location,
+                               NavigationGeneration generation);
+    void update_managed_list() noexcept;
+    bool managed_list_enabled_{};
+    std::unique_ptr<managed_list::Source> list_source_;
+    ListSnapshot list_;
+    HWND list_window_{};
+    std::size_t list_name_bytes_{};
+    HRESULT realize_managed_list(const RECT& rect, const core::ShellLocation& location);
     // Owned identity only: no borrowed TabState survives a Shell pump.
     panedock::core::NavigationRequest content_request() const;
     bool content_request_is_current(

@@ -471,6 +471,10 @@ LRESULT CALLBACK pane_window_proc(HWND window, UINT message, WPARAM wparam,
         return 0;
     }
     case WM_NOTIFY:
+        if (pane != nullptr) {
+            const auto handled = pane->list_notification(reinterpret_cast<NMHDR*>(lparam));
+            if (handled) return *handled;
+        }
         return SendMessageW(GetParent(window), message, wparam, lparam);
     case WM_DESTROY:
         if (pane != nullptr) {
@@ -631,7 +635,7 @@ void Pane::refresh_navigation_chrome() {
     if (auto* bound = pane_state()) {
         const std::wstring parsing_name =
             active_tab()->location.parsing_name;
-        if (parsing_name.starts_with(L"::")) {
+        if (!managed_list_enabled_ && parsing_name.starts_with(L"::")) {
             ShellCallScope shell_call(reentry_guard());
             text = panedock::shell_core::display_text_for_parsing_name(
                 parsing_name);
@@ -649,6 +653,7 @@ void Pane::refresh_navigation_chrome() {
 void Pane::refresh_status_bar() noexcept {
     if (pane_host() == nullptr) return;
     if (status_bar() == nullptr) return;
+    if (managed_list_enabled_) { update_managed_list(); return; }
     SelectionSnapshot counts;
     const HRESULT hr = selection_snapshot(counts);
     if (!active()) return;
@@ -706,6 +711,11 @@ HRESULT Pane::selection_snapshot(SelectionSnapshot &snapshot) noexcept try {
     snapshot = {};
     if (!active()) return E_ABORT;
     if (active_tab() == nullptr) return E_UNEXPECTED;
+    if (managed_list_enabled_) {
+        snapshot.total = static_cast<int>(list_.rows.size());
+        snapshot.selected = list_window_ ? ListView_GetSelectedCount(list_window_) : 0;
+        return S_OK;
+    }
     const auto request = content_request();
     panedock::explorer_host::ExplorerHost::ItemCounts counts;
     HRESULT hr = E_UNEXPECTED;
@@ -724,18 +734,31 @@ HRESULT Pane::selection_snapshot(SelectionSnapshot &snapshot) noexcept try {
 }
 
 panedock::core::ShellLocation Pane::content_location() const {
+    if (managed_list_enabled_) return active() && realized_ ? list_.request.location : core::ShellLocation{};
     return active() && realized_ ? explorer_host_.location()
                                  : panedock::core::ShellLocation{};
 }
 
 void Pane::focus_content() noexcept {
     if (!active() || active_tab() == nullptr) return;
+    if (managed_list_enabled_) { if (list_window_) SetFocus(list_window_); return; }
     ShellCallScope shell_call(reentry_guard());
     explorer_host_.focus();
 }
 
 HRESULT Pane::translate_content_accelerator(MSG *message) noexcept try {
     if (!active() || active_tab() == nullptr) return S_FALSE;
+    if (managed_list_enabled_) {
+        if (message && message->message == WM_KEYDOWN && message->hwnd == list_window_) {
+            if (message->wParam == VK_RETURN) {
+                const int row = ListView_GetNextItem(list_window_, -1, LVNI_FOCUSED);
+                if (row >= 0) open_list_row(static_cast<std::size_t>(row));
+                return S_OK;
+            }
+            if (message->wParam == VK_BACK) { navigate_up(); return S_OK; }
+        }
+        return S_FALSE;
+    }
     const auto request = content_request();
     HRESULT hr = S_FALSE;
     {
@@ -749,6 +772,7 @@ HRESULT Pane::translate_content_accelerator(MSG *message) noexcept try {
 }
 
 void Pane::process_content_retry() noexcept {
+    if (managed_list_enabled_) return;
     if (!active() || active_tab() == nullptr) return;
     ShellCallScope shell_call(reentry_guard());
     explorer_host_.process_retry_request();
@@ -756,6 +780,7 @@ void Pane::process_content_retry() noexcept {
 
 bool Pane::show_folder_context_menu(HWND owner, POINT screen) noexcept try {
     if (!active() || active_tab() == nullptr || !realized_) return false;
+    if (managed_list_enabled_) return false; // Native menu bridge belongs to PD-239.
     const auto request = content_request();
     focus_content();
     if (!content_request_is_current(request)) return false;
@@ -879,6 +904,7 @@ HRESULT Pane::navigate_to(
     if (pane_host() == nullptr) return E_UNEXPECTED;
     if (!active()) return E_ABORT;
     const auto target = location;
+    if (managed_list_enabled_) return start_managed_list(target, begin_navigation());
     ShellCallScope shell_call(reentry_guard());
     return explorer_host_.navigate(target, begin_navigation());
 }
@@ -887,6 +913,14 @@ HRESULT Pane::navigate_up_one_level() {
     if (pane_host() == nullptr) return E_UNEXPECTED;
     if (!active()) return E_ABORT;
     ShellCallScope shell_call(reentry_guard());
+    if (managed_list_enabled_) {
+        auto path = list_.request.location.parsing_name;
+        while (path.size() > 3 && path.back() == L'\\') path.pop_back();
+        const auto slash = path.find_last_of(L'\\');
+        if (slash == std::wstring::npos || path.size() <= 3) return S_FALSE;
+        path.resize(std::max<std::size_t>(3, slash));
+        return navigate_to({std::move(path), {}, {}});
+    }
     return explorer_host_.navigate_up(begin_navigation());
 }
 
@@ -978,7 +1012,8 @@ void Pane::navigate_history(bool back) {
     HRESULT hr = E_UNEXPECTED;
     {
         ShellCallScope shell_call(reentry_guard());
-        hr = explorer_host_.navigate(target, generation);
+        hr = managed_list_enabled_ ? start_managed_list(target, generation)
+                                   : explorer_host_.navigate(target, generation);
     }
     if (!active()) return;
     if (FAILED(hr)) navigation_failed(generation);
@@ -995,6 +1030,10 @@ void Pane::navigate_up() {
 }
 
 void Pane::refresh_view() {
+    if (managed_list_enabled_) {
+        if (active() && active_tab()) (void)navigate_to(active_tab()->location);
+        return;
+    }
     if (!active()) return;
     if (bound_state_ == nullptr) return;
     {
@@ -1006,6 +1045,7 @@ void Pane::refresh_view() {
 }
 
 void Pane::capture_view_mode() {
+    if (managed_list_enabled_) return;
     if (!active()) return;
     if (pane_state() == nullptr || !realized()) return;
     FOLDERVIEWMODE mode{};
@@ -1025,6 +1065,7 @@ void Pane::capture_view_mode() {
 }
 
 void Pane::capture_sort() {
+    if (managed_list_enabled_) return;
     if (!active()) return;
     if (pane_state() == nullptr || !realized()) return;
     std::string column;
@@ -1042,6 +1083,7 @@ void Pane::capture_sort() {
 }
 
 void Pane::apply_view_mode() {
+    if (managed_list_enabled_) return;
     if (!active()) return;
     auto *tab = active_tab();
     if (tab == nullptr || !realized()) return;
@@ -1060,6 +1102,7 @@ void Pane::apply_view_mode() {
 }
 
 void Pane::apply_sort() {
+    if (managed_list_enabled_) return;
     if (!active()) return;
     auto *tab = active_tab();
     if (tab == nullptr || !realized() || tab->sort_column.empty()) return;
@@ -1073,6 +1116,7 @@ void Pane::apply_sort() {
 }
 
 void Pane::capture_location() {
+    if (managed_list_enabled_) return;
     if (pane_host() == nullptr ||
         (capture_gate_ != nullptr && capture_gate_->suppressed()))
         return;
@@ -1092,6 +1136,7 @@ void Pane::capture_location() {
 }
 
 void Pane::set_view_mode(const panedock::shell_core::ViewModeOption &option) {
+    if (managed_list_enabled_) return;
     if (!active()) return;
     if (pane_state() == nullptr) return;
     HRESULT hr = E_UNEXPECTED;
@@ -1424,7 +1469,7 @@ void Pane::refresh_navigation_buttons() noexcept {
                  !suppress_history_record_ &&
                      panedock::core::can_navigate_tab_forward(*tab));
     EnableWindow(up_button_, TRUE);
-    EnableWindow(folder_context_button_, realized_);
+    EnableWindow(folder_context_button_, realized_ && !managed_list_enabled_);
 }
 
 void Pane::destroy() noexcept {
@@ -1445,6 +1490,9 @@ void Pane::destroy() noexcept {
     //      child, including explorer_container_, so §9.4 requires both the
     //      browser and its container to be gone first.
     tab_strip_ui_.revoke_drag_hover_target();
+    cancel_managed_list();
+    list_source_.reset();
+    destroy_window(list_window_);
     explorer_host_.destroy();
     realized_ = false;
     destroy_window(status_bar_);
@@ -1477,6 +1525,10 @@ void Pane::destroy() noexcept {
 
 HRESULT Pane::realize(const RECT &local_rect,
                       const panedock::core::ShellLocation &location) noexcept {
+    if (managed_list_enabled_) {
+        try { return realize_managed_list(local_rect, location); }
+        catch (...) { derealize(); return E_OUTOFMEMORY; }
+    }
     explorer_host_.set_shell_call_callback(
         this, [](void* context, bool entering) noexcept {
             auto* pane = static_cast<Pane*>(context);
@@ -1491,6 +1543,7 @@ HRESULT Pane::realize(const RECT &local_rect,
 }
 
 HRESULT Pane::configure_realized_view() noexcept {
+    if (managed_list_enabled_) { refresh_navigation_chrome(); update_managed_list(); return S_OK; }
     if (!active() || !realized_) return E_ABORT;
     refresh_navigation_buttons();
     {
@@ -1520,6 +1573,8 @@ HRESULT Pane::configure_realized_view() noexcept {
 }
 
 void Pane::derealize() noexcept {
+    cancel_managed_list();
+    destroy_window(list_window_);
     explorer_host_.destroy();
     realized_ = false;
 }
@@ -1638,7 +1693,7 @@ Pane::LayoutResult Pane::stage_layout(const RECT& pane_rect, UINT dpi,
     // Keep the footer action above its status-bar sibling.
     SetWindowPos(folder_context_button_, HWND_TOP, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    EnableWindow(folder_context_button_, realized_);
+    EnableWindow(folder_context_button_, realized_ && !managed_list_enabled_);
     const RECT container = local(rects.explorer_container);
     return {changed,
             {0, 0, rects.explorer_container.right -
@@ -1660,12 +1715,18 @@ void Pane::finish_layout(const LayoutResult& layout, UINT dpi) noexcept {
 }
 
 void Pane::set_shell_rect(const RECT& rect, HDWP* deferred) noexcept {
+    if (managed_list_enabled_) {
+        if (list_window_) SetWindowPos(list_window_, nullptr, rect.left, rect.top,
+            rect.right-rect.left, rect.bottom-rect.top, SWP_NOZORDER | SWP_NOACTIVATE);
+        return;
+    }
     if (pane_host() == nullptr) return;
     ShellCallScope shell_call(reentry_guard());
     explorer_host_.set_rect(rect, deferred);
 }
 
 void Pane::set_shell_visible(bool visible) noexcept {
+    if (managed_list_enabled_) { if (list_window_) ShowWindow(list_window_, visible ? SW_SHOW : SW_HIDE); return; }
     if (pane_host() == nullptr) return;
     ShellCallScope shell_call(reentry_guard());
     explorer_host_.set_visible(visible);

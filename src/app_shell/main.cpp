@@ -3772,9 +3772,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     }
 
     bool diagnostic_mode = false;
+    bool managed_list_requested = false;
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (argv != nullptr) {
+        for (int i = 1; i < argc; ++i)
+            if (std::wstring_view(argv[i]) == L"--managed-list") managed_list_requested = true;
         const bool requested = panedock::app_shell::diagnostic_requested(
             argc, argv);
         LocalFree(argv);
@@ -3825,6 +3828,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
 
     AppState state;
     state.diagnostic_mode = diagnostic_mode;
+    if (managed_list_requested) state.panes[0].use_managed_list();
     std::optional<std::filesystem::path> directory;
     {
         ShellCallScope shell_call(state.reentry_guard);
@@ -3974,6 +3978,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         // before blocking in GetMessageW, or an empty queue would leave the
         // loop blocked forever with quit_requested already true.
         if (state.quit_requested) break;
+        // Wait on owned worker events as well as input. Workers never hold an
+        // HWND or post to a possibly destroyed/reused window. A queued input
+        // message gets a turn between bounded result drains.
+        std::array<HANDLE, kExplorerCount> events{};
+        DWORD event_count = 0;
+        for (const auto& pane : state.panes)
+            if (const HANDLE event = pane.content_event()) events[event_count++] = event;
+        if (event_count != 0) {
+            const DWORD wake = MsgWaitForMultipleObjectsEx(event_count, events.data(),
+                INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            if (wake == WAIT_FAILED) { exit_code = 1; break; }
+            for (auto& pane : state.panes)
+                if (const HANDLE event = pane.content_event(); event &&
+                    WaitForSingleObject(event, 0) == WAIT_OBJECT_0)
+                    pane.process_content_results();
+            if (!PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE)) continue;
+        }
         result = GetMessageW(&message, nullptr, 0, 0);
         if (result <= 0) break;
         if (!state.is_shutting_down() &&

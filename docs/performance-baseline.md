@@ -19,7 +19,7 @@ Rows that still read **Not measured** are estimates or unobserved planning conte
 
 ## Managed-list acceptance targets (PD-222; all not measured)
 
-These are release acceptance budgets for the managed-list path, not observations. None has been measured because the managed-list implementation is not present. Do not overwrite the legacy measurements above or use them as managed-list evidence. The legacy path remains the normal default until PD-241 records a complete passing gate; PD-242 removes it separately.
+These are release acceptance budgets for the managed-list path, not observations. None has been measured against the complete managed-list gate corpus; PD-224 supplies only the opt-in local-folder slice. Do not overwrite the legacy measurements above or use them as managed-list evidence. The legacy path remains the normal default until PD-241 records a complete passing gate; PD-242 removes it separately.
 
 | Metric | Acceptance target | Measurement | Result at PD-222 |
 |---|---|---|---|
@@ -36,6 +36,35 @@ These are release acceptance budgets for the managed-list path, not observations
 | Idle power | No polling or continuously scheduled worker activity; zero idle CPU/disk I/O remains the blocking power proxy | Supporting Windows Performance Recorder energy trace where available; report method and trace, but do not call it a pass/fail watt measurement | Not measured |
 
 The test corpus, environments, required sample counts, future command and PASS/FAIL/UNVERIFIED rules are defined in `docs/testing.md` under “Managed-list preservation and release gate”. The future PD-241 harness must emit a complete result and fail closed on a missing sample or environment. A direct energy number is supplemental only; this repository has no validated per-process watt measurement method yet.
+
+## PD-224 implementation bounds (not performance measurements)
+
+The local-folder slice enforces at most four process-wide subscriptions/workers,
+one replaceable pending request per subscription and two queued batches of at
+most 128 rows each. A worker may additionally hold one batch under construction;
+UI consumption drains at most two batches before returning to input dispatch.
+Requests cap each location string at 32,760 characters, each Group/tab id at 256
+bytes, and item names at 255 characters. There are no property or image caches.
+These value bounds keep queued results below the 16 MiB target; actual process
+memory and allocator overhead still require the release measurements above.
+
+Each Pane retains at most 100,000 rows and 24 MiB of row-vector capacity plus
+owned name-string capacity (including terminators). Four slots therefore have a
+96 MiB accounted row ceiling, leaving headroom within the 128 MiB snapshot target
+for identities and allocator overhead. Rebinding, derealizing and destruction
+release rows; this slice does not retain inactive-tab lists. Exceeding either
+row or accounted-byte bound stops interest and displays a visible limit state.
+These bounds are implementation choices, not a measured PASS for the budgets.
+
+Workers own only request/result values, their waitable event and their directory
+read handle; they have no HWND, Pane/AppState or COM pointer. Cancellation clears
+the pending request/results and invalidates the worker serial. Destruction signals
+stop without joining an OS call. A stuck abandoned worker retains its bounded slot
+and owned resources until it returns or the process exits; it cannot deliver to a
+destroyed UI or create unlimited replacements. Another request on that same
+subscription can remain loading behind a stuck call. Slow/provider saturation and
+real hung-provider shutdown remain unverified and belong to the later gate; this
+implementation does not claim that cancellation interrupts Windows calls.
 
 ## Local tab-switch Shell probe (2026-09-29)
 

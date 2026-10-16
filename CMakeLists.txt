@@ -109,6 +109,8 @@ panedock_set_warnings(panedock_sidebar)
 add_library(panedock_pane STATIC
     src/app_shell/pane_host.h
     src/app_shell/shell_reentry_guard.h
+    src/managed_list/list_worker.cpp
+    src/app_shell/pane_managed_list.cpp
     src/app_shell/pane.cpp
     src/app_shell/pane_tab_strip.h
     src/app_shell/pane_tab_strip.cpp

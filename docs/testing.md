@@ -55,6 +55,52 @@ A corollary that has cost real bugs: **a check that scans source text is not a b
 
 These tests are fast, deterministic, and run in CI without a desktop session, a Shell, or installed extensions.
 
+## PD-224 local-folder development slice
+
+Build and run the focused behavior test with LLVM-MinGW (the isolated build
+avoids the running user's executable):
+
+```powershell
+$env:PATH = 'E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja;' + $env:PATH
+cmake -S . -B build/pd224 -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build/pd224
+ctest --test-dir build/pd224 --output-on-failure -R '^panedock_managed_list$'
+```
+
+`build/pd224/PaneDock.exe --managed-list` opts only the first pane into the local
+folder list for that process. Start it only when no existing singleton is running;
+a second launch relays to the existing window and cannot change its mode.
+Enter an absolute local drive path in that pane's
+address bar; double-click a folder or press Enter to enter it, and use Up or
+Backspace to leave. Names and size/folder information arrive in batches. Loading,
+empty, read failure, worker unavailable and row/memory exhaustion appear in the
+status bar; Refresh retries. Unsupported virtual/remote locations show an error
+in this development pane. Other panes and launches without the switch retain
+the legacy content. The switch is not persisted and adds no session schema or
+settings; existing navigation still saves the location through the usual seam.
+Native item/background menu integration is reserved for PD-239; this local
+slice does not create a substitute menu or a fake ExplorerBrowser.
+
+`panedock_managed_list` drives public Pane operations with a controlled owned-value
+source: usable partial rows before completion, leaving a paused source, late
+batches/failures after generation/location/Group/tab changes, reentrant navigation,
+empty/access-denied/submit failure, retry, unbinding/shutdown, row and string-memory
+limits. Its separate real-directory integration creates 400 files and one folder,
+hosts an actual hidden owner-data list through Pane, verifies text/selection counts,
+complete batches, folder entry/Up, an empty folder, a missing location, and a
+list-denying DACL on a disposable subfolder (restored before cleanup). It also
+checks global worker-capacity failure, pending navigation replacement, idle event
+reset and destruction during pending work. Test files live below the CTest working
+directory; no user session or live Shell view is used.
+
+PD-224 validation on 2026-10-16: isolated LLVM-MinGW Release build and all CTests
+except `panedock_launch_smoke` passed. That smoke was excluded because the existing
+user singleton prevents an isolated launch; the user's window was left open.
+Hidden control checks do **not** establish real desktop focus, keyboard,
+accessibility, mixed-DPI, Shell/network/OneDrive compatibility, or performance.
+Those remain **UNVERIFIED (real desktop required)**, including provider-hang
+behavior and the ten-minute idle/latency/memory gate below. PD-241 remains closed.
+
 ## Managed-list preservation and release gate (PD-222 / PD-241)
 
 PD-222 defines the contract, not a managed-list implementation. Every status in the last column is **UNVERIFIED** until the managed-list path exists and the row is exercised. Passing legacy `IExplorerBrowser` tests does not establish a managed-list pass. The managed path remains opt-in during implementation; PD-241 owns the measured go/no-go decision. The current path remains default unless every blocking row below passes; a failure keeps the legacy default and produces a follow-up ticket. PD-242 alone removes the legacy host after that gate.

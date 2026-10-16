@@ -1,0 +1,59 @@
+#pragma once
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <vector>
+#include "core/model.h"
+#include "core/navigation.h"
+
+namespace panedock::managed_list {
+// Fixed per-process limits: at most four subscriptions, each with one worker,
+// one replaceable pending request, two queued batches, and 100,000 retained rows.
+inline constexpr std::size_t kMaxSubscriptions = 4;
+inline constexpr std::size_t kBatchRows = 128;
+inline constexpr std::size_t kQueuedBatches = 2;
+inline constexpr std::size_t kMaxRows = 100000;
+inline constexpr std::size_t kMaxRowBytes = 24 * 1024 * 1024;
+inline constexpr std::size_t kMaxName = 255;
+inline constexpr std::size_t kMaxPath = 32760;
+struct Request final {
+    core::NavigationRequest binding;
+    core::ShellLocation location;
+    bool operator==(const Request& other) const noexcept {
+        return binding.generation == other.binding.generation &&
+            binding.group_id == other.binding.group_id &&
+            binding.tab_id == other.binding.tab_id && location == other.location;
+    }
+};
+struct Row final {
+    std::wstring name;
+    std::uint64_t bytes{};
+    bool directory{};
+};
+enum class Phase { idle, loading, complete, empty, error, limited };
+struct Batch final {
+    Request request;
+    std::vector<Row> rows;
+    Phase phase{Phase::loading};
+    DWORD error{};
+};
+// Owned values only. event() is a waitable kernel event, never a window.
+// take() drains at most one bounded batch. cancel() drops interest immediately.
+class Source {
+  public:
+    virtual ~Source() = default;
+    virtual bool submit(Request request) noexcept = 0;
+    virtual std::optional<Batch> take() noexcept = 0;
+    virtual HANDLE event() const noexcept = 0;
+    virtual void cancel() noexcept = 0;
+};
+// Subscription creation is UI-STA-only, like Pane ownership.
+std::unique_ptr<Source> make_local_source() noexcept;
+} // namespace panedock::managed_list
