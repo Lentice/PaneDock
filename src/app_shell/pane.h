@@ -120,6 +120,21 @@ class Pane final {
     void navigate_up();
     void refresh_view();
 
+    // Content operations stay behind Pane; callers never borrow the concrete
+    // Shell host or its location across a message-pumping call.
+    struct SelectionSnapshot final {
+        int total{};
+        int selected{};
+        unsigned long long selected_bytes{};
+        bool selected_bytes_valid{};
+    };
+    HRESULT selection_snapshot(SelectionSnapshot &snapshot) noexcept;
+    panedock::core::ShellLocation content_location() const;
+    void focus_content() noexcept;
+    HRESULT translate_content_accelerator(MSG *message) noexcept;
+    void process_content_retry() noexcept;
+    bool show_folder_context_menu(HWND owner, POINT screen) noexcept;
+
     void capture_view_mode();
     void capture_sort();
     void apply_view_mode();
@@ -219,18 +234,11 @@ class Pane final {
     }
     bool suppress_history() const noexcept { return suppress_history_record_; }
 
-    // Transitional direct access for ExplorerHost members that PD-183
-    // does not promote to a Pane-level command/query (navigation
-    // notification setup, view mode, sort, item counts, focus, ...). See
-    // PD-183 交接區 for the call-site list still using this.
-    panedock::explorer_host::ExplorerHost &host() noexcept {
-        return explorer_host_;
-    }
-    const panedock::explorer_host::ExplorerHost &host() const noexcept {
-        return explorer_host_;
-    }
-
   private:
+    // Owned identity only: no borrowed TabState survives a Shell pump.
+    panedock::core::NavigationRequest content_request() const;
+    bool content_request_is_current(
+        const panedock::core::NavigationRequest &request) const noexcept;
     void apply_container_region(int width, int height, int radius) noexcept;
     void set_paint_geometry(const PaneChromeRects& rects, UINT dpi) noexcept;
     std::array<HWND, 10> chrome_children() const noexcept;

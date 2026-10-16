@@ -1769,7 +1769,7 @@ HRESULT realize_startup_panes(HWND window, AppState& state) {
         const std::size_t active = active_pane_index(active_group(state));
         {
             ShellCallScope shell_call(state.reentry_guard);
-            state.panes[active].host().focus();
+            state.panes[active].focus_content();
         }
         if (state.is_shutting_down()) return E_ABORT;
     }
@@ -1853,7 +1853,7 @@ void perform_group_transition(HWND window, AppState& state,
         void focus_active_pane() override {
             const std::size_t active = active_pane_index(active_group(state_));
             ShellCallScope shell_call(state_.reentry_guard);
-            state_.panes[active].host().focus();
+            state_.panes[active].focus_content();
         }
         void refresh_sidebar() override { ::refresh_sidebar(state_); }
         void release_capture_suppression() noexcept override {
@@ -2007,7 +2007,7 @@ void set_active_pane(HWND window, AppState& state, std::size_t pane) noexcept {
         !panedock::core::set_active_pane(group, group.panes[pane].id)) return;
     {
         ShellCallScope shell_call(state.reentry_guard);
-        state.panes[pane].host().focus();
+        state.panes[pane].focus_content();
     }
     if (state.is_shutting_down()) return;
     state.panes[previous].set_chrome_active(false);
@@ -2760,8 +2760,8 @@ bool perform_clipboard_paste(HWND window, AppState& state,
         return true;
     if (pane_index >= kExplorerCount || !state.panes[pane_index].realized())
         return false;
-    const std::wstring& parsing_name =
-        state.panes[pane_index].host().location().parsing_name;
+    const std::wstring parsing_name =
+        state.panes[pane_index].content_location().parsing_name;
     if (parsing_name.empty()) return false;
 
     state.shutdown_coordinator.sequence().step(
@@ -2998,8 +2998,7 @@ bool handle_global_command(HWND window, AppState& state, int id,
             return true;
         const POINT anchor{button_rect.left, button_rect.top};
         ShellCallScope shell_call(state.reentry_guard);
-        pane.host().focus();
-        (void)pane.host().show_folder_context_menu(
+        (void)pane.show_folder_context_menu(
             state.main_window, anchor);
         return true;
     }
@@ -4010,7 +4009,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 HRESULT result = S_FALSE;
                 {
                     ShellCallScope shell_call(state.reentry_guard);
-                    result = state.panes[active].host().translate_accelerator(
+                    result = state.panes[active].translate_content_accelerator(
                         &message);
                 }
                 if (state.is_shutting_down())
@@ -4072,7 +4071,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         TranslateMessage(&message);
         DispatchMessageW(&message);
         for (auto& chrome : state.panes)
-            chrome.host().process_retry_request();
+            chrome.process_content_retry();
         apply_pinned_locations_dialog_result(state);
         handle_transfer_close_dialog_result(state);
         // win32: a nested modal loop can consume the WM_QUIT posted in

@@ -285,9 +285,17 @@ if ($chromeBody -notmatch 'ShellCallScope shell_call\(reentry_guard\(\)\);[\s\S]
     $chromeBody -notmatch 'current != bound') {
     throw 'Shell re-entry invariant failed: Pane address display lost its Shell gate or binding check'
 }
-if ($statusBody -notmatch 'ShellCallScope shell_call\(reentry_guard\(\)\);[\s\S]*item_counts\(counts\)' -or
-    $statusBody -notmatch 'item_counts\(counts\);\s*}\s*if \(!active\(\)\) return;') {
-    throw 'Shell re-entry invariant failed: Pane status counts lost their Shell gate or shutdown check'
+# PD-223: the actual Shell call now lives in the shared content query.
+$snapshotStart = $paneSource.IndexOf('HRESULT Pane::selection_snapshot(')
+$snapshotEnd = $paneSource.IndexOf('panedock::core::ShellLocation Pane::content_location(', $snapshotStart)
+if ($snapshotStart -lt 0 -or $snapshotEnd -lt $snapshotStart) {
+    throw 'Shell re-entry invariant failed: Pane selection snapshot body missing'
+}
+$snapshotBody = $paneSource.Substring($snapshotStart, $snapshotEnd - $snapshotStart)
+# Binding invalidation is exercised through Pane in pane_test.cpp. This is
+# only the policy gate for the real COM call's Shell scope.
+if ($snapshotBody -notmatch 'ShellCallScope shell_call\(reentry_guard\(\)\);\s*hr = explorer_host_\.item_counts\(counts\);') {
+    throw 'Shell re-entry invariant failed: Pane selection query lost its Shell gate'
 }
 
 # PD-198: popup selection still returns through main WM_COMMAND; only the

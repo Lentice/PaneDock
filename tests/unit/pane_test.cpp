@@ -297,6 +297,126 @@ void test_navigation_calls_are_no_ops_without_host() {
     pane.refresh_view();
 }
 
+void test_content_operations_without_a_live_view_preserve_model_and_windows() {
+    using panedock::app_shell::Pane;
+    TestPaneHost host;
+    Pane pane;
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    EXPECT(Pane::register_window_class(instance));
+    const HWND parent = CreateWindowExW(
+        0, L"STATIC", nullptr, 0, 0, 0, 300, 200, nullptr, nullptr,
+        instance, nullptr);
+    EXPECT(parent != nullptr);
+    EXPECT(pane.create(parent, 0));
+    const HWND window = pane.window();
+    const HWND container = pane.explorer_container();
+    pane.set_host(&host);
+    pane.set_reentry_guard(&host.guard);
+    pane.set_capture_gate(&host.session.capture_gate());
+    const panedock::core::ShellLocation a{L"A", {}, {}};
+    const panedock::core::ShellLocation b{L"B", {}, {}};
+    panedock::core::PaneState state{
+        "pane", {{"tab", b, {}, {}, true, {a, b}, 1}}, "tab"};
+    pane.bind(&state);
+    const auto original = state;
+    Pane::SelectionSnapshot selection{9, 8, 7, true};
+    EXPECT(pane.selection_snapshot(selection) == E_UNEXPECTED);
+    EXPECT(selection.total == 0 && selection.selected == 0);
+    EXPECT(selection.selected_bytes == 0 && !selection.selected_bytes_valid);
+    EXPECT(pane.content_location() == panedock::core::ShellLocation{});
+    MSG key{};
+    key.message = WM_KEYDOWN;
+    key.wParam = VK_RETURN;
+    EXPECT(pane.translate_content_accelerator(&key) == S_FALSE);
+    pane.focus_content();
+    pane.process_content_retry();
+    EXPECT(!pane.show_folder_context_menu(parent, {0, 0}));
+
+    // A real, unrealized ExplorerHost declines navigation. The public Pane
+    // command must roll back the history move, including its suppression.
+    pane.navigate_history(true);
+    EXPECT(state == original);
+    EXPECT(!pane.suppress_history());
+    EXPECT(!pane.realized());
+    EXPECT(pane.window() == window && pane.explorer_container() == container);
+    EXPECT(IsWindow(window) && IsWindow(container));
+    EXPECT(host.session_saves == 0);
+    EXPECT(!host.guard.in_shell_call());
+
+    host.shutting_down = true;
+    EXPECT(pane.navigate_to(a) == E_ABORT);
+    EXPECT(pane.navigate_up_one_level() == E_ABORT);
+    EXPECT(pane.selection_snapshot(selection) == E_ABORT);
+    EXPECT(pane.translate_content_accelerator(&key) == S_FALSE);
+    pane.focus_content();
+    pane.process_content_retry();
+    EXPECT(!pane.show_folder_context_menu(parent, {0, 0}));
+    EXPECT(state == original);
+    pane.derealize();
+    EXPECT(IsWindow(container));
+    pane.destroy();
+    EXPECT(!IsWindow(window) && !IsWindow(container));
+    EXPECT(IsWindow(parent));
+    DestroyWindow(parent);
+}
+
+void test_content_results_are_discarded_when_replay_changes_the_binding() {
+    using namespace panedock::app_shell;
+    // Exercise the real guard's unwind/replay boundary without a Shell fake.
+    // A replay sink can invalidate the binding before a content call returns.
+    class ReplayEffects final : public ShellReentryEffects {
+      public:
+        TestPaneHost &host;
+        Pane &pane;
+        int mutation;
+        ReplayEffects(TestPaneHost &h, Pane &p, int m)
+            : host(h), pane(p), mutation(m) {}
+        bool window_alive(HWND) noexcept override { return true; }
+        bool post(HWND, UINT, WPARAM, LPARAM) noexcept override {
+            switch (mutation) {
+            case 0: host.group_id = "other-group"; break;
+            case 1: pane.pane_state()->active_tab_id = "other-tab"; break;
+            case 2: pane.unbind(); break;
+            case 3: host.shutting_down = true; break;
+            case 4: (void)pane.begin_navigation(); break;
+            }
+            return true;
+        }
+        HWND shutdown_window() const noexcept override { return nullptr; }
+        void begin_shutdown_now() noexcept override {}
+    };
+    for (int mutation = 0; mutation < 5; ++mutation) {
+        for (const bool accelerator : {false, true}) {
+            TestPaneHost host;
+            Pane pane;
+            panedock::core::PaneState state{
+                "pane", {{"tab", {}, {}, {}, true, {}, 0},
+                         {"other-tab", {}, {}, {}, true, {}, 0}}, "tab"};
+            pane.set_host(&host);
+            pane.bind(&state);
+            ReplayEffects effects(host, pane, mutation);
+            ShellReentryGuard guard(host.shutdown, effects, WM_APP);
+            pane.set_reentry_guard(&guard);
+            guard.hold(nullptr, WM_COMMAND, 0, 0, false);
+            if (accelerator) {
+                MSG key{};
+                key.message = WM_KEYDOWN;
+                // The empty host declines, but a stale key must be consumed
+                // rather than routed to a command on the replacement tab.
+                EXPECT(pane.translate_content_accelerator(&key) == S_OK);
+            } else {
+                Pane::SelectionSnapshot snapshot{1, 1, 1, true};
+                EXPECT(pane.selection_snapshot(snapshot) == E_ABORT);
+                EXPECT(snapshot.total == 0 && snapshot.selected == 0);
+                EXPECT(snapshot.selected_bytes == 0);
+                EXPECT(!snapshot.selected_bytes_valid);
+            }
+            EXPECT(!guard.in_shell_call());
+            EXPECT(host.session_saves == 0);
+        }
+    }
+}
+
 void test_submit_address_is_a_no_op_while_shutting_down() {
     panedock::app_shell::Pane pane;
     panedock::core::PaneState state;
@@ -552,6 +672,8 @@ void test_tab_paint_stops_at_the_shortest_of_visuals_model_and_rects() {
 } // namespace
 
 int main() {
+    test_content_results_are_discarded_when_replay_changes_the_binding();
+    test_content_operations_without_a_live_view_preserve_model_and_windows();
     test_button_erase_preserves_pixels_until_owner_draw();
     test_tab_commands_schedule_only_successful_changes();
     test_replacement_navigation_does_not_inherit_history_suppression();

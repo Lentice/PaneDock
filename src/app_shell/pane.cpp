@@ -649,13 +649,10 @@ void Pane::refresh_navigation_chrome() {
 void Pane::refresh_status_bar() noexcept {
     if (pane_host() == nullptr) return;
     if (status_bar() == nullptr) return;
-    panedock::explorer_host::ExplorerHost::ItemCounts counts;
-    HRESULT hr = E_UNEXPECTED;
-    {
-        ShellCallScope shell_call(reentry_guard());
-        hr = host().item_counts(counts);
-    }
+    SelectionSnapshot counts;
+    const HRESULT hr = selection_snapshot(counts);
     if (!active()) return;
+    if (hr == E_ABORT) return;  // a different binding owns the status now
     if (hr == E_PENDING) return;  // keep the last counts until this navigation lands
     if (FAILED(hr)) {
         SetWindowTextW(status_bar(), L"");
@@ -686,6 +683,86 @@ void Pane::refresh_status_bar() noexcept {
 
 bool Pane::active() const noexcept {
     return host_ != nullptr && !host_->is_shutting_down();
+}
+
+panedock::core::NavigationRequest Pane::content_request() const {
+    if (!active()) return {};
+    const auto *tab = active_tab();
+    if (tab == nullptr) return {};
+    return {pending_navigation_.generation, pane_host()->active_group_id(),
+            tab->id};
+}
+
+bool Pane::content_request_is_current(
+    const panedock::core::NavigationRequest &request) const noexcept {
+    if (!active()) return false;
+    const auto *tab = active_tab();
+    return tab != nullptr && panedock::core::navigation_request_matches(
+        request, pending_navigation_.generation, pane_host()->active_group_id(),
+        tab->id);
+}
+
+HRESULT Pane::selection_snapshot(SelectionSnapshot &snapshot) noexcept try {
+    snapshot = {};
+    if (!active()) return E_ABORT;
+    if (active_tab() == nullptr) return E_UNEXPECTED;
+    const auto request = content_request();
+    panedock::explorer_host::ExplorerHost::ItemCounts counts;
+    HRESULT hr = E_UNEXPECTED;
+    {
+        ShellCallScope shell_call(reentry_guard());
+        hr = explorer_host_.item_counts(counts);
+    }
+    if (!content_request_is_current(request)) return E_ABORT;
+    if (SUCCEEDED(hr))
+        snapshot = {counts.total, counts.selected, counts.selected_bytes,
+                    counts.selected_bytes_valid};
+    return hr;
+} catch (...) {
+    snapshot = {};
+    return E_OUTOFMEMORY;
+}
+
+panedock::core::ShellLocation Pane::content_location() const {
+    return active() && realized_ ? explorer_host_.location()
+                                 : panedock::core::ShellLocation{};
+}
+
+void Pane::focus_content() noexcept {
+    if (!active() || active_tab() == nullptr) return;
+    ShellCallScope shell_call(reentry_guard());
+    explorer_host_.focus();
+}
+
+HRESULT Pane::translate_content_accelerator(MSG *message) noexcept try {
+    if (!active() || active_tab() == nullptr) return S_FALSE;
+    const auto request = content_request();
+    HRESULT hr = S_FALSE;
+    {
+        ShellCallScope shell_call(reentry_guard());
+        hr = explorer_host_.translate_accelerator(message);
+    }
+    // A declined key must not fall through to an action on a new binding.
+    return content_request_is_current(request) ? hr : S_OK;
+} catch (...) {
+    return S_OK;
+}
+
+void Pane::process_content_retry() noexcept {
+    if (!active() || active_tab() == nullptr) return;
+    ShellCallScope shell_call(reentry_guard());
+    explorer_host_.process_retry_request();
+}
+
+bool Pane::show_folder_context_menu(HWND owner, POINT screen) noexcept try {
+    if (!active() || active_tab() == nullptr || !realized_) return false;
+    const auto request = content_request();
+    focus_content();
+    if (!content_request_is_current(request)) return false;
+    ShellCallScope shell_call(reentry_guard());
+    return explorer_host_.show_folder_context_menu(owner, screen);
+} catch (...) {
+    return false;
 }
 
 bool Pane::register_window_class(HINSTANCE instance) noexcept {
@@ -800,11 +877,16 @@ Pane::NavigationGeneration Pane::begin_navigation() {
 HRESULT Pane::navigate_to(
     const panedock::core::ShellLocation &location) {
     if (pane_host() == nullptr) return E_UNEXPECTED;
-    return explorer_host_.navigate(location, begin_navigation());
+    if (!active()) return E_ABORT;
+    const auto target = location;
+    ShellCallScope shell_call(reentry_guard());
+    return explorer_host_.navigate(target, begin_navigation());
 }
 
 HRESULT Pane::navigate_up_one_level() {
     if (pane_host() == nullptr) return E_UNEXPECTED;
+    if (!active()) return E_ABORT;
+    ShellCallScope shell_call(reentry_guard());
     return explorer_host_.navigate_up(begin_navigation());
 }
 
@@ -892,10 +974,11 @@ void Pane::navigate_history(bool back) {
     // has asked the Shell yet, so remember where to put them back.
     history_rollback_ = std::pair{generation, previous_index};
     set_suppress_history(true);
+    const auto target = tab->location;
     HRESULT hr = E_UNEXPECTED;
     {
         ShellCallScope shell_call(reentry_guard());
-        hr = explorer_host_.navigate(tab->location, generation);
+        hr = explorer_host_.navigate(target, generation);
     }
     if (!active()) return;
     if (FAILED(hr)) navigation_failed(generation);
@@ -1207,7 +1290,7 @@ void Pane::finish_tab_change(bool navigate_active) {
         if (focused != nullptr && IsChild(window_, focused)) {
             {
                 ShellCallScope shell_call(reentry_guard());
-                explorer_host_.focus();
+                focus_content();
             }
             if (!active()) return;
         }

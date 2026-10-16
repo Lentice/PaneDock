@@ -260,7 +260,7 @@
 | PD-220 | launch smoke 使用隔離的 session 儲存位置 | 7 | `done` | PD-218 | [PD-220](tickets/PD-220-isolate-launch-smoke-session-storage.md) |
 | PD-221 | Active pane 改用標題區淡藍底、實心 tab 與 inactive 淡化（覆寫 PD-063 頂線） | 7 | `done` | PD-063, PD-076, PD-188 | [PD-221](tickets/PD-221-active-pane-chrome-tint.md) |
 | PD-222 | 對齊自建列表的規格與工程限制 | 8 | `done` | — | [PD-222](tickets/PD-222-managed-list-product-contract.md) |
-| PD-223 | Pane 內容入口 expand，保持既有行為 | 8 | `planned` | PD-222 | [PD-223](tickets/PD-223-pane-content-expand.md) |
+| PD-223 | Pane 內容入口 expand，保持既有行為 | 8 | `done` | PD-222 | [PD-223](tickets/PD-223-pane-content-expand.md) |
 | PD-224 | 單 pane 本機資料夾分批列表 | 8 | `planned` | PD-223 | [PD-224](tickets/PD-224-managed-list-local-batches.md) |
 | PD-225 | 自建列表接通 tab、Group 與 session 復原 | 8 | `planned` | PD-224 | [PD-225](tickets/PD-225-managed-list-tab-group-restore.md) |
 | PD-226 | 慢網路、容量耗盡與 pending shutdown | 8 | `planned` | PD-224 | [PD-226](tickets/PD-226-managed-list-slow-location-capacity.md) |
