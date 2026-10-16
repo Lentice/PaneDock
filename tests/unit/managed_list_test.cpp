@@ -55,9 +55,11 @@ void progressive_and_stale() {
     EXPECT(f.pane.list_snapshot().rows.size() == 2);
     EXPECT(!f.pane.open_list_row(1));
     EXPECT(f.pane.open_list_row(0)); // usable while the source remains paused
-    EXPECT(f.pane.active_tab()->location.parsing_name == L"C:\\A\\child");
-    EXPECT(f.pane.list_snapshot().phase == managed_list::Phase::loading);
+    EXPECT(f.pane.list_snapshot().request.location.parsing_name == L"C:\\A\\child");
+    f.deliver(managed_list::Phase::empty);
+    EXPECT(f.pane.list_snapshot().phase == managed_list::Phase::empty);
     EXPECT(SUCCEEDED(f.pane.navigate_up_one_level()));
+    f.deliver(managed_list::Phase::empty);
     EXPECT(f.pane.active_tab()->location.parsing_name == L"C:\\A");
     f.navigate(L"C:\\B");
     f.source->deliver({a, {{L"old", 0, true}}, managed_list::Phase::loading, 0});
@@ -77,6 +79,7 @@ void progressive_and_stale() {
     EXPECT(f.pane.active_tab()->view_mode == "details");
     EXPECT(f.pane.active_tab()->sort_column == "preserved-sort");
     f.pane.navigate_history(true);
+    f.deliver(managed_list::Phase::empty);
     EXPECT(f.pane.active_tab()->location.parsing_name == L"C:\\A");
 }
 void reentrant_acknowledgement() {
@@ -94,7 +97,9 @@ void reentrant_acknowledgement() {
     pane.set_host(&host); pane.set_reentry_guard(&host.guard); pane.bind(&state);
     auto source = std::make_unique<Controlled>(); auto* delivery = source.get();
     pane.use_managed_list(std::move(source));
-    EXPECT(pane.navigate_to({L"C:\\original", {}, {}}) == E_ABORT);
+    EXPECT(SUCCEEDED(pane.navigate_to({L"C:\\original", {}, {}})));
+    delivery->deliver({pane.list_snapshot().request, {{L"obsolete", 0, false}}, managed_list::Phase::complete, 0});
+    pane.process_content_results();
     EXPECT(pane.list_snapshot().request.location.parsing_name == L"C:\\replacement");
     delivery->deliver({pane.list_snapshot().request, {{L"correct", 0, false}}, managed_list::Phase::complete, 0});
     pane.process_content_results();

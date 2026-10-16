@@ -493,7 +493,8 @@ LRESULT CALLBACK ExplorerHost::context_menu_subclass_proc(
 }
 
 HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
-                                 const core::ShellLocation& location) {
+                                 const core::ShellLocation& location,
+                                 NavigationGeneration generation) {
     if (parent == nullptr || initialized_ || browser_ != nullptr) {
         return E_INVALIDARG;
     }
@@ -568,7 +569,7 @@ HRESULT ExplorerHost::initialize(HWND parent, const RECT& rect,
     // resolve is an error-overlay case, not a failed realization. Returning
     // it here would leave Pane::realized() false on an initialized browser,
     // and the next apply_layout would try to initialize it a second time.
-    log_hresult(L"ExplorerHost: initial navigation", navigate(location));
+    log_hresult(L"ExplorerHost: initial navigation", navigate(location, generation));
     return S_OK;
 }
 

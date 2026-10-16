@@ -3,7 +3,59 @@
 #include <algorithm>
 
 namespace panedock::app_shell {
-HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& location) {
+HRESULT Pane::navigate_content(core::ShellLocation location,
+                               NavigationGeneration generation) {
+    ShellCallScope shell_call(reentry_guard());
+    const auto request = content_request();
+    // Syntactic routing only: no drive/provider probing on the UI STA.
+    // Virtual/UNC identities remain intact on the legacy path until PD-234.
+    const auto& path = location.parsing_name;
+    const bool local = path.size() >= 3 && path[1] == L':' && path[2] == L'\\';
+    if (local == managed_list_active_ && (local || realized_))
+        return local ? start_managed_list(location, generation)
+                     : explorer_host_.navigate(location, generation);
+
+    const auto history_target = list_history_target_;
+    // Only content is replaced. Pane and chrome HWNDs retain their identities.
+    // Destroy pumps, so invalidate the old request before entering it and
+    // check the new binding again before creating its successor.
+    cancel_managed_list();
+    managed_list_active_ = local;
+    explorer_host_.destroy();
+    if (!content_request_is_current(request)) return E_ABORT;
+    list_history_target_ = history_target;
+    if (list_window_) ShowWindow(list_window_, local ? SW_SHOW : SW_HIDE);
+    RECT rect{};
+    GetClientRect(explorer_container_, &rect);
+    if (local) {
+        if (list_window_) { realized_ = true; return start_managed_list(location, generation); }
+        return realize_managed_list(rect, location, generation);
+    }
+    // Use the same generation for initial BrowseToObject and its callbacks.
+    // Configure callbacks before Initialize, which can complete synchronously.
+    explorer_host_.set_shell_call_callback(this, [](void* context, bool entering) noexcept {
+        auto& guard = static_cast<Pane*>(context)->reentry_guard();
+        if (entering) guard.enter(); else guard.leave();
+    });
+    explorer_host_.set_navigation_callback([this](auto token, const auto& target) {
+        if (!managed_list_active_) navigation_complete(token, target);
+    });
+    explorer_host_.set_navigation_failed_callback([this](auto token) {
+        if (!managed_list_active_) navigation_failed(token);
+    });
+    const auto hr = explorer_host_.initialize(explorer_container_, rect, location, generation);
+    if (!content_request_is_current(request)) return E_ABORT;
+    realized_ = SUCCEEDED(hr);
+    if (FAILED(hr)) {
+        explorer_host_.destroy();
+        if (content_request_is_current(request)) navigation_failed(generation);
+        return hr;
+    }
+    return configure_realized_view();
+}
+
+HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& location,
+                                    NavigationGeneration generation) {
     if (!active() || !active_tab()) return E_ABORT;
     if (list_window_) return S_FALSE;
     list_window_ = CreateWindowExW(0, WC_LISTVIEWW, L"Local folder",
@@ -28,13 +80,14 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
             return DefSubclassProc(hwnd, msg, wp, lp);
         }, 224, 0)) { derealize(); return E_FAIL; }
     realized_ = true;
-    (void)navigate_to(location);
+    (void)start_managed_list(location, generation);
     return S_OK; // enumeration failures are visible content states
 
 }
 void Pane::use_managed_list(std::unique_ptr<managed_list::Source> source) {
     if (realized_) return;
     managed_list_enabled_ = true;
+    managed_list_active_ = true;
     list_source_ = std::move(source); // create lazily after the content HWND exists
 }
 HANDLE Pane::content_event() const noexcept {
@@ -44,12 +97,15 @@ void Pane::cancel_managed_list() noexcept {
     if (!managed_list_enabled_) return;
     if (list_source_) list_source_->cancel();
     list_ = {};
+    list_navigation_pending_ = false;
+    list_history_target_.reset();
+    pending_list_route_.reset();
     list_name_bytes_ = 0;
     if (list_window_) ListView_SetItemCountEx(list_window_, 0, 0);
 }
 HRESULT Pane::start_managed_list(const core::ShellLocation& location,
                                 NavigationGeneration generation) {
-    if (!active() || !active_tab()) return E_ABORT;
+    if (!active() || !active_tab() || !navigation_request_is_current(generation)) return E_ABORT;
     if (!list_source_) list_source_ = managed_list::make_local_source();
     if (list_source_) list_source_->cancel();
     list_name_bytes_ = 0;
@@ -58,20 +114,26 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
         ListView_SetItemState(list_window_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
         ListView_SetItemCountEx(list_window_, 0, 0);
     }
-    // Acknowledgement and address feedback never wait for the first OS call.
-    // Preserve existing history policy; optional view/sort capture is disabled
-    // for this development slice, so persisted settings are not reinterpreted.
+    list_navigation_pending_ = true;
+    // Loading is immediate; only a valid first batch commits location/history.
+    // Mode/sort remain authoritative model values until their later slices.
     const auto request = list_.request;
-    navigation_complete(generation, location);
-    if (!content_request_is_current(request.binding) || !(request == list_.request)) return E_ABORT;
     refresh_navigation_chrome();
     if (!content_request_is_current(request.binding) || !(request == list_.request)) return E_ABORT;
     if (!list_source_ || !list_source_->submit(list_.request)) {
         list_.phase = managed_list::Phase::error;
         list_.error = ERROR_NO_SYSTEM_RESOURCES;
+        resolve_list_navigation(false);
     }
     update_managed_list();
     return S_OK;
+}
+void Pane::resolve_list_navigation(bool success) {
+    if (!list_navigation_pending_) return;
+    list_navigation_pending_ = false;
+    const auto request = list_.request;
+    if (success) navigation_complete(request.binding.generation, request.location);
+    else navigation_failed(request.binding.generation);
 }
 void Pane::process_content_results() noexcept try {
     if (!list_source_) return;
@@ -91,8 +153,18 @@ void Pane::process_content_results() noexcept try {
             })) {
             list_.phase = managed_list::Phase::error;
             list_.error = ERROR_INVALID_DATA;
-            list_source_->cancel(); break;
+            list_source_->cancel();
+            resolve_list_navigation(false);
+            break;
         }
+        const auto request = batch->request;
+        if (!batch->rows.empty() || batch->phase == managed_list::Phase::empty ||
+            batch->phase == managed_list::Phase::complete)
+            resolve_list_navigation(true);
+        else if (batch->phase == managed_list::Phase::error)
+            resolve_list_navigation(false);
+        // Session/chrome callbacks may re-enter and replace the tab or Group.
+        if (!content_request_is_current(request.binding) || !(request == list_.request)) continue;
         const auto count = std::min(batch->rows.size(), managed_list::kMaxRows-list_.rows.size());
         const auto required = list_.rows.size() + count;
         if (required > list_.rows.capacity()) {
@@ -123,10 +195,11 @@ void Pane::process_content_results() noexcept try {
     if (list_source_) list_source_->cancel();
     list_.phase = managed_list::Phase::error;
     list_.error = ERROR_NOT_ENOUGH_MEMORY;
+    resolve_list_navigation(false);
     update_managed_list();
 }
 void Pane::update_managed_list() noexcept try {
-    if (!managed_list_enabled_) return;
+    if (!managed_list_active_) return;
     if (list_window_) ListView_SetItemCountEx(list_window_, static_cast<int>(list_.rows.size()),
         LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
     std::wstring text = std::to_wstring(list_.rows.size()) + L" items";

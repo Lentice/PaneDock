@@ -3828,7 +3828,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
 
     AppState state;
     state.diagnostic_mode = diagnostic_mode;
-    if (managed_list_requested) state.panes[0].use_managed_list();
+    if (managed_list_requested)
+        for (auto& pane : state.panes) pane.use_managed_list();
     std::optional<std::filesystem::path> directory;
     {
         ShellCallScope shell_call(state.reentry_guard);

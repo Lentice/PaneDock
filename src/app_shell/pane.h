@@ -258,12 +258,21 @@ class Pane final {
     HRESULT start_managed_list(const core::ShellLocation& location,
                                NavigationGeneration generation);
     void update_managed_list() noexcept;
-    bool managed_list_enabled_{};
+    bool managed_list_enabled_{}; // process opt-in, never persisted
+    bool managed_list_active_{};  // current content; namespace tabs use Shell
+    bool list_navigation_pending_{};
+    // History cursor stays at the last success until this target is accepted.
+    std::optional<std::size_t> list_history_target_;
+    std::optional<managed_list::Request> pending_list_route_;
+    HRESULT navigate_content(core::ShellLocation location,
+                             NavigationGeneration generation);
+    void resolve_list_navigation(bool success);
     std::unique_ptr<managed_list::Source> list_source_;
     ListSnapshot list_;
     HWND list_window_{};
     std::size_t list_name_bytes_{};
-    HRESULT realize_managed_list(const RECT& rect, const core::ShellLocation& location);
+    HRESULT realize_managed_list(const RECT& rect, const core::ShellLocation& location,
+                                 NavigationGeneration generation);
     // Owned identity only: no borrowed TabState survives a Shell pump.
     panedock::core::NavigationRequest content_request() const;
     bool content_request_is_current(

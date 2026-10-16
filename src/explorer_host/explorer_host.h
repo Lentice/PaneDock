@@ -60,7 +60,8 @@ public:
                                  ShellCallCallback callback) noexcept;
     NavigationGeneration begin_navigation() noexcept;
     HRESULT initialize(HWND parent, const RECT& rect,
-                       const core::ShellLocation& location);
+                       const core::ShellLocation& location,
+                       NavigationGeneration generation = 0);
     HRESULT navigate(const core::ShellLocation& location);
     HRESULT navigate(const core::ShellLocation& location,
                      NavigationGeneration generation);

@@ -67,17 +67,23 @@ cmake --build build/pd224
 ctest --test-dir build/pd224 --output-on-failure -R '^panedock_managed_list$'
 ```
 
-`build/pd224/PaneDock.exe --managed-list` opts only the first pane into the local
-folder list for that process. Start it only when no existing singleton is running;
+`build/pd225/PaneDock.exe --managed-list` opts all four pane slots into the local
+folder list for that process (PD-225 extends the original single-pane entry). Start it only when no existing singleton is running;
 a second launch relays to the existing window and cannot change its mode.
-Enter an absolute local drive path in that pane's
+Enter an absolute local drive path in a visible pane's
 address bar; double-click a folder or press Enter to enter it, and use Up or
 Backspace to leave. Names and size/folder information arrive in batches. Loading,
 empty, read failure, worker unavailable and row/memory exhaustion appear in the
-status bar; Refresh retries. Unsupported virtual/remote locations show an error
-in this development pane. Other panes and launches without the switch retain
-the legacy content. The switch is not persisted and adds no session schema or
-settings; existing navigation still saves the location through the usual seam.
+status bar; Refresh retries the displayed destination. Virtual/UNC locations retain
+legacy Shell content and their original identity, with a Shell-view status label;
+entering a local folder from that view queues managed content after the Shell call
+returns. Mapped remote drives are still rejected by the local worker; remote
+capacity/provider behavior belongs to PD-226. Launches without the switch retain
+legacy content. The switch is not persisted and adds no session schema or settings.
+Loading updates the address immediately; the first valid rows or successful empty
+result commit location/history. A failure before that preserves the last successful
+location and history cursor for persistence. Mode/sort values remain exact model
+values; their managed rendering/interaction belongs to PD-228/PD-230.
 Native item/background menu integration is reserved for PD-239; this local
 slice does not create a substitute menu or a fake ExplorerBrowser.
 
@@ -100,6 +106,48 @@ Hidden control checks do **not** establish real desktop focus, keyboard,
 accessibility, mixed-DPI, Shell/network/OneDrive compatibility, or performance.
 Those remain **UNVERIFIED (real desktop required)**, including provider-hang
 behavior and the ten-minute idle/latency/memory gate below. PD-241 remains closed.
+
+## PD-225 tab, Group and session integration
+
+```powershell
+$env:PATH = 'E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja;' + $env:PATH
+cmake -S . -B build/pd225 -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build/pd225
+ctest --test-dir build/pd225 --output-on-failure -R '^panedock_managed_list'
+ctest --test-dir build/pd225 --output-on-failure -E '^panedock_launch_smoke$'
+git diff --check
+```
+
+`panedock_managed_list_restore` drives four real hidden owner-data controls through
+Pane public operations, with controlled owned-value deliveries. It covers A→B→A,
+keyboard tab cycling, add/close (active and inactive), the model move plus the same
+public navigation used by cross-pane drag, Group changes with hidden panes,
+stable pane HWNDs, discarded row storage, address submission, Back/Forward/Up,
+error/retry without saving a failed target, and completion reentry into tab/Group/
+close/shutdown. Late navigation and subsequent row deliveries cannot populate a
+new binding. This tests the result boundary, not a fake Shell host or actual drag
+input. The existing managed-list test also enumerates a real disposable folder.
+
+The restore test writes through SessionWriter to a disposable directory below the
+CTest working directory, closes the Pane controls, reads the session, and creates
+new Pane controls. It compares required state, all eight persisted view-mode
+choices, sort key/direction, active tabs/layout, all three location identity fields,
+and preservation of unknown root/tab fields; an unconfirmed navigation is saved
+as the previous successful location. It exercises atomic backup without changing
+schema or introducing a persisted rollout setting. This is an automated storage/
+control restoration test, **not** evidence of an application process restart.
+
+PD-225 validation on 2026-10-16: isolated LLVM-MinGW Release build, focused tests,
+and CTest excluding launch smoke passed. Sandbox compiler/build probes stalled;
+configure/build and the final CTest run used the authorized elevated context.
+`panedock_launch_smoke` is **UNVERIFIED**: an existing root-build singleton was
+running and was left untouched. No second app was launched or relayed to it.
+
+**UNVERIFIED (real desktop required):** actual isolated-session process restart,
+virtual/UNC fallback and Shell→managed transitions, native focus/accessibility,
+network/OneDrive behavior, mixed DPI, and latency/CPU/memory/power measurements.
+The existing policy/source checks are repository gates, not new behavior evidence.
+PD-241's measured gate is unchanged and remains closed.
 
 ## Managed-list preservation and release gate (PD-222 / PD-241)
 

@@ -76,3 +76,7 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+## 交接區
+
+- 未驗證，需真實桌面：隔離 session 的實際 app process 重啟、virtual／UNC fallback 與 Shell→managed 切換、焦點／accessibility、網路／OneDrive、mixed DPI 與效能／閒置資源。現有 root-build singleton 必須保留，因此本次未執行 launch smoke；hidden control／儲存重建測試不能替代上述證據，PD-241 gate 不變。
