@@ -424,3 +424,45 @@ PD-226 checks used an elevated LLVM-MinGW Release build after sandbox compiler d
 stalled. CTest excludes launch smoke to preserve the user's running singleton. No GUI
 verification or new application launch is implied. Recorded evidence and remaining
 external-environment gaps are in `docs/performance-baseline.md`.
+
+## PD-229 visible item icons and overlays
+
+The icon acquisition boundary exchanges owned raster values; it never transfers
+HICONs, PIDLs or COM interfaces between apartments. Pane owns viewport interest,
+DPI-sized image lists, placeholders and the LRU cache. This resource/rendering
+logic depends on Win32 and belongs outside `core`; the focused PaneHost test
+controls value completions without a live Shell or application GUI. Its gated
+provider additionally exercises the real bounded worker/queue/cancellation code
+without invoking an installed icon/overlay handler. Native image acquisition uses
+[SHGetFileInfoW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shgetfileinfow)
+with worker-owned apartment/PIDL/icon resources and composed overlays.
+
+Reproduce the focused Release checks (no app launch, no full test suite):
+
+```powershell
+$env:PATH = 'E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja;' + $env:PATH
+cmake -S . -B build/pd229-check -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build/pd229-check --target PaneDock panedock_managed_list_icons_test panedock_managed_list_restore_test panedock_managed_list_selection_test panedock_managed_list_sort_test panedock_managed_list_capacity_test
+ctest --test-dir build/pd229-check --output-on-failure -R '^panedock_(managed_list_(icons|restore|selection|sort|capacity)|single_threaded|shell_core_boundary|shell_reentry_gate)$'
+git diff --check
+```
+
+On 2026-10-19 the focused Release build and all eight checks above passed;
+`git diff --check` also passed. The full suite and application launch were not run.
+
+The controlled test checks observable item images through Pane, including bounded
+visible interest, partial rows while decoration waits, old completion rejection,
+hide/resize interest replacement, placeholder failure/retry, cache reuse and
+versioning, eviction, DPI replacement and repeated GDI cleanup. Production worker
+checks cover four blocked icon slots, 1,000 interest replacements, two-result
+backpressure, late cancellation, capacity recovery and non-joining destruction.
+The other focused tests cover restore/Group/tab transitions, selection/anchors,
+sorting and the unchanged enumeration capacity. Policy scans check STA and module
+boundaries; they are not icon compatibility tests.
+
+GUI/desktop checks are explicitly deferred by the user for PD-229. Still verify
+native EXE/LNK and installed overlays, OneDrive/virtual items, fast scrolling,
+resize/hide/tab/Group changes, mixed DPI, repeated process handle/private-byte
+measurements and ten-minute idle CPU/disk/wakeups on the required desktop before
+PD-241. Neither controlled raster results nor hidden-control regression tests
+establish those results. Right-click/context-menu behavior is outside this ticket.

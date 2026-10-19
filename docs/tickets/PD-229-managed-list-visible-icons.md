@@ -48,8 +48,8 @@ Phase 8 · managed list migration
 
 ## Acceptance criteria
 
-- [ ] 受控慢 icon 不延後第一批可操作內容，offscreen 工作不能無界增加。
-- [ ] 快速 scroll／切 tab 後圖示不貼到錯誤項目；失敗和 eviction 後可合理重取。
+- [x] 受控慢 icon 不延後第一批可操作內容，offscreen 工作不能無界增加。
+- [x] 快速 scroll／切 tab 後圖示不貼到錯誤項目；失敗和 eviction 後可合理重取。
 - [ ] 重複操作無單調 GDI／handle／image memory 成長，idle 無週期喚醒。
 
 ## Testing decisions
@@ -76,3 +76,8 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+## 交接區
+
+- 使用者明確延後 GUI／實機驗證；EXE／LNK／第三方 overlay、OneDrive、虛擬 Shell location、mixed-DPI 畫質與實際 scroll／resize 仍未驗證，需真實桌面。自動化 raster／Pane 測試不代表 Shell 圖示相容性通過。
+- 受控 worker 與 GDI cleanup 檢查不代表真實 provider 的資源或取消結果。真實 Shell 呼叫、COM teardown 可能卡住；圖示 worker 不 join，未返回的呼叫繼續占固定四個圖示 slot。實際 handle／private bytes／image memory、十分鐘 idle CPU／I/O／wakeups 仍未量測，留待 PD-241 gate；不據此改變 legacy 預設。

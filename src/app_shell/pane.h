@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "managed_list/list_worker.h"
+#include "managed_list/icon_source.h"
 #include "app_shell/pane_chrome_geometry.h"
 #include "app_shell/pane_control_id.h"
 #include "app_shell/pane_tab_strip.h"
@@ -156,6 +157,13 @@ class Pane final {
     // reports when the most recent restore hit the list's end bound. Returned
     // views expire on the next Pane operation.
     ListInteractionSnapshot list_interaction_snapshot() const;
+    // Owned-value enrichment seam. Viewport indexes are immediately converted
+    // to identities; they are never used to address a completion.
+    void use_list_icons(std::unique_ptr<managed_list::IconSource> source);
+    void set_list_icon_viewport(std::size_t first, std::size_t count) noexcept;
+    int list_item_image(std::size_t row) const noexcept;
+    HANDLE icon_event() const noexcept;
+    void process_icon_results() noexcept;
     HANDLE content_event() const noexcept;
     void process_content_results() noexcept;
     bool open_list_row(std::size_t row);
@@ -307,6 +315,26 @@ class Pane final {
     std::unique_ptr<managed_list::Source> list_source_;
     ListSnapshot list_;
     HWND list_window_{};
+    std::unique_ptr<managed_list::IconSource> icon_source_;
+    struct CachedIcon final {
+        managed_list::IconKey key;
+        int slot{};
+        std::uint64_t used{};
+    };
+    std::vector<CachedIcon> icon_cache_;
+    std::vector<managed_list::IconKey> icon_interest_;
+    HIMAGELIST icon_images_{};
+    int icon_size_{16};
+    std::uint64_t icon_viewport_{}, icon_clock_{};
+    bool icon_viewport_posted_{};
+    bool icon_seam_{};
+    managed_list::IconKey list_icon_key(std::size_t row) const;
+    void refresh_list_icon_viewport() noexcept;
+    void queue_list_icon_viewport() noexcept;
+    void cancel_list_icons() noexcept;
+    void destroy_list_icons() noexcept;
+    bool ensure_list_icon_images(int size) noexcept;
+    static LRESULT CALLBACK list_icon_subclass(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
     std::size_t list_name_bytes_{};
     bool last_viewport_anchor_clamped_{};
     HRESULT realize_managed_list(const RECT& rect, const core::ShellLocation& location,

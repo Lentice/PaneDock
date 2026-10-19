@@ -265,7 +265,7 @@
 | PD-226 | 慢網路、容量耗盡與 pending shutdown | 8 | `in_progress` | PD-224 | [PD-226](tickets/PD-226-managed-list-slow-location-capacity.md) |
 | PD-227 | 列表選取、鍵盤與 accessibility | 8 | `done` | PD-224 | [PD-227](tickets/PD-227-managed-list-selection-keyboard.md) |
 | PD-228 | 基本排序與穩定更新 | 8 | `done` | PD-227 | [PD-228](tickets/PD-228-managed-list-basic-sort.md) |
-| PD-229 | 可見項目圖示與 overlay | 8 | `planned` | PD-224 | [PD-229](tickets/PD-229-managed-list-visible-icons.md) |
+| PD-229 | 可見項目圖示與 overlay | 8 | `done` | PD-224 | [PD-229](tickets/PD-229-managed-list-visible-icons.md) |
 | PD-230 | 縮圖與既有 view mode 對應 | 8 | `planned` | PD-229 | [PD-230](tickets/PD-230-managed-list-thumbnails-view-modes.md) |
 | PD-231 | 昂貴屬性欄位與排序 | 8 | `planned` | PD-228 | [PD-231](tickets/PD-231-managed-list-expensive-properties.md) |
 | PD-232 | 本機變更通知與恢復掃描 | 8 | `planned` | PD-228 | [PD-232](tickets/PD-232-managed-list-change-notifications.md) |

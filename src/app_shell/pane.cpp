@@ -1561,6 +1561,7 @@ void Pane::destroy() noexcept {
     tab_strip_ui_.revoke_drag_hover_target();
     cancel_managed_list();
     list_source_.reset();
+    destroy_list_icons();
     destroy_window(list_window_);
     explorer_host_.destroy();
     realized_ = false;
@@ -1645,6 +1646,7 @@ HRESULT Pane::configure_realized_view() noexcept {
 
 void Pane::derealize() noexcept {
     cancel_managed_list();
+    destroy_list_icons();
     destroy_window(list_window_);
     explorer_host_.destroy();
     realized_ = false;
@@ -1797,18 +1799,25 @@ void Pane::set_shell_rect(const RECT& rect, HDWP* deferred) noexcept {
 }
 
 void Pane::set_shell_visible(bool visible) noexcept {
-    if (managed_list_active_) { if (list_window_) ShowWindow(list_window_, visible ? SW_SHOW : SW_HIDE); return; }
+    if (managed_list_active_) {
+        if (!visible) cancel_list_icons();
+        if (list_window_) ShowWindow(list_window_, visible ? SW_SHOW : SW_HIDE);
+        if (visible) queue_list_icon_viewport();
+        return;
+    }
     if (pane_host() == nullptr) return;
     ShellCallScope shell_call(reentry_guard());
     explorer_host_.set_visible(visible);
 }
 
 void Pane::set_paint_geometry(const PaneChromeRects &rects, UINT dpi) noexcept {
+    const bool dpi_changed = paint_dpi_ != dpi;
     navigation_background_ = rects.address_background;
     OffsetRect(&navigation_background_, -rects.pane_window.left,
                -rects.pane_window.top);
     header_bottom_ = rects.address_background.bottom - rects.pane_window.top;
     paint_dpi_ = dpi;
+    if (dpi_changed) queue_list_icon_viewport();
 }
 
 void Pane::paint_background(HDC target) noexcept {

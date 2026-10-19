@@ -365,3 +365,150 @@ bool wait_for_workers(DWORD timeout) noexcept {
 }
 } // namespace testing
 } // namespace panedock::managed_list
+
+// Icon enrichment has separate, fixed capacity so a provider cannot hold up
+// enumeration/first usable rows. All synchronization stays in this file.
+#include "managed_list/icon_source.h"
+#include "managed_list/icon_source_test.h"
+#include <objbase.h>
+namespace panedock::managed_list {
+namespace {
+struct IconState final {
+    std::mutex mutex;
+    std::condition_variable changed;
+    HANDLE ready{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+    bool stop{};
+    std::uint64_t serial{};
+    HANDLE done{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+    bool running{};
+    std::shared_ptr<testing::IconGate> gate;
+    std::deque<IconRequest> pending;
+    std::deque<IconResult> results;
+    ~IconState() { if (ready) CloseHandle(ready); if (done) CloseHandle(done); }
+};
+std::array<std::weak_ptr<IconState>, kIconWorkers> icon_slots;
+void run_icons(std::shared_ptr<IconState> state) noexcept {
+    struct Done { HANDLE event; ~Done() { SetEvent(event); } } done{state->done};
+    const HRESULT apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    struct Apartment { HRESULT result; ~Apartment() { if (SUCCEEDED(result)) CoUninitialize(); } } cleanup{apartment};
+    for (;;) {
+        IconRequest request;
+        std::uint64_t serial{};
+        {
+            std::unique_lock lock(state->mutex);
+            state->changed.wait(lock, [&] { return state->stop || !state->pending.empty(); });
+            if (state->stop) return;
+            request = std::move(state->pending.front()); state->pending.pop_front();
+            serial = state->serial;
+            state->running = true;
+        }
+        IconResult result{std::move(request), {}};
+        try {
+            if (state->gate) {
+                SetEvent(state->gate->entered);
+                WaitForSingleObject(state->gate->release, INFINITE);
+                const int size = result.request.key.size;
+                result.image.pixels.assign(static_cast<std::size_t>(size * size), 0xff336699);
+                result.image.mask.assign(static_cast<std::size_t>(((size + 15) / 16) * 2 * size), 0);
+            } else if (SUCCEEDED(apartment)) result.image = shell_core::load_item_icon(
+                result.request.key.location.parsing_name, result.request.key.name,
+                result.request.key.size);
+        } catch (...) { /* Decorative failure keeps a usable placeholder. */ }
+        std::unique_lock lock(state->mutex);
+        state->running = false;
+        if (state->gate && state->results.size() == kIconResults) SetEvent(state->gate->backpressure);
+        state->changed.wait(lock, [&] { return state->stop || state->serial != serial ||
+            state->results.size() < kIconResults; });
+        if (state->stop) return;
+        if (state->serial != serial) continue;
+        try { state->results.push_back(std::move(result)); SetEvent(state->ready); }
+        catch (...) { /* No repeated wakeups or retry loop on allocation failure. */ }
+    }
+}
+class WorkerIcons final : public IconSource {
+    std::shared_ptr<IconState> state_;
+  public:
+    explicit WorkerIcons(std::shared_ptr<IconState> state) : state_(std::move(state)) {}
+    ~WorkerIcons() override {
+        // No join: a stuck Shell call owns its apartment/state and bounded slot
+        // until return. It never holds a Pane, HWND or UI-owned object.
+        std::lock_guard lock(state_->mutex);
+        state_->stop = true; ++state_->serial;
+        state_->pending.clear(); state_->results.clear();
+        ResetEvent(state_->ready); state_->changed.notify_all();
+    }
+    bool replace(std::vector<IconRequest> requests) noexcept override try {
+        if (requests.size() > kIconInterest) return false;
+        for (const auto& r : requests)
+            if (r.key.name.size() > kMaxName || r.key.location.parsing_name.size() > kMaxPath ||
+                r.key.location.fallback_path.size() > kMaxPath ||
+                r.key.location.known_folder_identity.size() > kMaxPath ||
+                r.request.location.parsing_name.size() > kMaxPath ||
+                r.request.location.fallback_path.size() > kMaxPath ||
+                r.request.location.known_folder_identity.size() > kMaxPath ||
+                r.request.binding.group_id.size() > 256 || r.request.binding.tab_id.size() > 256 ||
+                r.key.size < 16 || r.key.size > 64) return false;
+        std::deque<IconRequest> pending;
+        for (auto& r : requests) pending.push_back(std::move(r));
+        std::lock_guard lock(state_->mutex);
+        ++state_->serial;
+        state_->pending.swap(pending); state_->results.clear(); ResetEvent(state_->ready);
+        state_->changed.notify_all(); return true;
+    } catch (...) { cancel(); return false; }
+    std::optional<IconResult> take() noexcept override {
+        std::lock_guard lock(state_->mutex);
+        if (state_->results.empty()) { ResetEvent(state_->ready); return {}; }
+        auto result = std::move(state_->results.front()); state_->results.pop_front();
+        if (state_->results.empty()) ResetEvent(state_->ready);
+        state_->changed.notify_all(); return result;
+    }
+    HANDLE event() const noexcept override { return state_->ready; }
+    void cancel() noexcept override {
+        std::lock_guard lock(state_->mutex);
+        ++state_->serial; state_->pending.clear(); state_->results.clear();
+        ResetEvent(state_->ready); state_->changed.notify_all();
+    }
+};
+std::unique_ptr<IconSource> acquire_icons(std::shared_ptr<testing::IconGate> gate = {}) {
+    for (auto& slot : icon_slots) {
+        if (!slot.expired()) continue;
+        auto state = std::make_shared<IconState>();
+        if (!state->ready || !state->done) return {};
+        state->gate = std::move(gate);
+        auto source = std::make_unique<WorkerIcons>(state);
+        slot = state;
+        std::thread worker(run_icons, state);
+        worker.detach();
+        return source;
+    }
+    return {};
+}
+} // namespace
+std::unique_ptr<IconSource> make_icon_source() noexcept try { return acquire_icons(); }
+catch (...) { return {}; }
+namespace testing {
+IconGate::~IconGate() { CloseHandle(entered); CloseHandle(release); CloseHandle(backpressure); }
+std::unique_ptr<IconSource> make_gated_icons(std::shared_ptr<IconGate> gate) noexcept try {
+    if (!gate || !gate->entered || !gate->release || !gate->backpressure) return {};
+    return acquire_icons(std::move(gate));
+} catch (...) { return {}; }
+IconCounts icon_counts() noexcept {
+    IconCounts result;
+    for (auto& slot : icon_slots) if (auto state = slot.lock()) {
+        std::lock_guard lock(state->mutex);
+        ++result.workers; result.running += state->running;
+        result.pending += state->pending.size(); result.results += state->results.size();
+    }
+    return result;
+}
+bool wait_for_icon_workers(DWORD timeout) noexcept {
+    std::array<std::shared_ptr<IconState>, kIconWorkers> states;
+    std::array<HANDLE, kIconWorkers> handles{};
+    DWORD count = 0;
+    for (auto& slot : icon_slots) if (auto state = slot.lock()) {
+        handles[count] = state->done; states[count++] = std::move(state);
+    }
+    return !count || WaitForMultipleObjects(count, handles.data(), TRUE, timeout) == WAIT_OBJECT_0;
+}
+} // namespace testing
+} // namespace panedock::managed_list

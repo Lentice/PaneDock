@@ -30,6 +30,7 @@ set(PANEDOCK_TESTS
     "managed_list|unit/managed_list_test.cpp|advapi32 panedock_pane panedock_explorer_host panedock_session_writer panedock_core"
     "managed_list_restore|unit/managed_list_restore_test.cpp|panedock_pane panedock_explorer_host panedock_session_writer panedock_core"
     "managed_list_selection|unit/managed_list_selection_test.cpp|panedock_pane panedock_explorer_host panedock_session_writer panedock_core"
+    "managed_list_icons|unit/managed_list_icons_test.cpp|panedock_pane panedock_explorer_host panedock_session_writer panedock_core"
     "managed_list_sort|unit/managed_list_sort_test.cpp|panedock_pane panedock_explorer_host panedock_session_writer panedock_core"
     "managed_list_capacity|unit/managed_list_capacity_test.cpp|panedock_pane panedock_explorer_host panedock_session_writer panedock_core"
     "pane|unit/pane_test.cpp|panedock_pane panedock_explorer_host panedock_session_writer panedock_core"

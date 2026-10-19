@@ -106,6 +106,9 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
         rect.bottom-rect.top, explorer_container_, nullptr,
         GetModuleHandleW(nullptr), nullptr);
     if (!list_window_) return HRESULT_FROM_WIN32(GetLastError());
+    if (!SetWindowSubclass(list_window_, list_icon_subclass, 229, reinterpret_cast<DWORD_PTR>(this))) {
+        derealize(); return E_FAIL;
+    }
     ListView_SetExtendedListViewStyle(list_window_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     LVCOLUMNW column{};
     column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
@@ -142,6 +145,7 @@ HANDLE Pane::content_event() const noexcept {
 void Pane::cancel_managed_list() noexcept {
     if (!managed_list_enabled_) return;
     if (list_source_) list_source_->cancel();
+    cancel_list_icons();
     list_ = {};
     list_navigation_pending_ = false;
     list_history_target_.reset();
@@ -325,6 +329,7 @@ void Pane::apply_managed_list_sort() noexcept {
                 static_cast<int>(list_.rows.size()) - 1);
         restore_managed_list_interaction(interaction);
         update_managed_list_sort_indicator();
+        queue_list_icon_viewport();
     } catch (...) {
         // Sorting uses bounded row data and no Shell calls. Preserve the last
         // displayed order if an interaction snapshot cannot be allocated.
@@ -354,6 +359,7 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
     if (!active() || !active_tab() || !navigation_request_is_current(generation)) return E_ABORT;
     if (!list_source_) list_source_ = managed_list::make_local_source();
     if (list_source_) list_source_->cancel();
+    cancel_list_icons();
     list_name_bytes_ = 0;
     list_ = { {content_request(), location}, {}, managed_list::Phase::loading, 0};
     if (list_window_) {
@@ -450,6 +456,7 @@ void Pane::process_content_results() noexcept try {
         if (interaction) restore_managed_list_interaction(*interaction);
     }
     update_managed_list_sort_indicator();
+    queue_list_icon_viewport();
 } catch (...) {
     if (list_source_) list_source_->cancel();
     list_.phase = managed_list::Phase::error;
@@ -520,6 +527,9 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
     if (!notification || !list_window_ || notification->hwndFrom != list_window_) return {};
     if (notification->code == LVN_GETDISPINFOW) {
         auto* info = reinterpret_cast<NMLVDISPINFOW*>(notification);
+        if (info->item.mask & LVIF_IMAGE)
+            info->item.iImage = info->item.iItem < 0 ? 0 :
+                list_item_image(static_cast<std::size_t>(info->item.iItem));
         if ((info->item.mask & LVIF_TEXT) && info->item.iItem >= 0 &&
             static_cast<std::size_t>(info->item.iItem) < list_.rows.size()) {
             const auto& row = list_.rows[info->item.iItem];

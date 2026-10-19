@@ -3982,10 +3982,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         // Wait on owned worker events as well as input. Workers never hold an
         // HWND or post to a possibly destroyed/reused window. A queued input
         // message gets a turn between bounded result drains.
-        std::array<HANDLE, kExplorerCount> events{};
+        std::array<HANDLE, kExplorerCount * 2> events{};
         DWORD event_count = 0;
-        for (const auto& pane : state.panes)
+        for (const auto& pane : state.panes) {
             if (const HANDLE event = pane.content_event()) events[event_count++] = event;
+            if (const HANDLE event = pane.icon_event()) events[event_count++] = event;
+        }
         if (event_count != 0) {
             const DWORD wake = MsgWaitForMultipleObjectsEx(event_count, events.data(),
                 INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
@@ -3994,6 +3996,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 if (const HANDLE event = pane.content_event(); event &&
                     WaitForSingleObject(event, 0) == WAIT_OBJECT_0)
                     pane.process_content_results();
+            for (auto& pane : state.panes)
+                if (const HANDLE event = pane.icon_event(); event &&
+                    WaitForSingleObject(event, 0) == WAIT_OBJECT_0)
+                    pane.process_icon_results();
             if (!PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE)) continue;
         }
         result = GetMessageW(&message, nullptr, 0, 0);

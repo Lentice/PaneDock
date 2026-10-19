@@ -44,7 +44,8 @@ one replaceable pending request per subscription and two queued batches of at
 most 128 rows each. A worker may additionally hold one batch under construction;
 UI consumption drains at most two batches before returning to input dispatch.
 Requests cap each location string at 32,760 characters, each Group/tab id at 256
-bytes, and item names at 255 characters. There are no property or image caches.
+bytes, and item names at 255 characters. This enumeration slice has no property
+cache; PD-229 adds the bounded icon path described below.
 These value bounds keep queued results below the 16 MiB target; actual process
 memory and allocator overhead still require the release measurements above.
 
@@ -203,3 +204,46 @@ the restricted compiler invocation stalled. No full-suite run or app launch occu
   No mapping was created or disconnected. Genuine disconnected mapped-drive
   navigation/retry/shutdown and real desktop multi-pane/tab/Group input during a
   pending read remain unverified. The probe reports INCOMPLETE; acceptance stays open.
+
+## PD-229 icon bounds (implementation limits, not desktop measurements)
+
+Icon enrichment has four process-wide slots **in addition to** the existing four
+unchanged enumeration slots: at most eight managed-list workers, including
+abandoned calls. The separate capacity prevents slow EXE/LNK/overlay providers
+from blocking first operable enumeration batches. Each icon slot owns its STA,
+one provider call, at most 128 replaceable pending requests and two queued
+results (plus one result under construction). Queued inputs and identity keys use
+the enumeration limits of 32,760 characters per location component, 255 per leaf,
+and 256 bytes per Group/tab id. No worker owns a window or UI COM object.
+
+Each Pane owns at most 128 visible identities of interest, zero offscreen
+prefetch and 256 LRU cached images plus two local placeholders. Excess visible
+rows retain placeholders until scrolling brings them within the interest window.
+Raster dimensions are 16–64 pixels, selected from DPI; every returned raster is
+validated as exactly size² 32-bit pixels plus a WORD-aligned 1-bit mask. The
+maximum accounted color/mask payload is 4,359,168 bytes per Pane (258 × 16,896),
+17,436,672 bytes across four Panes; the worker boundary holds at most another
+202,752 raster bytes (four × three × 16,896). These are raster payload bounds,
+not process/private-byte measurements or a claim about comctl32/Shell overhead.
+Key strings, request values, allocator/GDI overhead and provider-owned caches
+still require the existing full-process gate measurement. No thumbnails are
+introduced here.
+
+Navigation, Group/tab rebinding, hiding and derealization cancel queued interest;
+a running provider may finish later but cannot update a different identity or
+viewport generation. Cached identities include location, leaf name, size, modified
+time, directory flag and raster dimensions. Eviction replaces an existing image
+slot. Failure remains a placeholder and retries on renewed viewport interest or
+Refresh, without a timer. An exhausted icon pool degrades to placeholders until
+an explicit viewport/navigation retry. Destruction never joins a provider call;
+its bounded slot/resources remain owned until the worker returns and tears down
+its apartment. Cache refresh on external file changes belongs to the later change
+notification slices.
+
+The focused controlled test checks progressive operable rows while icons wait,
+stale viewport/tab results, failure/retry, identity reuse/version changes,
+eviction, DPI raster replacement, GDI cleanup, queue backpressure, saturation and
+non-joining destruction. **No GUI or real-machine verification was run for this
+ticket at the user's request.** Native EXE/LNK/overlay compatibility, mixed-DPI
+rendering, OneDrive/virtual items, process memory/handles and ten-minute idle
+CPU/I/O/wakeups remain **Not measured**, and are required by PD-241.

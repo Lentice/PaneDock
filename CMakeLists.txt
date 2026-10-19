@@ -57,7 +57,7 @@ target_include_directories(panedock_shell_core PUBLIC src)
 target_compile_definitions(panedock_shell_core PRIVATE
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
 )
-target_link_libraries(panedock_shell_core PRIVATE shell32 ole32 uuid)
+target_link_libraries(panedock_shell_core PRIVATE shell32 ole32 uuid user32 gdi32)
 panedock_set_warnings(panedock_shell_core)
 # Generic Win32 window helpers. Its own library because both app_shell and
 # explorer_host use it: it used to be compiled into panedock_explorer_host,
@@ -111,6 +111,7 @@ add_library(panedock_pane STATIC
     src/app_shell/shell_reentry_guard.h
     src/managed_list/list_worker.cpp
     src/app_shell/pane_managed_list.cpp
+    src/app_shell/pane_list_icons.cpp
     src/app_shell/pane.cpp
     src/app_shell/pane_tab_strip.h
     src/app_shell/pane_tab_strip.cpp
@@ -119,7 +120,7 @@ target_include_directories(panedock_pane PUBLIC src)
 target_compile_definitions(panedock_pane PRIVATE
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
 )
-target_link_libraries(panedock_pane PUBLIC panedock_core user32 ole32)
+target_link_libraries(panedock_pane PUBLIC panedock_core panedock_shell_core user32 ole32 gdi32 comctl32)
 panedock_set_warnings(panedock_pane)
 
 # Its own library so the unit test can link it. Nothing else moved.

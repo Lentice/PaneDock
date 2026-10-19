@@ -9,7 +9,10 @@
 
 #include "shell_core/shell_core.h"
 
+#include <algorithm>
 #include <charconv>
+#include "shell_core/icon_image.h"
+#include <shellapi.h>
 
 #include <shlobj.h>
 #include <utility>
@@ -222,3 +225,48 @@ std::optional<std::filesystem::path> session_directory() noexcept {
 }
 
 }  // namespace panedock::shell_core
+
+namespace panedock::shell_core {
+IconImage load_item_icon(std::wstring_view folder, std::wstring_view name, int size) {
+    if (size < 16 || size > 64) return {};
+    std::wstring path(folder);
+    if (!path.empty() && path.back() != L'\\') path += L'\\';
+    path += name;
+    struct Pidl { PIDLIST_ABSOLUTE value{}; ~Pidl() { CoTaskMemFree(value); } } pidl;
+    if (FAILED(SHParseDisplayName(path.c_str(), nullptr, &pidl.value, 0, nullptr))) return {};
+    SHFILEINFOW info{};
+    // ADDOVERLAYS composes native overlays into the owned icon. No extension
+    // filtering, system-image-list mutation or context-menu policy is involved.
+    const auto ok = SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl.value), 0, &info,
+        sizeof(info), SHGFI_PIDL | SHGFI_ICON | SHGFI_ADDOVERLAYS |
+            (size <= 16 ? SHGFI_SMALLICON : SHGFI_LARGEICON));
+    struct Icon { HICON value; ~Icon() { if (value) DestroyIcon(value); } } icon{info.hIcon};
+    if (!ok || !icon.value) return {};
+    struct Dc { HDC value{CreateCompatibleDC(nullptr)}; ~Dc() { if (value) DeleteDC(value); } } dc;
+    BITMAPINFO bitmap{};
+    bitmap.bmiHeader = {sizeof(BITMAPINFOHEADER), size, -size, 1, 32, BI_RGB, 0, 0, 0, 0, 0};
+    void* bits{};
+    struct Bitmap { HBITMAP value; ~Bitmap() { if (value) DeleteObject(value); } }
+        dib{CreateDIBSection(nullptr, &bitmap, DIB_RGB_COLORS, &bits, nullptr, 0)};
+    if (!dc.value || !dib.value || !bits) return {};
+    const auto previous = SelectObject(dc.value, dib.value);
+    struct Selection { HDC dc; HGDIOBJ old; ~Selection() { SelectObject(dc, old); } } selected{dc.value, previous};
+    const auto count = static_cast<std::size_t>(size * size);
+    auto* pixels = static_cast<std::uint32_t*>(bits);
+    std::fill_n(pixels, count, 0);
+    if (!DrawIconEx(dc.value, 0, 0, icon.value, size, size, 0, nullptr, DI_NORMAL)) return {};
+    GdiFlush();
+    IconImage result;
+    result.pixels.assign(pixels, pixels + count);
+    std::fill_n(pixels, count, 0);
+    if (!DrawIconEx(dc.value, 0, 0, icon.value, size, size, 0, nullptr, DI_MASK)) return {};
+    GdiFlush();
+    const int stride = ((size + 15) / 16) * 2; // CreateBitmap's WORD aligned scanlines
+    result.mask.assign(static_cast<std::size_t>(stride * size), 0);
+    for (int y = 0; y < size; ++y)
+        for (int x = 0; x < size; ++x)
+            if (pixels[y * size + x] & 0x00ffffff)
+                result.mask[y * stride + x / 8] |= static_cast<unsigned char>(0x80 >> (x % 8));
+    return result;
+}
+} // namespace panedock::shell_core
