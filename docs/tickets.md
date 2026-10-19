@@ -270,15 +270,19 @@
 | PD-231 | 昂貴屬性欄位與排序 | 8 | `done` | PD-228 | [PD-231](tickets/PD-231-managed-list-expensive-properties.md) |
 | PD-232 | 本機變更通知與恢復掃描 | 8 | `done` | PD-228 | [PD-232](tickets/PD-232-managed-list-change-notifications.md) |
 | PD-233 | tab 列表 snapshot 的全域有界快取 | 8 | `done` | PD-225, PD-228, PD-232 | [PD-233](tickets/PD-233-managed-list-tab-cache.md) |
-| PD-234 | 虛擬 Shell location 導覽 | 8 | `planned` | PD-225 | [PD-234](tickets/PD-234-managed-list-shell-namespace.md) |
-| PD-235 | OneDrive placeholder 瀏覽 | 8 | `planned` | PD-229, PD-234 | [PD-235](tickets/PD-235-managed-list-onedrive-placeholders.md) |
-| PD-236 | 自建選取接回剪貼簿與 Shell 檔案操作 | 8 | `planned` | PD-227, PD-234 | [PD-236](tickets/PD-236-managed-list-shell-file-operations.md) |
+| PD-234 | 虛擬 Shell location 導覽（umbrella；交付拆為 PD-243～PD-246） | 8 | `planned` | PD-246 | [PD-234](tickets/PD-234-managed-list-shell-namespace.md) |
+| PD-235 | OneDrive placeholder 瀏覽 | 8 | `planned` | PD-229, PD-246 | [PD-235](tickets/PD-235-managed-list-onedrive-placeholders.md) |
+| PD-236 | 自建選取接回剪貼簿與 Shell 檔案操作 | 8 | `planned` | PD-227, PD-246 | [PD-236](tickets/PD-236-managed-list-shell-file-operations.md) |
 | PD-237 | 自建列表 inline rename | 8 | `planned` | PD-232, PD-236 | [PD-237](tickets/PD-237-managed-list-inline-rename.md) |
 | PD-238 | 跨 pane 與外部 drag/drop | 8 | `planned` | PD-225, PD-236 | [PD-238](tickets/PD-238-managed-list-drag-drop.md) |
-| PD-239 | 原生選單目標相容性接線 | 8 | `planned` | PD-227, PD-234 | [PD-239](tickets/PD-239-managed-list-native-menu-compatibility.md) |
+| PD-239 | 原生選單目標相容性接線 | 8 | `planned` | PD-227, PD-246 | [PD-239](tickets/PD-239-managed-list-native-menu-compatibility.md) |
 | PD-240 | 新列表的 live resize 與 mixed DPI | 8 | `planned` | PD-224 | [PD-240](tickets/PD-240-managed-list-live-resize-dpi.md) |
 | PD-241 | 自建列表相容性及效能 gate，通過後切預設 | 8 | `planned` | PD-226, PD-230, PD-231, PD-233, PD-235, PD-237, PD-238, PD-239, PD-240 | [PD-241](tickets/PD-241-managed-list-rollout-gate.md) |
 | PD-242 | contract：移除舊 Shell view 路徑 | 8 | `planned` | PD-241 | [PD-242](tickets/PD-242-managed-list-remove-shell-view.md) |
+| PD-243 | PD-234 切片：列表 item identity 與顯示名稱分離 | 8 | `planned` | PD-227, PD-228, PD-232, PD-233 | [PD-243](tickets/PD-243-managed-list-item-identity.md) |
+| PD-244 | PD-234 切片：圖示與屬性請求使用 Shell item identity | 8 | `planned` | PD-243, PD-229, PD-230, PD-231 | [PD-244](tickets/PD-244-managed-list-enrichment-identity.md) |
+| PD-245 | PD-234 切片：Worker STA 的 namespace 列舉與 parent 值 | 8 | `planned` | PD-243, PD-226 | [PD-245](tickets/PD-245-managed-list-namespace-worker.md) |
+| PD-246 | PD-234 切片：Pane 虛擬導覽、預設位置與 session 還原 | 8 | `planned` | PD-225, PD-244, PD-245 | [PD-246](tickets/PD-246-managed-list-virtual-navigation.md) |
 
 
 ## 自建列表遷移（2026-10-16 使用者核准）
@@ -291,6 +295,12 @@ PD-222～PD-242 的狀態與依賴只以以上 Ticket 總覽為準；先 expand 
 這是使用者直接變更產品方向，不再以 Phase 0 No-Go 或 PD-209 量測作為「允許規劃自建列表」的前提；
 實際效能改善仍須量測，既有 Shell 路徑未隨切票改變。舊 completed ticket 與未結案工作不在本次重寫。
 GitHub tracker／triage 尚未設定，本系列未發布為 GitHub issues；本地工作可依總覽 frontier 開始。
+
+### PD-234 切分依據（2026-10-19）
+
+追查既有實作後，單一 namespace backend 不足以交付 PD-234：Row::name 同時作 display／selection／anchor／recovery key；圖示與屬性 worker 拼接 parent＋name；Batch 缺少獨立 canonical location／parent；Pane 的 realize、navigate、Up、history／restore 又有 filesystem-only 假設。跨上述契約遷移及回歸驗證超出半天至兩天切片，因此候選交付拆為 PD-243（item identity）、PD-244（enrichment identity）、PD-245（namespace worker）、PD-246（Pane／session 整合），各票均含 caller、邊界與聚焦 checks。切分不縮減 PD-234 驗收，不改 stage-reveal layout。
+
+PD-234 保留為產品 umbrella，子票完成不自動宣告其真實 Shell 驗收通過。實機／UI 驗證由使用者延後，This PC／Desktop children、known-folder restore、provider apartment／shutdown 仍未驗證，需真實桌面；seam tests 不代表 Shell PASS。PD-235／236／239 直接等待實際整合切片；具體依賴與狀態僅見總覽表。PD-245 沿用 PD-226 的容量／shutdown 交付，不代替或修改該票。未重開「已否決的方向」中的 fake ExplorerBrowser、Shell UI 自動化、runtime rewrite 或程序隔離。
 
 ## 已否決的方向 — 不要重開
 
