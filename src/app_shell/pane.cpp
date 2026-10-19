@@ -935,6 +935,11 @@ HRESULT Pane::navigate_up_one_level() {
     if (managed_list_active_) {
         auto path = list_.request.location.parsing_name;
         while (path.size() > 3 && path.back() == L'\\') path.pop_back();
+        if (path.starts_with(L"\\\\")) {
+            const auto server = path.find(L'\\', 2);
+            if (server == std::wstring::npos || path.find(L'\\', server + 1) == std::wstring::npos)
+                return S_FALSE;
+        }
         const auto slash = path.find_last_of(L'\\');
         if (slash == std::wstring::npos || path.size() <= 3) return S_FALSE;
         path.resize(std::max<std::size_t>(3, slash));
@@ -973,8 +978,7 @@ void Pane::navigation_complete(
     // A legacy namespace view can itself enter a local folder (e.g. This PC).
     // From there use the same bounded content entry as address/tab restore.
     if (managed_list_enabled_ && !managed_list_active_ &&
-        new_location.parsing_name.size() >= 3 && new_location.parsing_name[1] == L':' &&
-        new_location.parsing_name[2] == L'\\') {
+        managed_list::is_filesystem_location(new_location.parsing_name)) {
         // Never Destroy the browser from its own completion callback. A
         // single wake-up lets the outer loop route it after ShellCallScope.
         pending_list_route_ = managed_list::Request{content_request(), new_location};
@@ -1585,8 +1589,7 @@ void Pane::destroy() noexcept {
 
 HRESULT Pane::realize(const RECT &local_rect,
                       const panedock::core::ShellLocation &location) noexcept {
-    if (managed_list_enabled_ && location.parsing_name.size() >= 3 &&
-        location.parsing_name[1] == L':' && location.parsing_name[2] == L'\\') {
+    if (managed_list_enabled_ && managed_list::is_filesystem_location(location.parsing_name)) {
         managed_list_active_ = true;
         try { return realize_managed_list(local_rect, location, begin_navigation()); }
         catch (...) { derealize(); return E_OUTOFMEMORY; }

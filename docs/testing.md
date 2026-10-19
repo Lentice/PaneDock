@@ -74,11 +74,11 @@ Enter an absolute local drive path in a visible pane's
 address bar; double-click a folder or press Enter to enter it, and use Up or
 Backspace to leave. Names and size/folder information arrive in batches. Loading,
 empty, read failure, worker unavailable and row/memory exhaustion appear in the
-status bar; Refresh retries the displayed destination. Virtual/UNC locations retain
-legacy Shell content and their original identity, with a Shell-view status label;
-entering a local folder from that view queues managed content after the Shell call
-returns. Mapped remote drives are still rejected by the local worker; remote
-capacity/provider behavior belongs to PD-226. Launches without the switch retain
+status bar; Refresh retries the displayed destination. PD-226 extends this path
+to ordinary UNC shares and mapped drives without UI-thread drive/provider probes.
+Virtual locations retain legacy Shell content and their original identity, with a
+Shell-view status label; entering a filesystem folder from that view queues managed
+content after the Shell call returns. Launches without the switch retain
 legacy content. The switch is not persisted and adds no session schema or settings.
 Loading updates the address immediately; the first valid rows or successful empty
 result commit location/history. A failure before that preserves the last successful
@@ -381,3 +381,46 @@ headless smoke test, or source-code inspection as a PASS for any row above.
 - [ ] FR-009 network drive, USB volume, OneDrive placeholder reachable
 - [ ] FR-013 recovery from a corrupt session document
 - [ ] NFR-004 correct scaling across mixed-DPI monitors
+
+## PD-226 slow-location capacity checks and probe
+
+```powershell
+$env:PATH = 'E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja;' + $env:PATH
+cmake -S . -B build/pd226 -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build/pd226 --target PaneDock panedock_managed_list_capacity_test panedock_managed_list_test panedock_managed_list_restore_test panedock_managed_list_selection_test panedock_core_shutdown_coordinator_test panedock_shell_reentry_guard_test
+ctest --test-dir build/pd226 --output-on-failure -R '^panedock_managed_list_capacity$' -V
+ctest --test-dir build/pd226 --output-on-failure -R '^panedock_(managed_list(_capacity|_restore|_selection)?|core_shutdown_coordinator|shell_reentry_guard|single_threaded|shutdown_state|shell_reentry_gate)$'
+git diff --check
+# Substitute an already available slow UNC or disconnected mapped-drive path:
+build/pd226/tests/panedock_managed_list_capacity_test.exe '\\server\share\folder'
+```
+
+`panedock_managed_list_capacity` uses Pane public operations and observable state,
+with a kernel-event gate inside the real source worker, not a fake Source or Shell
+view. Only the explicit test factory enables that gate. It exercises four blocked
+operations, 1,000 retries without queue growth, another pane's real local enumeration,
+leaving a blocked destination, capacity refusal/recovery, restored parsing/known-folder/
+fallback identity, UNC share-root Up, two-batch backpressure, late errors and destruction
+while four reads remain blocked. Releasing the gates and waiting on worker handles
+verifies cleanup to zero workers; no arbitrary settling sleep is used.
+
+Supplying one path argument instead runs the real filesystem backend through Pane.
+The probe observes its event for up to five seconds, records 30 other-pane navigation
+acknowledgements, departure, retry identity and destruction. Before departure it
+captures the running read generation so prompt cancellation cannot erase evidence.
+A harness-only wait (at most ten seconds) records cancellation requests/acceptance,
+the captured FindFirstFileEx result, and whether the retired OS thread exited. Release
+of the observation precedes retry; it temporarily retains only the existing bounded
+slots. After destruction a separate ten-second wait reports any workers still retained.
+A timeout is not proof that the call can never return. It does not start PaneDock or
+touch its singleton/session. It always returns 2 (INCOMPLETE): a successful cancellation
+sample cannot certify native input, disconnected mappings or every provider/retry.
+A result before the five-second observation ends is not sustained slow-source evidence.
+`GetTickCount64` measurements of 0 ms are below that clock's granularity, not zero latency
+or a QPC/p95 performance PASS. Use only an existing authorized endpoint; never create or
+break a mapping, change firewall/routing, or disable networking for this probe.
+
+PD-226 checks used an elevated LLVM-MinGW Release build after sandbox compiler detection
+stalled. CTest excludes launch smoke to preserve the user's running singleton. No GUI
+verification or new application launch is implied. Recorded evidence and remaining
+external-environment gaps are in `docs/performance-baseline.md`.

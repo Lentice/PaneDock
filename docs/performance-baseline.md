@@ -61,10 +61,14 @@ read handle; they have no HWND, Pane/AppState or COM pointer. Cancellation clear
 the pending request/results and invalidates the worker serial. Destruction signals
 stop without joining an OS call. A stuck abandoned worker retains its bounded slot
 and owned resources until it returns or the process exits; it cannot deliver to a
-destroyed UI or create unlimited replacements. Another request on that same
-subscription can remain loading behind a stuck call. Slow/provider saturation and
-real hung-provider shutdown remain unverified and belong to the later gate; this
-implementation does not claim that cancellation interrupts Windows calls.
+destroyed UI or create unlimited replacements. PD-226 changes successor admission:
+a new destination reuses an idle worker or abandons the obsolete read and acquires a
+free slot under the same four-slot cap. All occupied means immediate recoverable
+`Worker capacity exhausted` error, not loading indefinitely behind an old call.
+Refresh is an explicit bounded retry; no automatic retry or polling timer is added.
+Cancellation attempts `CancelSynchronousIo` on an owned thread handle without waiting;
+unsupported/racing cancellation retains the slot until the old call exits. This does
+not promise that Windows/provider calls can always be interrupted.
 
 ## Local tab-switch Shell probe (2026-09-29)
 
@@ -114,3 +118,88 @@ For the legacy implementation, the decisions that bound memory are architectural
 3. Third-party shell extensions load lazily.
 
 For the managed-list implementation, use the explicit acceptance budgets above and measure them on the defined corpus. Reasoning from deployment size, runtime baselines or another project's figures is not evidence here.
+
+## PD-226 partial evidence (2026-10-16; not an acceptance PASS)
+
+LLVM-MinGW Release, `build/pd226`; no user app launch, session write, network setting
+change or mapping mutation. Public Pane/PaneHost checks use real source workers and
+bounded queues. The controlled read gate is not a network/provider measurement.
+
+| Check | Observed result | Limit of evidence |
+|---|---|---|
+| Controlled saturation, 1,000 retries | workers=4, running=4, pending=0, batches=0 | Fixed worker/request/value bounds; not process peak-memory measurement. |
+| Controlled result backpressure | queued_batches=2, pending=0 | Actual production queue; a worker may also own one batch under construction. |
+| Pane destruction with four blocked reads | 0 ms, retained_workers=4, UI event=null | Non-joining destruction; gate release then cleanup workers=0. Not arbitrary provider cancellation proof. |
+| Managed-list CTests | Three focused tests passed 20 consecutive runs each; capacity self-check PASSED | No native desktop input/accessibility claims. |
+| Full CTest excluding launch smoke | 39/39 passed | Existing singleton preserved; launch smoke not run. |
+| Existing `\\vianextfs06\Tmp\Lentice\test` | empty (phase=3), error=0 after 16 ms | Fast successful UNC read, **not slow-source PASS**. |
+| `\\192.0.2.1\PD226` read (TEST-NET-1 address) | Still loading (phase=1, error=0), event timeout after 5,016 ms | Real pending OS UNC request, not a controlled gate; no eventual error or cancellation-completion observation. |
+| Same pending UNC probe | 30 other-pane acknowledgement samples all 0 ms; departure=0 ms; Pane destruction=0 ms; probe exit=2 INCOMPLETE | GetTickCount64 granularity; public Pane calls, not QPC command-dispatch-to-paint or real input p95. |
+| Existing mapped-drive inventory | Get-SmbMapping empty; `net use` no entries; Win32_LogicalDisk only C:/D:/E: (type 3); HKCU Network no entries | No existing disconnected mapping available. None created or disconnected. |
+
+The network probe is repeatable with an existing endpoint using the command in
+`docs/testing.md`. It deliberately reports INCOMPLETE even when a pending UNC call
+is observed. Missing: genuine disconnected mapped-drive navigation/retry/shutdown,
+OS I/O cancellation completion versus retained-capacity behavior, and real desktop
+other-pane/tab/Group input during the wait. A fast failure/success does not close any
+of those gaps. Full managed-list latency/memory/idle release targets remain unmeasured.
+
+`CancelSynchronousIo` is a best-effort non-waiting cancellation request; a call may
+still complete normally, fail or return ERROR_OPERATION_ABORTED. See the
+[Microsoft API contract](https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-cancelsynchronousio).
+Bounded retention until an old call returns (or process exit) is the fallback, with
+four slots total and no force termination or process isolation.
+
+### PD-226 cancellation follow-up (2026-10-19; still INCOMPLETE)
+
+Only the existing `\\192.0.2.1\PD226` TEST-NET-1 endpoint was used. No mapping,
+firewall, routing or application-window changes. Get-SmbMapping / `net use` and
+HKCU Network again showed no existing mapping. Probe measurements use GetTickCount64.
+
+| Observation | Result | Interpretation |
+|---|---|---|
+| First follow-up, observation begun after departure | UNC pending for 5,000 ms; departed read was no longer observable; shutdown wait=10,000 ms, retained_workers=1 | Does not establish the departed read's cancellation outcome. |
+| Follow-up capturing the read generation before departure | UNC still loading after 5,015 ms; 30 other-pane acknowledgement samples all 0 ms; leave=0 ms | Genuine pending OS read; coarse public-Pane timing, not desktop/QPC p95. |
+| Captured read after departure | observed=1, exited=1, cancel_requests=2, cancel_accepted=1, reads_returned=1, reads_aborted=1, last_read_error=995 (ERROR_OPERATION_ABORTED), observation wait=0 ms | One real FindFirstFileEx read was cancelled and its worker exited. Last cancel error=1168 (ERROR_NOT_FOUND) on the later cancellation attempt does not negate the accepted request and aborted read. |
+| Retry followed by Pane destruction | shutdown=0 ms; bounded cleanup wait=10,016 ms, workers_exited=0, retained_workers=1; probe exit=2 | A later retry worker did not exit within this window. The product did not join it; the probe subsequently exited normally. No claim of universal cancellation or eventual retry completion. |
+
+The generation observation retains the original State/thread handle until the bounded
+wait finishes, then releases it before retry. This prevents prompt worker exit or reuse
+from losing the result. It does not substitute an OS read or alter cancellation behavior.
+Controlled capacity checks still observe four blocked workers, two queued batches and
+cleanup to zero after gate release. Acceptance remains open: no genuine disconnected
+mapped-drive read/retry/shutdown, no real desktop multi-pane/tab/Group input during a
+slow source, and no eventual-return evidence for the retained retry in this sample.
+The earlier unmeasured release latency/memory/idle targets remain unchanged.
+
+### PD-226 fresh-session verification after PD-227 (2026-10-19)
+
+Recovered the reviewed PD-226 WIP onto `1a2b168`, preserving PD-227 selection and
+keyboard behavior. The original stash remains intact. Release configure and the
+focused build succeeded; compilation required the elevated execution context after
+the restricted compiler invocation stalled. No full-suite run or app launch occurred.
+
+- Nine focused CTests cover managed list, restore, selection, capacity, shutdown
+  coordinator, Shell reentry guard, shutdown state, reentry gate and single-thread
+  boundary. Eight passed in the restricted context; managed-list's disposable DACL
+  setup failed there, then the same test passed in the elevated context.
+  After the final cancellation-handle failure guard, all nine passed together in
+  the elevated context; the capacity test again passed 20 consecutive runs.
+- The capacity CTest passed 20 consecutive runs: four blocked workers, 1,000 retries
+  without pending/batch growth, two-batch backpressure, destruction without joining,
+  and cleanup after releasing the controlled gates. These are bounded value/work
+  checks, not peak-process-memory or native desktop latency measurements.
+- Restricted UNC probe returned error 5 immediately; this is **not** slow-network
+  evidence. The elevated read of the same `\\192.0.2.1\PD226` endpoint remained
+  pending for 5,016 ms. Thirty other-pane acknowledgement samples and departure
+  measured 0 ms with GetTickCount64 (below clock granularity).
+- Captured generation: observed=1, exited=0, cancel_requests=1, cancel_accepted=1,
+  reads_returned=1, reads_aborted=1, last_read_error=995. The read returned before
+  successor admission could retire the thread; it was reused, so exited=0 does not
+  imply a stuck retired read. Pane destruction and cleanup measured 0 ms, with
+  workers_exited=1 and retained_workers=0. This successful sample does not erase
+  the earlier retained-retry evidence or establish universal cancellation.
+- `net use` reported no mappings; restricted Get-SmbMapping returned access denied.
+  No mapping was created or disconnected. Genuine disconnected mapped-drive
+  navigation/retry/shutdown and real desktop multi-pane/tab/Group input during a
+  pending read remain unverified. The probe reports INCOMPLETE; acceptance stays open.

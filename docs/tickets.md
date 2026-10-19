@@ -262,7 +262,7 @@
 | PD-223 | Pane 內容入口 expand，保持既有行為 | 8 | `done` | PD-222 | [PD-223](tickets/PD-223-pane-content-expand.md) |
 | PD-224 | 單 pane 本機資料夾分批列表 | 8 | `done` | PD-223 | [PD-224](tickets/PD-224-managed-list-local-batches.md) |
 | PD-225 | 自建列表接通 tab、Group 與 session 復原 | 8 | `done` | PD-224 | [PD-225](tickets/PD-225-managed-list-tab-group-restore.md) |
-| PD-226 | 慢網路、容量耗盡與 pending shutdown | 8 | `planned` | PD-224 | [PD-226](tickets/PD-226-managed-list-slow-location-capacity.md) |
+| PD-226 | 慢網路、容量耗盡與 pending shutdown | 8 | `in_progress` | PD-224 | [PD-226](tickets/PD-226-managed-list-slow-location-capacity.md) |
 | PD-227 | 列表選取、鍵盤與 accessibility | 8 | `done` | PD-224 | [PD-227](tickets/PD-227-managed-list-selection-keyboard.md) |
 | PD-228 | 基本排序與穩定更新 | 8 | `planned` | PD-227 | [PD-228](tickets/PD-228-managed-list-basic-sort.md) |
 | PD-229 | 可見項目圖示與 overlay | 8 | `planned` | PD-224 | [PD-229](tickets/PD-229-managed-list-visible-icons.md) |

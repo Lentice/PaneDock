@@ -8,9 +8,9 @@ HRESULT Pane::navigate_content(core::ShellLocation location,
     ShellCallScope shell_call(reentry_guard());
     const auto request = content_request();
     // Syntactic routing only: no drive/provider probing on the UI STA.
-    // Virtual/UNC identities remain intact on the legacy path until PD-234.
+    // Virtual identities retain the legacy path; UNC and drive paths use workers.
     const auto& path = location.parsing_name;
-    const bool local = path.size() >= 3 && path[1] == L':' && path[2] == L'\\';
+    const bool local = managed_list::is_filesystem_location(path);
     if (local == managed_list_active_ && (local || realized_))
         return local ? start_managed_list(location, generation)
                      : explorer_host_.navigate(location, generation);
@@ -58,7 +58,7 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
                                     NavigationGeneration generation) {
     if (!active() || !active_tab()) return E_ABORT;
     if (list_window_) return S_FALSE;
-    list_window_ = CreateWindowExW(0, WC_LISTVIEWW, L"Local folder",
+    list_window_ = CreateWindowExW(0, WC_LISTVIEWW, L"Folder",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS,
         rect.left, rect.top, rect.right-rect.left,
         rect.bottom-rect.top, explorer_container_, nullptr,
@@ -218,8 +218,8 @@ void Pane::update_managed_list() noexcept try {
     case managed_list::Phase::empty: text = L"This folder is empty."; break;
     case managed_list::Phase::error:
         text += list_.error == ERROR_NO_SYSTEM_RESOURCES
-            ? L" - Worker unavailable. Refresh to retry."
-            : L" - Cannot read this local folder. Refresh to retry. Error " + std::to_wstring(list_.error);
+            ? L" - Worker capacity exhausted. Leave this location or Refresh to retry."
+            : L" - Cannot read this location. Refresh to retry. Error " + std::to_wstring(list_.error);
         break;
     case managed_list::Phase::limited: text += L" - Row or memory limit reached (100,000 rows / 24 MiB). Open a subfolder to continue."; break;
     default: break;

@@ -14,8 +14,10 @@
 #include "core/navigation.h"
 
 namespace panedock::managed_list {
-// Fixed per-process limits: at most four subscriptions, each with one worker,
-// one replaceable pending request, two queued batches, and 100,000 retained rows.
+// Four worker slots process-wide, INCLUDING abandoned reads. Each has one
+// replaceable pending request and two queued batches. A successor may acquire
+// a free slot; exhaustion fails immediately until an explicit retry succeeds.
+// Pane separately caps retained rows at 100,000 / 24 MiB.
 inline constexpr std::size_t kMaxSubscriptions = 4;
 inline constexpr std::size_t kBatchRows = 128;
 inline constexpr std::size_t kQueuedBatches = 2;
@@ -56,4 +58,9 @@ class Source {
 };
 // Subscription creation is UI-STA-only, like Pane ownership.
 std::unique_ptr<Source> make_local_source() noexcept;
+// Pure syntax only; never resolves a drive, server or Shell item on the STA.
+inline bool is_filesystem_location(std::wstring_view path) noexcept {
+    return (path.size() >= 3 && path[1] == L':' && path[2] == L'\\') ||
+        (path.size() > 2 && path[0] == L'\\' && path[1] == L'\\');
+}
 } // namespace panedock::managed_list

@@ -76,3 +76,8 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+## 交接區
+
+- 尚缺既有 disconnected mapped drive 的實際讀取、離開／重試及 pending shutdown 證據；本機唯讀盤點沒有目前或持久化映射，未獲授權建立或中斷映射。真實 UNC pending probe 不能替代 mapped drive 驗收。
+- 未驗證，需真實桌面：慢網路期間實際多 pane／tab／Group input。TEST-NET-1 的一個真實 OS 讀取已觀察到取消後返回並退出 worker；後續 retry 在有界 shutdown 觀察窗內仍占用額度，最終返回未驗證，不能宣稱所有 provider／retry 可取消。受控 worker 的有界 abandonment／無 join 只能證明自身生命週期；快成功或粗粒度計時不能推論完整驗收通過。測量與重跑方式見 performance baseline／testing。
