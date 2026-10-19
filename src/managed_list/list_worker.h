@@ -38,6 +38,9 @@ struct Row final {
     std::wstring name;
     std::uint64_t bytes{};
     bool directory{};
+    // UTC FILETIME ticks copied directly from WIN32_FIND_DATA on the worker.
+    // Zero means the basic timestamp was unavailable.
+    std::uint64_t date_modified{};
 };
 enum class Phase { idle, loading, complete, empty, error, limited };
 struct Batch final {

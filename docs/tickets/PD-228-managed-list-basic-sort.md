@@ -48,9 +48,9 @@ Phase 8 · managed list migration
 
 ## Acceptance criteria
 
-- [ ] 同 key／unicode／空值／folders 與 files 混合，升降序結果可重現。
-- [ ] 多批到達及排序變更不跳到別的 selected item；anchor 不依舊 row number。
-- [ ] 既有 session sort 值可解讀，未知值有非破壞 fallback，操作不觸發 UI 執行緒慢 property 查詢。
+- [x] 同 key／unicode／空值／folders 與 files 混合，升降序結果可重現。
+- [x] 多批到達及排序變更不跳到別的 selected item；anchor 不依舊 row number。
+- [x] 既有 session sort 值可解讀，未知值有非破壞 fallback，操作不觸發 UI 執行緒慢 property 查詢。
 
 ## Testing decisions
 
@@ -76,3 +76,7 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+## 交接區
+
+- 尚未在真實 Windows 桌面驗證 Shell／網路／OneDrive、實際焦點與 accessibility 行為；本次只完成自動化測試，未啟動應用程式。這些項目仍須由 PD-241 rollout gate 實機驗證，unit test 不代表通過。

@@ -83,6 +83,22 @@ std::optional<ViewModeSelection> parse_view_mode(std::string_view name) {
     return std::nullopt;
 }
 
+std::string_view sort_property_name(SortProperty property) noexcept {
+    switch (property) {
+        case SortProperty::name: return "System.ItemNameDisplay";
+        case SortProperty::size: return "System.Size";
+        case SortProperty::date_modified: return "System.DateModified";
+    }
+    return {};
+}
+
+std::optional<SortProperty> parse_sort_property(std::string_view name) noexcept {
+    if (name == "System.ItemNameDisplay") return SortProperty::name;
+    if (name == "System.Size") return SortProperty::size;
+    if (name == "System.DateModified") return SortProperty::date_modified;
+    return std::nullopt;
+}
+
 core::ShellLocation capture_location(std::wstring parsing_name) {
     core::ShellLocation result{std::move(parsing_name), {}, {}};
     const auto item = parse(result.parsing_name);

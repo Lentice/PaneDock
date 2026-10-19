@@ -1122,6 +1122,8 @@ void Pane::capture_view_mode() {
 }
 
 void Pane::capture_sort() {
+    // Managed-list header actions update TabState directly. Reading a Shell
+    // view here would overwrite the model-owned sort value.
     if (managed_list_active_) return;
     if (!active()) return;
     if (pane_state() == nullptr || !realized()) return;
@@ -1161,7 +1163,10 @@ void Pane::apply_view_mode() {
 }
 
 void Pane::apply_sort() {
-    if (managed_list_active_) return;
+    if (managed_list_active_) {
+        apply_managed_list_sort();
+        return;
+    }
     if (!active()) return;
     auto *tab = active_tab();
     if (tab == nullptr || !realized() || tab->sort_column.empty()) return;

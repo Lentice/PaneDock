@@ -29,6 +29,11 @@ struct ViewModeOption final {
     ViewModeSelection selection;
 };
 
+// Canonical PROPERTYKEY names already used by TabState::sort_column.
+// Unsupported keys remain valid persisted values and are handled by the
+// managed list's non-destructive fallback.
+enum class SortProperty { name, size, date_modified };
+
 inline constexpr int kExtraLargeIconSize = 256;
 inline constexpr int kLargeIconSize = 96;
 inline constexpr int kMediumIconSize = 48;
@@ -47,6 +52,8 @@ inline constexpr std::array<ViewModeOption, 8> kViewModeOptions{{
 
 std::string view_mode_name(FOLDERVIEWMODE mode, int image_size = -1);
 std::optional<ViewModeSelection> parse_view_mode(std::string_view name);
+std::string_view sort_property_name(SortProperty property) noexcept;
+std::optional<SortProperty> parse_sort_property(std::string_view name) noexcept;
 
 core::ShellLocation capture_location(std::wstring parsing_name);
 

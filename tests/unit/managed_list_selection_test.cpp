@@ -98,6 +98,12 @@ struct Fixture final {
         source->deliver({std::move(request), std::move(rows), phase, 0});
         pane.process_content_results();
     }
+    int row(std::wstring_view name) const {
+        const auto& rows = pane.list_snapshot().rows;
+        const auto found = std::find_if(rows.begin(), rows.end(),
+            [&](const auto& item) { return item.name == name; });
+        return found == rows.end() ? -1 : static_cast<int>(found - rows.begin());
+    }
     void key(UINT key, WPARAM modifiers = 0) {
         MSG message{};
         message.hwnd = list;
@@ -130,7 +136,7 @@ void native_selection_and_keyboard_navigation_report_item_identities() {
         {{L"alpha.txt", 1, false}, {L"beta.txt", 2, false},
          {L"gamma.txt", 3, false}, {L"delta.txt", 4, false}});
 
-    f.select_item(1);
+    f.select_item(f.row(L"beta.txt"));
     auto observed = f.pane.list_interaction_snapshot();
     EXPECT(observed.selected.size() == 1);
     if (observed.selected.size() == 1) {
@@ -143,8 +149,8 @@ void native_selection_and_keyboard_navigation_report_item_identities() {
     auto keyboard = f.pane.list_interaction_snapshot();
     EXPECT(keyboard.selected.size() == 1);
     if (keyboard.selected.size() == 1)
-        EXPECT((keyboard.selected[0] == app_shell::Pane::ListItemIdentity{L"C:\\A", L"gamma.txt"}));
-    EXPECT((keyboard.focused == app_shell::Pane::ListItemIdentity{L"C:\\A", L"gamma.txt"}));
+        EXPECT((keyboard.selected[0] == app_shell::Pane::ListItemIdentity{L"C:\\A", L"delta.txt"}));
+    EXPECT((keyboard.focused == app_shell::Pane::ListItemIdentity{L"C:\\A", L"delta.txt"}));
 
     // Owner-data ListViews ask their parent for the item matching typed text.
     // Sending WM_CHAR exercises that native route (including LVN_ODFINDITEMW).
@@ -162,7 +168,7 @@ void native_selection_and_keyboard_navigation_report_item_identities() {
     prefix.lvfi.flags = LVFI_SUBSTRING;
     prefix.lvfi.psz = const_cast<wchar_t*>(L"gam");
     EXPECT(SendMessageW(f.pane.explorer_container(), WM_NOTIFY, 0,
-        reinterpret_cast<LPARAM>(&prefix)) == 2);
+        reinterpret_cast<LPARAM>(&prefix)) == f.row(L"gamma.txt"));
 }
 
 void range_selection_survives_batch_append_by_identity() {
@@ -170,17 +176,17 @@ void range_selection_survives_batch_append_by_identity() {
     f.deliver(L"C:\\A", managed_list::Phase::loading,
         {{L"one.txt", 1, false}, {L"two.txt", 2, false},
          {L"three.txt", 3, false}, {L"four.txt", 4, false}});
-    f.select_range(1, 3);
+    f.select_range(f.row(L"one.txt"), f.row(L"two.txt"));
 
     const auto before = own(f.pane.list_interaction_snapshot());
     EXPECT(before.selected.size() == 3);
     if (before.selected.size() == 3) {
-        EXPECT((before.selected[0] == OwnedIdentity{L"C:\\A", L"two.txt"}));
+        EXPECT((before.selected[0] == OwnedIdentity{L"C:\\A", L"one.txt"}));
         EXPECT((before.selected[1] == OwnedIdentity{L"C:\\A", L"three.txt"}));
-        EXPECT((before.selected[2] == OwnedIdentity{L"C:\\A", L"four.txt"}));
+        EXPECT((before.selected[2] == OwnedIdentity{L"C:\\A", L"two.txt"}));
     }
-    EXPECT((before.focused == OwnedIdentity{L"C:\\A", L"four.txt"}));
-    EXPECT((before.anchor == OwnedIdentity{L"C:\\A", L"two.txt"}));
+    EXPECT((before.focused == OwnedIdentity{L"C:\\A", L"two.txt"}));
+    EXPECT((before.anchor == OwnedIdentity{L"C:\\A", L"one.txt"}));
 
     f.deliver(L"C:\\A", managed_list::Phase::loading,
         {{L"five.txt", 5, false}, {L"six.txt", 6, false}});
@@ -203,7 +209,12 @@ void switching_tabs_and_reentering_clears_interaction() {
     EXPECT(ListView_GetItemCount(f.list) == 0);
     f.deliver(L"C:\\B", managed_list::Phase::complete,
         {{L"other.txt", 3, false}});
-    EXPECT(f.pane.list_interaction_snapshot() == app_shell::Pane::ListInteractionSnapshot{});
+    const auto in_tab_b = f.pane.list_interaction_snapshot();
+    EXPECT(in_tab_b.selected.empty());
+    EXPECT(!in_tab_b.focused);
+    EXPECT(!in_tab_b.anchor);
+    EXPECT((in_tab_b.viewport_anchor ==
+        app_shell::Pane::ListItemIdentity{L"C:\\B", L"other.txt"}));
 
     f.pane.navigate_to({L"C:\\A\\child", {}, {}});
     EXPECT(f.pane.list_snapshot().rows.empty());
@@ -214,7 +225,11 @@ void switching_tabs_and_reentering_clears_interaction() {
     EXPECT(f.pane.list_interaction_snapshot() == app_shell::Pane::ListInteractionSnapshot{});
     f.deliver(L"C:\\A", managed_list::Phase::complete,
         {{L"alpha.txt", 1, false}, {L"beta.txt", 2, false}});
-    EXPECT(f.pane.list_interaction_snapshot() == app_shell::Pane::ListInteractionSnapshot{});
+    const auto after_reenter = f.pane.list_interaction_snapshot();
+    EXPECT(after_reenter.selected.empty());
+    EXPECT(!after_reenter.focused);
+    EXPECT(!after_reenter.anchor);
+    EXPECT(after_reenter.viewport_anchor.has_value());
 }
 
 void managed_list_yields_global_shortcut_precedence() {

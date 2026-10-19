@@ -36,6 +36,20 @@ void test_icon_sizes_are_distinguishable() {
            panedock::shell_core::view_mode_name(FVM_ICON, 96));
 }
 
+void test_sort_property_keys_round_trip_without_accepting_unknown_keys() {
+    using panedock::shell_core::SortProperty;
+    const std::array properties{
+        SortProperty::name, SortProperty::size, SortProperty::date_modified};
+    for (const auto property : properties) {
+        const auto key = panedock::shell_core::sort_property_name(property);
+        const auto decoded = panedock::shell_core::parse_sort_property(key);
+        EXPECT(decoded.has_value());
+        EXPECT(decoded == property);
+    }
+    EXPECT(!panedock::shell_core::parse_sort_property("future.property").has_value());
+    EXPECT(!panedock::shell_core::parse_sort_property("System.ItemTypeText").has_value());
+}
+
 void test_unresolvable_virtual_name_falls_back_to_parsing_name() {
     const std::wstring parsing_name =
         L"::{00000000-0000-0000-0000-000000000000}";
@@ -48,6 +62,7 @@ int main() {
     test_all_persisted_modes_round_trip();
     test_unknown_modes_are_rejected();
     test_icon_sizes_are_distinguishable();
+    test_sort_property_keys_round_trip_without_accepting_unknown_keys();
     test_unresolvable_virtual_name_falls_back_to_parsing_name();
     return panedock::test::summary("shell_core_view_mode");
 }

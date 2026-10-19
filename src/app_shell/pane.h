@@ -146,11 +146,15 @@ class Pane final {
         std::vector<ListItemIdentity> selected;
         std::optional<ListItemIdentity> focused;
         std::optional<ListItemIdentity> anchor;
+        std::optional<ListItemIdentity> viewport_anchor;
+        int viewport_offset{};
+        bool viewport_anchor_clamped{};
         bool operator==(const ListInteractionSnapshot&) const = default;
     };
-    // Selection, keyboard focus and the range-selection mark are reported as
-    // item identities, never as row numbers. Returned views expire on the
-    // next Pane operation.
+    // Selection, keyboard focus, selection mark, and the top visible row are
+    // reported as identities, never row numbers. The viewport clamp flag
+    // reports when the most recent restore hit the list's end bound. Returned
+    // views expire on the next Pane operation.
     ListInteractionSnapshot list_interaction_snapshot() const;
     HANDLE content_event() const noexcept;
     void process_content_results() noexcept;
@@ -272,8 +276,22 @@ class Pane final {
     bool suppress_history() const noexcept { return suppress_history_record_; }
 
   private:
+    struct ManagedListInteraction final {
+        std::vector<std::wstring> selected_names;
+        std::optional<std::wstring> focused_name;
+        std::optional<std::wstring> anchor_name;
+        std::optional<std::wstring> viewport_anchor_name;
+        int viewport_offset{};
+    };
     void cancel_managed_list() noexcept;
     void clear_managed_list_interaction() noexcept;
+    ManagedListInteraction capture_managed_list_interaction() const;
+    void restore_managed_list_interaction(
+        const ManagedListInteraction& interaction) noexcept;
+    void apply_managed_list_sort() noexcept;
+    void sort_managed_list_rows() noexcept;
+    void update_managed_list_sort_indicator() noexcept;
+    void set_managed_list_sort(panedock::shell_core::SortProperty property);
     HRESULT start_managed_list(const core::ShellLocation& location,
                                NavigationGeneration generation);
     void update_managed_list() noexcept;
@@ -290,6 +308,7 @@ class Pane final {
     ListSnapshot list_;
     HWND list_window_{};
     std::size_t list_name_bytes_{};
+    bool last_viewport_anchor_clamped_{};
     HRESULT realize_managed_list(const RECT& rect, const core::ShellLocation& location,
                                  NavigationGeneration generation);
     // Owned identity only: no borrowed TabState survives a Shell pump.

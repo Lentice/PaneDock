@@ -118,7 +118,9 @@ void enumerate(const std::shared_ptr<State>& state, std::uint64_t serial,
             }
             batch.rows.push_back({std::move(name),
                 (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow,
-                (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0});
+                (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0,
+                (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) |
+                    data.ftLastWriteTime.dwLowDateTime});
             ++count;
             if (batch.rows.size() == kBatchRows) {
                 if (!publish(state, serial, std::move(batch))) return;
