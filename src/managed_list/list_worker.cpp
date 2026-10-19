@@ -1,6 +1,8 @@
 #include "managed_list/list_worker.h"
 #include "managed_list/list_worker_test.h"
 #include <array>
+#include <algorithm>
+#include <cstddef>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -12,6 +14,12 @@ struct State final {
     std::mutex mutex;
     std::condition_variable changed;
     HANDLE ready{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+    HANDLE control{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+    bool recovery{};
+    bool recovering{};
+    bool watch_open{};
+    bool initial_complete{};
+    DWORD injected_error{};
     bool stop{};
     bool running{};
     HANDLE thread{};
@@ -27,7 +35,7 @@ struct State final {
     std::optional<Request> pending;
     std::deque<Batch> results;
     std::optional<Batch> emergency;
-    ~State() { if (thread) CloseHandle(thread); if (ready) CloseHandle(ready); }
+    ~State() { if (control) CloseHandle(control); if (thread) CloseHandle(thread); if (ready) CloseHandle(ready); }
 };
 // UI creates subscriptions on its STA. A blocked abandoned worker retains its
 // slot, resources and event; reopening cannot create an unbounded thread leak.
@@ -56,8 +64,9 @@ struct FindHandle final {
     ~FindHandle() { if (value != INVALID_HANDLE_VALUE) FindClose(value); }
 };
 void enumerate(const std::shared_ptr<State>& state, std::uint64_t serial,
-               const Request& request) {
+               const Request& request, bool recovery = false) {
     Batch batch{request, {}, Phase::loading, 0};
+    if (recovery) batch.change = Change::rescan;
     const auto& path = request.location.parsing_name;
     // All provider/drive calls stay here, including disconnected mappings.
     // Reject device namespaces; this backend accepts ordinary UNC share paths.
@@ -76,6 +85,7 @@ void enumerate(const std::shared_ptr<State>& state, std::uint64_t serial,
             batch.rows.assign(kBatchRows, {L"controlled", 0, false});
             if (!publish(state, serial, std::move(batch))) return;
             batch = {request, {}, Phase::loading, 0};
+            if (recovery) batch.change = Change::rescan;
         }
         batch.phase = Phase::error; batch.error = ERROR_BAD_NETPATH;
         publish(state, serial, std::move(batch)); return;
@@ -125,6 +135,7 @@ void enumerate(const std::shared_ptr<State>& state, std::uint64_t serial,
             if (batch.rows.size() == kBatchRows) {
                 if (!publish(state, serial, std::move(batch))) return;
                 batch = {request, {}, Phase::loading, 0};
+                if (recovery) batch.change = Change::rescan;
             }
         }
         if (!FindNextFileW(find.value, &data)) {
@@ -137,6 +148,207 @@ void enumerate(const std::shared_ptr<State>& state, std::uint64_t serial,
     }
     publish(state, serial, std::move(batch));
 }
+// Directory I/O, its OVERLAPPED and buffers live ONLY on this bounded worker.
+// UI cancellation never waits; even a broken driver's cancellation retains its
+// existing slot until completion, rather than freeing storage still used by I/O.
+struct DirectoryWatch final {
+    HANDLE directory{INVALID_HANDLE_VALUE};
+    OVERLAPPED io{};
+    alignas(DWORD) std::array<std::byte, 64 * 1024> buffer{};
+    bool pending{};
+    DirectoryWatch() { io.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr); }
+    ~DirectoryWatch() {
+        if (pending) {
+            CancelIoEx(directory, &io);
+            DWORD bytes{};
+            (void)GetOverlappedResult(directory, &io, &bytes, TRUE);
+        }
+        if (directory != INVALID_HANDLE_VALUE) CloseHandle(directory);
+        if (io.hEvent) CloseHandle(io.hEvent);
+    }
+    DWORD arm() {
+        ResetEvent(io.hEvent);
+        if (!ReadDirectoryChangesW(directory, buffer.data(), static_cast<DWORD>(buffer.size()),
+            FALSE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+            FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE |
+            FILE_NOTIFY_CHANGE_ATTRIBUTES, nullptr, &io, nullptr)) return GetLastError();
+        pending = true;
+        return ERROR_SUCCESS;
+    }
+};
+Row basic_row(const WIN32_FIND_DATAW& data, std::wstring name) {
+    return {std::move(name),
+        (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow,
+        (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0,
+        (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) |
+            data.ftLastWriteTime.dwLowDateTime};
+}
+bool leaf_name(std::wstring_view name) {
+    return !name.empty() && name.size() <= kMaxName && name != L"." && name != L".." &&
+        name.find_first_of(L"\\/:*?\"") == std::wstring::npos;
+}
+// Notification detail has a fixed cap. Exceeding it discards detail and requests
+// ONE recovery, just like ERROR_NOTIFY_ENUM_DIR / a zero-byte completion.
+bool decode_changes(const std::shared_ptr<State>& state, std::uint64_t serial,
+                    const DirectoryWatch& watch, DWORD bytes, Batch& batch,
+                    std::wstring& old_name) {
+    std::vector<std::wstring> names;
+    std::size_t offset = 0;
+    constexpr auto header = offsetof(FILE_NOTIFY_INFORMATION, FileName);
+    while (offset < bytes) {
+        if (bytes - offset < header) return false;
+        const auto* info = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(watch.buffer.data() + offset);
+        if (info->FileNameLength % sizeof(wchar_t) || info->FileNameLength > bytes - offset - header)
+            return false;
+        std::wstring name(info->FileName, info->FileNameLength / sizeof(wchar_t));
+        if (!leaf_name(name)) return false;
+        if (info->Action < FILE_ACTION_ADDED || info->Action > FILE_ACTION_RENAMED_NEW_NAME) return false;
+        if (info->Action == FILE_ACTION_RENAMED_OLD_NAME) {
+            // A split rename pair must not first delete the selected identity.
+            // Kernel order pairs old/new; an unpaired old name needs recovery.
+            if (!old_name.empty()) return false;
+            old_name = name;
+        }
+        else if (info->Action == FILE_ACTION_RENAMED_NEW_NAME && !old_name.empty()) {
+            batch.renamed.emplace_back(old_name, name);
+            if (std::find(names.begin(), names.end(), old_name) == names.end()) names.push_back(old_name);
+            old_name.clear();
+            if (batch.renamed.size() > kBatchRows) return false;
+        } else if (!old_name.empty()) return false;
+        if (info->Action != FILE_ACTION_RENAMED_OLD_NAME &&
+            std::find(names.begin(), names.end(), name) == names.end()) names.push_back(name);
+        if (names.size() > kBatchRows) return false;
+        if (!info->NextEntryOffset) break;
+        if (info->NextEntryOffset < header + info->FileNameLength ||
+            info->NextEntryOffset % alignof(DWORD) || info->NextEntryOffset >= bytes - offset) return false;
+        offset += info->NextEntryOffset;
+    }
+    for (auto& name : names) {
+        if (!interested(state, serial)) return false;
+        auto path = batch.request.location.parsing_name;
+        if (path.back() != L'\\') path += L'\\';
+        path += name;
+        WIN32_FIND_DATAW data{};
+        FindHandle find{FindFirstFileExW(path.c_str(), FindExInfoBasic, &data,
+            FindExSearchNameMatch, nullptr, 0)};
+        if (find.value != INVALID_HANDLE_VALUE) batch.rows.push_back(basic_row(data, std::move(name)));
+        else {
+            const DWORD error = GetLastError();
+            if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) return false;
+            batch.removed.push_back(std::move(name));
+        }
+    }
+    return true;
+}
+void enumerate_and_watch(const std::shared_ptr<State>& state, std::uint64_t serial,
+                         const Request& request) {
+    DirectoryWatch watch;
+    const auto& path = request.location.parsing_name;
+    DWORD error = ERROR_SUCCESS;
+    // No UNC/mapped-network subscriptions. Existing enumeration routing and
+    // location support remain unchanged. All drive probing stays off the STA.
+    const bool drive_path = path.size() >= 3 && path[1] == L':' && path[2] == L'\\' &&
+        path.find_first_of(L"*?") == std::wstring::npos;
+    bool local = false;
+    if (!interested(state, serial)) return;
+    if (drive_path) {
+        const auto root = path.substr(0, 3);
+        const auto type = GetDriveTypeW(root.c_str());
+        local = type == DRIVE_FIXED || type == DRIVE_REMOVABLE || type == DRIVE_RAMDISK || type == DRIVE_CDROM;
+    }
+    if (!interested(state, serial)) return;
+    if (local) {
+        if (!watch.io.hEvent) error = ERROR_NOT_ENOUGH_MEMORY;
+        else {
+            watch.directory = CreateFileW(path.c_str(), FILE_LIST_DIRECTORY,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
+            if (watch.directory == INVALID_HANDLE_VALUE) error = GetLastError();
+            else {
+                // A local drive path can traverse a junction to a server.
+                // Resolve only on this worker; never subscribe to its UNC target.
+                std::wstring resolved(kMaxPath + 1, L'\0');
+                const DWORD length = GetFinalPathNameByHandleW(watch.directory, resolved.data(),
+                    static_cast<DWORD>(resolved.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+                if (!length || length >= resolved.size()) error = length ? ERROR_BUFFER_OVERFLOW : GetLastError();
+                else if (resolved.starts_with(L"\\\\?\\UNC\\")) error = ERROR_NOT_SUPPORTED;
+                else if (!interested(state, serial)) return;
+                else error = watch.arm();
+            }
+        }
+    }
+    // Arm BEFORE the initial read to close the enumerate/subscribe loss window.
+    enumerate(state, serial, request);
+    { std::lock_guard lock(state->mutex); state->initial_complete = true; }
+    if (!local || !interested(state, serial)) return;
+    if (error) {
+        publish(state, serial, {request, {}, Phase::complete, error, Change::watch_error}); return;
+    }
+    { std::lock_guard lock(state->mutex); state->watch_open = true; }
+    if (!publish(state, serial, {request, {}, Phase::complete, 0, Change::watching})) return;
+    std::wstring old_name;
+    unsigned recovery_scans = 0;
+    for (;;) {
+        {
+            std::lock_guard lock(state->mutex);
+            state->running = false; // control event releases this idle wait
+        }
+        const HANDLE handles[]{state->control, watch.io.hEvent};
+        const DWORD wake = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+        bool recovery = false;
+        {
+            std::lock_guard lock(state->mutex);
+            if (state->stop || state->serial != serial) return;
+            state->running = true;
+            recovery = state->recovery;
+            error = state->injected_error;
+            state->injected_error = 0;
+            state->recovery = false;
+            ResetEvent(state->control);
+        }
+        if (error) {
+            publish(state, serial, {request, {}, Phase::complete, error, Change::watch_error}); return;
+        }
+        if (wake == WAIT_FAILED) {
+            publish(state, serial, {request, {}, Phase::complete, GetLastError(), Change::watch_error}); return;
+        }
+        Batch batch{request, {}, Phase::complete, 0, Change::delta};
+        if (WaitForSingleObject(watch.io.hEvent, 0) == WAIT_OBJECT_0) {
+            DWORD bytes{};
+            const BOOL success = GetOverlappedResult(watch.directory, &watch.io, &bytes, FALSE);
+            error = success ? ERROR_SUCCESS : GetLastError();
+            watch.pending = false;
+            if (error && error != ERROR_NOTIFY_ENUM_DIR) {
+                publish(state, serial, {request, {}, Phase::complete, error, Change::watch_error}); return;
+            }
+            recovery = recovery || error == ERROR_NOTIFY_ENUM_DIR || !bytes;
+            if (!recovery) recovery = !decode_changes(state, serial, watch, bytes, batch, old_name);
+            if (!interested(state, serial)) return;
+            // Kernel retains changes between reads. Rearm before publishing or
+            // scanning so UI backpressure cannot open a notification gap.
+            error = watch.arm();
+            if (error) {
+                publish(state, serial, {request, {}, Phase::complete, error, Change::watch_error}); return;
+            }
+        }
+        if (!interested(state, serial)) return;
+        if (recovery) {
+            // At most two consecutive loss recoveries without usable detail.
+            // A failing/deleted directory must not cause an endless rescan loop.
+            if (++recovery_scans > 2) {
+                publish(state, serial, {request, {}, Phase::complete, ERROR_NOTIFY_ENUM_DIR, Change::watch_error}); return;
+            }
+            { std::lock_guard lock(state->mutex); state->recovering = true; }
+            old_name.clear();
+            if (!publish(state, serial, {request, {}, Phase::loading, 0, Change::rescan_begin})) return;
+            enumerate(state, serial, request, true);
+            { std::lock_guard lock(state->mutex); state->recovering = false; }
+        } else if (!batch.rows.empty() || !batch.removed.empty()) {
+            recovery_scans = 0;
+            if (!publish(state, serial, std::move(batch))) return;
+        }
+    }
+}
 void run(std::shared_ptr<State> state) noexcept {
     for (;;) {
         std::optional<Request> request;
@@ -147,20 +359,27 @@ void run(std::shared_ptr<State> state) noexcept {
             if (state->stop) return;
             request = std::move(state->pending); state->pending.reset();
             serial = state->serial;
+            ResetEvent(state->control);
+            state->recovery = false;
+            state->initial_complete = false;
             state->running = true;
             state->running_serial = serial;
             state->first_read_returned = false;
             state->first_read_error = 0;
         }
-        try { enumerate(state, serial, *request); }
+        try { enumerate_and_watch(state, serial, *request); }
         catch (...) {
-            try { publish(state, serial, {*request, {}, Phase::error, ERROR_NOT_ENOUGH_MEMORY}); }
+            bool complete = false;
+            { std::lock_guard lock(state->mutex); complete = state->initial_complete; }
+            try { publish(state, serial, {*request, {}, Phase::error, ERROR_NOT_ENOUGH_MEMORY,
+                complete ? Change::watch_error : Change::none}); }
             catch (...) { // No allocation is needed to expose a terminal failure.
                 std::lock_guard lock(state->mutex);
                 if (!state->stop && state->serial == serial) {
                     state->results.clear();
                     state->emergency.emplace(Batch{std::move(*request), {},
-                        Phase::error, ERROR_NOT_ENOUGH_MEMORY});
+                        Phase::error, ERROR_NOT_ENOUGH_MEMORY,
+                        complete ? Change::watch_error : Change::none});
                     SetEvent(state->ready);
                 }
                 // Wait for a replacement or shutdown; never repeatedly signal.
@@ -168,6 +387,7 @@ void run(std::shared_ptr<State> state) noexcept {
         }
         {
             std::lock_guard lock(state->mutex);
+            state->watch_open = false;
             state->running = false;
         }
     }
@@ -176,7 +396,7 @@ std::shared_ptr<State> acquire(std::shared_ptr<testing::ReadGate> gate = {}) {
     for (auto& slot : slots) {
         if (!slot.expired()) continue;
         auto state = std::make_shared<State>();
-        if (!state->ready) return {};
+        if (!state->ready || !state->control) return {};
         state->gate = std::move(gate);
         slot = state;
         std::thread worker(run, state);
@@ -200,6 +420,8 @@ std::shared_ptr<State> acquire(std::shared_ptr<testing::ReadGate> gate = {}) {
 // Called under the worker lock. Best effort only: cancellation can race entry
 // into a system call or be unsupported. The slot remains occupied until exit.
 void invalidate(State& state, bool stop) noexcept {
+    SetEvent(state.control);
+    state.recovery = false;
     ++state.serial;
     state.stop = stop;
     state.pending.reset(); state.results.clear(); state.emergency.reset();
@@ -222,6 +444,16 @@ class LocalSource final : public Source {
         // exits after its current OS call returns. State is freed on last use.
         if (state_) { std::lock_guard lock(state_->mutex); invalidate(*state_, true); }
     }
+    bool overflow(DWORD error = 0) noexcept {
+        if (!state_) return false;
+        std::lock_guard lock(state_->mutex);
+        if (state_->stop) return false;
+        if (state_->recovering) return true;
+        state_->injected_error = error;
+        state_->recovery = !error;
+        SetEvent(state_->control);
+        return true;
+    }
     bool submit(Request request) noexcept override try {
         if (request.location.parsing_name.size() > kMaxPath ||
             request.location.fallback_path.size() > kMaxPath ||
@@ -233,7 +465,9 @@ class LocalSource final : public Source {
             std::lock_guard lock(state_->mutex);
             // Never queue a successor behind an obsolete OS call. Retiring
             // counts against the SAME four-slot cap, even after Pane dies.
-            retire = state_->running;
+            // Also retire an idle watch: its worker may be awaiting a broken
+            // driver's asynchronous cancellation. Never queue navigation behind it.
+            retire = state_->running || state_->watch_open;
             if (retire) invalidate(*state_, true);
         }
         if (retire) state_.reset();
@@ -241,6 +475,7 @@ class LocalSource final : public Source {
         if (!state_) return false;
         std::lock_guard lock(state_->mutex);
         if (state_->stop) return false;
+        SetEvent(state_->control);
         ++state_->serial; state_->results.clear(); state_->emergency.reset(); ResetEvent(state_->ready);
         state_->pending = std::move(request);
         state_->changed.notify_all(); return true;
@@ -291,6 +526,14 @@ std::unique_ptr<Source> make_blocked_source(std::shared_ptr<ReadGate> gate) noex
     if (!gate || !gate->entered || !gate->release || !gate->backpressure) return {};
     return make_source(std::move(gate));
 } catch (...) { return {}; }
+bool inject_overflow(Source& source) noexcept {
+    auto* local = dynamic_cast<LocalSource*>(&source);
+    return local && local->overflow();
+}
+bool inject_watch_failure(Source& source, DWORD error) noexcept {
+    auto* local = dynamic_cast<LocalSource*>(&source);
+    return error && local && local->overflow(error);
+}
 Counts counts() noexcept {
     Counts result;
     for (auto& slot : slots) if (auto state = slot.lock()) {

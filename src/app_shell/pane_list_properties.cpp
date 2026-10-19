@@ -85,7 +85,8 @@ void Pane::accept_property_result(managed_list::IconResult& result) {
 void Pane::finish_property_batch() noexcept try {
     if (!active() || !managed_list_active_ ||
         !content_request_is_current(list_.request.binding) || !enrichment_interest_.empty()) return;
-    if (property_sort_pending_ && list_.phase != managed_list::Phase::loading &&
+    if (property_sort_pending_ && list_.watch != managed_list::WatchState::recovering &&
+        list_.phase != managed_list::Phase::loading &&
         (property_sort_cursor_ >= list_.rows.size() || property_capacity_failed_)) {
         if (!property_order_.active()) property_order_.start(list_.rows.size());
         if (!property_order_.step(2048, [this](auto a, auto b) { return property_row_less(a, b); })) {

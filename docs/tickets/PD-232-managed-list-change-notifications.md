@@ -76,3 +76,8 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+## 交接區
+
+- 使用者明確延後實機驗證，未啟動 PaneDock。真實桌面之外部操作、真正 focus／accessibility、不同本機 filesystem／可移除磁碟、OneDrive、mixed DPI，以及十分鐘 idle CPU／disk I/O／wakeups 仍「未驗證，需真實桌面」；自動化 temp-directory／hidden-control 測試不構成 PD-241 gate 證據。UNC／mapped network 及解析至 UNC 的 junction 不建立 watcher，既有 location 支援矩陣未變。
+- 通知依賴 Win32 HANDLE／OVERLAPPED，不能置於純 core；需在真實桌面檢查通知丟失／監看失敗後的 Refresh、四 pane 快速 tab／Group 切換與 derealize／shutdown 的資源回收。取消不保證 driver 完成；worker 仍保有其 I/O storage 與既有固定 slot，UI 不 join。四個 slot 皆被舊工作占用時，沿用可見容量錯誤與明確 Refresh 重試；正常裝置的實際取消延遲及此狀態出現頻率尚未量測。

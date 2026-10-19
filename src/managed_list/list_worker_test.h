@@ -18,6 +18,8 @@ struct Counts final {
     std::size_t workers{}, running{}, pending{}, batches{};
 };
 std::unique_ptr<Source> make_blocked_source(std::shared_ptr<ReadGate> gate) noexcept;
+bool inject_overflow(Source& source) noexcept;
+bool inject_watch_failure(Source& source, DWORD error) noexcept;
 Counts counts() noexcept; // UI/test caller only, like subscription creation
 struct RetiredReadReport final {
     std::size_t observed{}, exited{}, cancel_requests{}, cancel_accepted{};

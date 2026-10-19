@@ -23,6 +23,10 @@ inline constexpr std::size_t kMaxSubscriptions = 4;
 inline constexpr std::size_t kBatchRows = 128;
 inline constexpr std::size_t kQueuedBatches = 2;
 inline constexpr std::size_t kMaxRows = 100000;
+// Separate per-visible-Pane recovery/delta index ceiling, in addition to the
+// 24 MiB row budget. Counts allocator-requested node bytes, like row capacity;
+// implementation-specific malloc bookkeeping is not retained row/index data.
+inline constexpr std::size_t kMaxIndexBytes = 4 * 1024 * 1024;
 inline constexpr std::size_t kMaxRowBytes = 24 * 1024 * 1024;
 inline constexpr std::size_t kMaxName = 255;
 inline constexpr std::size_t kMaxPath = 32760;
@@ -54,15 +58,21 @@ struct Row final {
     // 24 MiB row cap. No inactive-tab cache. Released with rows.
     std::array<PropertyValue, 3> properties{};
 };
+enum class Change { none, delta, rescan_begin, rescan, watching, watch_error };
+enum class WatchState { inactive, watching, recovering, failed };
 enum class Phase { idle, loading, complete, empty, error, limited };
 struct Batch final {
     Request request;
     std::vector<Row> rows;
     Phase phase{Phase::loading};
     DWORD error{};
+    Change change{Change::none};
+    std::vector<std::wstring> removed{}; // <=128 leaf identities
+    std::vector<std::pair<std::wstring, std::wstring>> renamed{}; // <=128 pairs
 };
 // Owned values only. event() is a waitable kernel event, never a window.
-// take() drains at most one bounded batch. cancel() drops interest immediately.
+// take() drains at most one bounded batch. Successful enumeration keeps a
+// local change subscription alive; cancel() drops all interest immediately.
 class Source {
   public:
     virtual ~Source() = default;

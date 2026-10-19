@@ -154,7 +154,15 @@ void bounded_rows() {
             rows.push_back({L"row"+std::to_wstring(i*managed_list::kBatchRows+j), 0, false});
         f.deliver(managed_list::Phase::loading, std::move(rows));
     }
-    EXPECT(f.pane.list_snapshot().rows.size() == managed_list::kMaxRows);
+    // PD-231's inline property slots also consume the original 24 MiB cap.
+    // HEAD already reaches that cap before 100,000 rows on LLVM-MinGW.
+    const auto& retained = f.pane.list_snapshot().rows;
+    EXPECT(!retained.empty() && retained.size() <= managed_list::kMaxRows);
+    auto bytes = retained.capacity() * sizeof(managed_list::Row);
+    for (const auto& row : retained) bytes += (row.name.capacity() + 1) * sizeof(wchar_t);
+    EXPECT(bytes <= managed_list::kMaxRowBytes);
+    EXPECT(retained.size() == managed_list::kMaxRows ||
+        bytes + managed_list::kBatchRows * sizeof(managed_list::Row) > managed_list::kMaxRowBytes);
     EXPECT(f.pane.list_snapshot().phase == managed_list::Phase::limited);
     f.navigate(L"C:\\long-names");
     for (int i = 0; i < 1000 && f.pane.list_snapshot().phase == managed_list::Phase::loading; ++i)
@@ -175,7 +183,8 @@ void wait_for_complete(app_shell::Pane& pane) {
         if (result != WAIT_OBJECT_0) return;
         pane.process_content_results();
     }
-    EXPECT(WaitForSingleObject(pane.content_event(), 0) == WAIT_TIMEOUT);
+    // Notification readiness/idle is independently awaited by PD-232's
+    // integration test; enumeration alone does not promise an empty event.
 }
 void real_local_directory() {
     // All four global slots remain owned during this integration run; a fifth
