@@ -17,6 +17,7 @@
 #include <utility>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "managed_list/list_worker.h"
@@ -134,6 +135,23 @@ class Pane final {
     };
     // Borrowed until the next Pane operation; never keep across a Shell pump.
     const ListSnapshot& list_snapshot() const noexcept { return list_; }
+    struct ListItemIdentity final {
+        // A local item is identified by its containing Shell location and leaf
+        // name. These views are borrowed from list_snapshot().
+        std::wstring_view location;
+        std::wstring_view name;
+        bool operator==(const ListItemIdentity&) const noexcept = default;
+    };
+    struct ListInteractionSnapshot final {
+        std::vector<ListItemIdentity> selected;
+        std::optional<ListItemIdentity> focused;
+        std::optional<ListItemIdentity> anchor;
+        bool operator==(const ListInteractionSnapshot&) const = default;
+    };
+    // Selection, keyboard focus and the range-selection mark are reported as
+    // item identities, never as row numbers. Returned views expire on the
+    // next Pane operation.
+    ListInteractionSnapshot list_interaction_snapshot() const;
     HANDLE content_event() const noexcept;
     void process_content_results() noexcept;
     bool open_list_row(std::size_t row);
@@ -255,6 +273,7 @@ class Pane final {
 
   private:
     void cancel_managed_list() noexcept;
+    void clear_managed_list_interaction() noexcept;
     HRESULT start_managed_list(const core::ShellLocation& location,
                                NavigationGeneration generation);
     void update_managed_list() noexcept;

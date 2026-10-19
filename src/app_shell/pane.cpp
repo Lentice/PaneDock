@@ -753,12 +753,20 @@ HRESULT Pane::translate_content_accelerator(MSG *message) noexcept try {
     if (!active() || active_tab() == nullptr) return S_FALSE;
     if (managed_list_active_) {
         if (message && message->message == WM_KEYDOWN && message->hwnd == list_window_) {
-            if (message->wParam == VK_RETURN) {
+            const bool control_down = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            const bool alt_down = (GetKeyState(VK_MENU) & 0x8000) != 0;
+            const bool shift_down = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            if (!control_down && !alt_down && !shift_down &&
+                message->wParam == VK_RETURN) {
                 const int row = ListView_GetNextItem(list_window_, -1, LVNI_FOCUSED);
                 if (row >= 0) open_list_row(static_cast<std::size_t>(row));
                 return S_OK;
             }
-            if (message->wParam == VK_BACK) { navigate_up(); return S_OK; }
+            if (!control_down && !alt_down && !shift_down &&
+                message->wParam == VK_BACK) {
+                navigate_up();
+                return S_OK;
+            }
         }
         return S_FALSE;
     }

@@ -29,6 +29,7 @@ set(PANEDOCK_TESTS
     "session_writer|unit/session_writer_test.cpp|panedock_session_writer panedock_core"
     "managed_list|unit/managed_list_test.cpp|advapi32 panedock_pane panedock_explorer_host panedock_session_writer panedock_core"
     "managed_list_restore|unit/managed_list_restore_test.cpp|panedock_pane panedock_explorer_host panedock_session_writer panedock_core"
+    "managed_list_selection|unit/managed_list_selection_test.cpp|panedock_pane panedock_explorer_host panedock_session_writer panedock_core"
     "pane|unit/pane_test.cpp|panedock_pane panedock_explorer_host panedock_session_writer panedock_core"
     "pane_tab_strip|unit/pane_tab_strip_test.cpp|panedock_pane panedock_explorer_host panedock_session_writer panedock_core"
     "pane_control_id|unit/pane_control_id_test.cpp|"

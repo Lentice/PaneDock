@@ -101,7 +101,15 @@ void Pane::cancel_managed_list() noexcept {
     list_history_target_.reset();
     pending_list_route_.reset();
     list_name_bytes_ = 0;
-    if (list_window_) ListView_SetItemCountEx(list_window_, 0, 0);
+    if (list_window_) {
+        clear_managed_list_interaction();
+        ListView_SetItemCountEx(list_window_, 0, 0);
+    }
+}
+void Pane::clear_managed_list_interaction() noexcept {
+    if (!list_window_) return;
+    ListView_SetItemState(list_window_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetSelectionMark(list_window_, -1);
 }
 HRESULT Pane::start_managed_list(const core::ShellLocation& location,
                                 NavigationGeneration generation) {
@@ -111,7 +119,7 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
     list_name_bytes_ = 0;
     list_ = { {content_request(), location}, {}, managed_list::Phase::loading, 0};
     if (list_window_) {
-        ListView_SetItemState(list_window_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        clear_managed_list_interaction();
         ListView_SetItemCountEx(list_window_, 0, 0);
     }
     list_navigation_pending_ = true;
@@ -200,8 +208,10 @@ void Pane::process_content_results() noexcept try {
 }
 void Pane::update_managed_list() noexcept try {
     if (!managed_list_active_) return;
-    if (list_window_) ListView_SetItemCountEx(list_window_, static_cast<int>(list_.rows.size()),
-        LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
+    if (list_window_ && ListView_GetItemCount(list_window_) !=
+            static_cast<int>(list_.rows.size()))
+        ListView_SetItemCountEx(list_window_, static_cast<int>(list_.rows.size()),
+            LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
     std::wstring text = std::to_wstring(list_.rows.size()) + L" items";
     switch (list_.phase) {
     case managed_list::Phase::loading: text += L" - Loading..."; break;
@@ -216,6 +226,27 @@ void Pane::update_managed_list() noexcept try {
     }
     if (status_bar_) SetWindowTextW(status_bar_, text.c_str());
 } catch (...) { if (status_bar_) SetWindowTextW(status_bar_, L"Cannot display folder status."); }
+Pane::ListInteractionSnapshot Pane::list_interaction_snapshot() const {
+    ListInteractionSnapshot snapshot;
+    if (!managed_list_active_ || !list_window_) return snapshot;
+
+    const std::wstring_view location{list_.request.location.parsing_name};
+    const auto identity_at = [&](int index) -> std::optional<ListItemIdentity> {
+        if (index < 0 || static_cast<std::size_t>(index) >= list_.rows.size())
+            return {};
+        return ListItemIdentity{location, list_.rows[static_cast<std::size_t>(index)].name};
+    };
+    for (int index = ListView_GetNextItem(list_window_, -1, LVNI_SELECTED);
+         index >= 0;
+         index = ListView_GetNextItem(list_window_, index, LVNI_SELECTED)) {
+        if (auto identity = identity_at(index))
+            snapshot.selected.push_back(*identity);
+    }
+    snapshot.focused = identity_at(
+        ListView_GetNextItem(list_window_, -1, LVNI_FOCUSED));
+    snapshot.anchor = identity_at(ListView_GetSelectionMark(list_window_));
+    return snapshot;
+}
 bool Pane::open_list_row(std::size_t row) {
     if (!active() || !managed_list_enabled_ || row >= list_.rows.size() ||
         !content_request_is_current(list_.request.binding) || !list_.rows[row].directory) return false;
@@ -239,11 +270,41 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
         }
         return 0;
     }
+    if (notification->code == LVN_ODFINDITEMW) {
+        const auto* find = reinterpret_cast<const NMLVFINDITEMW*>(notification);
+        const auto& search = find->lvfi;
+        if (!search.psz || !(search.flags & (LVFI_STRING | LVFI_PARTIAL | LVFI_SUBSTRING)))
+            return -1;
+
+        const int count = static_cast<int>(list_.rows.size());
+        if (count == 0) return -1;
+        const int start = std::clamp(find->iStart, -1, count - 1);
+        const bool partial = (search.flags & (LVFI_PARTIAL | LVFI_SUBSTRING)) != 0;
+        const bool wrap = (search.flags & LVFI_WRAP) != 0;
+        const std::wstring_view needle{search.psz};
+        for (int offset = 1; offset <= count; ++offset) {
+            int index = start + offset;
+            if (index >= count) {
+                if (!wrap) break;
+                index %= count;
+            }
+            const std::wstring_view name{list_.rows[static_cast<std::size_t>(index)].name};
+            if (needle.empty()) return index;
+            if (partial && name.size() < needle.size()) continue;
+            if (!partial && name.size() != needle.size()) continue;
+            if (CompareStringOrdinal(name.data(), static_cast<int>(needle.size()),
+                                     needle.data(), static_cast<int>(needle.size()), TRUE) == CSTR_EQUAL)
+                return index;
+        }
+        return -1;
+    }
     if (notification->code == NM_DBLCLK) {
         const auto* click = reinterpret_cast<NMITEMACTIVATE*>(notification);
         if (click->iItem >= 0) open_list_row(static_cast<std::size_t>(click->iItem));
         return 0;
     }
+    // The ListView owns selection state. Read it on demand through the Pane
+    // snapshot instead of reentering the control during state notifications.
     return 0;
 } catch (...) { return 0; }
 } // namespace panedock::app_shell
