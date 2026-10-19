@@ -43,10 +43,10 @@ Phase 8 · PD-234 拆分 · 目標 1–2 天
 
 ## Acceptance criteria
 
-- [ ] 注入相同 display name、不同 parsing identity 的兩列，經排序／Refresh reconciliation／cache round-trip 後 selection 與 anchor 仍指向原項目；刪除不選到同名替代項。
-- [ ] 本機 rename 能轉移既有 selection identity，removed／overflow recovery 行為保持；不將 display name 寫入 ShellLocation。
-- [ ] 所有新增 owned identity 字串計入 24 MiB／32 MiB 上限；超限停止且可手動重試；過期 request 不改新 pane。
-- [ ] 正常預設與 virtual routing 保持原狀，沒有新增 UI Shell call。
+- [x] 注入相同 display name、不同 parsing identity 的兩列，經排序／Refresh reconciliation／cache round-trip 後 selection 與 anchor 仍指向原項目；刪除不選到同名替代項。
+- [x] 本機 rename 能轉移既有 selection identity，removed／overflow recovery 行為保持；不將 display name 寫入 ShellLocation。
+- [x] 所有新增 owned identity 字串計入 24 MiB／32 MiB 上限；超限停止且可手動重試；過期 request 不改新 pane。
+- [x] 正常預設與 virtual routing 保持原狀，沒有新增 UI Shell call。
 
 ## Agent checks
 

@@ -239,10 +239,82 @@ void real_local_changes_overflow_failure_retry_and_departure() {
     EXPECT(ml::testing::counts().workers == 0);
     std::filesystem::remove_all(root);
 }
+
+void local_deltas_use_leaf_identity_instead_of_display_text() {
+    Fixture f(std::make_unique<Delivery>()); f.realize({L"C:\\synthetic", {}, {}});
+    ml::Row local{L"Friendly name", 1, false}; local.identity = {L"actual-leaf", false};
+    ml::Row shell{L"Friendly name", 2, false}; shell.identity = {L"actual-leaf", true};
+    deliver(f, ml::Change::none, ml::Phase::complete, {local, shell});
+    f.select(L"Friendly name");
+    // Pick local explicitly; both the display text and raw key collide.
+    const auto& rows = f.pane.list_snapshot().rows;
+    const int selected = rows[0].identity.shell_item ? 1 : 0;
+    ListView_SetItemState(f.list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetItemState(f.list, selected, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetSelectionMark(f.list, selected);
+    ml::Row renamed{L"Still friendly", 1, false}; renamed.identity = {L"new-leaf", false};
+    ml::Batch delta{f.pane.list_snapshot().request, {renamed}, ml::Phase::complete, 0, ml::Change::delta};
+    delta.renamed.push_back({L"actual-leaf", L"new-leaf"});
+    delta.removed.push_back(L"actual-leaf");
+    auto& source = static_cast<Delivery&>(*f.source);
+    source.batches.push_back(std::move(delta)); f.pane.process_content_results();
+    auto interaction = f.pane.list_interaction_snapshot();
+    EXPECT(interaction.selected.size() == 1 && interaction.selected[0].name == L"new-leaf");
+    EXPECT(interaction.focused && interaction.focused->name == L"new-leaf");
+    EXPECT(interaction.anchor && interaction.anchor->name == L"new-leaf");
+    EXPECT(f.pane.list_snapshot().rows.size() == 2); // Shell key is not a leaf delta
+    ml::Batch removed{f.pane.list_snapshot().request, {}, ml::Phase::complete, 0, ml::Change::delta};
+    removed.removed.push_back(L"new-leaf"); source.batches.push_back(std::move(removed));
+    f.pane.process_content_results();
+    EXPECT(f.pane.list_snapshot().rows.size() == 1);
+    EXPECT(f.pane.list_snapshot().rows[0].identity.shell_item);
+    EXPECT(f.pane.list_interaction_snapshot().selected.empty());
+    EXPECT(!f.pane.list_interaction_snapshot().anchor);
+}
+
+void local_recovery_and_notifications_preserve_exact_case_comparisons() {
+    Fixture f(std::make_unique<Delivery>()); f.realize({L"C:\\synthetic", {}, {}});
+    ml::Row lower{L"Same label", 1, false}; lower.identity = {L"leaf", false};
+    ml::Row upper{L"Same label", 2, false}; upper.identity = {L"LEAF", false};
+    deliver(f, ml::Change::none, ml::Phase::complete, {lower, upper});
+    const int selected = f.pane.list_snapshot().rows[0].identity.key == L"leaf" ? 0 : 1;
+    ListView_SetItemState(f.list, selected, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetSelectionMark(f.list, selected);
+    deliver(f, ml::Change::rescan_begin, ml::Phase::loading);
+    lower.bytes = 3; upper.bytes = 4;
+    deliver(f, ml::Change::rescan, ml::Phase::complete, {lower, upper});
+    EXPECT(f.pane.list_snapshot().rows.size() == 2);
+    EXPECT(f.pane.list_snapshot().rows[0].identity.key == L"LEAF");
+    EXPECT(f.pane.list_snapshot().rows[0].bytes == 4);
+    EXPECT(f.pane.list_snapshot().rows[1].identity.key == L"leaf");
+    EXPECT(f.pane.list_snapshot().rows[1].bytes == 3);
+    EXPECT(f.pane.list_interaction_snapshot().selected.size() == 1);
+    EXPECT(f.pane.list_interaction_snapshot().anchor &&
+        f.pane.list_interaction_snapshot().anchor->name == L"leaf");
+    auto& source = static_cast<Delivery&>(*f.source);
+    ml::Batch removed{f.pane.list_snapshot().request, {}, ml::Phase::complete, 0, ml::Change::delta};
+    removed.removed.push_back(L"LEAF"); source.batches.push_back(std::move(removed));
+    f.pane.process_content_results();
+    EXPECT(f.pane.list_snapshot().rows.size() == 1);
+    EXPECT(f.pane.list_interaction_snapshot().selected.size() == 1);
+    EXPECT(f.pane.list_interaction_snapshot().selected[0].name == L"leaf");
+    lower.identity.key = L"Leaf";
+    ml::Batch renamed{f.pane.list_snapshot().request, {lower}, ml::Phase::complete, 0, ml::Change::delta};
+    renamed.renamed.push_back({L"leaf", L"Leaf"}); source.batches.push_back(std::move(renamed));
+    f.pane.process_content_results();
+    EXPECT(f.pane.list_snapshot().rows.size() == 1);
+    const auto interaction = f.pane.list_interaction_snapshot();
+    EXPECT(interaction.selected.size() == 1 && interaction.selected[0].name == L"Leaf");
+    EXPECT(interaction.focused && interaction.focused->name == L"Leaf");
+    EXPECT(interaction.anchor && interaction.anchor->name == L"Leaf");
+    EXPECT(f.pane.list_snapshot().rows[0].name == L"Same label");
+}
 } // namespace
 int main() {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
     EXPECT(InitCommonControlsEx(&controls));
+    local_recovery_and_notifications_preserve_exact_case_comparisons();
+    local_deltas_use_leaf_identity_instead_of_display_text();
     large_recovery_has_log_linear_work_and_one_snapshot();
     stale_events_and_reentry_cannot_change_a_new_binding();
     real_local_changes_overflow_failure_retry_and_departure();

@@ -586,11 +586,38 @@ void paused_worker_property_keeps_navigation_available() {
     SetEvent(gate->release);
     EXPECT(managed_list::testing::wait_for_icon_workers(3000));
 }
+
+void duplicate_display_names_preserve_viewport_and_interaction_on_reorder() {
+    Fixture f;
+    std::vector<managed_list::Row> rows;
+    for (int i = 0; i < 60; ++i) {
+        managed_list::Row row{L"Same label", 1, false, static_cast<std::uint64_t>(i + 1)};
+        row.identity = {L"::{provider}\\" + std::to_wstring(i), true};
+        rows.push_back(std::move(row));
+    }
+    f.deliver(managed_list::Phase::complete, std::move(rows));
+    ListView_SetItemState(f.list, 20, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetSelectionMark(f.list, 20);
+    ListView_EnsureVisible(f.list, 44, FALSE);
+    const auto before = own(f.pane.list_interaction_snapshot());
+    EXPECT(before.viewport_anchor.has_value());
+    f.state.tabs[0].sort_column = "System.DateModified";
+    f.state.tabs[0].sort_ascending = false;
+    f.pane.apply_sort();
+    const auto after = own(f.pane.list_interaction_snapshot());
+    EXPECT(after.selected == before.selected);
+    EXPECT(after.focused == before.focused);
+    EXPECT(after.anchor == before.anchor);
+    EXPECT(after.viewport_anchor == before.viewport_anchor);
+    EXPECT(after.viewport_offset == before.viewport_offset);
+    EXPECT(!after.viewport_anchor_clamped);
+}
 } // namespace
 
 int main() {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
     EXPECT(InitCommonControlsEx(&controls));
+    duplicate_display_names_preserve_viewport_and_interaction_on_reorder();
     basic_keys_group_directories_and_keep_deterministic_ties();
     unicode_name_order_and_unknown_sort_fallback_are_stable();
     out_of_order_batches_and_sort_changes_preserve_item_and_viewport_identity();

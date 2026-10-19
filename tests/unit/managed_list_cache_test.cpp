@@ -250,10 +250,142 @@ void refresh_index_capacity_failure_is_bounded() {
     EXPECT(f.pane.list_index_bytes() == 0);
     EXPECT(f.pane.list_index_peak_bytes() <= 1);
 }
+
+ml::Row shell_row(std::wstring key, std::uint64_t size = 1) {
+    ml::Row row{L"Same display: name", size, true, size};
+    row.identity = {key, true};
+    row.child_location = core::ShellLocation{std::move(key), L"KnownFolder", L"C:\\fallback"};
+    return row;
+}
+void duplicate_display_names_keep_identity_through_sort_cache_and_recovery() {
+    Fixture f;
+    f.deliver({shell_row(L"::{provider}\\one", 2), shell_row(L"::{provider}\\two", 1)});
+    const auto index = [&](std::wstring_view key) {
+        const auto& rows = f.pane.list_snapshot().rows;
+        const auto it = std::find_if(rows.begin(), rows.end(), [&](const auto& row) {
+            return row.identity.key == key;
+        });
+        return static_cast<int>(it - rows.begin());
+    };
+    f.select(index(L"::{provider}\\one"));
+    const auto check = [&] {
+        const auto interaction = f.pane.list_interaction_snapshot();
+        EXPECT(interaction.selected.size() == 1);
+        if (!interaction.selected.empty()) {
+            EXPECT(interaction.selected[0].name == L"::{provider}\\one");
+            EXPECT(interaction.selected[0].shell_item);
+        }
+        EXPECT(interaction.focused && interaction.focused->name == L"::{provider}\\one");
+        EXPECT(interaction.anchor && interaction.anchor->name == L"::{provider}\\one");
+    };
+    // Date sort moves the selected identity to the opposite end.
+    f.state.tabs[0].sort_column = "System.DateModified";
+    f.state.tabs[0].sort_ascending = false; f.pane.apply_sort(); check();
+    EXPECT(index(L"::{provider}\\one") == 0);
+    EXPECT(!f.pane.open_list_row(index(L"::{provider}\\one")));
+    EXPECT(f.pane.list_snapshot().request.location == f.state.tabs[0].location);
+    f.pane.switch_active_tab("1"); f.deliver({}, ml::Phase::empty);
+    f.pane.switch_active_tab("0"); check();
+    EXPECT(f.pane.list_snapshot().rows[index(L"::{provider}\\one")].child_location ==
+        shell_row(L"::{provider}\\one").child_location);
+    // Cached scan is a fresh request. Both same-text identities must survive,
+    // including a display-only rename with unchanged size/time metadata.
+    auto renamed_display = shell_row(L"::{provider}\\one", 2);
+    renamed_display.name = L"New display";
+    f.deliver({shell_row(L"::{provider}\\two", 1)}, ml::Phase::loading);
+    f.deliver({std::move(renamed_display)}); check();
+    EXPECT(f.pane.list_snapshot().rows.size() == 2);
+    EXPECT(f.pane.list_snapshot().rows[index(L"::{provider}\\one")].name == L"New display");
+    // Overflow recovery uses the same key index. Losing one item must not select
+    // its same-text replacement or leave a Shift-select mark on that replacement.
+    f.deliver({}, ml::Phase::loading, ml::Change::rescan_begin);
+    auto same_text_replacement = shell_row(L"::{provider}\\two", 1);
+    same_text_replacement.name = L"New display";
+    f.deliver({std::move(same_text_replacement)}, ml::Phase::complete, ml::Change::rescan);
+    EXPECT(f.pane.list_snapshot().rows.size() == 1);
+    EXPECT(f.pane.list_interaction_snapshot().selected.empty());
+    EXPECT(!f.pane.list_interaction_snapshot().anchor);
+    EXPECT(f.pane.list_index_bytes() == 0);
+}
+void identity_capacities_obey_active_and_cache_budgets() {
+    // Each independent owned identity string can exhaust admission even when
+    // its text is short. A retry must discard the rejected storage.
+    for (int field = 0; field < 4; ++field) {
+        Fixture f;
+        auto row = shell_row(L"::{item}");
+        auto* text = field == 0 ? &row.identity.key : field == 1 ? &row.child_location->parsing_name :
+            field == 2 ? &row.child_location->known_folder_identity : &row.child_location->fallback_path;
+        text->reserve(ml::kMaxRowBytes / sizeof(wchar_t));
+        std::vector<ml::Row> rows; rows.push_back(std::move(row));
+        f.deliver(std::move(rows));
+        EXPECT(f.pane.list_snapshot().phase == ml::Phase::limited);
+        EXPECT(f.pane.list_snapshot().rows.empty());
+        f.pane.refresh_view(); f.deliver({shell_row(L"::{retry}")});
+        EXPECT(f.pane.list_snapshot().phase == ml::Phase::complete);
+        // Recovery replacement admission uses the same capacity accounting.
+        auto huge = shell_row(L"::{retry}", 2);
+        huge.child_location->fallback_path.reserve(ml::kMaxRowBytes / sizeof(wchar_t));
+        f.deliver({}, ml::Phase::loading, ml::Change::rescan_begin);
+        std::vector<ml::Row> replacement; replacement.push_back(std::move(huge));
+        f.deliver(std::move(replacement), ml::Phase::complete, ml::Change::rescan);
+        EXPECT(f.pane.list_snapshot().watch == ml::WatchState::failed);
+        EXPECT(f.pane.list_snapshot().rows[0].bytes == 1);
+        EXPECT(f.pane.list_index_bytes() == 0);
+    }
+    std::size_t ordinary{};
+    {
+        Fixture f; f.deliver({shell_row(L"::{item}")}); f.select(0);
+        f.pane.switch_active_tab("1"); ordinary = app_shell::Pane::list_cache_stats().bytes;
+    }
+    {
+        Fixture f;
+        auto row = shell_row(L"::{item}");
+        row.identity.key.reserve(4096);
+        row.child_location->parsing_name.reserve(4096);
+        row.child_location->known_folder_identity.reserve(4096);
+        row.child_location->fallback_path.reserve(4096);
+        std::vector<ml::Row> rows; rows.push_back(std::move(row));
+        f.deliver(std::move(rows)); f.select(0); f.pane.switch_active_tab("1");
+        EXPECT(app_shell::Pane::list_cache_stats().bytes > ordinary + 4 * 4000 * sizeof(wchar_t));
+        app_shell::Pane::limit_list_cache_bytes(ordinary);
+        EXPECT(app_shell::Pane::list_cache_stats().bytes == 0);
+        f.pane.switch_active_tab("0"); EXPECT(f.pane.list_snapshot().rows.empty());
+    }
+    app_shell::Pane::limit_list_cache_bytes(32 * 1024 * 1024);
+}
+
+void contradictory_or_missing_shell_keys_are_rejected_without_display_fallback() {
+    for (int kind = 0; kind < 4; ++kind) {
+        Fixture f;
+        auto row = shell_row(L"::{item}");
+        if (kind == 0) row.child_location->parsing_name = L"::{different}";
+        if (kind == 1) row.identity.key.clear();
+        if (kind == 2) { row.identity.key.clear(); row.child_location.reset(); }
+        if (kind == 3) row.identity.shell_item = false;
+        // No shell/local reinterpretation and no fallback to Row::name.
+        f.deliver({row});
+        EXPECT(f.pane.list_snapshot().phase == ml::Phase::error);
+        EXPECT(f.pane.list_snapshot().error == ERROR_INVALID_DATA);
+        EXPECT(f.pane.list_snapshot().rows.empty());
+        f.pane.refresh_view(); f.deliver({shell_row(L"::{valid}")});
+        EXPECT(f.pane.list_snapshot().rows.size() == 1);
+        // The delta/recovery admission must enforce the same invariant.
+        f.deliver({}, ml::Phase::loading, ml::Change::rescan_begin);
+        f.deliver({row}, ml::Phase::complete, ml::Change::rescan);
+        EXPECT(f.pane.list_snapshot().watch == ml::WatchState::failed);
+        EXPECT(f.pane.list_snapshot().watch_error == ERROR_INVALID_DATA);
+        EXPECT(f.pane.list_snapshot().rows.size() == 1);
+        EXPECT(f.pane.list_snapshot().rows[0].identity.key == L"::{valid}");
+        EXPECT(f.pane.list_index_bytes() == 0);
+    }
+}
 } // namespace
 int main() {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
     EXPECT(InitCommonControlsEx(&controls));
+    contradictory_or_missing_shell_keys_are_rejected_without_display_fallback();
+    duplicate_display_names_keep_identity_through_sort_cache_and_recovery();
+    identity_capacities_obey_active_and_cache_budgets();
     warm_refresh_and_notifications(); missing_identity_and_failed_scan();
     global_budget_and_lru(); binding_and_location_invalidation();
     unwatched_cache_refresh_does_not_claim_subscription();

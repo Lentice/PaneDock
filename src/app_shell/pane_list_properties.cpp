@@ -73,11 +73,13 @@ void Pane::accept_property_result(managed_list::IconResult& result) {
     if (value.text.empty()) std::wstring{}.swap(value.text);
     auto& target = row.properties[request.property_slot];
     if (target.state != managed_list::PropertyState::unresolved) return;
-    const auto bytes = value.text.empty() ? 0 : (value.text.capacity() + 1) * sizeof(wchar_t);
-    if (list_name_bytes_ + bytes + list_.rows.capacity() * sizeof(managed_list::Row) > managed_list::kMaxRowBytes) {
+    const auto old_bytes = managed_list::owned_string_bytes(target.text);
+    const auto bytes = managed_list::owned_string_bytes(value.text);
+    if (list_name_bytes_ - old_bytes + bytes + list_.rows.capacity() * sizeof(managed_list::Row) > managed_list::kMaxRowBytes) {
         value = {}; value.state = managed_list::PropertyState::failed;
         property_capacity_failed_ = true;
-    } else list_name_bytes_ += bytes;
+    }
+    list_name_bytes_ = list_name_bytes_ - old_bytes + managed_list::owned_string_bytes(value.text);
     target = std::move(value);
     if (list_window_) ListView_RedrawItems(list_window_, static_cast<int>(request.row_index),
                                          static_cast<int>(request.row_index));

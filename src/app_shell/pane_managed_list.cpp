@@ -201,14 +201,13 @@ void Pane::save_list_cache() noexcept try {
         string_bytes(request.location.parsing_name) + string_bytes(request.location.known_folder_identity) +
         string_bytes(request.location.fallback_path);
     for (const auto& row : entry.snapshot.rows) {
-        entry.bytes += string_bytes(row.name);
-        for (const auto& property : row.properties) entry.bytes += string_bytes(property.text);
+        entry.bytes += managed_list::owned_row_bytes(row);
     }
     const auto& interaction = entry.interaction;
-    entry.bytes += interaction.selected_names.capacity() * sizeof(std::wstring);
-    for (const auto& name : interaction.selected_names) entry.bytes += string_bytes(name);
-    for (const auto* name : {&interaction.focused_name, &interaction.anchor_name, &interaction.viewport_anchor_name})
-        if (*name) entry.bytes += string_bytes(**name);
+    entry.bytes += interaction.selected_items.capacity() * sizeof(managed_list::ItemIdentity);
+    for (const auto& name : interaction.selected_items) entry.bytes += string_bytes(name.key);
+    for (const auto* name : {&interaction.focused_item, &interaction.anchor_item, &interaction.viewport_anchor_item})
+        if (*name) entry.bytes += string_bytes((**name).key);
     auto& cache = list_cache();
     if (entry.bytes > cache.stats.limit) return;
     while (cache.stats.bytes + entry.bytes > cache.stats.limit && !cache.entries.empty()) {
@@ -260,19 +259,22 @@ void Pane::clear_managed_list_interaction() noexcept {
 Pane::ManagedListInteraction Pane::capture_managed_list_interaction() const {
     ManagedListInteraction saved;
     const auto snapshot = list_interaction_snapshot();
-    saved.selected_names.reserve(snapshot.selected.size());
+    saved.selected_items.reserve(snapshot.selected.size());
     for (const auto& item : snapshot.selected)
-        saved.selected_names.emplace_back(item.name);
-    if (snapshot.focused) saved.focused_name.emplace(snapshot.focused->name);
-    if (snapshot.anchor) saved.anchor_name.emplace(snapshot.anchor->name);
+        saved.selected_items.push_back({std::wstring(item.name), item.shell_item});
+    if (snapshot.focused) saved.focused_item.emplace(managed_list::ItemIdentity{
+        std::wstring(snapshot.focused->name), snapshot.focused->shell_item});
+    if (snapshot.anchor) saved.anchor_item.emplace(managed_list::ItemIdentity{
+        std::wstring(snapshot.anchor->name), snapshot.anchor->shell_item});
     if (snapshot.viewport_anchor)
-        saved.viewport_anchor_name.emplace(snapshot.viewport_anchor->name);
+        saved.viewport_anchor_item.emplace(managed_list::ItemIdentity{
+            std::wstring(snapshot.viewport_anchor->name), snapshot.viewport_anchor->shell_item});
     saved.viewport_offset = snapshot.viewport_offset;
     saved.focused_index = list_window_ ? ListView_GetNextItem(list_window_, -1, LVNI_FOCUSED) : -1;
     saved.viewport_index = list_window_ ? ListView_GetTopIndex(list_window_) : -1;
-    std::sort(saved.selected_names.begin(), saved.selected_names.end(),
+    std::sort(saved.selected_items.begin(), saved.selected_items.end(),
         [](const auto& left, const auto& right) {
-            return ordinal_compare(left, right, false) < 0;
+            return left < right;
         });
     return saved;
 }
@@ -284,20 +286,20 @@ void Pane::restore_managed_list_interaction(
     ListView_SetItemState(list_window_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     ListView_SetSelectionMark(list_window_, -1);
 
-    const auto index_of = [&](const std::optional<std::wstring>& name) {
+    const auto index_of = [&](const std::optional<managed_list::ItemIdentity>& name) {
         if (!name) return -1;
         const auto found = std::find_if(list_.rows.begin(), list_.rows.end(),
-            [&](const auto& row) { return row.name == *name; });
+            [&](const auto& row) { return row.identity == *name; });
         return found == list_.rows.end() ? -1 :
             static_cast<int>(found - list_.rows.begin());
     };
 
     for (std::size_t index = 0; index < list_.rows.size(); ++index) {
-        const auto& name = list_.rows[index].name;
-        if (std::binary_search(interaction.selected_names.begin(),
-                interaction.selected_names.end(), name,
+        const auto& name = list_.rows[index].identity;
+        if (std::binary_search(interaction.selected_items.begin(),
+                interaction.selected_items.end(), name,
                 [](const auto& left, const auto& right) {
-                    return ordinal_compare(left, right, false) < 0;
+                    return left < right;
                 }))
             ListView_SetItemState(list_window_, static_cast<int>(index),
                                   LVIS_SELECTED, LVIS_SELECTED);
@@ -307,17 +309,17 @@ void Pane::restore_managed_list_interaction(
         return old_index < 0 || list_.rows.empty() ? -1 :
             std::min(old_index, static_cast<int>(list_.rows.size()) - 1);
     };
-    int focused = index_of(interaction.focused_name);
-    if (focused < 0 && interaction.focused_name) focused = fallback(interaction.focused_index);
+    int focused = index_of(interaction.focused_item);
+    if (focused < 0 && interaction.focused_item) focused = fallback(interaction.focused_index);
     if (focused >= 0)
         ListView_SetItemState(list_window_, focused, LVIS_FOCUSED, LVIS_FOCUSED);
-    const int anchor = index_of(interaction.anchor_name);
+    const int anchor = index_of(interaction.anchor_item);
     // Setting native focus can create a selection mark. A missing identity
     // must clear it after focus fallback so Shift-select cannot inherit it.
     ListView_SetSelectionMark(list_window_, anchor);
 
-    int viewport = index_of(interaction.viewport_anchor_name);
-    if (viewport < 0 && interaction.viewport_anchor_name) viewport = fallback(interaction.viewport_index);
+    int viewport = index_of(interaction.viewport_anchor_item);
+    if (viewport < 0 && interaction.viewport_anchor_item) viewport = fallback(interaction.viewport_index);
     if (viewport >= 0) {
         const int row_count = static_cast<int>(list_.rows.size());
         const int page = std::max(1, ListView_GetCountPerPage(list_window_));
@@ -398,7 +400,8 @@ void Pane::sort_managed_list_rows() noexcept {
         const int name_order = compare_names(left.name, right.name);
         if (name_order != 0) return name_order < 0;
         if (left.bytes != right.bytes) return left.bytes < right.bytes;
-        return left.date_modified < right.date_modified;
+        if (left.date_modified != right.date_modified) return left.date_modified < right.date_modified;
+        return left.identity < right.identity;
     };
     std::sort(list_.rows.begin(), list_.rows.end(), less);
 }
@@ -423,7 +426,8 @@ bool Pane::property_row_less(std::size_t left_index, std::size_t right_index) co
     const int name_order = compare_names(left.name, right.name);
     if (name_order != 0) return name_order < 0;
     if (left.bytes != right.bytes) return left.bytes < right.bytes;
-    return left.date_modified < right.date_modified;
+    if (left.date_modified != right.date_modified) return left.date_modified < right.date_modified;
+    return left.identity < right.identity;
 }
 
 void Pane::update_managed_list_sort_indicator() noexcept {
@@ -461,9 +465,9 @@ void Pane::apply_managed_list_sort() noexcept {
             property_sort_cursor_ = 0;
             property_capacity_failed_ = false;
             for (auto& row : list_.rows) {
-                list_name_bytes_ -= row.properties[2].text.empty() ? 0 :
-                    (row.properties[2].text.capacity() + 1) * sizeof(wchar_t);
+                list_name_bytes_ -= managed_list::owned_string_bytes(row.properties[2].text);
                 row.properties[2] = {};
+                list_name_bytes_ += managed_list::owned_string_bytes(row.properties[2].text);
             }
         }
         property_sort_pending_ = expensive_sort_slot() >= 0;
@@ -531,7 +535,7 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
         if (icon_images_) ImageList_SetImageCount(icon_images_, 2);
         for (auto& row : list_.rows) {
             row.properties = {};
-            list_name_bytes_ += (row.name.capacity() + 1) * sizeof(wchar_t);
+            list_name_bytes_ += managed_list::owned_row_bytes(row);
         }
         managed_list::Batch begin;
         begin.change = managed_list::Change::rescan_begin;
@@ -601,10 +605,8 @@ void Pane::process_content_results() noexcept try {
         }
         if (list_.phase != managed_list::Phase::loading) continue;
         if (batch->rows.size() > managed_list::kBatchRows ||
-            std::any_of(batch->rows.begin(), batch->rows.end(), [](const auto& row) {
-                return row.name.empty() || row.name.size() > managed_list::kMaxName ||
-                    row.name == L"." || row.name == L".." ||
-                    row.name.find_first_of(L"\\/:*?\"") != std::wstring::npos;
+            std::any_of(batch->rows.begin(), batch->rows.end(), [](auto& row) {
+                return !managed_list::prepare_row(row);
             })) {
             list_.phase = managed_list::Phase::error;
             list_.error = ERROR_INVALID_DATA;
@@ -666,7 +668,7 @@ void Pane::process_content_results() noexcept try {
         }
         std::size_t accepted = 0;
         for (; accepted < count; ++accepted) {
-            const auto bytes = (batch->rows[accepted].name.capacity()+1)*sizeof(wchar_t);
+            const auto bytes = managed_list::owned_row_bytes(batch->rows[accepted]);
             if (list_name_bytes_ + bytes + list_.rows.capacity()*sizeof(managed_list::Row) >
                 managed_list::kMaxRowBytes) break;
             list_name_bytes_ += bytes;
@@ -751,31 +753,28 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
         list_.watch = WatchState::failed; list_.watch_error = ERROR_INVALID_DATA;
         list_source_->cancel(); clear_list_index(); return;
     }
-    const auto row_bytes = [](const managed_list::Row& row) {
-        auto bytes = (row.name.capacity() + 1) * sizeof(wchar_t);
-        for (const auto& value : row.properties)
-            if (!value.text.empty()) bytes += (value.text.capacity() + 1) * sizeof(wchar_t);
-        return bytes;
-    };
-    const auto translate = [&](std::optional<std::wstring>& name, const auto& from, const auto& to) {
+    const auto row_bytes = managed_list::owned_row_bytes;
+    const auto translate = [&](std::optional<managed_list::ItemIdentity>& name, const auto& from, const auto& to) {
         if (name && *name == from) name = to;
     };
-    for (const auto& [from, to] : batch.renamed) {
+    for (const auto& [old_leaf, new_leaf] : batch.renamed) {
+        const managed_list::ItemIdentity from{old_leaf, false}, to{new_leaf, false};
         // A rename is the only notification that transfers an interaction
         // identity. Deletes never implicitly select a different row.
-        for (auto& name : interaction.selected_names) if (name == from) name = to;
-        translate(interaction.focused_name, from, to);
-        translate(interaction.anchor_name, from, to);
-        translate(interaction.viewport_anchor_name, from, to);
+        for (auto& name : interaction.selected_items) if (name == from) name = to;
+        translate(interaction.focused_item, from, to);
+        translate(interaction.anchor_item, from, to);
+        translate(interaction.viewport_anchor_item, from, to);
         std::erase_if(list_.rows, [&](const auto& row) {
-            if (row.name != from) return false;
+            if (row.identity != from) return false;
             list_name_bytes_ -= row_bytes(row); return true;
         });
     }
-    std::sort(interaction.selected_names.begin(), interaction.selected_names.end(),
-        [](const auto& a, const auto& b) { return ordinal_compare(a, b, false) < 0; });
+    std::sort(interaction.selected_items.begin(), interaction.selected_items.end(),
+        [](const auto& a, const auto& b) { return a < b; });
     if (!batch.removed.empty()) std::erase_if(list_.rows, [&](const auto& row) {
-        if (std::find(batch.removed.begin(), batch.removed.end(), row.name) == batch.removed.end()) return false;
+        if (row.identity.shell_item || std::find(batch.removed.begin(), batch.removed.end(),
+                row.identity.key) == batch.removed.end()) return false;
         list_name_bytes_ -= row_bytes(row); return true;
     });
     // Recovery builds this index exactly once. No erasing/reordering until its
@@ -787,19 +786,19 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
             if (!index_list_row(i)) return;
     }
     for (auto& row : batch.rows) {
-        if (row.name.empty() || row.name.size() > managed_list::kMaxName ||
-            row.name == L"." || row.name == L".." || row.name.find_first_of(L"\\/:*?\"") != std::wstring::npos) {
+        if (!managed_list::prepare_row(row)) {
             list_.watch = WatchState::failed; list_.watch_error = ERROR_INVALID_DATA;
             list_source_->cancel(); clear_list_index(); return;
         }
         if (batch.change == Change::rescan) ++recovery_work_.lookups;
-        const auto match = recovery_index_.find(std::wstring_view(row.name));
+        const auto match = recovery_index_.find(row.identity);
         if (match != recovery_index_.end()) {
             auto* found = &list_.rows[*match];
             // Recovery can keep known metadata for unchanged rows; ordinary
             // notifications invalidate properties even if size/time are equal.
             const bool unchanged = batch.change == Change::rescan && found->bytes == row.bytes &&
-                found->date_modified == row.date_modified && found->directory == row.directory;
+                found->date_modified == row.date_modified && found->directory == row.directory &&
+                found->name == row.name && found->child_location == row.child_location;
             if (!unchanged) {
                 const auto old_bytes = row_bytes(*found);
                 const auto new_bytes = row_bytes(row);
@@ -813,7 +812,7 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
             }
             if (batch.change == Change::rescan) recovery_seen_[*match] = 1;
         } else {
-            const auto bytes = (row.name.capacity() + 1) * sizeof(wchar_t);
+            const auto bytes = row_bytes(row);
             if (list_.rows.size() == managed_list::kMaxRows ||
                 list_name_bytes_ + bytes + std::max(list_.rows.capacity(), list_.rows.size() + 1) *
                     sizeof(managed_list::Row) > managed_list::kMaxRowBytes) {
@@ -824,7 +823,12 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
             if (list_.rows.size() == list_.rows.capacity()) {
                 const auto capacity = std::min(managed_list::kMaxRows, std::max<std::size_t>(
                     list_.rows.size() + 1, list_.rows.capacity() * 2));
-                const auto available = (managed_list::kMaxRowBytes - list_name_bytes_ - bytes) / sizeof(managed_list::Row);
+                // Reserve headroom for owned strings as well as Row slots.
+                // Filling all remaining bytes with empty slots would make the
+                // very next recovery append fail despite ample usable budget.
+                const auto average = (list_name_bytes_ + bytes + list_.rows.size()) / (list_.rows.size() + 1);
+                const auto available = std::max(list_.rows.size() + 1,
+                    managed_list::kMaxRowBytes / (sizeof(managed_list::Row) + average));
                 list_.rows.reserve(std::min(capacity, available));
             }
             list_name_bytes_ += bytes;
@@ -893,7 +897,8 @@ Pane::ListInteractionSnapshot Pane::list_interaction_snapshot() const {
     const auto identity_at = [&](int index) -> std::optional<ListItemIdentity> {
         if (index < 0 || static_cast<std::size_t>(index) >= list_.rows.size())
             return {};
-        return ListItemIdentity{location, list_.rows[static_cast<std::size_t>(index)].name};
+        const auto& identity = list_.rows[static_cast<std::size_t>(index)].identity;
+        return ListItemIdentity{location, identity.key, identity.shell_item};
     };
     for (int index = ListView_GetNextItem(list_window_, -1, LVNI_SELECTED);
          index >= 0;
@@ -917,9 +922,11 @@ Pane::ListInteractionSnapshot Pane::list_interaction_snapshot() const {
 bool Pane::open_list_row(std::size_t row) {
     if (!active() || !managed_list_enabled_ || row >= list_.rows.size() ||
         !content_request_is_current(list_.request.binding) || !list_.rows[row].directory) return false;
+    // Absolute child routing belongs to PD-246. Never synthesize from display text.
+    if (list_.rows[row].identity.shell_item) return false;
     auto target = list_.request.location.parsing_name;
     if (!target.empty() && target.back() != L'\\') target += L'\\';
-    target += list_.rows[row].name;
+    target += list_.rows[row].identity.key;
     (void)navigate_to({std::move(target), {}, {}});
     return true;
 }

@@ -466,3 +466,33 @@ resize/hide/tab/Group changes, mixed DPI, repeated process handle/private-byte
 measurements and ten-minute idle CPU/disk/wakeups on the required desktop before
 PD-241. Neither controlled raster results nor hidden-control regression tests
 establish those results. Right-click/context-menu behavior is outside this ticket.
+
+## PD-243 item identity value contract
+
+The existing PaneHost/Source seam checks list-control state because selection,
+focus, selection marks and viewport anchoring are owned by Pane's native list,
+not the pure core model. Controlled rows cover identical display text with distinct
+Shell keys through sorting, cached refresh reconciliation, overflow recovery and
+cache round-trip; deleting one identity never selects its same-text replacement.
+Display sorting, text cells and type-to-select still use display text; local folder
+activation uses the leaf key. No new Shell call is needed for these checks.
+
+Shell rows require an explicit stable key. When an absolute child location is
+present, its parsing name must equal that key; missing or contradictory keys are
+rejected at initial and recovery admission without using display text as a key.
+Local recovery and notification matching intentionally retain PD-232's exact,
+case-sensitive comparisons, including distinct case keys and case-only rename.
+The tests also exercise capacity (rather than text length) limits on the key and
+all three child-location strings, failed recovery replacement, explicit retry,
+cache eviction and clearing the recovery index.
+
+PD-243 validation (2026-10-19): LLVM-MinGW Release configure and the five targeted
+builds succeeded; all five CTests passed. Build/CTest used the elevated execution
+context after the restricted build stalled. Only these targets were built:
+`panedock_managed_list_selection_test`, `panedock_managed_list_sort_test`,
+`panedock_managed_list_changes_test`, `panedock_managed_list_cache_test`, and
+`panedock_managed_list_restore_test`. The CTest filter was
+`^panedock_managed_list_(selection|sort|changes|cache|restore)$`.
+`git diff --check` passed. No full suite, GUI automation or real-machine
+verification was run. Real Shell namespace, native desktop focus/accessibility
+and the PD-241 performance/compatibility gate remain unverified.

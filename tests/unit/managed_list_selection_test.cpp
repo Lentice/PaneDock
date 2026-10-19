@@ -304,11 +304,39 @@ void managed_list_yields_global_shortcut_precedence() {
     EXPECT(f.pane.list_snapshot().request.location.parsing_name == unchanged_location);
     EXPECT(SetKeyboardState(keyboard_state));
 }
+
+void display_text_drives_presentation_while_local_navigation_uses_leaf_key() {
+    Fixture f;
+    managed_list::Row first{L"Zulu label", 1, true};
+    first.identity = {L"alpha-leaf", false};
+    managed_list::Row second{L"Alpha label", 1, true};
+    second.identity = {L"zulu-leaf", false};
+    f.deliver(L"C:\\A", managed_list::Phase::complete, {first, second});
+    EXPECT(f.pane.list_snapshot().rows[0].name == L"Alpha label");
+    wchar_t buffer[64]{};
+    NMLVDISPINFOW info{};
+    info.hdr.hwndFrom = f.list; info.hdr.code = LVN_GETDISPINFOW;
+    info.item.mask = LVIF_TEXT; info.item.iItem = 0;
+    info.item.pszText = buffer; info.item.cchTextMax = ARRAYSIZE(buffer);
+    EXPECT(f.pane.list_notification(&info.hdr).has_value());
+    EXPECT(std::wstring(buffer) == L"Alpha label");
+    NMLVFINDITEMW find{};
+    find.hdr.hwndFrom = f.list; find.hdr.code = LVN_ODFINDITEMW;
+    find.iStart = -1; find.lvfi.flags = LVFI_PARTIAL;
+    find.lvfi.psz = const_cast<wchar_t*>(L"Zulu");
+    EXPECT(f.pane.list_notification(&find.hdr) == 1);
+    f.select_item(0);
+    const auto selected = f.pane.list_interaction_snapshot();
+    EXPECT(selected.selected.size() == 1 && selected.selected[0].name == L"zulu-leaf");
+    EXPECT(f.pane.open_list_row(0));
+    EXPECT(f.pane.list_snapshot().request.location.parsing_name == L"C:\\A\\zulu-leaf");
+}
 } // namespace
 
 int main() {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
     EXPECT(InitCommonControlsEx(&controls));
+    display_text_drives_presentation_while_local_navigation_uses_leaf_key();
     native_selection_and_keyboard_navigation_report_item_identities();
     range_selection_survives_batch_append_by_identity();
     switching_tabs_and_reentering_clears_interaction();

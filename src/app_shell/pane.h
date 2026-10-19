@@ -148,10 +148,11 @@ class Pane final {
     // Borrowed until the next Pane operation; never keep across a Shell pump.
     const ListSnapshot& list_snapshot() const noexcept { return list_; }
     struct ListItemIdentity final {
-        // A local item is identified by its containing Shell location and leaf
-        // name. These views are borrowed from list_snapshot().
+        // Borrowed parent location and stable key (the legacy name member).
+        // Display text is available only through Row::name.
         std::wstring_view location;
         std::wstring_view name;
+        bool shell_item{};
         bool operator==(const ListItemIdentity&) const noexcept = default;
     };
     struct ListInteractionSnapshot final {
@@ -312,10 +313,10 @@ class Pane final {
 
   private:
     struct ManagedListInteraction final {
-        std::vector<std::wstring> selected_names;
-        std::optional<std::wstring> focused_name;
-        std::optional<std::wstring> anchor_name;
-        std::optional<std::wstring> viewport_anchor_name;
+        std::vector<managed_list::ItemIdentity> selected_items;
+        std::optional<managed_list::ItemIdentity> focused_item;
+        std::optional<managed_list::ItemIdentity> anchor_item;
+        std::optional<managed_list::ItemIdentity> viewport_anchor_item;
         int viewport_offset{};
         int focused_index{-1};
         int viewport_index{-1};
@@ -361,14 +362,16 @@ class Pane final {
     std::unique_ptr<managed_list::Source> list_source_;
     ListSnapshot list_;
     mutable RecoveryWork recovery_work_;
-    struct RowNameLess final {
+    struct RowIdentityLess final {
         using is_transparent = void;
         const Pane* pane{};
-        std::wstring_view name(std::size_t index) const { return pane->list_.rows[index].name; }
-        std::wstring_view name(std::wstring_view value) const { return value; }
+        const managed_list::ItemIdentity& identity(std::size_t index) const { return pane->list_.rows[index].identity; }
+        const managed_list::ItemIdentity& identity(const managed_list::ItemIdentity& value) const { return value; }
         template<class A, class B> bool operator()(const A& a, const B& b) const {
             ++pane->recovery_work_.comparisons;
-            return name(a) < name(b);
+            // Preserve PD-232's exact, case-sensitive leaf comparison. Display
+            // sorting's case folding must never merge distinct local keys.
+            return identity(a) < identity(b);
         }
     };
     struct IndexMemory final {
@@ -397,8 +400,8 @@ class Pane final {
     };
     // Indices survive vector reallocation. Both entry count and allocator node
     // bytes are bounded; no duplicate row/property snapshot is retained.
-    std::set<std::size_t, RowNameLess, IndexAllocator<std::size_t>> recovery_index_{
-        RowNameLess{this}, IndexAllocator<std::size_t>{&index_memory_}};
+    std::set<std::size_t, RowIdentityLess, IndexAllocator<std::size_t>> recovery_index_{
+        RowIdentityLess{this}, IndexAllocator<std::size_t>{&index_memory_}};
     std::vector<unsigned char, IndexAllocator<unsigned char>> recovery_seen_{
         IndexAllocator<unsigned char>{&index_memory_}};
     void clear_list_index() noexcept;

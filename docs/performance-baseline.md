@@ -71,6 +71,26 @@ Cancellation attempts `CancelSynchronousIo` on an owned thread handle without wa
 unsupported/racing cancellation retains the slot until the old call exits. This does
 not promise that Windows/provider calls can always be interrupted.
 
+## PD-243 identity accounting (implementation bounds, not measurements)
+
+The 24 MiB active-row budget includes Row-vector capacity and the capacities
+(including terminators) of display text, stable item keys, optional absolute child
+parsing name / known-folder identity / fallback path, and property text. Empty
+strings are conservatively counted too. Each key/child component is at most
+32,760 characters; local leaf keys and display text remain capped at 255.
+The recovery index still stores row indexes rather than copied keys and retains
+its separate 4 MiB allocator ceiling. Growth reserves headroom for owned strings,
+so larger Row values do not spend all remaining budget on unused vector slots.
+
+Inactive snapshots retain the existing 32 MiB global LRU budget. Their accounting
+includes these same row strings, binding/location strings, selected-key vector
+capacity and every copied focus/selection/viewport anchor key. Transient interaction
+copies contain only keys from the bounded active snapshot plus three anchors;
+no extra child-location copies, COM pointers or PIDLs are retained there.
+The local worker/queue limits are unchanged; no namespace producer is enabled.
+Capacity failures stop interest and remain explicitly retryable. These are value
+and admission checks, not evidence of process memory or the PD-241 release gate.
+
 ## Local tab-switch Shell probe (2026-09-29)
 
 `panedock_tab_switch_probe` reuses the product's `ExplorerHost` in a separate
