@@ -112,8 +112,9 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
     ListView_SetExtendedListViewStyle(list_window_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     LVCOLUMNW column{};
     column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
-    const std::array<std::pair<const wchar_t*, int>, 3> columns{{
-        {L"Name", 320}, {L"Size / Type", 160}, {L"Date Modified", 180}}};
+    const std::array<std::pair<const wchar_t*, int>, 5> columns{{
+        {L"Name", 320}, {L"Size", 160}, {L"Date Modified", 180},
+        {L"Type", 160}, {L"Duration", 120}}};
     for (int index = 0; index < static_cast<int>(columns.size()); ++index) {
         column.pszText = const_cast<wchar_t*>(columns[index].first);
         column.cx = columns[index].second;
@@ -147,6 +148,9 @@ void Pane::cancel_managed_list() noexcept {
     if (list_source_) list_source_->cancel();
     cancel_list_icons();
     list_ = {};
+    property_sort_pending_ = false;
+    property_capacity_failed_ = false;
+    property_sort_key_.clear();
     list_navigation_pending_ = false;
     list_history_target_.reset();
     pending_list_route_.reset();
@@ -257,6 +261,8 @@ void Pane::sort_managed_list_rows() noexcept {
     if (tab == nullptr) return;
     const auto property = panedock::shell_core::parse_sort_property(tab->sort_column)
         .value_or(panedock::shell_core::SortProperty::name);
+    const int slot = expensive_sort_slot();
+    if (slot >= 0) return; // expensive order commits through bounded merge steps
     const bool ascending = tab->sort_ascending;
 
     const auto less = [property, ascending](const managed_list::Row& left,
@@ -296,6 +302,29 @@ void Pane::sort_managed_list_rows() noexcept {
     std::sort(list_.rows.begin(), list_.rows.end(), less);
 }
 
+bool Pane::property_row_less(std::size_t left_index, std::size_t right_index) const noexcept {
+    const auto& left = list_.rows[left_index];
+    const auto& right = list_.rows[right_index];
+    if (left.directory != right.directory) return left.directory;
+    const int slot = expensive_sort_slot();
+    const auto& a = left.properties[slot];
+    const auto& b = right.properties[slot];
+    const bool a_empty = a.state != managed_list::PropertyState::value;
+    const bool b_empty = b.state != managed_list::PropertyState::value;
+    if (a_empty != b_empty) return !a_empty;
+    int primary = 0;
+    if (!a_empty && !b_empty) {
+        if (a.numeric != b.numeric) primary = a.numeric ? -1 : 1;
+        else if (a.numeric) primary = a.number < b.number ? -1 : a.number > b.number ? 1 : 0;
+        else primary = ordinal_compare(a.text, b.text, true);
+    }
+    if (primary != 0) return active_tab()->sort_ascending ? primary < 0 : primary > 0;
+    const int name_order = compare_names(left.name, right.name);
+    if (name_order != 0) return name_order < 0;
+    if (left.bytes != right.bytes) return left.bytes < right.bytes;
+    return left.date_modified < right.date_modified;
+}
+
 void Pane::update_managed_list_sort_indicator() noexcept {
     if (!list_window_) return;
     const auto* tab = active_tab();
@@ -304,15 +333,17 @@ void Pane::update_managed_list_sort_indicator() noexcept {
         .value_or(panedock::shell_core::SortProperty::name);
     const int sorted_column = property == panedock::shell_core::SortProperty::name ? 0 :
         (property == panedock::shell_core::SortProperty::size ? 1 : 2);
+    const int slot = expensive_sort_slot();
+    const int actual_column = slot == 0 ? 3 : slot == 1 ? 4 : slot == 2 ? -1 : sorted_column;
     const HWND header = ListView_GetHeader(list_window_);
     if (!header) return;
-    for (int index = 0; index < 3; ++index) {
+    for (int index = 0; index < 5; ++index) {
         HDITEMW item{};
         item.mask = HDI_FORMAT;
         if (!SendMessageW(header, HDM_GETITEMW, static_cast<WPARAM>(index),
                           reinterpret_cast<LPARAM>(&item))) continue;
         item.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
-        if (index == sorted_column)
+        if (index == actual_column)
             item.fmt |= tab->sort_ascending ? HDF_SORTUP : HDF_SORTDOWN;
         SendMessageW(header, HDM_SETITEMW, static_cast<WPARAM>(index),
                      reinterpret_cast<LPARAM>(&item));
@@ -322,6 +353,21 @@ void Pane::update_managed_list_sort_indicator() noexcept {
 void Pane::apply_managed_list_sort() noexcept {
     if (!managed_list_active_ || !list_window_ || !active()) return;
     try {
+        const auto* tab = active_tab();
+        if (tab && property_sort_key_ != tab->sort_column) {
+            cancel_list_icons();
+            property_sort_key_ = tab->sort_column;
+            property_sort_cursor_ = 0;
+            property_capacity_failed_ = false;
+            for (auto& row : list_.rows) {
+                list_name_bytes_ -= row.properties[2].text.empty() ? 0 :
+                    (row.properties[2].text.capacity() + 1) * sizeof(wchar_t);
+                row.properties[2] = {};
+            }
+        }
+        property_sort_pending_ = expensive_sort_slot() >= 0;
+        property_sort_cursor_ = 0;
+        property_order_.clear();
         const auto interaction = capture_managed_list_interaction();
         sort_managed_list_rows();
         if (!list_.rows.empty())
@@ -329,6 +375,7 @@ void Pane::apply_managed_list_sort() noexcept {
                 static_cast<int>(list_.rows.size()) - 1);
         restore_managed_list_interaction(interaction);
         update_managed_list_sort_indicator();
+        finish_property_batch();
         queue_list_icon_viewport();
     } catch (...) {
         // Sorting uses bounded row data and no Shell calls. Preserve the last
@@ -360,6 +407,10 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
     if (!list_source_) list_source_ = managed_list::make_local_source();
     if (list_source_) list_source_->cancel();
     cancel_list_icons();
+    property_sort_cursor_ = 0;
+    property_sort_key_ = active_tab()->sort_column;
+    property_sort_pending_ = expensive_sort_slot() >= 0;
+    property_capacity_failed_ = false;
     list_name_bytes_ = 0;
     list_ = { {content_request(), location}, {}, managed_list::Phase::loading, 0};
     if (list_window_) {
@@ -448,7 +499,10 @@ void Pane::process_content_results() noexcept try {
         list_.error = batch->error;
         if (list_.phase != managed_list::Phase::loading) list_source_->cancel();
     }
-    if (rows_changed) sort_managed_list_rows();
+    if (rows_changed) {
+        cancel_list_icons();
+        sort_managed_list_rows();
+    }
     update_managed_list();
     if (rows_changed) {
         if (list_window_ && !list_.rows.empty())
@@ -457,6 +511,7 @@ void Pane::process_content_results() noexcept try {
         if (interaction) restore_managed_list_interaction(*interaction);
     }
     update_managed_list_sort_indicator();
+    finish_property_batch();
     queue_list_icon_viewport();
 } catch (...) {
     if (list_source_) list_source_->cancel();
@@ -483,6 +538,8 @@ void Pane::update_managed_list() noexcept try {
     case managed_list::Phase::limited: text += L" - Row or memory limit reached (100,000 rows / 24 MiB). Open a subfolder to continue."; break;
     default: break;
     }
+    if (property_sort_pending_) text += L" - Sorting properties...";
+    if (property_capacity_failed_) text += L" - Properties unavailable. Refresh to retry.";
     if (status_bar_) SetWindowTextW(status_bar_, text.c_str());
 } catch (...) { if (status_bar_) SetWindowTextW(status_bar_, L"Cannot display folder status."); }
 Pane::ListInteractionSnapshot Pane::list_interaction_snapshot() const {
@@ -541,6 +598,19 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
                 text = row.directory ? L"Folder" : std::to_wstring(row.bytes) + L" bytes";
             else if (info->item.iSubItem == 2)
                 text = format_modified_time(row.date_modified);
+            else if (info->item.iSubItem == 3 || info->item.iSubItem == 4) {
+                const auto& value = row.properties[info->item.iSubItem - 3];
+                if (value.state == managed_list::PropertyState::unresolved)
+                    text = property_capacity_failed_ ? L"Unavailable" : L"Loading...";
+                else if (value.state == managed_list::PropertyState::failed) text = L"Unavailable";
+                else if (value.state == managed_list::PropertyState::value) {
+                    if (info->item.iSubItem == 4 && value.numeric) {
+                        const auto seconds = static_cast<std::uint64_t>(value.number / 10000000);
+                        text = std::to_wstring(seconds / 60) + L":" +
+                            (seconds % 60 < 10 ? L"0" : L"") + std::to_wstring(seconds % 60);
+                    } else text = value.numeric ? std::to_wstring(static_cast<double>(value.number)) : value.text;
+                }
+            }
             if (info->item.cchTextMax > 0)
                 lstrcpynW(info->item.pszText, text.c_str(), info->item.cchTextMax);
         }
@@ -553,6 +623,16 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
             case 0: set_managed_list_sort(panedock::shell_core::SortProperty::name); break;
             case 1: set_managed_list_sort(panedock::shell_core::SortProperty::size); break;
             case 2: set_managed_list_sort(panedock::shell_core::SortProperty::date_modified); break;
+            case 3: case 4: {
+                auto* tab = active_tab();
+                if (!tab) break;
+                const std::string key = click->iSubItem == 3 ? "System.ItemTypeText" : "System.Media.Duration";
+                tab->sort_ascending = tab->sort_column == key ? !tab->sort_ascending : true;
+                tab->sort_column = key;
+                apply_managed_list_sort();
+                if (pane_host()) pane_host()->schedule_session_save();
+                break;
+            }
             default: break;
         }
         return 0;

@@ -28,6 +28,7 @@
 #include "app_shell/session_writer.h"
 #include "app_shell/shell_reentry_guard.h"
 #include "core/model.h"
+#include "core/bounded_order.h"
 #include "core/navigation.h"
 #include "explorer_host/explorer_host.h"
 #include "shell_core/shell_core.h"
@@ -165,6 +166,8 @@ class Pane final {
     std::size_t list_image_bytes() const noexcept {
         return icon_images_ ? (icon_cache_.size() + 2) * managed_list::image_bytes(icon_size_) : 0;
     }
+    bool list_property_sort_pending() const noexcept { return property_sort_pending_; }
+    bool list_property_capacity_failed() const noexcept { return property_capacity_failed_; }
     HANDLE icon_event() const noexcept;
     void process_icon_results() noexcept;
     HANDLE content_event() const noexcept;
@@ -338,6 +341,19 @@ class Pane final {
     std::uint64_t icon_viewport_{}, icon_clock_{};
     bool icon_viewport_posted_{};
     bool icon_seam_{};
+    std::array<bool, managed_list::kIconInterest> image_attempted_{};
+    std::vector<managed_list::IconRequest> enrichment_interest_;
+    std::size_t property_sort_cursor_{};
+    bool property_sort_pending_{};
+    bool property_capacity_failed_{};
+    std::string property_sort_key_;
+    core::BoundedOrder property_order_;
+    bool property_row_less(std::size_t left, std::size_t right) const noexcept;
+    int expensive_sort_slot() const noexcept;
+    void append_property_requests(std::vector<managed_list::IconRequest>& requests,
+                                  const std::vector<std::size_t>& visible);
+    void accept_property_result(managed_list::IconResult& result);
+    void finish_property_batch() noexcept;
     managed_list::IconKey list_icon_key(std::size_t row) const;
     void refresh_list_icon_viewport() noexcept;
     void queue_list_icon_viewport() noexcept;

@@ -1,5 +1,6 @@
 #include "unit/test_pane_host.h"
 #include "unit/test_util.h"
+#include "managed_list/icon_source_test.h"
 
 #include <algorithm>
 #include <deque>
@@ -29,6 +30,25 @@ class Controlled final : public managed_list::Source {
     }
   private:
     std::deque<managed_list::Batch> batches;
+};
+
+class Properties final : public managed_list::IconSource {
+  public:
+    std::vector<managed_list::IconRequest> requests;
+    std::deque<managed_list::IconResult> results;
+    bool accept{true};
+    bool replace(std::vector<managed_list::IconRequest> value) noexcept override {
+        requests = std::move(value); return accept;
+    }
+    std::optional<managed_list::IconResult> take() noexcept override {
+        if (results.empty()) return {};
+        auto result = std::move(results.front()); results.pop_front(); return result;
+    }
+    HANDLE event() const noexcept override { return nullptr; }
+    void cancel() noexcept override { requests.clear(); }
+    void deliver(const managed_list::IconRequest& request, managed_list::PropertyValue value) {
+        results.push_back({request, {}, std::move(value)});
+    }
 };
 
 struct OwnedIdentity final {
@@ -275,6 +295,297 @@ void out_of_order_batches_and_sort_changes_preserve_item_and_viewport_identity()
             item.bottom > client.top);
     }
 }
+
+managed_list::PropertyValue number(long double value) {
+    return {managed_list::PropertyState::value, {}, value, true};
+}
+std::vector<std::wstring> order(const Fixture& f) {
+    std::vector<std::wstring> names;
+    for (const auto& row : f.pane.list_snapshot().rows) names.push_back(row.name);
+    return names;
+}
+Properties* use_properties(Fixture& f) {
+    auto source = std::make_unique<Properties>();
+    auto* result = source.get(); f.pane.use_list_icons(std::move(source)); return result;
+}
+void expensive_sort_commits_once_and_preserves_interaction() {
+    Fixture f;
+    auto* source = use_properties(f);
+    std::vector<managed_list::Row> rows;
+    for (int i = 0; i < 50; ++i) rows.push_back({L"item-" + std::to_wstring(i), 1, false, 1});
+    f.deliver(managed_list::Phase::complete, std::move(rows));
+    ListView_SetItemState(f.list, 17, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetSelectionMark(f.list, 17);
+    ListView_EnsureVisible(f.list, 35, FALSE);
+    const auto interaction = own(f.pane.list_interaction_snapshot());
+    const auto before = order(f);
+    f.click_column(4);
+    EXPECT(f.pane.list_property_sort_pending());
+    f.pane.set_list_icon_viewport(0, 3);
+    auto requests = source->requests;
+    EXPECT(requests.size() <= managed_list::kIconInterest);
+    std::vector<managed_list::IconRequest> properties;
+    for (const auto& r : requests) if (!r.property.empty()) properties.push_back(r);
+    EXPECT(properties.size() == 50); // all keys, including offscreen rows
+    std::reverse(properties.begin(), properties.end());
+    for (std::size_t i = 0; i < properties.size(); ++i) {
+        auto value = number(100 - static_cast<long double>(properties[i].row_index));
+        if (properties[i].row_index == 0) value.state = managed_list::PropertyState::missing;
+        if (properties[i].row_index == 1) value.state = managed_list::PropertyState::failed;
+        source->deliver(properties[i], std::move(value));
+        f.pane.process_icon_results();
+        if (i + 1 < properties.size()) {
+            EXPECT(order(f) == before);
+            EXPECT(f.pane.list_property_sort_pending());
+        }
+    }
+    for (const auto& r : requests) if (r.property.empty()) source->deliver(r, {});
+    f.pane.process_icon_results(); f.pane.process_icon_results();
+    EXPECT(!f.pane.list_property_sort_pending());
+    const auto after = order(f);
+    EXPECT(after != before);
+    EXPECT(after.front() == before.back());
+    EXPECT(after[48] == before[0]); EXPECT(after[49] == before[1]);
+    const auto restored = own(f.pane.list_interaction_snapshot());
+    EXPECT(restored.selected == interaction.selected);
+    EXPECT(restored.focused == interaction.focused);
+    EXPECT(restored.anchor == interaction.anchor);
+    if (!restored.viewport_anchor_clamped)
+        EXPECT(restored.viewport_anchor == interaction.viewport_anchor);
+    else if (interaction.viewport_anchor) {
+        RECT item{}, client{};
+        EXPECT(ListView_GetItemRect(f.list, f.row(interaction.viewport_anchor->name), &item, LVIR_BOUNDS));
+        EXPECT(GetClientRect(f.list, &client));
+        EXPECT(item.top < client.bottom && item.bottom > client.top);
+    }
+    EXPECT(restored.viewport_offset == interaction.viewport_offset);
+    f.click_column(4); // cached values: no extraction, same missing-last policy
+    f.pane.set_list_icon_viewport(0, 3);
+    EXPECT(!f.pane.list_property_sort_pending());
+    EXPECT(order(f).front() == before[2]);
+    for (const auto& r : source->requests) EXPECT(r.property.empty());
+}
+void property_demand_is_bounded_and_stale_results_are_rejected() {
+    Fixture f;
+    auto* source = use_properties(f);
+    for (int batch = 0; batch < 3; ++batch) {
+        std::vector<managed_list::Row> rows;
+        for (int i = 0; i < 120; ++i)
+            rows.push_back({L"item-" + std::to_wstring(batch * 120 + i), 1, false, 1});
+        f.deliver(batch == 2 ? managed_list::Phase::complete : managed_list::Phase::loading, std::move(rows));
+    }
+    f.click_column(4);
+    f.pane.set_list_icon_viewport(0, 3);
+    auto stale = source->requests.front();
+    EXPECT(!stale.property.empty());
+    f.pane.set_list_icon_viewport(100, 3);
+    source->deliver(stale, number(999)); f.pane.process_icon_results();
+    EXPECT(f.pane.list_snapshot().rows[stale.row_index].properties[1].state == managed_list::PropertyState::unresolved);
+    std::size_t completed = 0;
+    for (int round = 0; round < 8 && f.pane.list_property_sort_pending(); ++round) {
+        auto requests = source->requests;
+        EXPECT(requests.size() <= managed_list::kIconInterest);
+        for (const auto& r : requests) {
+            source->deliver(r, number(1));
+            if (!r.property.empty()) ++completed;
+        }
+        while (!source->results.empty()) f.pane.process_icon_results();
+        f.pane.set_list_icon_viewport(100, 3);
+    }
+    EXPECT(completed == 360);
+    EXPECT(!f.pane.list_property_sort_pending());
+    const auto before = order(f);
+    source->deliver(stale, number(0)); f.pane.process_icon_results();
+    EXPECT(order(f) == before);
+    EXPECT(SUCCEEDED(f.pane.navigate_to({L"C:\\B", {}, {}})));
+    f.deliver(managed_list::Phase::complete, {{L"new", 2, false, 2}});
+    source->deliver(stale, number(100)); f.pane.process_icon_results();
+    EXPECT(f.pane.list_snapshot().rows.size() == 1);
+    EXPECT(f.pane.list_snapshot().rows.front().properties[1].state == managed_list::PropertyState::unresolved);
+}
+void display_demand_and_custom_keys_use_the_same_bounded_boundary() {
+    Fixture f;
+    auto* source = use_properties(f);
+    f.deliver(managed_list::Phase::complete, {{L"a", 1, false}, {L"b", 2, false}, {L"c", 3, false}});
+    for (int column = 0; column < 5; ++column) ListView_SetColumnWidth(f.list, column, 100);
+    f.pane.set_list_icon_viewport(0, 1);
+    std::size_t properties = 0;
+    for (const auto& r : source->requests) if (!r.property.empty()) {
+        ++properties; EXPECT(r.row_index == 0);
+    }
+    EXPECT(properties == 2); // display-only never extracts offscreen keys
+    auto old = source->requests;
+    f.state.tabs.front().sort_column = "{9B174B34-40FF-11D2-A27E-00C04FC30871} 5";
+    f.pane.apply_sort();
+    f.pane.set_list_icon_viewport(1, 1);
+    EXPECT(f.pane.list_property_sort_pending());
+    auto requests = source->requests;
+    std::size_t custom = 0;
+    for (const auto& r : requests) {
+        if (r.property_slot == 2) { ++custom; EXPECT(r.property == f.state.tabs.front().sort_column); }
+        source->deliver(r, r.property_slot == 2 ?
+            managed_list::PropertyValue{managed_list::PropertyState::value, r.row_index == 0 ? L"Z" : L"A", 0, false} : number(1));
+    }
+    EXPECT(custom == 3);
+    while (!source->results.empty()) f.pane.process_icon_results();
+    EXPECT(!f.pane.list_property_sort_pending());
+    EXPECT(order(f) == std::vector<std::wstring>({L"b", L"c", L"a"}));
+    for (const auto& r : old) source->deliver(r, number(99));
+    while (!source->results.empty()) f.pane.process_icon_results();
+    EXPECT(f.pane.list_snapshot().rows[0].properties[0].state == managed_list::PropertyState::unresolved);
+    // Basic canonical keys reuse cached enumeration fields instead of property reads.
+    f.state.tabs.front().sort_column = "{B725F130-47EF-101A-A5F1-02608C9EEBAC} 12";
+    f.pane.apply_sort(); EXPECT(!f.pane.list_property_sort_pending());
+    EXPECT(f.state.tabs.front().sort_column == "{B725F130-47EF-101A-A5F1-02608C9EEBAC} 12");
+}
+
+std::wstring cell(Fixture& f, int row, int column) {
+    wchar_t buffer[256]{};
+    NMLVDISPINFOW info{};
+    info.hdr.hwndFrom = f.list; info.hdr.code = LVN_GETDISPINFOW;
+    info.item.mask = LVIF_TEXT; info.item.iItem = row; info.item.iSubItem = column;
+    info.item.pszText = buffer; info.item.cchTextMax = ARRAYSIZE(buffer);
+    EXPECT(f.pane.list_notification(&info.hdr).has_value()); return buffer;
+}
+std::wstring status(Fixture& f) {
+    wchar_t buffer[512]{}; GetWindowTextW(f.pane.status_bar(), buffer, ARRAYSIZE(buffer)); return buffer;
+}
+void property_cells_status_and_explicit_retry() {
+    Fixture f;
+    auto* source = use_properties(f);
+    for (int column = 0; column < 5; ++column) ListView_SetColumnWidth(f.list, column, 100);
+    f.deliver(managed_list::Phase::complete, {{L"a", 1, false}, {L"b", 2, false}});
+    EXPECT(cell(f, 0, 3) == L"Loading..."); EXPECT(cell(f, 0, 4) == L"Loading...");
+    f.pane.set_list_icon_viewport(0, 2);
+    auto requests = source->requests;
+    for (const auto& r : requests) {
+        auto value = number(650000000);
+        if (r.row_index == 0 && r.property_slot == 0)
+            value = {managed_list::PropertyState::value, L"Audio", 0, false};
+        if (r.row_index == 1) value = {managed_list::PropertyState::failed, {}, 0, false};
+        source->deliver(r, std::move(value));
+    }
+    while (!source->results.empty()) f.pane.process_icon_results();
+    EXPECT(cell(f, 0, 3) == L"Audio"); EXPECT(cell(f, 0, 4) == L"1:05");
+    EXPECT(cell(f, 1, 3) == L"Unavailable"); EXPECT(cell(f, 1, 4) == L"Unavailable");
+    f.pane.set_list_icon_viewport(0, 2);
+    EXPECT(source->requests.empty()); // failures are terminal until explicit Refresh
+    f.pane.refresh_view();
+    f.deliver(managed_list::Phase::complete, {{L"a", 1, false}, {L"b", 2, false}});
+    f.click_column(4); f.pane.set_list_icon_viewport(0, 2);
+    EXPECT(status(f).find(L"Sorting properties...") != std::wstring::npos);
+    EXPECT(cell(f, 1, 4) == L"Loading...");
+    auto retry = source->requests; EXPECT(retry.size() == 2);
+    for (const auto& r : retry) source->deliver(r, number(10000000));
+    while (!source->results.empty()) f.pane.process_icon_results();
+    EXPECT(status(f).find(L"Sorting properties...") == std::wstring::npos);
+    EXPECT(cell(f, 1, 4) == L"0:01");
+    // A delayed key does not trap the old tab, even with the same folder/name.
+    f.pane.refresh_view();
+    f.deliver(managed_list::Phase::complete, {{L"a", 1, false}});
+    f.pane.set_list_icon_viewport(0, 1);
+    const auto old = source->requests.front();
+    f.state.tabs.push_back({"second", {L"C:\\A", {}, {}}, "details", "System.Media.Duration", true, {}, 0});
+    f.pane.activate_tab_at(1);
+    EXPECT(f.state.active_tab_id == "second");
+    f.deliver(managed_list::Phase::complete, {{L"a", 1, false}});
+    source->deliver(old, number(990000000)); f.pane.process_icon_results();
+    EXPECT(cell(f, 0, 4) == L"Loading...");
+}
+void exhausted_properties_degrade_without_blocking_navigation() {
+    Fixture f;
+    auto* source = use_properties(f);
+    f.deliver(managed_list::Phase::complete, {{L"a", 1, false}});
+    source->accept = false;
+    f.click_column(4); f.pane.set_list_icon_viewport(0, 1);
+    EXPECT(f.pane.list_property_capacity_failed());
+    EXPECT(!f.pane.list_property_sort_pending());
+    EXPECT(f.pane.list_snapshot().rows.size() == 1);
+    EXPECT(status(f).find(L"Properties unavailable") != std::wstring::npos);
+    source->accept = true;
+    f.pane.refresh_view();
+    f.deliver(managed_list::Phase::complete, {{L"a", 1, false}});
+    f.pane.set_list_icon_viewport(0, 1);
+    EXPECT(!f.pane.list_property_capacity_failed());
+    EXPECT(f.pane.list_property_sort_pending());
+    auto retry = source->requests; EXPECT(retry.size() == 1);
+    for (const auto& r : retry) source->deliver(r, number(10000000));
+    while (!source->results.empty()) f.pane.process_icon_results();
+    EXPECT(cell(f, 0, 4) == L"0:01");
+    EXPECT(!f.pane.list_property_sort_pending());
+    EXPECT(SUCCEEDED(f.pane.navigate_to({L"C:\\B", {}, {}})));
+    EXPECT(!f.pane.list_property_capacity_failed());
+}
+
+void bounded_order_yields_without_mutation_and_finishes_stably() {
+    struct Item final {
+        std::size_t key{}, original{};
+        bool operator==(const Item&) const = default;
+    };
+    std::vector<Item> rows;
+    for (std::size_t index = 0; index < 5000; ++index)
+        rows.push_back({(5000 - index) % 17, index});
+    const auto original = rows;
+    core::BoundedOrder order;
+    order.start(rows.size());
+    const auto less = [&](auto a, auto b) { return rows[a].key < rows[b].key; };
+    bool complete = order.step(2048, less);
+    EXPECT(!complete);
+    EXPECT(rows == original);
+    std::size_t turns = 1;
+    while (!complete && turns < 64) {
+        complete = order.step(2048, less);
+        ++turns;
+        EXPECT(rows == original); // no partial permutation is ever presented
+    }
+    EXPECT(complete); EXPECT(turns > 1);
+    order.apply(rows);
+    for (std::size_t index = 1; index < rows.size(); ++index) {
+        EXPECT(rows[index - 1].key <= rows[index].key);
+        if (rows[index - 1].key == rows[index].key)
+            EXPECT(rows[index - 1].original < rows[index].original);
+    }
+}
+void property_owned_bytes_limit_keeps_rows_usable() {
+    Fixture f;
+    auto* source = use_properties(f);
+    f.deliver(managed_list::Phase::complete, {{L"a", 1, false}});
+    f.click_column(3); f.pane.set_list_icon_viewport(0, 1);
+    auto request = source->requests.front();
+    managed_list::PropertyValue oversized{managed_list::PropertyState::value, L"Type", 0, false};
+    oversized.text.reserve(managed_list::kMaxRowBytes);
+    source->deliver(request, std::move(oversized)); f.pane.process_icon_results();
+    EXPECT(f.pane.list_property_capacity_failed()); EXPECT(!f.pane.list_property_sort_pending());
+    EXPECT(f.pane.list_snapshot().rows.size() == 1);
+    EXPECT(cell(f, 0, 3) == L"Unavailable");
+    EXPECT(f.pane.list_snapshot().rows.front().properties[0].text.empty());
+    source->deliver(request, {managed_list::PropertyState::value, L"late", 0, false});
+    f.pane.process_icon_results(); EXPECT(cell(f, 0, 3) == L"Unavailable");
+}
+void paused_worker_property_keeps_navigation_available() {
+    auto gate = std::make_shared<managed_list::testing::IconGate>();
+    {
+        Fixture f;
+        auto worker = managed_list::testing::make_gated_icons(gate);
+        EXPECT(worker != nullptr); f.pane.use_list_icons(std::move(worker));
+        f.deliver(managed_list::Phase::complete, {{L"a", 1, false}});
+        f.click_column(4); f.pane.set_list_icon_viewport(0, 1);
+        EXPECT(WaitForSingleObject(gate->entered, 2000) == WAIT_OBJECT_0);
+        EXPECT(f.pane.list_property_sort_pending());
+        EXPECT(status(f).find(L"Sorting properties...") != std::wstring::npos);
+        const auto counts = managed_list::testing::icon_counts();
+        EXPECT(counts.workers <= managed_list::kIconWorkers);
+        EXPECT(counts.running == 1); EXPECT(counts.pending <= managed_list::kIconInterest);
+        // The provider remains gated during departure and destruction. Neither
+        // operation joins it or needs its COM objects to return to the UI.
+        EXPECT(SUCCEEDED(f.pane.navigate_to({L"C:\\B", {}, {}})));
+        f.deliver(managed_list::Phase::complete, {{L"new", 2, false}});
+        EXPECT(f.pane.list_snapshot().request.location.parsing_name == L"C:\\B");
+        EXPECT(f.pane.list_snapshot().rows.front().name == L"new");
+    }
+    SetEvent(gate->release);
+    EXPECT(managed_list::testing::wait_for_icon_workers(3000));
+}
 } // namespace
 
 int main() {
@@ -283,5 +594,13 @@ int main() {
     basic_keys_group_directories_and_keep_deterministic_ties();
     unicode_name_order_and_unknown_sort_fallback_are_stable();
     out_of_order_batches_and_sort_changes_preserve_item_and_viewport_identity();
+    expensive_sort_commits_once_and_preserves_interaction();
+    property_demand_is_bounded_and_stale_results_are_rejected();
+    display_demand_and_custom_keys_use_the_same_bounded_boundary();
+    exhausted_properties_degrade_without_blocking_navigation();
+    property_cells_status_and_explicit_retry();
+    bounded_order_yields_without_mutation_and_finishes_stably();
+    property_owned_bytes_limit_keeps_rows_usable();
+    paused_worker_property_keeps_navigation_available();
     return test::summary("managed_list_sort");
 }

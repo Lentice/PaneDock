@@ -267,7 +267,7 @@
 | PD-228 | 基本排序與穩定更新 | 8 | `done` | PD-227 | [PD-228](tickets/PD-228-managed-list-basic-sort.md) |
 | PD-229 | 可見項目圖示與 overlay | 8 | `done` | PD-224 | [PD-229](tickets/PD-229-managed-list-visible-icons.md) |
 | PD-230 | 縮圖與既有 view mode 對應 | 8 | `done` | PD-229 | [PD-230](tickets/PD-230-managed-list-thumbnails-view-modes.md) |
-| PD-231 | 昂貴屬性欄位與排序 | 8 | `planned` | PD-228 | [PD-231](tickets/PD-231-managed-list-expensive-properties.md) |
+| PD-231 | 昂貴屬性欄位與排序 | 8 | `done` | PD-228 | [PD-231](tickets/PD-231-managed-list-expensive-properties.md) |
 | PD-232 | 本機變更通知與恢復掃描 | 8 | `planned` | PD-228 | [PD-232](tickets/PD-232-managed-list-change-notifications.md) |
 | PD-233 | tab 列表 snapshot 的全域有界快取 | 8 | `planned` | PD-225, PD-228, PD-232 | [PD-233](tickets/PD-233-managed-list-tab-cache.md) |
 | PD-234 | 虛擬 Shell location 導覽 | 8 | `planned` | PD-225 | [PD-234](tickets/PD-234-managed-list-shell-namespace.md) |

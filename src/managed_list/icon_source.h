@@ -5,7 +5,8 @@
 
 namespace panedock::managed_list {
 // Separate from the four enumeration slots: at most eight list workers in
-// total, including abandoned calls. No offscreen prefetch. Viewports exceeding
+// total, including abandoned calls. Properties share these same slots/queues.
+// No offscreen image prefetch; only full-sort demand requests offscreen keys. Viewports exceeding
 // the interest cap retain placeholders for the excess until they scroll in.
 inline constexpr std::size_t kIconWorkers = 4;
 inline constexpr std::size_t kIconInterest = 128;
@@ -38,10 +39,15 @@ struct IconRequest final {
     Request request;
     std::uint64_t viewport{};
     IconKey key;
+    std::string property{}; // empty = image; otherwise worker-owned property query
+    int property_slot{};
+    std::size_t row_index{};
+    bool operator==(const IconRequest&) const = default;
 };
 struct IconResult final {
     IconRequest request;
     shell_core::IconImage image; // empty on failure; no negative cache
+    PropertyValue property{};
 };
 class IconSource {
   public:

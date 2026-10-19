@@ -46,11 +46,31 @@ Phase 8 · managed list migration
 - 量取／排序與 UI 分開，成功／未知／失敗／取消各有狀態；完成以一致 snapshot 套用，保留 selection／scroll。
 - 超時或不可取消遵守現有容量政策，不自建第二套無界 executor。
 
+### Property key 盤點與取得政策
+
+依據 `docs/testing.md` 的功能保留矩陣、來源 Commander 研究、`shell_core` 的 sort adapter、legacy `ExplorerHost::set_sort/get_sort` 及 PD-230 實際 view-mode rendering：
+
+| Key／既有契約 | PD-231 取得方式 |
+|---|---|
+| `System.ItemNameDisplay` | 既有列名稱；不另取 property。 |
+| `System.Size` | 既有列舉 bytes；不另取 property。 |
+| `System.DateModified` | 既有列舉 FILETIME；不另取 property。 |
+| `System.ItemTypeText` | 保留矩陣明定的 Type；背景 Shell property，不能假定查詢免費。 |
+| `System.Media.Duration` | 來源研究及本票明列的昂貴媒體 key；背景 Shell property，100 ns ticks 顯示為分鐘／秒。 |
+| 已持久化的 `{GUID} PID`／canonical `System.*` key | 同一 worker 解析與取得；基本三鍵的既有 canonical GUID 字串重用列舉快取，其他 scalar number／FILETIME／bounded text 作排序值。無法解析、轉換或取得則明確失敗；原字串不改寫。 |
+
+因此本票不是 Duration-only。現有八種 view mode 沒有額外指定 Artist／Album／Dimensions 等固定欄位；Tiles／Content 繼續使用已快取的名稱、size／folder、date summary，不額外擷取媒體屬性。
+
+- **顯示需求**：只有可見列且與 Details viewport 相交的 Type／Duration 欄位取得資料；無 offscreen display prefetch。資料夾不查 Duration。未解析顯示 `Loading...`，未知／缺值留白，失敗顯示 `Unavailable`；基本操作一直可用。
+- **排序需求**：先取可見列的 sort key，再以最多 128 筆窗口取得全部保留列的 key，包含 offscreen 列。status 顯示 `Sorting properties...`；列舉結束、所有 key 成功／缺值／失敗後才提交一致順序。key 的比較採每回合最多 2,048 步的 cooperative merge，不在單次 UI dispatch 排完整份清單；來源列直到 final permutation 才改變。相同值與失敗／缺值使用既有 directory-first／name tie-break；缺值與失敗不因降序跑到有效值之前。
+- **容量與失敗**：沿用圖示／縮圖的同一四個 enrichment slot、128 queued requests、兩筆 queued results，以及既有四個 enumeration slot；不建立第二套 executor。每值文字最多 128 characters，三個值槽／列與其字串 capacity 計入原 24 MiB row cap；額外排序索引最多兩份 100,000 × size_t。navigation／tab／viewport／view-mode 變化取消舊 interest，binding、location、generation、viewport、item version 與 request membership 共同拒收過期結果。
+- 取得失敗／缺值在目前 snapshot 為 terminal，不在每次 paint 或 completion 重試；`Refresh` 清掉 snapshot 後明確重試。slot／記憶體耗盡顯示 `Properties unavailable. Refresh to retry.`，保留目前可操作列；尚未取得的 key 依缺值 fallback 完成排序，不無界排隊。provider 不可取消時仍占固定 slot，關閉不 join；沒有 timer／idle polling。
+
 ## Acceptance criteria
 
-- [ ] 控制單一慢 key 可重現 loading，仍可切換目的地，舊 key 回覆不改新 tab。
-- [ ] 所有 key 到齊或按已定義失敗政策結束後，排序穩定且 selection／anchor 正確。
-- [ ] 缺 key／相同 key／取得失敗有確定次序與重試行為，無每筆 completion 全表洗牌。
+- [x] 控制單一慢 key 可重現 loading，仍可切換目的地，舊 key 回覆不改新 tab。
+- [x] 所有 key 到齊或按已定義失敗政策結束後，排序穩定且 selection／anchor 正確。
+- [x] 缺 key／相同 key／取得失敗有確定次序與重試行為，無每筆 completion 全表洗牌。
 
 ## Testing decisions
 
@@ -76,3 +96,8 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+## 交接區
+
+- 使用者明確延後實機／GUI 驗證；未啟動 PaneDock。真實媒體／第三方 property provider、Shell namespace／network／OneDrive 的相容性、是否觸發 placeholder 下載、真正 focus／accessibility、名稱與媒體排序的首次可操作／完成延遲、CPU／private bytes／handles 與十分鐘 idle CPU／I/O 仍「未驗證，需真實桌面」，由 PD-241 gate 驗證；受控 PaneHost／worker 測試不能推論實機通過，legacy 預設不變。
+- Shell property 取得涉及 worker-owned COM，不能放入純 core；PaneHost 的延遲／亂序／失敗／tab 與 location 換代／文字呈現／Refresh 重試測試替代本次自動化驗證，純排序 permutation 另可在無 HWND 的 core 驅動。真實 provider 或 COM teardown 仍可能永久阻塞；沿用固定 slot、不 join 的關閉政策，受控 gate 不代表真實取消／資源回收結果。超長或無法轉為 scalar／bounded text 的自訂 key 依失敗政策 fallback，其與 Shell 原生特殊比較語意的完整相容性仍需實機 corpus 確認。

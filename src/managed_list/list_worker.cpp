@@ -366,11 +366,16 @@ bool wait_for_workers(DWORD timeout) noexcept {
 } // namespace testing
 } // namespace panedock::managed_list
 
-// Icon enrichment has separate, fixed capacity so a provider cannot hold up
+// Icon/property enrichment has separate, fixed capacity so a provider cannot hold up
 // enumeration/first usable rows. All synchronization stays in this file.
 #include "managed_list/icon_source.h"
 #include "managed_list/icon_source_test.h"
 #include <objbase.h>
+#include <shobjidl.h>
+#include <propsys.h>
+#include <propvarutil.h>
+#include <cmath>
+#include <wrl/client.h>
 namespace panedock::managed_list {
 namespace {
 struct IconState final {
@@ -387,6 +392,49 @@ struct IconState final {
     ~IconState() { if (ready) CloseHandle(ready); if (done) CloseHandle(done); }
 };
 std::array<std::weak_ptr<IconState>, kIconWorkers> icon_slots;
+PropertyValue read_property(const IconRequest& request) {
+    PropertyValue result;
+    result.state = PropertyState::failed;
+    PROPERTYKEY key{};
+    std::wstring property(request.property.begin(), request.property.end());
+    if (FAILED(PSGetPropertyKeyFromName(property.c_str(), &key)) &&
+        FAILED(PSPropertyKeyFromString(property.c_str(), &key))) return result;
+    auto path = request.key.location.parsing_name;
+    if (!path.empty() && path.back() != L'\\') path += L'\\';
+    path += request.key.name;
+    Microsoft::WRL::ComPtr<IShellItem2> item;
+    if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&item)))) return result;
+    PROPVARIANT value{};
+    struct Clear { PROPVARIANT& value; ~Clear() { PropVariantClear(&value); } } clear{value};
+    if (FAILED(item->GetProperty(key, &value))) return result;
+    if (value.vt == VT_EMPTY || value.vt == VT_NULL) {
+        result.state = PropertyState::missing; return result;
+    }
+    if (value.vt == VT_UI8 || value.vt == VT_UI4 || value.vt == VT_UI2 || value.vt == VT_UI1) {
+        ULONGLONG number{};
+        if (FAILED(PropVariantToUInt64(value, &number))) return result;
+        result.number = number; result.numeric = true;
+    } else if (value.vt == VT_I8 || value.vt == VT_I4 || value.vt == VT_I2 || value.vt == VT_I1) {
+        LONGLONG number{};
+        if (FAILED(PropVariantToInt64(value, &number))) return result;
+        result.number = number; result.numeric = true;
+    } else if (value.vt == VT_R8 || value.vt == VT_R4) {
+        double number{};
+        if (FAILED(PropVariantToDouble(value, &number)) || !std::isfinite(number)) return result;
+        result.number = number; result.numeric = true;
+    } else if (value.vt == VT_FILETIME) {
+        result.number = (static_cast<std::uint64_t>(value.filetime.dwHighDateTime) << 32) |
+            value.filetime.dwLowDateTime;
+        result.numeric = true;
+    } else {
+        // Bounded conversion: a provider cannot make a retained property string grow.
+        wchar_t text[129]{};
+        if (FAILED(PropVariantToString(value, text, ARRAYSIZE(text)))) return result;
+        result.text = text;
+    }
+    result.state = PropertyState::value;
+    return result;
+}
 void run_icons(std::shared_ptr<IconState> state) noexcept {
     struct Done { HANDLE event; ~Done() { SetEvent(event); } } done{state->done};
     const HRESULT apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -402,7 +450,8 @@ void run_icons(std::shared_ptr<IconState> state) noexcept {
             serial = state->serial;
             state->running = true;
         }
-        IconResult result{std::move(request), {}};
+        IconResult result{std::move(request), {}, {}};
+        result.property.state = PropertyState::failed;
         try {
             if (state->gate) {
                 SetEvent(state->gate->entered);
@@ -410,7 +459,9 @@ void run_icons(std::shared_ptr<IconState> state) noexcept {
                 const int size = result.request.key.size;
                 result.image.pixels.assign(static_cast<std::size_t>(size * size), 0xff336699);
                 result.image.mask.assign(static_cast<std::size_t>(((size + 15) / 16) * 2 * size), 0);
-            } else if (SUCCEEDED(apartment)) result.image = (result.request.key.thumbnail ? shell_core::load_item_thumbnail : shell_core::load_item_icon)(
+            } else if (SUCCEEDED(apartment) && !result.request.property.empty())
+                result.property = read_property(result.request);
+            else if (SUCCEEDED(apartment)) result.image = (result.request.key.thumbnail ? shell_core::load_item_thumbnail : shell_core::load_item_icon)(
                 result.request.key.location.parsing_name, result.request.key.name,
                 result.request.key.size);
         } catch (...) { /* Decorative failure keeps a usable placeholder. */ }
@@ -447,6 +498,7 @@ class WorkerIcons final : public IconSource {
                 r.request.location.fallback_path.size() > kMaxPath ||
                 r.request.location.known_folder_identity.size() > kMaxPath ||
                 r.request.binding.group_id.size() > 256 || r.request.binding.tab_id.size() > 256 ||
+                r.property.size() > 128 || r.property_slot < 0 || r.property_slot > 2 ||
                 r.key.size < 16 || r.key.size > kMaxImageSize) return false;
         std::deque<IconRequest> pending;
         for (auto& r : requests) pending.push_back(std::move(r));

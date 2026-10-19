@@ -7,6 +7,7 @@
 #endif
 #include <windows.h>
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -34,6 +35,13 @@ struct Request final {
             binding.tab_id == other.binding.tab_id && location == other.location;
     }
 };
+enum class PropertyState { unresolved, value, missing, failed };
+struct PropertyValue final {
+    PropertyState state{PropertyState::unresolved};
+    std::wstring text; // bounded to 128 characters; no provider-owned data
+    long double number{};
+    bool numeric{};
+};
 struct Row final {
     std::wstring name;
     std::uint64_t bytes{};
@@ -41,6 +49,10 @@ struct Row final {
     // UTC FILETIME ticks copied directly from WIN32_FIND_DATA on the worker.
     // Zero means the basic timestamp was unavailable.
     std::uint64_t date_modified{};
+    // Type, Duration, and the current persisted custom sort key. <=3 values per
+    // retained row (<=100,000); structural and owned text bytes share the SAME
+    // 24 MiB row cap. No inactive-tab cache. Released with rows.
+    std::array<PropertyValue, 3> properties{};
 };
 enum class Phase { idle, loading, complete, empty, error, limited };
 struct Batch final {

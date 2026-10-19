@@ -37,6 +37,10 @@ managed_list::IconKey Pane::list_icon_key(std::size_t row) const {
 void Pane::cancel_list_icons() noexcept {
     ++icon_viewport_;
     icon_interest_.clear();
+    enrichment_interest_.clear();
+    image_attempted_.fill(false);
+    property_sort_cursor_ = 0;
+    property_order_.clear();
     if (icon_source_) icon_source_->cancel();
 }
 void Pane::destroy_list_icons() noexcept {
@@ -133,27 +137,63 @@ void Pane::request_list_images(std::vector<std::size_t> rows) noexcept try {
         icon_images_ = nullptr; icon_cache_.clear();
         icon_dpi_ = paint_dpi_; icon_thumbnail_ = thumbnail;
     }
-    if (!ensure_list_icon_images(size)) return;
+    if (!ensure_list_icon_images(size)) {
+        property_capacity_failed_ = true;
+        property_sort_pending_ = false;
+        update_managed_list();
+        return;
+    }
     std::vector<managed_list::IconKey> interest;
     for (auto i : rows) {
         if (i < list_.rows.size() && interest.size() < managed_list::kIconInterest)
             interest.push_back(list_icon_key(i));
     }
-    if (interest == icon_interest_) return;
-    ++icon_viewport_;
+    const bool changed = interest != icon_interest_;
+    if (!changed && !enrichment_interest_.empty()) return;
+    if (changed) {
+        ++icon_viewport_;
+        enrichment_interest_.clear();
+        image_attempted_.fill(false);
+        // Requests discarded by replace remain unresolved and are retried only
+        // in the next bounded demand window. No per-completion whole-list scan.
+        property_sort_cursor_ = 0;
+        property_order_.clear();
+    }
     icon_interest_ = std::move(interest);
     std::vector<managed_list::IconRequest> requests;
-    for (const auto& key : icon_interest_) {
+    append_property_requests(requests, rows);
+    if (property_sort_pending_ && requests.empty() &&
+        list_.phase != managed_list::Phase::loading && property_sort_cursor_ >= list_.rows.size()) {
+        finish_property_batch();
+        return;
+    }
+    if (!property_sort_pending_) for (std::size_t index = 0; index < icon_interest_.size(); ++index) {
+        const auto& key = icon_interest_[index];
+        if (image_attempted_[index]) continue;
         const auto found = std::find_if(icon_cache_.begin(), icon_cache_.end(),
             [&](const auto& entry) { return entry.key == key; });
         if (found != icon_cache_.end()) { found->used = ++icon_clock_; continue; }
-        if (std::any_of(requests.begin(), requests.end(), [&](const auto& r) { return r.key == key; })) continue;
-        requests.push_back({list_.request, icon_viewport_, key});
+        if (std::any_of(requests.begin(), requests.end(), [&](const auto& r) { return r.key == key && r.property.empty(); })) continue;
+        if (requests.size() < managed_list::kIconInterest) {
+            requests.push_back({list_.request, icon_viewport_, key, {}, 0, 0});
+            image_attempted_[index] = true;
+        }
     }
-    if (requests.empty()) { if (icon_source_) icon_source_->cancel(); return; }
+    if (requests.empty()) { if (icon_source_) icon_source_->cancel(); finish_property_batch(); return; }
     if (!icon_source_ && !icon_seam_) icon_source_ = managed_list::make_icon_source();
-    if (icon_source_ && !icon_source_->replace(std::move(requests))) icon_source_->cancel();
-} catch (...) { cancel_list_icons(); }
+    enrichment_interest_ = requests;
+    if (!icon_source_ || !icon_source_->replace(std::move(requests))) {
+        if (icon_source_) icon_source_->cancel();
+        enrichment_interest_.clear();
+        property_capacity_failed_ = true;
+        finish_property_batch();
+    }
+} catch (...) {
+    cancel_list_icons();
+    property_capacity_failed_ = true;
+    property_sort_pending_ = false;
+    update_managed_list();
+}
 HANDLE Pane::icon_event() const noexcept { return icon_source_ ? icon_source_->event() : nullptr; }
 void Pane::process_icon_results() noexcept try {
     if (!icon_source_) return;
@@ -164,8 +204,15 @@ void Pane::process_icon_results() noexcept try {
         if (!active() || !managed_list_active_ ||
             !content_request_is_current(request.request.binding) ||
             !(request.request == list_.request) || request.viewport != icon_viewport_ ||
-            std::find(icon_interest_.begin(), icon_interest_.end(), request.key) == icon_interest_.end() ||
             request.key.size != icon_size_ || !icon_images_) continue;
+        const auto pending = std::find(enrichment_interest_.begin(), enrichment_interest_.end(), request);
+        if (pending == enrichment_interest_.end()) continue;
+        enrichment_interest_.erase(pending);
+        if (!request.property.empty()) {
+            accept_property_result(*result);
+            continue;
+        }
+        if (std::find(icon_interest_.begin(), icon_interest_.end(), request.key) == icon_interest_.end()) continue;
         struct OwnedIcon { HICON value; ~OwnedIcon() { if (value) DestroyIcon(value); } };
         const OwnedIcon icon{raster_icon(result->image, icon_size_)};
         if (!icon.value) continue; // retry on renewed interest/Refresh, never an idle loop
@@ -187,6 +234,10 @@ void Pane::process_icon_results() noexcept try {
             if (slot < 0) icon_cache_.pop_back(); else icon_cache_.back().slot = slot;
         }
         if (slot >= 0 && list_window_) InvalidateRect(list_window_, nullptr, FALSE);
+    }
+    if (enrichment_interest_.empty()) {
+        finish_property_batch();
+        queue_list_icon_viewport();
     }
 } catch (...) { cancel_list_icons(); }
 void Pane::queue_list_icon_viewport() noexcept {
@@ -221,6 +272,10 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
     const auto result = DefSubclassProc(window, message, wp, lp);
     if (pane->list_window_ != window || !IsWindow(window)) return result;
     switch (message) {
+    case WM_NOTIFY:
+        if (lp && reinterpret_cast<NMHDR*>(lp)->hwndFrom == ListView_GetHeader(window))
+            pane->queue_list_icon_viewport();
+        break;
     case WM_VSCROLL: case WM_HSCROLL: case WM_MOUSEWHEEL: case WM_KEYDOWN:
     case WM_SIZE: case WM_SHOWWINDOW: case LVM_SCROLL: case LVM_ENSUREVISIBLE:
         pane->queue_list_icon_viewport(); break;

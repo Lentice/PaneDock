@@ -112,6 +112,7 @@ add_library(panedock_pane STATIC
     src/managed_list/list_worker.cpp
     src/app_shell/pane_managed_list.cpp
     src/app_shell/pane_list_icons.cpp
+    src/app_shell/pane_list_properties.cpp
     src/app_shell/pane.cpp
     src/app_shell/pane_tab_strip.h
     src/app_shell/pane_tab_strip.cpp

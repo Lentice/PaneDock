@@ -96,6 +96,9 @@ std::string_view sort_property_name(SortProperty property) noexcept {
 }
 
 std::optional<SortProperty> parse_sort_property(std::string_view name) noexcept {
+    if (name == "{B725F130-47EF-101A-A5F1-02608C9EEBAC} 10") return SortProperty::name;
+    if (name == "{B725F130-47EF-101A-A5F1-02608C9EEBAC} 12") return SortProperty::size;
+    if (name == "{B725F130-47EF-101A-A5F1-02608C9EEBAC} 14") return SortProperty::date_modified;
     if (name == "System.ItemNameDisplay") return SortProperty::name;
     if (name == "System.Size") return SortProperty::size;
     if (name == "System.DateModified") return SortProperty::date_modified;
