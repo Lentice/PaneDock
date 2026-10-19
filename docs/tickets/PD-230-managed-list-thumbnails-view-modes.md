@@ -76,3 +76,8 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+## 交接區
+
+- 使用者明確延後 GUI／實機驗證。真實 Shell 縮圖 provider、巨大／損壞檔案、透明影像、OneDrive 是否觸發下載、網路／虛擬 namespace、mixed-DPI 畫質與 Tiles／Content 實際排版、鍵盤／accessibility 仍「未驗證，需真實桌面」；受控 raster 與隱藏控制項測試不是這些相容性的證據。切換 20 次後的真實 process handles／private bytes 與十分鐘 idle CPU／I/O／wakeups 尚未量測，仍由 PD-241 gate 驗證，legacy 預設不變。
+- 縮圖與繪製涉及 worker-owned Shell COM、HBITMAP／HICON 與虛擬 ListView，不能移入純 core；自動化替代檢查沿用 PaneHost seam，實機替代檢查是八種既有模式／尺寸切換、tab 還原、快速捲動、失敗縮圖與 mixed-DPI。Shell provider 及 COM teardown 仍可能永久阻塞；沿用 PD-229 四個影像 slot 的不 join 關閉策略，無法以受控測試推論真實 provider 的取消／資源結果。

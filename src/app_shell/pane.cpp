@@ -1143,7 +1143,7 @@ void Pane::capture_sort() {
 }
 
 void Pane::apply_view_mode() {
-    if (managed_list_active_) return;
+    if (managed_list_active_) { apply_managed_list_view_mode(); return; }
     if (!active()) return;
     auto *tab = active_tab();
     if (tab == nullptr || !realized()) return;
@@ -1204,7 +1204,15 @@ void Pane::capture_location() {
 }
 
 void Pane::set_view_mode(const panedock::shell_core::ViewModeOption &option) {
-    if (managed_list_active_) return;
+    if (managed_list_active_) {
+        if (!active()) return;
+        if (auto* tab = active_tab()) {
+            tab->view_mode = panedock::shell_core::view_mode_name(option.selection.mode, option.selection.image_size);
+            apply_managed_list_view_mode();
+            if (pane_host()) pane_host()->schedule_session_save();
+        }
+        return;
+    }
     if (!active()) return;
     if (pane_state() == nullptr) return;
     const auto request = content_request();
@@ -1817,7 +1825,7 @@ void Pane::set_paint_geometry(const PaneChromeRects &rects, UINT dpi) noexcept {
                -rects.pane_window.top);
     header_bottom_ = rects.address_background.bottom - rects.pane_window.top;
     paint_dpi_ = dpi;
-    if (dpi_changed) queue_list_icon_viewport();
+    if (dpi_changed && managed_list_active_) apply_managed_list_view_mode();
 }
 
 void Pane::paint_background(HDC target) noexcept {

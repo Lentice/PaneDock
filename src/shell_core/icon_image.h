@@ -10,4 +10,5 @@ struct IconImage final {
 };
 // Caller owns an initialized COM apartment. May block: worker only.
 IconImage load_item_icon(std::wstring_view folder, std::wstring_view name, int size);
+IconImage load_item_thumbnail(std::wstring_view folder, std::wstring_view name, int size);
 } // namespace panedock::shell_core

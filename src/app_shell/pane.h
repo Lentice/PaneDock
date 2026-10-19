@@ -162,6 +162,9 @@ class Pane final {
     void use_list_icons(std::unique_ptr<managed_list::IconSource> source);
     void set_list_icon_viewport(std::size_t first, std::size_t count) noexcept;
     int list_item_image(std::size_t row) const noexcept;
+    std::size_t list_image_bytes() const noexcept {
+        return icon_images_ ? (icon_cache_.size() + 2) * managed_list::image_bytes(icon_size_) : 0;
+    }
     HANDLE icon_event() const noexcept;
     void process_icon_results() noexcept;
     HANDLE content_event() const noexcept;
@@ -325,6 +328,13 @@ class Pane final {
     std::vector<managed_list::IconKey> icon_interest_;
     HIMAGELIST icon_images_{};
     int icon_size_{16};
+    UINT icon_dpi_{96};
+    bool icon_thumbnail_{};
+    FOLDERVIEWMODE list_mode_{FVM_DETAILS};
+    shell_core::ViewModeSelection list_view_selection_{FVM_DETAILS, -1};
+    void apply_managed_list_view_mode() noexcept;
+    void request_list_images(std::vector<std::size_t> rows) noexcept;
+    std::optional<LRESULT> draw_list_card(NMHDR*) noexcept;
     std::uint64_t icon_viewport_{}, icon_clock_{};
     bool icon_viewport_posted_{};
     bool icon_seam_{};

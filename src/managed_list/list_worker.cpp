@@ -410,7 +410,7 @@ void run_icons(std::shared_ptr<IconState> state) noexcept {
                 const int size = result.request.key.size;
                 result.image.pixels.assign(static_cast<std::size_t>(size * size), 0xff336699);
                 result.image.mask.assign(static_cast<std::size_t>(((size + 15) / 16) * 2 * size), 0);
-            } else if (SUCCEEDED(apartment)) result.image = shell_core::load_item_icon(
+            } else if (SUCCEEDED(apartment)) result.image = (result.request.key.thumbnail ? shell_core::load_item_thumbnail : shell_core::load_item_icon)(
                 result.request.key.location.parsing_name, result.request.key.name,
                 result.request.key.size);
         } catch (...) { /* Decorative failure keeps a usable placeholder. */ }
@@ -447,7 +447,7 @@ class WorkerIcons final : public IconSource {
                 r.request.location.fallback_path.size() > kMaxPath ||
                 r.request.location.known_folder_identity.size() > kMaxPath ||
                 r.request.binding.group_id.size() > 256 || r.request.binding.tab_id.size() > 256 ||
-                r.key.size < 16 || r.key.size > 64) return false;
+                r.key.size < 16 || r.key.size > kMaxImageSize) return false;
         std::deque<IconRequest> pending;
         for (auto& r : requests) pending.push_back(std::move(r));
         std::lock_guard lock(state_->mutex);

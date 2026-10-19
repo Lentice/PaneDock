@@ -366,6 +366,7 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
         clear_managed_list_interaction();
         ListView_SetItemCountEx(list_window_, 0, 0);
     }
+    apply_managed_list_view_mode();
     list_navigation_pending_ = true;
     // Loading is immediate; only a valid first batch commits location/history.
     // Mode/sort remain authoritative model values until their later slices.
@@ -525,6 +526,7 @@ bool Pane::open_list_row(std::size_t row) {
 }
 std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try {
     if (!notification || !list_window_ || notification->hwndFrom != list_window_) return {};
+    if (auto card = draw_list_card(notification)) return card;
     if (notification->code == LVN_GETDISPINFOW) {
         auto* info = reinterpret_cast<NMLVDISPINFOW*>(notification);
         if (info->item.mask & LVIF_IMAGE)

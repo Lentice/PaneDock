@@ -228,7 +228,7 @@ std::optional<std::filesystem::path> session_directory() noexcept {
 
 namespace panedock::shell_core {
 IconImage load_item_icon(std::wstring_view folder, std::wstring_view name, int size) {
-    if (size < 16 || size > 64) return {};
+    if (size < 16 || size > 512) return {};
     std::wstring path(folder);
     if (!path.empty() && path.back() != L'\\') path += L'\\';
     path += name;
@@ -267,6 +267,52 @@ IconImage load_item_icon(std::wstring_view folder, std::wstring_view name, int s
         for (int x = 0; x < size; ++x)
             if (pixels[y * size + x] & 0x00ffffff)
                 result.mask[y * stride + x / 8] |= static_cast<unsigned char>(0x80 >> (x % 8));
+    return result;
+}
+} // namespace panedock::shell_core
+
+namespace panedock::shell_core {
+IconImage load_item_thumbnail(std::wstring_view folder, std::wstring_view name, int size) {
+    if (size < 16 || size > 512) return {};
+    std::wstring path(folder);
+    if (!path.empty() && path.back() != L'\\') path += L'\\';
+    path += name;
+    Microsoft::WRL::ComPtr<IShellItemImageFactory> factory;
+    struct Bitmap { HBITMAP value{}; ~Bitmap() { if (value) DeleteObject(value); } } bitmap;
+    // This entire function runs in the image worker's apartment. Thumbnail
+    // failure takes the existing native icon path once, with no retry loop.
+    if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&factory))) ||
+        FAILED(factory->GetImage({size, size}, SIIGBF_THUMBNAILONLY, &bitmap.value)))
+        return load_item_icon(folder, name, size);
+    BITMAP description{};
+    if (!GetObjectW(bitmap.value, sizeof(description), &description) ||
+        description.bmWidth <= 0 || description.bmHeight <= 0 ||
+        description.bmWidth > size || description.bmHeight > size) return load_item_icon(folder, name, size);
+    struct Dc { HDC value{CreateCompatibleDC(nullptr)}; ~Dc() { if (value) DeleteDC(value); } } dc;
+    if (!dc.value) return {};
+    BITMAPINFO info{};
+    info.bmiHeader = {sizeof(BITMAPINFOHEADER), description.bmWidth, -description.bmHeight,
+        1, 32, BI_RGB, 0, 0, 0, 0, 0};
+    std::vector<std::uint32_t> pixels(static_cast<std::size_t>(description.bmWidth * description.bmHeight));
+    if (GetDIBits(dc.value, bitmap.value, 0, description.bmHeight, pixels.data(), &info, DIB_RGB_COLORS)
+        != static_cast<int>(description.bmHeight)) return load_item_icon(folder, name, size);
+    IconImage result;
+    result.pixels.assign(static_cast<std::size_t>(size * size), 0);
+    const int stride = ((size + 15) / 16) * 2;
+    result.mask.assign(static_cast<std::size_t>(stride * size), 0xff);
+    const int left = (size - description.bmWidth) / 2;
+    const int top = (size - description.bmHeight) / 2;
+    const bool has_alpha = std::any_of(pixels.begin(), pixels.end(),
+        [](auto pixel) { return (pixel & 0xff000000) != 0; });
+    for (int y = 0; y < description.bmHeight; ++y)
+        for (int x = 0; x < description.bmWidth; ++x) {
+            auto pixel = pixels[y * description.bmWidth + x];
+            if (!has_alpha) pixel |= 0xff000000;
+            result.pixels[(y + top) * size + x + left] = pixel;
+            if ((pixel & 0xff000000) == 0) continue;
+            result.mask[(y + top) * stride + (x + left) / 8] &=
+                static_cast<unsigned char>(~(0x80 >> ((x + left) % 8)));
+        }
     return result;
 }
 } // namespace panedock::shell_core

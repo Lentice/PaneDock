@@ -32,7 +32,7 @@ void Pane::use_list_icons(std::unique_ptr<managed_list::IconSource> source) {
 managed_list::IconKey Pane::list_icon_key(std::size_t row) const {
     const auto& item = list_.rows[row];
     return {list_.request.location, item.name, item.bytes, item.date_modified,
-        item.directory, icon_size_};
+        item.directory, icon_size_, icon_dpi_, icon_thumbnail_ && !item.directory};
 }
 void Pane::cancel_list_icons() noexcept {
     ++icon_viewport_;
@@ -42,7 +42,10 @@ void Pane::cancel_list_icons() noexcept {
 void Pane::destroy_list_icons() noexcept {
     cancel_list_icons();
     icon_source_.reset();
-    if (list_window_) ListView_SetImageList(list_window_, nullptr, LVSIL_SMALL);
+    if (list_window_) {
+        ListView_SetImageList(list_window_, nullptr, LVSIL_SMALL);
+        ListView_SetImageList(list_window_, nullptr, LVSIL_NORMAL);
+    }
     if (icon_images_) ImageList_Destroy(icon_images_);
     icon_images_ = nullptr;
     icon_cache_.clear();
@@ -50,13 +53,16 @@ void Pane::destroy_list_icons() noexcept {
 bool Pane::ensure_list_icon_images(int size) noexcept try {
     if (icon_images_ && size == icon_size_) return true;
     cancel_list_icons();
-    if (list_window_) ListView_SetImageList(list_window_, nullptr, LVSIL_SMALL);
+    if (list_window_) {
+        ListView_SetImageList(list_window_, nullptr, LVSIL_SMALL);
+        ListView_SetImageList(list_window_, nullptr, LVSIL_NORMAL);
+    }
     if (icon_images_) ImageList_Destroy(icon_images_);
     icon_images_ = nullptr;
     icon_cache_.clear();
     icon_size_ = size;
     icon_images_ = ImageList_Create(size, size, ILC_COLOR32 | ILC_MASK,
-        static_cast<int>(managed_list::kIconCache + 2), 1);
+        static_cast<int>(managed_list::image_capacity(size) + 2), 1);
     if (!icon_images_) return false;
     // Cheap local placeholders: no Shell/property call on paint or selection.
     for (int folder = 0; folder < 2; ++folder) {
@@ -76,7 +82,10 @@ bool Pane::ensure_list_icon_images(int size) noexcept try {
             ImageList_Destroy(icon_images_); icon_images_ = nullptr; return false;
         }
     }
-    if (list_window_) ListView_SetImageList(list_window_, icon_images_, LVSIL_SMALL);
+    if (list_window_) {
+        ListView_SetImageList(list_window_, icon_images_, LVSIL_SMALL);
+        ListView_SetImageList(list_window_, icon_images_, LVSIL_NORMAL);
+    }
     return true;
 } catch (...) {
     if (icon_images_) ImageList_Destroy(icon_images_);
@@ -91,19 +100,45 @@ int Pane::list_item_image(std::size_t row) const noexcept {
             const auto& key = entry.key;
             return key.location == list_.request.location && key.name == item.name &&
                 key.bytes == item.bytes && key.modified == item.date_modified &&
-                key.directory == item.directory && key.size == icon_size_;
+                key.directory == item.directory && key.size == icon_size_ &&
+                key.dpi == icon_dpi_ && key.thumbnail == (icon_thumbnail_ && !item.directory);
         });
     return found == icon_cache_.end() ? (item.directory ? 1 : 0) : found->slot;
 }
 void Pane::set_list_icon_viewport(std::size_t first, std::size_t count) noexcept try {
-    if (!managed_list_active_ || !active() ||
-        !content_request_is_current(list_.request.binding)) { cancel_list_icons(); return; }
-    const int size = std::clamp(MulDiv(16, static_cast<int>(paint_dpi_), 96), 16, 64);
-    if (!ensure_list_icon_images(size)) return;
-    std::vector<managed_list::IconKey> interest;
     first = std::min(first, list_.rows.size());
     const auto end = first + std::min({count, managed_list::kIconInterest, list_.rows.size() - first});
-    for (auto i = first; i < end; ++i) interest.push_back(list_icon_key(i));
+    std::vector<std::size_t> rows;
+    for (auto i = first; i < end; ++i) rows.push_back(i);
+    request_list_images(std::move(rows));
+} catch (...) { cancel_list_icons(); }
+void Pane::request_list_images(std::vector<std::size_t> rows) noexcept try {
+    if (!managed_list_active_ || !active() ||
+        !content_request_is_current(list_.request.binding)) { cancel_list_icons(); return; }
+    const auto* tab = active_tab();
+    const auto mode = shell_core::parse_view_mode(tab ? tab->view_mode : "")
+        .value_or(shell_core::ViewModeSelection{FVM_DETAILS, -1});
+    const int logical = mode.mode == FVM_ICON ? mode.image_size :
+        (mode.mode == FVM_TILE ? 48 : mode.mode == FVM_CONTENT ? 64 : 16);
+    const int size = std::clamp(MulDiv(std::clamp(logical, 16, 512), static_cast<int>(paint_dpi_), 96),
+        16, managed_list::kMaxImageSize);
+    const bool thumbnail = logical > 16;
+    if (icon_dpi_ != paint_dpi_ || icon_thumbnail_ != thumbnail) {
+        cancel_list_icons();
+        if (list_window_) {
+            ListView_SetImageList(list_window_, nullptr, LVSIL_SMALL);
+            ListView_SetImageList(list_window_, nullptr, LVSIL_NORMAL);
+        }
+        if (icon_images_) ImageList_Destroy(icon_images_);
+        icon_images_ = nullptr; icon_cache_.clear();
+        icon_dpi_ = paint_dpi_; icon_thumbnail_ = thumbnail;
+    }
+    if (!ensure_list_icon_images(size)) return;
+    std::vector<managed_list::IconKey> interest;
+    for (auto i : rows) {
+        if (i < list_.rows.size() && interest.size() < managed_list::kIconInterest)
+            interest.push_back(list_icon_key(i));
+    }
     if (interest == icon_interest_) return;
     ++icon_viewport_;
     icon_interest_ = std::move(interest);
@@ -138,7 +173,7 @@ void Pane::process_icon_results() noexcept try {
             [&](const auto& entry) { return entry.key == request.key; });
         if (found != icon_cache_.end()) continue;
         int slot = -1;
-        if (icon_cache_.size() == managed_list::kIconCache) {
+        if (icon_cache_.size() == managed_list::image_capacity(icon_size_)) {
             found = std::min_element(icon_cache_.begin(), icon_cache_.end(),
                 [](const auto& a, const auto& b) { return a.used < b.used; });
             auto key = request.key; // allocate before mutating the occupied slot
@@ -158,11 +193,19 @@ void Pane::queue_list_icon_viewport() noexcept {
     if (list_window_ && !icon_viewport_posted_)
         icon_viewport_posted_ = PostMessageW(list_window_, kViewportMessage, 0, 0) != FALSE;
 }
-void Pane::refresh_list_icon_viewport() noexcept {
+void Pane::refresh_list_icon_viewport() noexcept try {
     if (!list_window_ || !IsWindowVisible(list_window_)) { cancel_list_icons(); return; }
-    set_list_icon_viewport(static_cast<std::size_t>(std::max(0, ListView_GetTopIndex(list_window_))),
-        static_cast<std::size_t>(std::max(0, ListView_GetCountPerPage(list_window_))) + 1);
-}
+    // Visible-only traversal handles horizontal List and icon grids as well
+    // as report rows. Never enumerate the whole folder to discover a viewport.
+    std::vector<std::size_t> rows;
+    int item = -1;
+    while (rows.size() < managed_list::kIconInterest) {
+        item = ListView_GetNextItem(list_window_, item, LVNI_VISIBLEONLY);
+        if (item < 0) break;
+        rows.push_back(static_cast<std::size_t>(item));
+    }
+    request_list_images(std::move(rows));
+} catch (...) { cancel_list_icons(); }
 LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, LPARAM lp,
                                          UINT_PTR id, DWORD_PTR data) {
     auto* pane = reinterpret_cast<Pane*>(data);
@@ -185,4 +228,88 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
     }
     return result;
 }
+
+void Pane::apply_managed_list_view_mode() noexcept {
+    if (!active() || !managed_list_active_) return;
+    const auto* tab = active_tab();
+    if (!tab) return;
+    const auto mode = shell_core::parse_view_mode(tab->view_mode)
+        .value_or(shell_core::ViewModeSelection{FVM_DETAILS, -1});
+    if (mode != list_view_selection_) {
+        cancel_list_icons();
+        if (list_window_) {
+            ListView_SetImageList(list_window_, nullptr, LVSIL_SMALL);
+            ListView_SetImageList(list_window_, nullptr, LVSIL_NORMAL);
+        }
+        if (icon_images_) ImageList_Destroy(icon_images_);
+        icon_images_ = nullptr; icon_cache_.clear();
+        list_view_selection_ = mode;
+    }
+    list_mode_ = mode.mode;
+    cancel_list_icons();
+    if (!list_window_) return;
+    // Attach size-dependent images before spacing: comctl32 may recompute
+    // icon metrics when an image list changes. This never calls the Shell.
+    set_list_icon_viewport(0, 0);
+    const auto scale = [&](int n) { return MulDiv(n, static_cast<int>(paint_dpi_), 96); };
+    // LVS_OWNERDATA cannot use native tile item data. Cards use the virtual
+    // icon grid (Tiles) or headerless report rows (Content), drawn below.
+    const DWORD view = mode.mode == FVM_LIST ? LV_VIEW_LIST :
+        mode.mode == FVM_DETAILS || mode.mode == FVM_CONTENT ? LV_VIEW_DETAILS :
+        mode.mode == FVM_ICON && mode.image_size == 16 ? LV_VIEW_SMALLICON : LV_VIEW_ICON;
+    auto style = GetWindowLongPtrW(list_window_, GWL_STYLE);
+    style = mode.mode == FVM_CONTENT ? style | LVS_NOCOLUMNHEADER : style & ~LVS_NOCOLUMNHEADER;
+    style = (style & ~LVS_TYPEMASK) | view;
+    SetWindowLongPtrW(list_window_, GWL_STYLE, style);
+    ListView_SetView(list_window_, view);
+    if (view == LV_VIEW_ICON) {
+        const int size = mode.mode == FVM_TILE ? 48 : std::clamp(mode.image_size, 16, 512);
+        ListView_SetIconSpacing(list_window_, scale(mode.mode == FVM_TILE ? 300 : size + 40),
+            scale(mode.mode == FVM_TILE ? 80 : size + 52));
+    }
+    queue_list_icon_viewport();
+    InvalidateRect(list_window_, nullptr, TRUE);
+}
+std::optional<LRESULT> Pane::draw_list_card(NMHDR* notification) noexcept try {
+    if (notification->code != NM_CUSTOMDRAW ||
+        (list_mode_ != FVM_TILE && list_mode_ != FVM_CONTENT)) return {};
+    auto* draw = reinterpret_cast<NMLVCUSTOMDRAW*>(notification);
+    if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+    if (draw->nmcd.dwDrawStage != CDDS_ITEMPREPAINT) return CDRF_DODEFAULT;
+    const auto index = static_cast<std::size_t>(draw->nmcd.dwItemSpec);
+    if (index >= list_.rows.size()) return CDRF_DODEFAULT;
+    RECT rect{};
+    if (!ListView_GetItemRect(list_window_, static_cast<int>(index), &rect, LVIR_BOUNDS))
+        return CDRF_DODEFAULT;
+    const auto& row = list_.rows[index];
+    const bool selected = (ListView_GetItemState(list_window_, static_cast<int>(index), LVIS_SELECTED) != 0);
+    const HDC dc = draw->nmcd.hdc;
+    const int saved = SaveDC(dc);
+    struct DcState { HDC dc; int saved; ~DcState() { if (saved) RestoreDC(dc, saved); } } restore{dc, saved};
+    FillRect(dc, &rect, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+    SetTextColor(dc, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
+    SetBkMode(dc, TRANSPARENT);
+    const int pad = MulDiv(6, static_cast<int>(paint_dpi_), 96);
+    if (icon_images_) ImageList_Draw(icon_images_, list_item_image(index), dc,
+        rect.left + pad, rect.top + std::max(0L, (rect.bottom - rect.top - icon_size_) / 2), ILD_TRANSPARENT);
+    rect.left += icon_size_ + pad * 2; rect.top += pad; rect.right -= pad;
+    RECT title = rect;
+    DrawTextW(dc, row.name.c_str(), -1, &title, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    TEXTMETRICW metrics{}; GetTextMetricsW(dc, &metrics);
+    rect.top += metrics.tmHeight + pad;
+    auto detail = row.directory ? std::wstring(L"Folder") : std::to_wstring(row.bytes) + L" bytes";
+    if (list_mode_ == FVM_CONTENT && row.date_modified != 0) {
+        FILETIME utc{static_cast<DWORD>(row.date_modified), static_cast<DWORD>(row.date_modified >> 32)};
+        FILETIME local{}; SYSTEMTIME time{}; wchar_t date[64]{};
+        if (FileTimeToLocalFileTime(&utc, &local) && FileTimeToSystemTime(&local, &time) &&
+            GetDateFormatW(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &time, nullptr, date, ARRAYSIZE(date)))
+            detail += std::wstring(L"    ") + date;
+    }
+    DrawTextW(dc, detail.c_str(), -1, &rect, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (draw->nmcd.uItemState & CDIS_FOCUS) {
+        RECT focus{}; ListView_GetItemRect(list_window_, static_cast<int>(index), &focus, LVIR_BOUNDS);
+        DrawFocusRect(dc, &focus);
+    }
+    return CDRF_SKIPDEFAULT;
+} catch (...) { return CDRF_DODEFAULT; }
 } // namespace panedock::app_shell

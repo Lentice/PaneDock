@@ -53,13 +53,23 @@ struct Fixture {
     app_shell::Pane pane;
     Rows* rows{};
     Icons* icons{};
-    Fixture() {
+    HWND parent{};
+    Fixture(bool controls = false) {
         pane.set_host(&host); pane.set_reentry_guard(&host.guard); pane.bind(&state);
+        if (controls) {
+            EXPECT(app_shell::Pane::register_window_class(GetModuleHandleW(nullptr)));
+            parent = CreateWindowExW(0, L"STATIC", L"image mode test", 0,
+                0, 0, 800, 600, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+            EXPECT(parent != nullptr);
+            EXPECT(pane.create(parent, 0));
+            pane.bind(&state);
+        }
         auto r = std::make_unique<Rows>(); rows = r.get(); pane.use_managed_list(std::move(r));
         auto i = std::make_unique<Icons>(); icons = i.get(); pane.use_list_icons(std::move(i));
-        navigate();
+        if (controls) EXPECT(SUCCEEDED(pane.realize({0, 0, 640, 420}, {L"C:\\A", {}, {}})));
+        else navigate();
     }
-    ~Fixture() { pane.destroy(); }
+    ~Fixture() { pane.destroy(); if (parent) DestroyWindow(parent); }
     void navigate(const wchar_t* path = L"C:\\A") { EXPECT(SUCCEEDED(pane.navigate_to({path, {}, {}}))); }
     void deliver(std::vector<ml::Row> items, ml::Phase phase = ml::Phase::complete) {
         rows->batches.push_back({pane.list_snapshot().request, std::move(items), phase, 0});
@@ -158,6 +168,94 @@ void bounded_cache_eviction_and_resource_cleanup() {
     }
     EXPECT(GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) <= before + 2);
 }
+void thumbnails_modes_stale_failure_and_budget() {
+    const DWORD before = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
+    {
+        Fixture f;
+        std::vector<ml::Row> rows;
+        for (int n = 0; n < 100; ++n) rows.push_back({L"image-" + std::to_wstring(n), 1, false});
+        f.deliver(std::move(rows));
+        const std::array sizes{256, 96, 48, 16, 16, 16, 48, 64};
+        for (int repeat = 0; repeat < 20; ++repeat) {
+            for (std::size_t mode = 0; mode < shell_core::kViewModeOptions.size(); ++mode) {
+                f.viewport(0, 1);
+                auto old = f.icons->interest.empty() ? ml::IconRequest{} : f.icons->interest.front();
+                const auto option = shell_core::kViewModeOptions[mode];
+                f.pane.set_view_mode(option);
+                EXPECT(f.state.tabs[0].view_mode == shell_core::view_mode_name(
+                    option.selection.mode, option.selection.image_size));
+                f.viewport(0, 100);
+                EXPECT(!f.icons->interest.empty());
+                const auto current = f.icons->interest.front();
+                EXPECT(current.key.size == sizes[mode]);
+                EXPECT(current.key.dpi == 96);
+                EXPECT(current.key.thumbnail == (sizes[mode] > 16));
+                f.icons->deliver(old); f.pane.process_icon_results();
+                EXPECT(f.pane.list_item_image(0) == 0);
+                f.icons->deliver(current, false); f.pane.process_icon_results();
+                EXPECT(f.pane.list_item_image(0) == 0);
+                const auto attempts = f.icons->replacements;
+                f.viewport(0, 100); EXPECT(f.icons->replacements == attempts);
+                // Complete every visible image; size-dependent eviction must
+                // bound large rasters as well as the small-icon cache count.
+                f.finish();
+                EXPECT(f.pane.list_image_bytes() <= ml::kImageCacheBytes);
+                EXPECT(WaitForSingleObject(f.pane.icon_event(), 0) == WAIT_TIMEOUT);
+                f.pane.set_shell_visible(false); // renewed interest for next mode
+            }
+        }
+        f.pane.set_view_mode(shell_core::kViewModeOptions[0]);
+        app_shell::WindowPositionBatch outer, children;
+        (void)f.pane.stage_layout({0, 0, 640, 480}, 192, outer, children);
+        f.viewport(0, 100);
+        EXPECT(f.icons->interest.front().key.size == 512);
+        f.finish();
+        EXPECT(f.pane.list_image_bytes() <= ml::kImageCacheBytes);
+        EXPECT(f.pane.list_item_image(0) == 0); // evicted instead of wrong reused slot
+    }
+    EXPECT(GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) <= before + 2);
+}
+void hidden_control_mode_layout_and_restore() {
+    Fixture f(true);
+    f.deliver({{L"picture.png", 10, false}, {L"folder", 0, true}});
+    const HWND list = FindWindowExW(f.pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr);
+    EXPECT(list != nullptr);
+    const std::array<DWORD, 8> views{LV_VIEW_ICON, LV_VIEW_ICON, LV_VIEW_ICON, LV_VIEW_SMALLICON,
+        LV_VIEW_LIST, LV_VIEW_DETAILS, LV_VIEW_ICON, LV_VIEW_DETAILS};
+    ListView_SetItemState(list, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    for (std::size_t n = 0; n < views.size(); ++n) {
+        f.pane.set_view_mode(shell_core::kViewModeOptions[n]);
+        EXPECT((GetWindowLongPtrW(list, GWL_STYLE) & LVS_TYPEMASK) == views[n]);
+        EXPECT((GetWindowLongPtrW(list, GWL_STYLE) & LVS_OWNERDATA) != 0);
+        EXPECT(((GetWindowLongPtrW(list, GWL_STYLE) & LVS_NOCOLUMNHEADER) != 0) == (n == 7));
+        EXPECT(f.pane.list_interaction_snapshot().selected.size() == 1);
+        f.viewport(0, 2);
+        const auto images = ListView_GetImageList(list, n < 3 || n == 6 ? LVSIL_NORMAL : LVSIL_SMALL);
+        int width{}, height{};
+        EXPECT(ImageList_GetIconSize(images, &width, &height));
+        EXPECT(width == (n == 0 ? 256 : n == 1 ? 96 : n == 2 || n == 6 ? 48 : n == 7 ? 64 : 16));
+        EXPECT(width == height);
+        // Hidden-control paint exercises the card fallback without Shell or a
+        // desktop window. Native focus/accessibility remains a desktop check.
+        const HDC dc = CreateCompatibleDC(nullptr);
+        const HBITMAP bitmap = CreateBitmap(640, 420, 1, 32, nullptr);
+        const auto previous = SelectObject(dc, bitmap);
+        NMLVCUSTOMDRAW draw{};
+        draw.nmcd.hdr = {list, 0, NM_CUSTOMDRAW};
+        draw.nmcd.hdc = dc; draw.nmcd.dwDrawStage = CDDS_ITEMPREPAINT;
+        draw.nmcd.dwItemSpec = 0;
+        const auto result = f.pane.list_notification(&draw.nmcd.hdr);
+        if (n >= 6) EXPECT(result && *result == CDRF_SKIPDEFAULT);
+        SelectObject(dc, previous); DeleteObject(bitmap); DeleteDC(dc);
+        const auto saved = f.state.tabs[0].view_mode;
+        f.pane.add_tab({L"C:\\B", {}, {}});
+        f.pane.activate_tab_at(0);
+        EXPECT(f.state.tabs[0].view_mode == saved);
+        EXPECT((GetWindowLongPtrW(list, GWL_STYLE) & LVS_TYPEMASK) == views[n]);
+        f.deliver({{L"picture.png", 10, false}, {L"folder", 0, true}});
+        ListView_SetItemState(list, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    }
+}
 void production_worker_capacity_cancel_and_backpressure() {
     auto gate = std::make_shared<ml::testing::IconGate>();
     std::array<std::unique_ptr<ml::IconSource>, ml::kIconWorkers> sources;
@@ -200,10 +298,14 @@ void production_worker_capacity_cancel_and_backpressure() {
     EXPECT(WaitForSingleObject(source->event(), 0) == WAIT_TIMEOUT);
     EXPECT(!source->take());
     request.viewport = 9999;
+    request.key.size = ml::kMaxImageSize;
+    request.key.thumbnail = true;
+    request.key.dpi = 192;
     EXPECT(source->replace({request}));
     EXPECT(WaitForSingleObject(source->event(), 10000) == WAIT_OBJECT_0);
     auto result = source->take();
-    EXPECT(result && result->request.viewport == 9999 && !result->image.pixels.empty());
+    EXPECT(result && result->request.viewport == 9999 &&
+        result->image.pixels.size() == static_cast<std::size_t>(512 * 512));
     EXPECT(WaitForSingleObject(source->event(), 0) == WAIT_TIMEOUT);
     source.reset(); EXPECT(ml::testing::wait_for_icon_workers(10000));
 }
@@ -211,6 +313,8 @@ void production_worker_capacity_cancel_and_backpressure() {
 int main() {
     stale_identity_failure_and_reuse();
     bounded_cache_eviction_and_resource_cleanup();
+    thumbnails_modes_stale_failure_and_budget();
+    hidden_control_mode_layout_and_restore();
     production_worker_capacity_cancel_and_backpressure();
     return test::summary("managed_list_icons");
 }
