@@ -1394,6 +1394,7 @@ void Pane::handle_tab_context_menu(POINT screen) {
 }
 
 void Pane::finish_tab_change(bool navigate_active) {
+    prune_list_cache();
     if (navigate_active && realized()) {
         auto *tab = active_tab();
         if (tab == nullptr) return;

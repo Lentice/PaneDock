@@ -76,3 +76,8 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+## 交接區
+
+- 使用者明確延後實機驗證，未啟動 PaneDock。cold／warm 切換延遲、100 個 inactive tabs 的 process private bytes／實際 retained memory、Shell／網路／OneDrive、真正焦點與 accessibility、mixed DPI 及 idle CPU／I/O 仍「未驗證，需真實桌面」。PaneHost 隱藏控制項測試與 capacity 計數不構成 PD-241 效能或相容性 gate 證據。
+- 快取整合使用既有 Pane 的 Win32 ListView selection／focus／viewport 擷取與還原，以及既有含 Windows 狀態型別的 managed-list 資料，因此未搬入純 core。真實桌面仍需確認 A→B→A 更新期間的焦點、捲動與選取，以及外部刪除／rename、通知失敗後的 Refresh。現有 managed-list 開啟目錄透過新 generation 的精確 location 掃描驗證；尚未交付的 Shell 檔案操作／rename／menu bridge 仍須自行重新解析 current item，不能將 cached row 視為存在證明。

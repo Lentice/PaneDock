@@ -143,8 +143,97 @@ void Pane::use_managed_list(std::unique_ptr<managed_list::Source> source) {
 HANDLE Pane::content_event() const noexcept {
     return managed_list_enabled_ && list_source_ ? list_source_->event() : nullptr;
 }
+Pane::ListCache& Pane::list_cache() noexcept {
+    static ListCache cache;
+    return cache;
+}
+Pane::ListCacheStats Pane::list_cache_stats() noexcept {
+    auto stats = list_cache().stats;
+    stats.entries = list_cache().entries.size();
+    return stats;
+}
+void Pane::limit_list_cache_bytes(std::size_t bytes) noexcept {
+    auto& cache = list_cache();
+    cache.stats.limit = std::min<std::size_t>(bytes, 32 * 1024 * 1024);
+    while (cache.stats.bytes > cache.stats.limit && !cache.entries.empty()) {
+        cache.stats.bytes -= cache.entries.front().bytes;
+        cache.entries.pop_front();
+        ++cache.stats.evictions;
+    }
+}
+void Pane::prune_list_cache(bool all) noexcept {
+    auto& cache = list_cache();
+    std::erase_if(cache.entries, [&](const auto& entry) {
+        if (entry.owner != this) return false;
+        const bool valid = !all && pane_state() && std::any_of(
+            pane_state()->tabs.begin(), pane_state()->tabs.end(), [&](const auto& tab) {
+                return tab.id == entry.snapshot.request.binding.tab_id &&
+                    tab.location == entry.snapshot.request.location;
+            });
+        if (valid) return false;
+        cache.stats.bytes -= entry.bytes;
+        return true;
+    });
+}
+void Pane::save_list_cache() noexcept try {
+    prune_list_cache();
+    if (!pane_state() || list_.updating ||
+        (list_.phase != managed_list::Phase::complete && list_.phase != managed_list::Phase::empty) ||
+        list_.request.binding.group_id != pane_host()->active_group_id()) return;
+    // Only a still-existing inactive tab at this exact location may retain rows.
+    const auto found = std::find_if(pane_state()->tabs.begin(), pane_state()->tabs.end(), [&](const auto& tab) {
+        return tab.id == list_.request.binding.tab_id && tab.id != pane_state()->active_tab_id &&
+            tab.location == list_.request.location;
+    });
+    if (found == pane_state()->tabs.end()) return;
+    CachedList entry{this, {}, capture_managed_list_interaction(), 0};
+    entry.snapshot = std::move(list_);
+    // Account allocated capacities, including empty property strings, binding,
+    // anchors and list nodes. Inline strings are conservatively overcounted;
+    // allocator bookkeeping is excluded, as with the active row/index budgets.
+    const auto string_bytes = [](const auto& value) {
+        return (value.capacity() + 1) * sizeof(typename std::decay_t<decltype(value)>::value_type);
+    };
+    entry.bytes = sizeof(CachedList) + 2 * sizeof(void*) +
+        entry.snapshot.rows.capacity() * sizeof(managed_list::Row);
+    const auto& request = entry.snapshot.request;
+    entry.bytes += string_bytes(request.binding.group_id) + string_bytes(request.binding.tab_id) +
+        string_bytes(request.location.parsing_name) + string_bytes(request.location.known_folder_identity) +
+        string_bytes(request.location.fallback_path);
+    for (const auto& row : entry.snapshot.rows) {
+        entry.bytes += string_bytes(row.name);
+        for (const auto& property : row.properties) entry.bytes += string_bytes(property.text);
+    }
+    const auto& interaction = entry.interaction;
+    entry.bytes += interaction.selected_names.capacity() * sizeof(std::wstring);
+    for (const auto& name : interaction.selected_names) entry.bytes += string_bytes(name);
+    for (const auto* name : {&interaction.focused_name, &interaction.anchor_name, &interaction.viewport_anchor_name})
+        if (*name) entry.bytes += string_bytes(**name);
+    auto& cache = list_cache();
+    if (entry.bytes > cache.stats.limit) return;
+    while (cache.stats.bytes + entry.bytes > cache.stats.limit && !cache.entries.empty()) {
+        cache.stats.bytes -= cache.entries.front().bytes;
+        cache.entries.pop_front(); ++cache.stats.evictions;
+    }
+    const auto bytes = entry.bytes;
+    cache.entries.push_back(std::move(entry));
+    cache.stats.bytes += bytes;
+} catch (...) { /* Cache admission failure never prevents navigation. */ }
+std::optional<Pane::CachedList> Pane::take_list_cache(const managed_list::Request& request) {
+    auto& cache = list_cache();
+    const auto found = std::find_if(cache.entries.begin(), cache.entries.end(), [&](const auto& entry) {
+        return entry.owner == this && entry.snapshot.request.binding.group_id == request.binding.group_id &&
+            entry.snapshot.request.binding.tab_id == request.binding.tab_id && entry.snapshot.request.location == request.location;
+    });
+    if (found == cache.entries.end()) return {};
+    auto entry = std::move(*found);
+    cache.stats.bytes -= entry.bytes;
+    cache.entries.erase(found); ++cache.stats.hits;
+    return entry;
+}
 void Pane::cancel_managed_list() noexcept {
     if (!managed_list_enabled_) return;
+    prune_list_cache(true);
     if (list_source_) list_source_->cancel();
     cancel_list_icons();
     clear_list_index();
@@ -223,7 +312,9 @@ void Pane::restore_managed_list_interaction(
     if (focused >= 0)
         ListView_SetItemState(list_window_, focused, LVIS_FOCUSED, LVIS_FOCUSED);
     const int anchor = index_of(interaction.anchor_name);
-    if (anchor >= 0) ListView_SetSelectionMark(list_window_, anchor);
+    // Setting native focus can create a selection mark. A missing identity
+    // must clear it after focus fallback so Shift-select cannot inherit it.
+    ListView_SetSelectionMark(list_window_, anchor);
 
     int viewport = index_of(interaction.viewport_anchor_name);
     if (viewport < 0 && interaction.viewport_anchor_name) viewport = fallback(interaction.viewport_index);
@@ -422,14 +513,42 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
     property_sort_pending_ = expensive_sort_slot() >= 0;
     property_capacity_failed_ = false;
     clear_list_index();
+    auto cached = take_list_cache({content_request(), location});
+    save_list_cache();
     list_name_bytes_ = 0;
     list_ = { {content_request(), location}, {}, managed_list::Phase::loading, 0};
+    list_navigation_pending_ = true;
     if (list_window_) {
         clear_managed_list_interaction();
         ListView_SetItemCountEx(list_window_, 0, 0);
     }
+    if (cached) {
+        list_.rows = std::move(cached->snapshot.rows);
+        list_.updating = true;
+        // Notifications were suspended while inactive: even equal size/time is
+        // not evidence that optional properties or overlays are still current.
+        icon_cache_.clear();
+        if (icon_images_) ImageList_SetImageCount(icon_images_, 2);
+        for (auto& row : list_.rows) {
+            row.properties = {};
+            list_name_bytes_ += (row.name.capacity() + 1) * sizeof(wchar_t);
+        }
+        managed_list::Batch begin;
+        begin.change = managed_list::Change::rescan_begin;
+        ManagedListInteraction unused;
+        apply_list_changes(begin, unused);
+        if (list_.watch == managed_list::WatchState::failed) {
+            list_.phase = managed_list::Phase::error;
+            list_.error = list_.watch_error;
+            list_.updating = false;
+            resolve_list_navigation(false);
+            update_managed_list();
+            return S_OK;
+        }
+        update_managed_list();
+        restore_managed_list_interaction(cached->interaction);
+    }
     apply_managed_list_view_mode();
-    list_navigation_pending_ = true;
     // Loading is immediate; only a valid first batch commits location/history.
     // Mode/sort remain authoritative model values until their later slices.
     const auto request = list_.request;
@@ -438,6 +557,8 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
     if (!list_source_ || !list_source_->submit(list_.request)) {
         list_.phase = managed_list::Phase::error;
         list_.error = ERROR_NO_SYSTEM_RESOURCES;
+        list_.updating = false;
+        clear_list_index();
         resolve_list_navigation(false);
     }
     update_managed_list();
@@ -487,6 +608,8 @@ void Pane::process_content_results() noexcept try {
             })) {
             list_.phase = managed_list::Phase::error;
             list_.error = ERROR_INVALID_DATA;
+            list_.updating = false;
+            clear_list_index();
             list_source_->cancel();
             resolve_list_navigation(false);
             break;
@@ -499,6 +622,33 @@ void Pane::process_content_results() noexcept try {
             resolve_list_navigation(false);
         // Session/chrome callbacks may re-enter and replace the tab or Group.
         if (!content_request_is_current(request.binding) || !(request == list_.request)) continue;
+        if (list_.updating) {
+            const bool terminal = batch->phase != managed_list::Phase::loading;
+            if (terminal && !interaction) interaction.emplace(capture_managed_list_interaction());
+            batch->change = managed_list::Change::rescan;
+            ManagedListInteraction unused;
+            apply_list_changes(*batch, interaction ? *interaction : unused);
+            // Keep loading until the scan ends; PD-232 reconciliation otherwise
+            // exposes complete for intermediate recovery batches.
+            list_.phase = batch->phase;
+            list_.error = batch->error;
+            if (list_.watch == managed_list::WatchState::failed) {
+                list_.phase = managed_list::Phase::error;
+                list_.error = list_.watch_error;
+                list_source_->cancel();
+                list_.updating = false;
+                clear_list_index();
+            }
+            if (terminal) {
+                list_.updating = false;
+                // Cache reconciliation is not a notification subscription.
+                // UNC/mapped/provider locations may never send watching.
+                if (list_.watch == managed_list::WatchState::watching)
+                    list_.watch = managed_list::WatchState::inactive;
+            }
+            rows_changed = rows_changed || terminal;
+            continue;
+        }
         const auto count = std::min(batch->rows.size(), managed_list::kMaxRows-list_.rows.size());
         if (count != 0 && !interaction)
             interaction.emplace(capture_managed_list_interaction());
@@ -547,6 +697,7 @@ void Pane::process_content_results() noexcept try {
     clear_list_index();
     list_.phase = managed_list::Phase::error;
     list_.error = ERROR_NOT_ENOUGH_MEMORY;
+    list_.updating = false;
     resolve_list_navigation(false);
     update_managed_list();
 }
@@ -716,7 +867,7 @@ void Pane::update_managed_list() noexcept try {
             LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
     std::wstring text = std::to_wstring(list_.rows.size()) + L" items";
     switch (list_.phase) {
-    case managed_list::Phase::loading: text += L" - Loading..."; break;
+    case managed_list::Phase::loading: text += list_.updating ? L" - Updating..." : L" - Loading..."; break;
     case managed_list::Phase::empty: text = L"This folder is empty."; break;
     case managed_list::Phase::error:
         text += list_.error == ERROR_NO_SYSTEM_RESOURCES

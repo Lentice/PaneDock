@@ -14,6 +14,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <list>
 #include <utility>
 #include <span>
 #include <set>
@@ -137,7 +138,13 @@ class Pane final {
         DWORD error{};
         managed_list::WatchState watch{managed_list::WatchState::inactive};
         DWORD watch_error{};
+        bool updating{};
     };
+    struct ListCacheStats final {
+        std::size_t bytes{}, entries{}, hits{}, evictions{}, limit{};
+    };
+    static ListCacheStats list_cache_stats() noexcept;
+    static void limit_list_cache_bytes(std::size_t bytes) noexcept;
     // Borrowed until the next Pane operation; never keep across a Shell pump.
     const ListSnapshot& list_snapshot() const noexcept { return list_; }
     struct ListItemIdentity final {
@@ -313,6 +320,22 @@ class Pane final {
         int focused_index{-1};
         int viewport_index{-1};
     };
+    struct CachedList final {
+        const Pane* owner{};
+        ListSnapshot snapshot;
+        ManagedListInteraction interaction;
+        std::size_t bytes{};
+    };
+    struct ListCache final {
+        // 4 visible lists * 24 MiB + 32 MiB inactive <= 128 MiB row target.
+        // STA-only process owner: independent of pane coordinator and images.
+        std::list<CachedList> entries;
+        ListCacheStats stats{0, 0, 0, 0, 32 * 1024 * 1024};
+    };
+    static ListCache& list_cache() noexcept;
+    void prune_list_cache(bool all = false) noexcept;
+    void save_list_cache() noexcept;
+    std::optional<CachedList> take_list_cache(const managed_list::Request& request);
     void cancel_managed_list() noexcept;
     void clear_managed_list_interaction() noexcept;
     ManagedListInteraction capture_managed_list_interaction() const;

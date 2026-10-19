@@ -269,7 +269,7 @@
 | PD-230 | 縮圖與既有 view mode 對應 | 8 | `done` | PD-229 | [PD-230](tickets/PD-230-managed-list-thumbnails-view-modes.md) |
 | PD-231 | 昂貴屬性欄位與排序 | 8 | `done` | PD-228 | [PD-231](tickets/PD-231-managed-list-expensive-properties.md) |
 | PD-232 | 本機變更通知與恢復掃描 | 8 | `done` | PD-228 | [PD-232](tickets/PD-232-managed-list-change-notifications.md) |
-| PD-233 | tab 列表 snapshot 的全域有界快取 | 8 | `planned` | PD-225, PD-228, PD-232 | [PD-233](tickets/PD-233-managed-list-tab-cache.md) |
+| PD-233 | tab 列表 snapshot 的全域有界快取 | 8 | `done` | PD-225, PD-228, PD-232 | [PD-233](tickets/PD-233-managed-list-tab-cache.md) |
 | PD-234 | 虛擬 Shell location 導覽 | 8 | `planned` | PD-225 | [PD-234](tickets/PD-234-managed-list-shell-namespace.md) |
 | PD-235 | OneDrive placeholder 瀏覽 | 8 | `planned` | PD-229, PD-234 | [PD-235](tickets/PD-235-managed-list-onedrive-placeholders.md) |
 | PD-236 | 自建選取接回剪貼簿與 Shell 檔案操作 | 8 | `planned` | PD-227, PD-234 | [PD-236](tickets/PD-236-managed-list-shell-file-operations.md) |

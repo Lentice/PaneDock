@@ -55,7 +55,7 @@ struct Row final {
     std::uint64_t date_modified{};
     // Type, Duration, and the current persisted custom sort key. <=3 values per
     // retained row (<=100,000); structural and owned text bytes share the SAME
-    // 24 MiB row cap. No inactive-tab cache. Released with rows.
+    // 24 MiB active row cap. Inactive snapshots use a separate global budget.
     std::array<PropertyValue, 3> properties{};
 };
 enum class Change { none, delta, rescan_begin, rescan, watching, watch_error };

@@ -120,16 +120,19 @@ void four_panes_tabs_groups_and_move() {
     const auto obsolete_b = pane.list_snapshot().request;
     pane.cycle_active_tab(false); // B -> A, without waiting for B
     EXPECT(pane.active_tab()->id == a);
-    EXPECT(pane.list_snapshot().rows.empty());
-    EXPECT(pane.list_snapshot().rows.capacity() == 0);
+    EXPECT(pane.list_snapshot().updating);
+    EXPECT(pane.list_snapshot().rows.size() == 1);
+    EXPECT(pane.list_snapshot().rows[0].name == L"pane0");
     f.deliver(0, old[0], L"old A"); f.deliver(0, obsolete_b, L"old B");
-    EXPECT(pane.list_snapshot().rows.empty());
+    EXPECT(pane.list_snapshot().rows[0].name == L"pane0");
     f.complete(0);
     pane.add_tab({L"C:\\added", {}, {}});
     const auto closed = pane.list_snapshot().request;
     pane.close_tab(pane.active_tab()->id);
     f.deliver(0, closed, L"closed");
-    EXPECT(pane.list_snapshot().rows.empty());
+    EXPECT(pane.list_snapshot().updating);
+    EXPECT(pane.list_snapshot().rows.size() == 1);
+    EXPECT(pane.list_snapshot().rows[0].name == L"current");
     f.complete(0);
 
     // Same value-model move and public content entry used by the coordinator.
