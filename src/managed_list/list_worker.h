@@ -29,6 +29,9 @@ inline constexpr std::size_t kMaxRows = 100000;
 // implementation-specific malloc bookkeeping is not retained row/index data.
 inline constexpr std::size_t kMaxIndexBytes = 4 * 1024 * 1024;
 inline constexpr std::size_t kMaxRowBytes = 24 * 1024 * 1024;
+// Eight queued batches across four slots fit the 16 MiB result budget.
+// A worker additionally owns one bounded batch under construction.
+inline constexpr std::size_t kMaxBatchOwnedBytes = 2 * 1024 * 1024;
 inline constexpr std::size_t kMaxName = 255;
 inline constexpr std::size_t kMaxPath = 32760;
 struct Request final {
@@ -105,6 +108,8 @@ inline bool prepare_row(Row& row) {
 enum class Change { none, delta, rescan_begin, rescan, watching, watch_error };
 enum class WatchState { inactive, watching, recovering, failed };
 enum class Phase { idle, loading, complete, empty, error, limited };
+enum class ParentOutcome { unresolved, root, value, failed };
+enum class NotificationCapability { filesystem_watch, manual_refresh };
 struct Batch final {
     Request request;
     std::vector<Row> rows;
@@ -115,7 +120,33 @@ struct Batch final {
     // at the Pane boundary. These are never display-name or virtual deltas.
     std::vector<std::wstring> removed{}; // <=128 leaf identities
     std::vector<std::pair<std::wstring, std::wstring>> renamed{}; // <=128 pairs
+    // Namespace metadata is repeated on every batch so consumers never need
+    // to combine a child batch with a separately timed resolution result.
+    std::optional<core::ShellLocation> resolved_location{};
+    std::optional<core::ShellLocation> parent_location{};
+    ParentOutcome parent_outcome{ParentOutcome::unresolved};
+    NotificationCapability notification{NotificationCapability::filesystem_watch};
 };
+inline std::size_t owned_batch_bytes(const Batch& batch) noexcept {
+    std::size_t bytes = sizeof(Batch) + batch.rows.capacity() * sizeof(Row) +
+        batch.removed.capacity() * sizeof(std::wstring) +
+        batch.renamed.capacity() * sizeof(std::pair<std::wstring, std::wstring>) +
+        owned_string_bytes(batch.request.location.parsing_name) +
+        owned_string_bytes(batch.request.location.known_folder_identity) +
+        owned_string_bytes(batch.request.location.fallback_path) +
+        batch.request.binding.group_id.capacity() + 1 + batch.request.binding.tab_id.capacity() + 1;
+    if (batch.resolved_location) bytes += owned_string_bytes(batch.resolved_location->parsing_name) +
+        owned_string_bytes(batch.resolved_location->known_folder_identity) +
+        owned_string_bytes(batch.resolved_location->fallback_path);
+    if (batch.parent_location) bytes += owned_string_bytes(batch.parent_location->parsing_name) +
+        owned_string_bytes(batch.parent_location->known_folder_identity) +
+        owned_string_bytes(batch.parent_location->fallback_path);
+    for (const auto& row : batch.rows) bytes += owned_row_bytes(row);
+    for (const auto& name : batch.removed) bytes += owned_string_bytes(name);
+    for (const auto& [old_name, new_name] : batch.renamed)
+        bytes += owned_string_bytes(old_name) + owned_string_bytes(new_name);
+    return bytes;
+}
 // Owned values only. event() is a waitable kernel event, never a window.
 // take() drains at most one bounded batch. Successful enumeration keeps a
 // local change subscription alive; cancel() drops all interest immediately.

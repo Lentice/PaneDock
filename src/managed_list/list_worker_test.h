@@ -9,7 +9,9 @@ struct ReadGate final {
     HANDLE release;
     HANDLE backpressure;
     const std::size_t batches;
-    explicit ReadGate(std::size_t result_batches = 0);
+    // Immutable owned-value provider substitute; never a live Shell bind.
+    const std::optional<Batch> namespace_batch;
+    explicit ReadGate(std::size_t result_batches = 0, std::optional<Batch> result = {});
     ~ReadGate();
     ReadGate(const ReadGate&) = delete;
     ReadGate& operator=(const ReadGate&) = delete;

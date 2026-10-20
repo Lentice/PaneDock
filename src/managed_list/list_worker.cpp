@@ -7,6 +7,11 @@
 #include <deque>
 #include <mutex>
 #include <thread>
+#include <objbase.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <wrl/client.h>
+#include "shell_core/shell_core.h"
 
 namespace panedock::managed_list {
 namespace {
@@ -43,6 +48,13 @@ std::array<std::weak_ptr<State>, kMaxSubscriptions> slots;
 
 bool publish(const std::shared_ptr<State>& state, std::uint64_t serial,
              Batch batch) {
+    if (batch.rows.size() > kBatchRows || owned_batch_bytes(batch) > kMaxBatchOwnedBytes) {
+        std::vector<Row>().swap(batch.rows);
+        std::vector<std::wstring>().swap(batch.removed);
+        std::vector<std::pair<std::wstring, std::wstring>>().swap(batch.renamed);
+        batch.phase = Phase::limited;
+        batch.error = ERROR_BUFFER_OVERFLOW;
+    }
     std::unique_lock lock(state->mutex);
     if (state->gate && state->results.size() == kQueuedBatches)
         SetEvent(state->gate->backpressure);
@@ -63,11 +75,241 @@ struct FindHandle final {
     HANDLE value{INVALID_HANDLE_VALUE};
     ~FindHandle() { if (value != INVALID_HANDLE_VALUE) FindClose(value); }
 };
+struct Pidl final {
+    PIDLIST_ABSOLUTE value{};
+    ~Pidl() { if (value) CoTaskMemFree(value); }
+};
+struct RelativePidl final {
+    PIDLIST_RELATIVE value{};
+    ~RelativePidl() { if (value) CoTaskMemFree(value); }
+};
+struct Str final {
+    PWSTR value{};
+    ~Str() { if (value) CoTaskMemFree(value); }
+};
+// No provider call runs with State locked. Cancellation invalidates interest;
+// it cannot interrupt an arbitrary provider (including COM Release on unwind).
+template<class Call>
+HRESULT provider_call(const std::shared_ptr<State>& state, std::uint64_t serial, Call call) {
+    if (!interested(state, serial)) return E_ABORT;
+    const HRESULT result = call();
+    return interested(state, serial) ? result : E_ABORT;
+}
+DWORD provider_error(HRESULT result) {
+    return HRESULT_FACILITY(result) == FACILITY_WIN32 ? HRESULT_CODE(result) : ERROR_INVALID_DATA;
+}
+bool bounded_location(const core::ShellLocation& value) {
+    return !value.parsing_name.empty() && value.parsing_name.size() <= kMaxPath &&
+        value.known_folder_identity.size() <= kMaxPath && value.fallback_path.size() <= kMaxPath;
+}
+bool copy_provider_text(PCWSTR text, std::size_t limit, std::wstring& output) {
+    if (!text) return false;
+    // Scan only the admitted prefix; never first copy an unbounded provider string.
+    std::size_t size = 0;
+    while (size <= limit && text[size]) ++size;
+    if (size > limit) return false;
+    output.assign(text, size);
+    return true;
+}
+HRESULT shell_location(const std::shared_ptr<State>& state, std::uint64_t serial,
+                       PIDLIST_ABSOLUTE pidl, core::ShellLocation& output) {
+    Str parsing, path;
+    auto result = provider_call(state, serial, [&] {
+        return SHGetNameFromIDList(pidl, SIGDN_DESKTOPABSOLUTEPARSING, &parsing.value);
+    });
+    if (FAILED(result)) return result;
+    if (!copy_provider_text(parsing.value, kMaxPath, output.parsing_name) || output.parsing_name.empty())
+        return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
+    result = provider_call(state, serial, [&] {
+        return SHGetNameFromIDList(pidl, SIGDN_FILESYSPATH, &path.value);
+    });
+    if (!interested(state, serial)) return E_ABORT;
+    // Virtual folders normally have no filesystem path. Never navigate to a fallback.
+    if (SUCCEEDED(result) && !copy_provider_text(path.value, kMaxPath, output.fallback_path))
+        return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
+    Microsoft::WRL::ComPtr<IKnownFolderManager> manager;
+    Microsoft::WRL::ComPtr<IKnownFolder> folder;
+    result = provider_call(state, serial, [&] {
+        return CoCreateInstance(CLSID_KnownFolderManager, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&manager));
+    });
+    if (SUCCEEDED(result)) result = provider_call(state, serial, [&] {
+        return manager->FindFolderFromIDList(pidl, &folder);
+    });
+    if (SUCCEEDED(result) && folder) {
+        KNOWNFOLDERID id{};
+        result = provider_call(state, serial, [&] { return folder->GetId(&id); });
+        wchar_t guid[39]{};
+        if (SUCCEEDED(result) && StringFromGUID2(id, guid, ARRAYSIZE(guid)))
+            output.known_folder_identity = guid;
+    }
+    return interested(state, serial) ? S_OK : E_ABORT;
+}
+void enumerate_shell_namespace(const std::shared_ptr<State>& state, std::uint64_t serial,
+                               const Request& request) {
+    Batch metadata{request, {}, Phase::loading, 0};
+    metadata.notification = NotificationCapability::manual_refresh;
+    const auto fail = [&](HRESULT result) {
+        metadata.phase = Phase::error;
+        metadata.error = provider_error(result);
+        publish(state, serial, std::move(metadata));
+    };
+    // Shares production slots, interest checks, accounting and backpressure.
+    // This substitutes owned values only, never Shell objects or COM behavior.
+    if (state->gate && state->gate->namespace_batch) {
+        SetEvent(state->gate->entered);
+        WaitForSingleObject(state->gate->release, INFINITE);
+        if (!interested(state, serial)) return;
+        const auto& supplied = *state->gate->namespace_batch;
+        if ((supplied.resolved_location && !bounded_location(*supplied.resolved_location)) ||
+            (supplied.parent_location && !bounded_location(*supplied.parent_location))) {
+            fail(HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW)); return;
+        }
+        metadata.resolved_location = state->gate->namespace_batch->resolved_location;
+        metadata.parent_location = state->gate->namespace_batch->parent_location;
+        metadata.parent_outcome = state->gate->namespace_batch->parent_outcome;
+        std::size_t retained = 0, count = 0;
+        for (std::size_t n = 0; n < state->gate->batches; ++n) {
+            if (!interested(state, serial)) return;
+            auto batch = metadata;
+            batch.rows = state->gate->namespace_batch->rows;
+            bool valid = (!batch.resolved_location || bounded_location(*batch.resolved_location)) &&
+                (!batch.parent_location || bounded_location(*batch.parent_location));
+            for (auto& row : batch.rows) {
+                valid = valid && prepare_row(row);
+                retained += sizeof(Row) + owned_row_bytes(row);
+            }
+            count += batch.rows.size();
+            if (!valid) { fail(HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW)); return; }
+            if (retained > kMaxRowBytes || count > kMaxRows) {
+                batch.rows = {}; batch.phase = Phase::limited;
+                publish(state, serial, std::move(batch)); return;
+            }
+            const bool limited = batch.rows.size() > kBatchRows ||
+                owned_batch_bytes(batch) > kMaxBatchOwnedBytes;
+            if (!publish(state, serial, std::move(batch)) || limited) return;
+        }
+        metadata.phase = state->gate->namespace_batch->phase;
+        metadata.error = state->gate->namespace_batch->error;
+        publish(state, serial, std::move(metadata));
+        return;
+    }
+    Pidl absolute;
+    HRESULT result = E_INVALIDARG;
+    // Known-folder identity takes precedence, like the legacy resolver, but a
+    // failed resolution retries only the original parsing name, never fallback.
+    if (!request.location.known_folder_identity.empty()) {
+        GUID id{};
+        if (SUCCEEDED(CLSIDFromString(request.location.known_folder_identity.c_str(), &id)))
+            result = provider_call(state, serial, [&] {
+                return SHGetKnownFolderIDList(id, KF_FLAG_DONT_VERIFY, nullptr, &absolute.value);
+            });
+    }
+    if (!interested(state, serial)) return;
+    if (!absolute.value) result = provider_call(state, serial, [&] {
+        return SHParseDisplayName(request.location.parsing_name.c_str(), nullptr,
+                                  &absolute.value, 0, nullptr);
+    });
+    if (FAILED(result) || !absolute.value) { fail(FAILED(result) ? result : E_FAIL); return; }
+    core::ShellLocation resolved;
+    result = shell_location(state, serial, absolute.value, resolved);
+    if (FAILED(result)) { fail(result); return; }
+    metadata.resolved_location = std::move(resolved);
+    metadata.parent_outcome = ParentOutcome::root;
+    if (!ILIsEmpty(absolute.value)) {
+        metadata.parent_outcome = ParentOutcome::failed;
+        Pidl parent;
+        parent.value = ILCloneFull(absolute.value);
+        if (!parent.value) { fail(E_OUTOFMEMORY); return; }
+        if (!ILRemoveLastID(parent.value)) { fail(E_FAIL); return; }
+        core::ShellLocation parent_value;
+        result = shell_location(state, serial, parent.value, parent_value);
+        if (FAILED(result)) { fail(result); return; }
+        metadata.parent_location = std::move(parent_value);
+        metadata.parent_outcome = ParentOutcome::value;
+    }
+    Microsoft::WRL::ComPtr<IShellFolder> folder;
+    result = provider_call(state, serial, [&] {
+        // Desktop is the namespace root, not a child to BindToObject.
+        return ILIsEmpty(absolute.value) ? SHGetDesktopFolder(&folder) :
+            SHBindToObject(nullptr, absolute.value, nullptr, IID_PPV_ARGS(&folder));
+    });
+    if (FAILED(result) || !folder) { fail(FAILED(result) ? result : E_FAIL); return; }
+    Microsoft::WRL::ComPtr<IEnumIDList> enumerator;
+    result = provider_call(state, serial, [&] {
+        return folder->EnumObjects(nullptr,
+            SHCONTF_FOLDERS | SHCONTF_NONFOLDERS | SHCONTF_INCLUDEHIDDEN, &enumerator);
+    });
+    if (result == S_FALSE) {
+        metadata.phase = Phase::empty; publish(state, serial, std::move(metadata)); return;
+    }
+    if (FAILED(result) || !enumerator) { fail(FAILED(result) ? result : E_FAIL); return; }
+    auto batch = metadata;
+    batch.rows.reserve(kBatchRows);
+    std::size_t count = 0, retained = 0;
+    const auto finish = [&](Phase phase, DWORD error = 0) {
+        batch.phase = phase; batch.error = error;
+        publish(state, serial, std::move(batch));
+    };
+    for (;;) {
+        RelativePidl child;
+        ULONG fetched{};
+        result = provider_call(state, serial, [&] { return enumerator->Next(1, &child.value, &fetched); });
+        if (FAILED(result)) { finish(Phase::error, provider_error(result)); return; }
+        if (result == S_FALSE) { finish(count ? Phase::complete : Phase::empty); return; }
+        if (fetched != 1 || !child.value) { finish(Phase::error, ERROR_INVALID_DATA); return; }
+        if (count == kMaxRows) { finish(Phase::limited); return; }
+        Pidl child_absolute;
+        child_absolute.value = ILCombine(absolute.value, child.value);
+        if (!child_absolute.value) { finish(Phase::error, ERROR_NOT_ENOUGH_MEMORY); return; }
+        core::ShellLocation child_location;
+        result = shell_location(state, serial, child_absolute.value, child_location);
+        if (FAILED(result)) { finish(Phase::error, provider_error(result)); return; }
+        Str name;
+        result = provider_call(state, serial, [&] {
+            return SHGetNameFromIDList(child_absolute.value, SIGDN_NORMALDISPLAY, &name.value);
+        });
+        if (FAILED(result)) { finish(Phase::error, provider_error(result)); return; }
+        Row row;
+        if (!copy_provider_text(name.value, kMaxName, row.name) || row.name.empty()) {
+            finish(Phase::error, ERROR_BUFFER_OVERFLOW); return;
+        }
+        SFGAOF attributes = SFGAO_FOLDER;
+        PCUITEMID_CHILD relative = child.value;
+        result = provider_call(state, serial, [&] { return folder->GetAttributesOf(1, &relative, &attributes); });
+        if (FAILED(result)) { finish(Phase::error, provider_error(result)); return; }
+        row.directory = (attributes & SFGAO_FOLDER) != 0;
+        row.identity = {child_location.parsing_name, true};
+        row.child_location = std::move(child_location);
+        // Optional properties belong to the existing visible-item enrichment
+        // path; no size/date provider query delays the first operable batch.
+        const auto bytes = owned_row_bytes(row);
+        if (retained + sizeof(Row) + bytes > kMaxRowBytes) { finish(Phase::limited); return; }
+        if (owned_batch_bytes(batch) + bytes > kMaxBatchOwnedBytes) {
+            if (batch.rows.empty()) { finish(Phase::limited); return; }
+            if (!publish(state, serial, std::move(batch))) return;
+            batch = metadata;
+            batch.rows.reserve(kBatchRows);
+        }
+        batch.rows.push_back(std::move(row));
+        retained += sizeof(Row) + bytes;
+        ++count;
+        if (batch.rows.size() == kBatchRows) {
+            if (!publish(state, serial, std::move(batch))) return;
+            batch = metadata;
+            batch.rows.reserve(kBatchRows);
+        }
+    }
+}
 void enumerate(const std::shared_ptr<State>& state, std::uint64_t serial,
                const Request& request, bool recovery = false) {
     Batch batch{request, {}, Phase::loading, 0};
     if (recovery) batch.change = Change::rescan;
     const auto& path = request.location.parsing_name;
+    if (!is_filesystem_location(path)) {
+        enumerate_shell_namespace(state, serial, request);
+        return;
+    }
     // All provider/drive calls stay here, including disconnected mappings.
     // Reject device namespaces; this backend accepts ordinary UNC share paths.
     if (!is_filesystem_location(path) || path.size() > kMaxPath ||
@@ -242,6 +484,11 @@ bool decode_changes(const std::shared_ptr<State>& state, std::uint64_t serial,
 }
 void enumerate_and_watch(const std::shared_ptr<State>& state, std::uint64_t serial,
                          const Request& request) {
+    if (!is_filesystem_location(request.location.parsing_name)) {
+        enumerate(state, serial, request);
+        { std::lock_guard lock(state->mutex); state->initial_complete = true; }
+        return; // Virtual locations explicitly require manual Refresh.
+    }
     DirectoryWatch watch;
     const auto& path = request.location.parsing_name;
     DWORD error = ERROR_SUCCESS;
@@ -350,6 +597,11 @@ void enumerate_and_watch(const std::shared_ptr<State>& state, std::uint64_t seri
     }
 }
 void run(std::shared_ptr<State> state) noexcept {
+    const HRESULT apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    struct Apartment final {
+        HRESULT result;
+        ~Apartment() { if (SUCCEEDED(result)) CoUninitialize(); }
+    } apartment_cleanup{apartment};
     for (;;) {
         std::optional<Request> request;
         std::uint64_t serial{};
@@ -367,12 +619,23 @@ void run(std::shared_ptr<State> state) noexcept {
             state->first_read_returned = false;
             state->first_read_error = 0;
         }
-        try { enumerate_and_watch(state, serial, *request); }
+        try {
+            if (!is_filesystem_location(request->location.parsing_name) && FAILED(apartment)) {
+                Batch error{*request, {}, Phase::error, provider_error(apartment)};
+                error.notification = NotificationCapability::manual_refresh;
+                publish(state, serial, std::move(error));
+            } else enumerate_and_watch(state, serial, *request);
+        }
         catch (...) {
             bool complete = false;
             { std::lock_guard lock(state->mutex); complete = state->initial_complete; }
-            try { publish(state, serial, {*request, {}, Phase::error, ERROR_NOT_ENOUGH_MEMORY,
-                complete ? Change::watch_error : Change::none}); }
+            try {
+                Batch error{*request, {}, Phase::error, ERROR_NOT_ENOUGH_MEMORY,
+                    complete ? Change::watch_error : Change::none};
+                if (!is_filesystem_location(request->location.parsing_name))
+                    error.notification = NotificationCapability::manual_refresh;
+                publish(state, serial, std::move(error));
+            }
             catch (...) { // No allocation is needed to expose a terminal failure.
                 std::lock_guard lock(state->mutex);
                 if (!state->stop && state->serial == serial) {
@@ -380,6 +643,8 @@ void run(std::shared_ptr<State> state) noexcept {
                     state->emergency.emplace(Batch{std::move(*request), {},
                         Phase::error, ERROR_NOT_ENOUGH_MEMORY,
                         complete ? Change::watch_error : Change::none});
+                    if (!is_filesystem_location(state->emergency->request.location.parsing_name))
+                        state->emergency->notification = NotificationCapability::manual_refresh;
                     SetEvent(state->ready);
                 }
                 // Wait for a replacement or shutdown; never repeatedly signal.
@@ -440,7 +705,7 @@ class LocalSource final : public Source {
   public:
     explicit LocalSource(std::shared_ptr<State> state) : state_(std::move(state)), gate_(state_->gate) {}
     ~LocalSource() override {
-        // Never join an OS call. Worker owns only State and FindHandle, and
+        // Never join an OS call. Worker owns State, handles and its STA COM resources, and
         // exits after its current OS call returns. State is freed on last use.
         if (state_) { std::lock_guard lock(state_->mutex); invalidate(*state_, true); }
     }
@@ -460,6 +725,11 @@ class LocalSource final : public Source {
             request.location.known_folder_identity.size() > kMaxPath ||
             request.binding.group_id.size() > 256 || request.binding.tab_id.size() > 256)
             return false;
+        const auto request_bytes = owned_string_bytes(request.location.parsing_name) +
+            owned_string_bytes(request.location.known_folder_identity) +
+            owned_string_bytes(request.location.fallback_path) +
+            request.binding.group_id.capacity() + request.binding.tab_id.capacity();
+        if (request_bytes > kMaxBatchOwnedBytes / 4) return false;
         bool retire = false;
         if (state_) {
             std::lock_guard lock(state_->mutex);
@@ -517,10 +787,10 @@ std::unique_ptr<Source> make_local_source() noexcept try {
     return make_source();
 } catch (...) { return {}; }
 namespace testing {
-ReadGate::ReadGate(std::size_t result_batches)
+ReadGate::ReadGate(std::size_t result_batches, std::optional<Batch> result)
     : entered(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
       release(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
-      backpressure(CreateEventW(nullptr, TRUE, FALSE, nullptr)), batches(result_batches) {}
+      backpressure(CreateEventW(nullptr, TRUE, FALSE, nullptr)), batches(result_batches), namespace_batch(std::move(result)) {}
 ReadGate::~ReadGate() { CloseHandle(entered); CloseHandle(release); CloseHandle(backpressure); }
 std::unique_ptr<Source> make_blocked_source(std::shared_ptr<ReadGate> gate) noexcept try {
     if (!gate || !gate->entered || !gate->release || !gate->backpressure) return {};

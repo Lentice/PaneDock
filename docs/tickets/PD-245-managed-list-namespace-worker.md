@@ -48,10 +48,10 @@ Phase 8 · PD-234 拆分 · 目標 1–2 天
 
 ## Acceptance criteria
 
-- [ ] Source 可表達 virtual identity、child／canonical／parent 與 manual notification capability，原 request token 不被 canonicalization 改寫。
-- [ ] controlled provider delay／late delivery／capacity exhausted／cancel／shutdown 案例證明沿用同一 slot cap 與 bounded batches；不 fake IExplorerBrowser 或假裝 controlled calls 是真實 COM。
-- [ ] 增加 owned value metadata 的 focused CTest；本機 change／capacity checks 保持通過，無 UI COM 或無界等待。
-- [ ] 真實 This PC／Desktop children、known-folder bind、provider STA teardown 仍明列未驗證，需真實桌面；不因 deferred validation 宣稱真實 Shell PASS。
+- [x] Source 可表達 virtual identity、child／canonical／parent 與 manual notification capability，原 request token 不被 canonicalization 改寫。
+- [x] controlled provider delay／late delivery／capacity exhausted／cancel／shutdown 案例證明沿用同一 slot cap 與 bounded batches；不 fake IExplorerBrowser 或假裝 controlled calls 是真實 COM。
+- [x] 增加 owned value metadata 的 focused CTest；本機 change／capacity checks 保持通過，無 UI COM 或無界等待。
+- [x] 真實 This PC／Desktop children、known-folder bind、provider STA teardown 仍明列未驗證，需真實桌面；不因 deferred validation 宣稱真實 Shell PASS。
 
 ## Agent checks
 
@@ -66,3 +66,27 @@ git diff --check
 ```
 
 使用者延後實機／UI 驗證，不執行 launch smoke 或 GUI。交付須記錄實際命令、容量與 teardown 未解風險；交接區只放未解風險與不可重推結論。超過兩天先再拆，不擴寫此票。
+
+
+## Agent checks 紀錄（2026-10-20）
+
+使用 LLVM-MinGW Release，實際執行：
+
+```powershell
+$env:PATH = 'E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja;' + $env:PATH
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target panedock_managed_list_namespace_worker_test panedock_managed_list_capacity_test panedock_managed_list_changes_test
+ctest --test-dir build --output-on-failure -R '^panedock_managed_list_(namespace_worker|capacity|changes)$'
+git diff --check
+```
+
+Configure 成功；三個 targets 建置成功；三個 CTests 全部通過；diff whitespace check 通過。受限環境的首次 build 停滯且沒有編譯子程序，核對命令後只停止該次 CMake／Ninja（PID 9604／31672），相同 build／CTest 改在 elevated 執行環境完成；這不是應用程式要求 elevation。
+
+Focused test 僅使用 owned-value／controlled worker：保留原 Request equality、canonical／child／parent 與 root、bind error／重試、manual-refresh capability、名稱與三個 location 欄位長度限制、batch bytes、兩個 queued batches 的 backpressure、四個共用 slots（包含 abandoned）、1,000 次容量耗盡重試、cancel／late delivery 與 non-joining destruction。每個 batch 上限 2 MiB（含 vector capacity、字串 capacity、Request、resolved／parent）；四個 slots × 兩個 queued batches 合計最多 16 MiB，另各有一個建構中的有界 batch。既有 128 rows/batch、100,000 rows／24 MiB active rows 限制仍適用。這些是值與容量檢查，並非 process memory 或真實 provider 效能量測。
+
+未執行 GUI、launch smoke 或 live Shell bind；未宣告真實 Shell namespace PASS。PD-226 的既有依賴與未解狀態保留；獨立實作與 focused checks 已交付，但依賴的外部驗證尚未完成，不據此結清上游驗收。
+
+## 交接區
+
+- 未解風險：This PC／Desktop 真實 children、known-folder bind、無 filesystem path 的 provider 與 STA COM teardown 仍未驗證，需真實桌面。列舉需要 Win32／Shell COM，不能放入純模型 `src/core`；controlled owned-value CTest 不取代此實機檢查。
+- 未解風險：PD-226 所需真實慢／斷線來源、桌面回應性及 pending shutdown／取消證據仍是外部條件；本票不修改或代替其驗收。任意 provider 呼叫或 COM Release 卡住時，只保證失效 interest、保留 bounded slot 且 UI 不 join；不能保證 provider 終止或安全完成真實 teardown，PD-241 gate 仍需實證。
