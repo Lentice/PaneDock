@@ -175,7 +175,11 @@ class Pane final {
     void set_list_icon_viewport(std::size_t first, std::size_t count) noexcept;
     int list_item_image(std::size_t row) const noexcept;
     std::size_t list_image_bytes() const noexcept {
-        return icon_images_ ? (icon_cache_.size() + 2) * managed_list::image_bytes(icon_size_) : 0;
+        if (!icon_images_) return 0;
+        auto bytes = (icon_cache_.size() + 2) * managed_list::image_bytes(icon_size_);
+        for (const auto& entry : icon_cache_)
+            bytes += sizeof(CachedIcon) + managed_list::owned_icon_key_bytes(entry.key);
+        return bytes;
     }
     struct RecoveryWork final {
         std::size_t indexed_rows{}, lookups{}, comparisons{}, accounted_rows{};

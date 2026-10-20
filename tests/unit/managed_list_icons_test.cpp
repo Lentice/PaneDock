@@ -87,6 +87,97 @@ struct Fixture {
         while (!icons->results.empty()) pane.process_icon_results();
     }
 };
+ml::Row shell_row(std::wstring key) {
+    ml::Row row{L"Same display", 1, false, 1};
+    row.identity = {key, true};
+    row.child_location = core::ShellLocation{std::move(key), L"KnownFolder", L"C:\\fallback"};
+    return row;
+}
+void absolute_identity_interest_completion_and_cache() {
+    Fixture f;
+    auto first = shell_row(L"::{provider}\\one");
+    auto second = shell_row(L"::{provider}\\two");
+    f.deliver({first, second}); f.viewport(0, 2);
+    const auto requests = f.icons->interest;
+    EXPECT(requests.size() == 2);
+    EXPECT(requests[0].key.identity != requests[1].key.identity);
+    for (const auto& request : requests) {
+        const auto& row = f.pane.list_snapshot().rows[request.key.identity == first.identity ? 0 : 1];
+        EXPECT(request.key.child_location == row.child_location);
+        EXPECT(request.key.parsing_name() == request.key.identity.key);
+        EXPECT(request.key.parsing_name() != row.child_location->fallback_path);
+    }
+    // Matching display/version/ordinal is insufficient. Every identity field,
+    // request generation and viewport must still match outstanding interest.
+    for (int field = 0; field < 7; ++field) {
+        auto wrong = requests.front();
+        if (field == 0) wrong.key.identity = second.identity;
+        if (field == 1) wrong.key.child_location->known_folder_identity = L"Other";
+        if (field == 2) wrong.key.child_location->fallback_path = L"C:\\other";
+        if (field == 3) ++wrong.request.binding.generation;
+        if (field == 4) ++wrong.viewport;
+        if (field == 5) wrong.request.binding.group_id = "other-group";
+        if (field == 6) ++wrong.row_index;
+        f.icons->deliver(wrong); f.pane.process_icon_results();
+        EXPECT(f.pane.list_item_image(0) == 0 && f.pane.list_item_image(1) == 0);
+    }
+    f.icons->deliver(requests[1]); f.pane.process_icon_results();
+    EXPECT(f.pane.list_item_image(0) == 0 && f.pane.list_item_image(1) >= 2);
+    f.icons->deliver(requests[0]); f.pane.process_icon_results();
+    EXPECT(f.pane.list_item_image(0) >= 2);
+    EXPECT(f.pane.list_item_image(0) != f.pane.list_item_image(1));
+    // A display-only rename keeps its cached image; a changed absolute child
+    // value does not borrow the image even when key/size/time are unchanged.
+    f.navigate(); first.name = L"Renamed display";
+    f.deliver({first});
+    const auto replacements = f.icons->replacements;
+    f.viewport(0, 1); EXPECT(f.icons->replacements == replacements);
+    EXPECT(f.pane.list_item_image(0) >= 2);
+    f.navigate(); first.child_location->fallback_path = L"C:\\new-fallback";
+    f.deliver({first}); f.viewport(0, 1);
+    EXPECT(f.pane.list_item_image(0) == 0);
+    const auto old = f.icons->interest.front();
+    f.pane.add_tab({L"C:\\A", {}, {}}); f.navigate(); f.deliver({first}); f.viewport(0, 1);
+    f.icons->deliver(old); f.pane.process_icon_results();
+    EXPECT(f.pane.list_item_image(0) == 0);
+    f.finish(); EXPECT(f.pane.list_item_image(0) >= 2);
+    // A Shell key without an optional child remains absolute. A local key
+    // remains parent+leaf even when its display text is different.
+    f.navigate(); second.child_location.reset();
+    ml::Row local{L"Display only", 1, false}; local.identity = {L"real.txt", false};
+    f.deliver({second, local}); f.viewport(0, 2);
+    for (const auto& request : f.icons->interest)
+        EXPECT(request.key.parsing_name() == (request.key.identity.shell_item ?
+            second.identity.key : L"C:\\A\\real.txt"));
+    f.finish();
+    EXPECT(f.pane.list_item_image(0) >= 2 && f.pane.list_item_image(1) >= 2);
+}
+void long_identity_interest_and_cache_are_byte_bounded() {
+    Fixture f;
+    std::vector<ml::Row> rows;
+    for (int n = 0; n < 40; ++n) {
+        auto row = shell_row(L"::{provider}\\" + std::to_wstring(n) + std::wstring(16000, L'x'));
+        row.child_location->known_folder_identity.assign(16000, L'k');
+        row.child_location->fallback_path.assign(16000, L'f');
+        rows.push_back(std::move(row));
+    }
+    f.deliver(std::move(rows)); f.viewport(0, 40);
+    EXPECT(!f.icons->interest.empty() && f.icons->interest.size() < 40);
+    std::size_t bytes{};
+    for (const auto& request : f.icons->interest) bytes += ml::owned_icon_request_bytes(request);
+    EXPECT(bytes <= ml::kIconValueBytes);
+    for (std::size_t row = 0; row < 40; ++row) {
+        f.viewport(row, 1); f.finish();
+        EXPECT(f.pane.list_item_image(row) >= 2);
+        EXPECT(f.pane.list_image_bytes() <= ml::kImageCacheBytes);
+    }
+    EXPECT(f.pane.list_item_image(0) == 0); // key bytes force eviction before 256 rasters
+    const auto last_slot = f.pane.list_item_image(39);
+    EXPECT(last_slot >= 2);
+    f.viewport(0, 1); f.finish();
+    EXPECT(f.pane.list_item_image(0) >= 2 && f.pane.list_item_image(39) >= 2);
+    EXPECT(f.pane.list_item_image(0) != f.pane.list_item_image(39));
+}
 void stale_identity_failure_and_reuse() {
     Fixture f;
     f.deliver({{L"z-file", 1, false}, {L"folder", 0, true}, {L"a-file", 2, false}}, ml::Phase::loading);
@@ -260,7 +351,7 @@ void production_worker_capacity_cancel_and_backpressure() {
     auto gate = std::make_shared<ml::testing::IconGate>();
     std::array<std::unique_ptr<ml::IconSource>, ml::kIconWorkers> sources;
     ml::IconRequest request{{{1, "group", "tab"}, {L"C:\\A", {}, {}}}, 1,
-        {{L"C:\\A", {}, {}}, L"file", 1, 1, false, 16}};
+        {{L"C:\\A", {}, {}}, {L"file", false}, 1, 1, false, 16}};
     for (auto& source : sources) {
         ResetEvent(gate->entered);
         source = ml::testing::make_gated_icons(gate); EXPECT(source != nullptr);
@@ -309,12 +400,50 @@ void production_worker_capacity_cancel_and_backpressure() {
     EXPECT(WaitForSingleObject(source->event(), 0) == WAIT_TIMEOUT);
     source.reset(); EXPECT(ml::testing::wait_for_icon_workers(10000));
 }
+void worker_identity_length_capacity_and_target_contract() {
+    auto gate = std::make_shared<ml::testing::IconGate>();
+    auto source = ml::testing::make_gated_icons(gate); EXPECT(source != nullptr);
+    ml::IconRequest request{{{1, "group", "tab"}, {L"C:\\A", {}, {}}}, 1,
+        {{L"C:\\A", {}, {}}, {L"::{item}", true}, 1, 1, false, 16, 96, false,
+            core::ShellLocation{L"::{item}", L"KnownFolder", L"C:\\fallback"}}};
+    // Reject excessive length and capacity independently for every new string.
+    for (int field = 0; field < 4; ++field) {
+        for (bool capacity : {false, true}) {
+            auto wrong = request;
+            auto& key = wrong.key;
+            auto& text = field == 0 ? key.identity.key : field == 1 ? key.child_location->parsing_name :
+                field == 2 ? key.child_location->known_folder_identity : key.child_location->fallback_path;
+            if (capacity) text.reserve(ml::kIconValueBytes / sizeof(wchar_t));
+            else text.assign(ml::kMaxPath + 1, L'x');
+            std::vector<ml::IconRequest> input; input.push_back(std::move(wrong));
+            EXPECT(!source->replace(std::move(input)));
+            EXPECT(ml::testing::icon_counts().pending == 0);
+        }
+    }
+    auto wrong = request; wrong.key.child_location->parsing_name = L"::{other}";
+    EXPECT(!source->replace({wrong}));
+    // The maximum legal Shell key is not restricted to a 255-character leaf.
+    request.key.identity.key.assign(ml::kMaxPath, L'x');
+    request.key.child_location->parsing_name = request.key.identity.key;
+    EXPECT(source->replace({request}));
+    EXPECT(WaitForSingleObject(gate->entered, 10000) == WAIT_OBJECT_0);
+    std::vector<ml::IconRequest> too_many_bytes(16, request);
+    EXPECT(!source->replace(std::move(too_many_bytes)));
+    SetEvent(gate->release);
+    EXPECT(WaitForSingleObject(source->event(), 10000) == WAIT_OBJECT_0);
+    const auto result = source->take();
+    EXPECT(result && result->request.key == request.key);
+    source.reset(); EXPECT(ml::testing::wait_for_icon_workers(10000));
+}
 }
 int main() {
+    absolute_identity_interest_completion_and_cache();
+    long_identity_interest_and_cache_are_byte_bounded();
     stale_identity_failure_and_reuse();
     bounded_cache_eviction_and_resource_cleanup();
     thumbnails_modes_stale_failure_and_budget();
     hidden_control_mode_layout_and_restore();
     production_worker_capacity_cancel_and_backpressure();
+    worker_identity_length_capacity_and_target_contract();
     return test::summary("managed_list_icons");
 }

@@ -31,8 +31,8 @@ void Pane::use_list_icons(std::unique_ptr<managed_list::IconSource> source) {
 }
 managed_list::IconKey Pane::list_icon_key(std::size_t row) const {
     const auto& item = list_.rows[row];
-    return {list_.request.location, item.name, item.bytes, item.date_modified,
-        item.directory, icon_size_, icon_dpi_, icon_thumbnail_ && !item.directory};
+    return {list_.request.location, item.identity, item.bytes, item.date_modified,
+        item.directory, icon_size_, icon_dpi_, icon_thumbnail_ && !item.directory, item.child_location};
 }
 void Pane::cancel_list_icons() noexcept {
     ++icon_viewport_;
@@ -102,9 +102,7 @@ int Pane::list_item_image(std::size_t row) const noexcept {
     const auto found = std::find_if(icon_cache_.begin(), icon_cache_.end(),
         [&](const auto& entry) {
             const auto& key = entry.key;
-            return key.location == list_.request.location && key.name == item.name &&
-                key.bytes == item.bytes && key.modified == item.date_modified &&
-                key.directory == item.directory && key.size == icon_size_ &&
+            return key.location == list_.request.location && key.matches(item) && key.size == icon_size_ &&
                 key.dpi == icon_dpi_ && key.thumbnail == (icon_thumbnail_ && !item.directory);
         });
     return found == icon_cache_.end() ? (item.directory ? 1 : 0) : found->slot;
@@ -144,9 +142,14 @@ void Pane::request_list_images(std::vector<std::size_t> rows) noexcept try {
         return;
     }
     std::vector<managed_list::IconKey> interest;
+    std::size_t interest_bytes{};
     for (auto i : rows) {
-        if (i < list_.rows.size() && interest.size() < managed_list::kIconInterest)
-            interest.push_back(list_icon_key(i));
+        if (i >= list_.rows.size() || interest.size() >= managed_list::kIconInterest) continue;
+        auto key = list_icon_key(i);
+        const auto bytes = sizeof(key) + managed_list::owned_icon_key_bytes(key);
+        if (interest_bytes + bytes > managed_list::kIconValueBytes) break;
+        interest_bytes += bytes;
+        interest.push_back(std::move(key));
     }
     const bool changed = interest != icon_interest_;
     if (!changed && !enrichment_interest_.empty()) return;
@@ -175,7 +178,8 @@ void Pane::request_list_images(std::vector<std::size_t> rows) noexcept try {
         if (found != icon_cache_.end()) { found->used = ++icon_clock_; continue; }
         if (std::any_of(requests.begin(), requests.end(), [&](const auto& r) { return r.key == key && r.property.empty(); })) continue;
         if (requests.size() < managed_list::kIconInterest) {
-            requests.push_back({list_.request, icon_viewport_, key, {}, 0, 0});
+            if (!managed_list::append_icon_request(requests,
+                    {list_.request, icon_viewport_, key, {}, 0, 0})) break;
             image_attempted_[index] = true;
         }
     }
@@ -219,20 +223,28 @@ void Pane::process_icon_results() noexcept try {
         auto found = std::find_if(icon_cache_.begin(), icon_cache_.end(),
             [&](const auto& entry) { return entry.key == request.key; });
         if (found != icon_cache_.end()) continue;
-        int slot = -1;
-        if (icon_cache_.size() == managed_list::image_capacity(icon_size_)) {
+        auto key = request.key; // allocate before mutating any occupied slot
+        const auto key_bytes = sizeof(CachedIcon) + managed_list::owned_icon_key_bytes(key);
+        // Include owned identity capacity in the existing image-cache budget.
+        // Removing an LRU image shifts native slot indices; repair every key's
+        // slot before exposing the cache again. Placeholders always stay 0/1.
+        if (key_bytes + 3 * managed_list::image_bytes(icon_size_) > managed_list::kImageCacheBytes) continue;
+        while (icon_cache_.size() == managed_list::image_capacity(icon_size_) ||
+            list_image_bytes() + managed_list::image_bytes(icon_size_) + key_bytes > managed_list::kImageCacheBytes) {
             found = std::min_element(icon_cache_.begin(), icon_cache_.end(),
                 [](const auto& a, const auto& b) { return a.used < b.used; });
-            auto key = request.key; // allocate before mutating the occupied slot
-            slot = ImageList_ReplaceIcon(icon_images_, found->slot, icon.value);
-            if (slot >= 0) *found = {std::move(key), slot, ++icon_clock_};
-        } else {
-            // Allocate the key before adding an image, so allocation failure
-            // cannot orphan an untracked slot and grow the image list.
-            icon_cache_.push_back({request.key, -1, ++icon_clock_});
-            slot = ImageList_AddIcon(icon_images_, icon.value);
-            if (slot < 0) icon_cache_.pop_back(); else icon_cache_.back().slot = slot;
+            const int removed = found->slot;
+            if (!ImageList_Remove(icon_images_, removed)) break;
+            icon_cache_.erase(found);
+            for (auto& entry : icon_cache_) if (entry.slot > removed) --entry.slot;
         }
+        if (list_image_bytes() + managed_list::image_bytes(icon_size_) + key_bytes > managed_list::kImageCacheBytes)
+            continue;
+        // Track the key before adding the image so allocation failure cannot
+        // orphan a native slot. Image count stays <= the existing raster cap.
+        icon_cache_.push_back({std::move(key), -1, ++icon_clock_});
+        const int slot = ImageList_AddIcon(icon_images_, icon.value);
+        if (slot < 0) icon_cache_.pop_back(); else icon_cache_.back().slot = slot;
         if (slot >= 0 && list_window_) InvalidateRect(list_window_, nullptr, FALSE);
     }
     if (enrichment_interest_.empty()) {

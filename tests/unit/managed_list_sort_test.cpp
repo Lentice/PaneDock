@@ -612,11 +612,112 @@ void duplicate_display_names_preserve_viewport_and_interaction_on_reorder() {
     EXPECT(after.viewport_offset == before.viewport_offset);
     EXPECT(!after.viewport_anchor_clamped);
 }
+void shell_property_identity_reorder_and_completion() {
+    Fixture f;
+    auto* source = use_properties(f);
+    managed_list::Row first{L"Same label", 1, false, 1};
+    first.identity = {L"::{provider}\\one", true};
+    first.child_location = core::ShellLocation{first.identity.key, L"KnownFolder", L"C:\\fallback"};
+    auto second = first;
+    second.identity.key = L"::{provider}\\two";
+    second.child_location->parsing_name = second.identity.key;
+    f.deliver(managed_list::Phase::complete, {first, second});
+    f.click_column(4); f.pane.set_list_icon_viewport(0, 2);
+    const auto requests = source->requests;
+    EXPECT(requests.size() == 2);
+    EXPECT(requests[0].key.identity != requests[1].key.identity);
+    for (const auto& request : requests) {
+        const auto& row = f.pane.list_snapshot().rows[request.row_index];
+        EXPECT(request.key.identity == row.identity);
+        EXPECT(request.key.child_location == row.child_location);
+        EXPECT(request.key.parsing_name() == row.identity.key);
+        EXPECT(request.property == "System.Media.Duration");
+    }
+    for (int field = 0; field < 6; ++field) {
+        auto wrong = requests.front();
+        if (field == 0) wrong.row_index = requests.back().row_index;
+        if (field == 1) wrong.key.identity = requests.back().key.identity;
+        if (field == 2) wrong.key.child_location->known_folder_identity = L"Other";
+        if (field == 3) wrong.key.child_location->fallback_path = L"C:\\other";
+        if (field == 4) ++wrong.viewport;
+        if (field == 5) ++wrong.request.binding.generation;
+        source->deliver(wrong, number(999)); f.pane.process_icon_results();
+        for (const auto& row : f.pane.list_snapshot().rows)
+            EXPECT(row.properties[1].state == managed_list::PropertyState::unresolved);
+        EXPECT(f.pane.list_property_sort_pending());
+    }
+    source->deliver(requests[1], number(1)); f.pane.process_icon_results();
+    EXPECT(f.pane.list_property_sort_pending());
+    EXPECT(f.pane.list_snapshot().rows[requests[1].row_index].properties[1].number == 1);
+    EXPECT(f.pane.list_snapshot().rows[requests[0].row_index].properties[1].state ==
+        managed_list::PropertyState::unresolved);
+    source->deliver(requests[0], number(2)); f.pane.process_icon_results();
+    EXPECT(!f.pane.list_property_sort_pending());
+    EXPECT(f.pane.list_snapshot().rows[0].identity == requests[1].key.identity);
+    EXPECT(f.pane.list_snapshot().rows[1].identity == requests[0].key.identity);
+    // The old ordinal now names the other identical label. It cannot receive
+    // the old completion, including after a fresh tab or Group binding.
+    for (const auto& request : requests) source->deliver(request, number(999));
+    f.pane.process_icon_results();
+    EXPECT(f.pane.list_snapshot().rows[0].properties[1].number == 1);
+    EXPECT(f.pane.list_snapshot().rows[1].properties[1].number == 2);
+    f.state.tabs.push_back({"second", {L"C:\\A", {}, {}}, "details", "System.Media.Duration", true, {}, 0});
+    f.pane.activate_tab_at(1);
+    f.deliver(managed_list::Phase::complete, {first, second});
+    f.pane.set_list_icon_viewport(0, 2);
+    for (const auto& request : requests) source->deliver(request, number(999));
+    f.pane.process_icon_results();
+    for (const auto& row : f.pane.list_snapshot().rows)
+        EXPECT(row.properties[1].state == managed_list::PropertyState::unresolved);
+    const auto old_group = source->requests;
+    auto other = f.state;
+    f.host.group_id = "other-group"; f.pane.bind(&other);
+    EXPECT(SUCCEEDED(f.pane.navigate_to({L"C:\\A", {}, {}})));
+    f.deliver(managed_list::Phase::complete, {first, second});
+    f.pane.set_list_icon_viewport(0, 2);
+    for (const auto& request : old_group) source->deliver(request, number(999));
+    f.pane.process_icon_results();
+    for (const auto& row : f.pane.list_snapshot().rows)
+        EXPECT(row.properties[1].state == managed_list::PropertyState::unresolved);
+    f.pane.unbind(); // other must outlive its binding
+}
+void long_shell_property_batches_finish_within_byte_budget() {
+    Fixture f;
+    auto* source = use_properties(f);
+    std::vector<managed_list::Row> rows;
+    for (int n = 0; n < 30; ++n) {
+        managed_list::Row row{L"Same label", 1, false, 1};
+        row.identity = {L"::{provider}\\" + std::to_wstring(n) + std::wstring(10000, L'x'), true};
+        row.child_location = core::ShellLocation{row.identity.key, std::wstring(10000, L'k'), std::wstring(10000, L'f')};
+        rows.push_back(std::move(row));
+    }
+    f.deliver(managed_list::Phase::complete, std::move(rows));
+    f.click_column(4); f.pane.set_list_icon_viewport(0, 2);
+    EXPECT(source->requests.size() < 30);
+    std::size_t completed{};
+    for (int round = 0; round < 30 && f.pane.list_property_sort_pending(); ++round) {
+        auto requests = source->requests;
+        std::size_t bytes{};
+        for (const auto& request : requests) {
+            bytes += managed_list::owned_icon_request_bytes(request);
+            EXPECT(!request.property.empty());
+            source->deliver(request, number(1)); ++completed;
+        }
+        EXPECT(bytes <= managed_list::kIconValueBytes);
+        while (!source->results.empty()) f.pane.process_icon_results();
+        f.pane.set_list_icon_viewport(0, 2);
+    }
+    EXPECT(completed == 30);
+    EXPECT(!f.pane.list_property_sort_pending());
+    EXPECT(!f.pane.list_property_capacity_failed());
+}
 } // namespace
 
 int main() {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
     EXPECT(InitCommonControlsEx(&controls));
+    shell_property_identity_reorder_and_completion();
+    long_shell_property_batches_finish_within_byte_budget();
     duplicate_display_names_preserve_viewport_and_interaction_on_reorder();
     basic_keys_group_directories_and_keep_deterministic_ties();
     unicode_name_order_and_unknown_sort_fallback_are_stable();

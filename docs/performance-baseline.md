@@ -91,6 +91,17 @@ The local worker/queue limits are unchanged; no namespace producer is enabled.
 Capacity failures stop interest and remain explicitly retryable. These are value
 and admission checks, not evidence of process memory or the PD-241 release gate.
 
+## PD-244 enrichment identity accounting (implementation bounds, not measurements)
+
+Icon-interest/request values are capped at 1 MiB per replacement window, in
+addition to the existing item-count and worker/pending/result limits. The icon
+cache's existing 4 MiB ceiling now accounts for each cached raster, cache entry,
+and owned location/item identity capacities, including optional child parsing,
+known-folder and fallback strings. Least-recently-used entries are evicted to
+admit the next image; if one key cannot fit with the placeholders, it remains a
+placeholder until a later explicit demand. These owned-value checks do not measure
+GDI/provider memory or prove real Shell namespace compatibility.
+
 ## Local tab-switch Shell probe (2026-09-29)
 
 `panedock_tab_switch_probe` reuses the product's `ExplorerHost` in a separate

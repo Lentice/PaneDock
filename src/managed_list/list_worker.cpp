@@ -642,9 +642,7 @@ PropertyValue read_property(const IconRequest& request) {
     std::wstring property(request.property.begin(), request.property.end());
     if (FAILED(PSGetPropertyKeyFromName(property.c_str(), &key)) &&
         FAILED(PSPropertyKeyFromString(property.c_str(), &key))) return result;
-    auto path = request.key.location.parsing_name;
-    if (!path.empty() && path.back() != L'\\') path += L'\\';
-    path += request.key.name;
+    const auto path = request.key.parsing_name();
     Microsoft::WRL::ComPtr<IShellItem2> item;
     if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&item)))) return result;
     PROPVARIANT value{};
@@ -704,9 +702,12 @@ void run_icons(std::shared_ptr<IconState> state) noexcept {
                 result.image.mask.assign(static_cast<std::size_t>(((size + 15) / 16) * 2 * size), 0);
             } else if (SUCCEEDED(apartment) && !result.request.property.empty())
                 result.property = read_property(result.request);
-            else if (SUCCEEDED(apartment)) result.image = (result.request.key.thumbnail ? shell_core::load_item_thumbnail : shell_core::load_item_icon)(
-                result.request.key.location.parsing_name, result.request.key.name,
-                result.request.key.size);
+            else if (SUCCEEDED(apartment)) {
+                const auto target = result.request.key.parsing_name();
+                result.image = result.request.key.thumbnail ?
+                    shell_core::load_item_thumbnail(target, result.request.key.size) :
+                    shell_core::load_item_icon(target, result.request.key.size);
+            }
         } catch (...) { /* Decorative failure keeps a usable placeholder. */ }
         std::unique_lock lock(state->mutex);
         state->running = false;
@@ -733,8 +734,18 @@ class WorkerIcons final : public IconSource {
     }
     bool replace(std::vector<IconRequest> requests) noexcept override try {
         if (requests.size() > kIconInterest) return false;
-        for (const auto& r : requests)
-            if (r.key.name.size() > kMaxName || r.key.location.parsing_name.size() > kMaxPath ||
+        std::size_t bytes{};
+        for (const auto& r : requests) {
+            bytes += owned_icon_request_bytes(r);
+            const auto& identity = r.key.identity;
+            const auto& child = r.key.child_location;
+            if (bytes > kIconValueBytes || identity.key.empty() ||
+                identity.key.size() > (identity.shell_item ? kMaxPath : kMaxName) ||
+                (!identity.shell_item && (child || identity.key == L"." || identity.key == L".." ||
+                    identity.key.find_first_of(L"\\/:*?\"") != std::wstring::npos)) ||
+                (child && (child->parsing_name != identity.key ||
+                    child->known_folder_identity.size() > kMaxPath || child->fallback_path.size() > kMaxPath)) ||
+                r.key.location.parsing_name.size() > kMaxPath ||
                 r.key.location.fallback_path.size() > kMaxPath ||
                 r.key.location.known_folder_identity.size() > kMaxPath ||
                 r.request.location.parsing_name.size() > kMaxPath ||
@@ -743,6 +754,7 @@ class WorkerIcons final : public IconSource {
                 r.request.binding.group_id.size() > 256 || r.request.binding.tab_id.size() > 256 ||
                 r.property.size() > 128 || r.property_slot < 0 || r.property_slot > 2 ||
                 r.key.size < 16 || r.key.size > kMaxImageSize) return false;
+        }
         std::deque<IconRequest> pending;
         for (auto& r : requests) pending.push_back(std::move(r));
         std::lock_guard lock(state_->mutex);

@@ -280,7 +280,7 @@
 | PD-241 | 自建列表相容性及效能 gate，通過後切預設 | 8 | `planned` | PD-226, PD-230, PD-231, PD-233, PD-235, PD-237, PD-238, PD-239, PD-240 | [PD-241](tickets/PD-241-managed-list-rollout-gate.md) |
 | PD-242 | contract：移除舊 Shell view 路徑 | 8 | `planned` | PD-241 | [PD-242](tickets/PD-242-managed-list-remove-shell-view.md) |
 | PD-243 | PD-234 切片：列表 item identity 與顯示名稱分離 | 8 | `done` | PD-227, PD-228, PD-232, PD-233 | [PD-243](tickets/PD-243-managed-list-item-identity.md) |
-| PD-244 | PD-234 切片：圖示與屬性請求使用 Shell item identity | 8 | `planned` | PD-243, PD-229, PD-230, PD-231 | [PD-244](tickets/PD-244-managed-list-enrichment-identity.md) |
+| PD-244 | PD-234 切片：圖示與屬性請求使用 Shell item identity | 8 | `done` | PD-243, PD-229, PD-230, PD-231 | [PD-244](tickets/PD-244-managed-list-enrichment-identity.md) |
 | PD-245 | PD-234 切片：Worker STA 的 namespace 列舉與 parent 值 | 8 | `planned` | PD-243, PD-226 | [PD-245](tickets/PD-245-managed-list-namespace-worker.md) |
 | PD-246 | PD-234 切片：Pane 虛擬導覽、預設位置與 session 還原 | 8 | `planned` | PD-225, PD-244, PD-245 | [PD-246](tickets/PD-246-managed-list-virtual-navigation.md) |
 

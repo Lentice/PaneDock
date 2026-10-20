@@ -43,10 +43,10 @@ Phase 8 · PD-234 拆分 · 目標半天至一天
 
 ## Acceptance criteria
 
-- [ ] Pane 的 injected IconSource 可觀察到兩個同名虛擬列有不同 absolute identity，且 parsing／known-folder／fallback 未被 display name 或 filesystem fallback 取代。
-- [ ] stale identity／generation／viewport／row index 結果被拒絕，正確結果只更新對應列；placeholder、sort 完成及 cache eviction 行為保持。
-- [ ] 新 identity 資料長度與核帳有界，既有 worker capacity／cancel 行為保持；無 UI provider 查詢。
-- [ ] 本機 enrichment 的既有聚焦案例通過；不以此宣稱真實 namespace icon／property PASS。
+- [x] Pane 的 injected IconSource 可觀察到兩個同名虛擬列有不同 absolute identity，且 parsing／known-folder／fallback 未被 display name 或 filesystem fallback 取代。
+- [x] stale identity／generation／viewport／row index 結果被拒絕，正確結果只更新對應列；placeholder、sort 完成及 cache eviction 行為保持。
+- [x] 新 identity 資料長度與核帳有界，既有 worker capacity／cancel 行為保持；無 UI provider 查詢。
+- [x] 本機 enrichment 的既有聚焦案例通過；不以此宣稱真實 namespace icon／property PASS。
 
 ## Agent checks
 

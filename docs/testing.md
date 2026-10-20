@@ -496,3 +496,23 @@ context after the restricted build stalled. Only these targets were built:
 `git diff --check` passed. No full suite, GUI automation or real-machine
 verification was run. Real Shell namespace, native desktop focus/accessibility
 and the PD-241 performance/compatibility gate remain unverified.
+
+## PD-244 enrichment identity routing
+
+The injected IconSource seam verifies two rows with equal display text produce
+distinct icon/property request identities and absolute parsing targets. It rejects
+stale identity components, generation, viewport, Group and row-index results;
+after a reorder, only the matching row receives its property. A display-only
+rename keeps its image cache entry, while changing the child ShellLocation does
+not reuse it. Local rows still build their existing parent-plus-leaf target.
+Long owned identity strings exercise the 1 MiB request window and 4 MiB raster+
+cache-key eviction accounting; no live provider or COM call is made by the tests.
+
+PD-244 validation (2026-10-20): LLVM-MinGW Release build succeeded for
+`panedock_managed_list_icons_test`, `panedock_managed_list_sort_test`, and
+`panedock_managed_list_cache_test`. The targeted CTest filter
+`^panedock_managed_list_(icons|sort|cache)$` passed 3/3, and
+`git diff --check` passed. The restricted build stalled before starting compiler
+children; the same Ninja targets completed in the elevated execution context.
+No full suite, GUI or real-machine verification was run. Real Shell icon/property
+behavior, provider STA teardown and the PD-241 gate remain unverified.

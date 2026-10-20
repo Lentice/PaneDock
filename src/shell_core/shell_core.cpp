@@ -231,10 +231,14 @@ std::optional<std::filesystem::path> session_directory() noexcept {
 
 namespace panedock::shell_core {
 IconImage load_item_icon(std::wstring_view folder, std::wstring_view name, int size) {
-    if (size < 16 || size > 512) return {};
     std::wstring path(folder);
     if (!path.empty() && path.back() != L'\\') path += L'\\';
     path += name;
+    return load_item_icon(path, size);
+}
+IconImage load_item_icon(std::wstring_view parsing_name, int size) {
+    if (size < 16 || size > 512 || parsing_name.empty()) return {};
+    const std::wstring path(parsing_name);
     struct Pidl { PIDLIST_ABSOLUTE value{}; ~Pidl() { CoTaskMemFree(value); } } pidl;
     if (FAILED(SHParseDisplayName(path.c_str(), nullptr, &pidl.value, 0, nullptr))) return {};
     SHFILEINFOW info{};
@@ -276,21 +280,25 @@ IconImage load_item_icon(std::wstring_view folder, std::wstring_view name, int s
 
 namespace panedock::shell_core {
 IconImage load_item_thumbnail(std::wstring_view folder, std::wstring_view name, int size) {
-    if (size < 16 || size > 512) return {};
     std::wstring path(folder);
     if (!path.empty() && path.back() != L'\\') path += L'\\';
     path += name;
+    return load_item_thumbnail(path, size);
+}
+IconImage load_item_thumbnail(std::wstring_view parsing_name, int size) {
+    if (size < 16 || size > 512 || parsing_name.empty()) return {};
+    const std::wstring path(parsing_name);
     Microsoft::WRL::ComPtr<IShellItemImageFactory> factory;
     struct Bitmap { HBITMAP value{}; ~Bitmap() { if (value) DeleteObject(value); } } bitmap;
     // This entire function runs in the image worker's apartment. Thumbnail
     // failure takes the existing native icon path once, with no retry loop.
     if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&factory))) ||
         FAILED(factory->GetImage({size, size}, SIIGBF_THUMBNAILONLY, &bitmap.value)))
-        return load_item_icon(folder, name, size);
+        return load_item_icon(parsing_name, size);
     BITMAP description{};
     if (!GetObjectW(bitmap.value, sizeof(description), &description) ||
         description.bmWidth <= 0 || description.bmHeight <= 0 ||
-        description.bmWidth > size || description.bmHeight > size) return load_item_icon(folder, name, size);
+        description.bmWidth > size || description.bmHeight > size) return load_item_icon(parsing_name, size);
     struct Dc { HDC value{CreateCompatibleDC(nullptr)}; ~Dc() { if (value) DeleteDC(value); } } dc;
     if (!dc.value) return {};
     BITMAPINFO info{};
@@ -298,7 +306,7 @@ IconImage load_item_thumbnail(std::wstring_view folder, std::wstring_view name, 
         1, 32, BI_RGB, 0, 0, 0, 0, 0};
     std::vector<std::uint32_t> pixels(static_cast<std::size_t>(description.bmWidth * description.bmHeight));
     if (GetDIBits(dc.value, bitmap.value, 0, description.bmHeight, pixels.data(), &info, DIB_RGB_COLORS)
-        != static_cast<int>(description.bmHeight)) return load_item_icon(folder, name, size);
+        != static_cast<int>(description.bmHeight)) return load_item_icon(parsing_name, size);
     IconImage result;
     result.pixels.assign(static_cast<std::size_t>(size * size), 0);
     const int stride = ((size + 15) / 16) * 2;
