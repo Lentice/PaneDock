@@ -459,7 +459,15 @@ LRESULT CALLBACK pane_window_proc(HWND window, UINT message, WPARAM wparam,
     // The host supplies the shutdown and Shell re-entry gates.
     case WM_CONTEXTMENU: {
         if (pane == nullptr || pane->pane_host() == nullptr) break;
-        if (reinterpret_cast<HWND>(wparam) != pane->tab_strip()) break;
+        if (reinterpret_cast<HWND>(wparam) != pane->tab_strip()) {
+            const auto gated = pane->pane_host()->handle_pane_control_message(
+                *pane, message, wparam, lparam);
+            if (gated.has_value()) return *gated;
+            const POINT screen{static_cast<short>(LOWORD(lparam)),
+                               static_cast<short>(HIWORD(lparam))};
+            if (pane->show_content_context_menu(reinterpret_cast<HWND>(wparam), screen)) return 0;
+            break;
+        }
         const POINT screen{static_cast<short>(LOWORD(lparam)),
                            static_cast<short>(HIWORD(lparam))};
         // Keyboard-invoked (Shift+F10): no anchor to hit-test against.
@@ -848,18 +856,6 @@ void Pane::process_content_retry() noexcept try {
     ShellCallScope shell_call(reentry_guard());
     explorer_host_.process_retry_request();
 } catch (...) { OutputDebugStringW(L"PaneDock: content retry failed\n"); }
-
-bool Pane::show_folder_context_menu(HWND owner, POINT screen) noexcept try {
-    if (!active() || active_tab() == nullptr || !realized_) return false;
-    if (managed_list_active_) return false; // Native menu bridge belongs to PD-239.
-    const auto request = content_request();
-    focus_content();
-    if (!content_request_is_current(request)) return false;
-    ShellCallScope shell_call(reentry_guard());
-    return explorer_host_.show_folder_context_menu(owner, screen);
-} catch (...) {
-    return false;
-}
 
 bool Pane::register_window_class(HINSTANCE instance) noexcept {
     return register_simple_window_class(kWindowClassName, pane_window_proc,
@@ -1719,6 +1715,8 @@ HRESULT Pane::configure_realized_view() noexcept {
             });
         explorer_host_.set_selection_changed_callback(
             [this]() { refresh_status_bar(); });
+        explorer_host_.set_context_menu_gate(
+            [this]() { return active() && pane_state() != nullptr; });
         apply_view_mode();
         if (!active()) return E_ABORT;
         apply_sort();

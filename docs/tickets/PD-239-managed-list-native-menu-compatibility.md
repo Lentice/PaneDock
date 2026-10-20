@@ -76,3 +76,29 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+
+## Checkpoint 驗證（2026-10-20）
+
+本次保留 Windows Shell 原生 `IContextMenu`；選單內容由 Shell 建立，不新增自訂 UI、過濾、隱藏、重排或樣式。Pane 負責選取／背景目標快照與 mouse、Menu key、Shift+F10、footer routing；Shell 整合負責 acquisition、HMENU／COM lifetime、`IContextMenu2/3` forwarding 及 verb invocation。legacy background entry 共用選單執行邊界，仍透過 live view 的 `GetItemObject(SVGIO_BACKGROUND)` 取得選單。
+
+目標契約：目前 folder 解析本機 leaf key 或 Shell parsing identity，不使用顯示名稱。`ParseDisplayName` 的結果必須是相對於該 folder、只有一個 `SHITEMID` 的 child PIDL，才可交給 `GetUIObjectOf`；解析失敗或得到多節 PIDL 時拒絕整份 selection，不縮減成部分選取。依據：[ParseDisplayName](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishellfolder-parsedisplayname)、[GetUIObjectOf](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishellfolder-getuiobjectof)。
+
+測試透過 Pane 公開操作與 PaneHost、受控值型列表來源及選單 presenter seam，使用隱藏 common controls，不建立真實選單 COM。此邏輯涉及 Win32 ListView selection／hit testing 與 Shell integration，不能放入純 core。測項涵蓋 mouse 多選／未選取列、Menu key／Shift+F10、空白處／footer background、顯示名稱與 identity 分離，以及 modal 期間改選取／排序後保持原目標，切 tab／導覽／shutdown 後目標失效。
+
+最終 focused Release 命令與結果（依使用者要求，不執行完整 CTest 或 GUI）：
+
+~~~powershell
+$env:PATH = 'E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja;' + $env:PATH
+cmake -S . -B build -G Ninja -D'CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake' -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 2 --target PaneDock panedock_managed_list_context_menu_test panedock_managed_list_selection_test panedock_managed_list_file_commands_test panedock_pane_test panedock_deferred_messages_test panedock_shell_reentry_guard_test
+ctest --test-dir build -R '^panedock_(managed_list_context_menu|managed_list_selection|managed_list_file_commands|pane|deferred_messages|shell_reentry_guard|shell_reentry_gate|single_threaded)$' --output-on-failure
+git diff --check
+~~~
+
+Release configure／build 成功；指定的 8 個 CTests 全部通過（2.77 秒）。其中 `shell_reentry_gate` 與 `single_threaded` 是政策檢查，不作為原生選單行為證據。`git diff --check` 通過。
+
+## 交接區
+
+- 真實原生 verbs、folder background menu（含需要 view site 的 verbs）、installed shell extensions、legacy／managed 桌面對照、實際焦點及 mixed-DPI keyboard anchor 均未驗證，需真實桌面；本次依使用者要求略過。Pane seam PASS 不代表上述 Shell 相容性 PASS，也不代表選單延遲改善。
+- namespace provider 是否接受目前的 parsing identity 並回傳單節 child PIDL，尤其 Desktop／This PC／虛擬 location，以及 OneDrive／網路環境的選單行為，仍需實機確認；不能由受控 namespace row 推論支援已通過。

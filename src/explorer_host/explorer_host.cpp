@@ -1,4 +1,5 @@
 #include "explorer_host/explorer_host.h"
+#include "explorer_host/context_menu.h"
 
 #include <algorithm>
 #include <atomic>
@@ -345,140 +346,52 @@ bool ExplorerHost::show_folder_context_menu(HWND owner,
 
 bool ExplorerHost::show_folder_context_menu_at(HWND owner, POINT screen_point,
                                                 bool clear_selection,
-                                                bool align_above) noexcept {
+                                                bool align_above) noexcept try {
     if (owner == nullptr || current_view_ == nullptr ||
         context_menu_active_ || destroying_) {
         return false;
     }
 
     ShellCallScope shell_call(*this);
-    Microsoft::WRL::ComPtr<IFolderView2> folder_view;
-    if (FAILED(current_view_->QueryInterface(IID_PPV_ARGS(&folder_view)))) {
-        return false;
-    }
-    if (clear_selection) {
-        const HRESULT selection_result =
-            current_view_->SelectItem(nullptr, SVSI_DESELECTOTHERS);
-        if (FAILED(selection_result)) {
-            log_hresult(L"IShellView::SelectItem(SVSI_DESELECTOTHERS)",
-                        selection_result);
-            return false;
-        }
-    } else {
-        int selected = 0;
-        if (FAILED(folder_view->ItemCount(SVGIO_SELECTION, &selected)) ||
-            selected != 0) {
-            return false;
-        }
-    }
-
-    Microsoft::WRL::ComPtr<IContextMenu> menu;
-    HRESULT hr = current_view_->GetItemObject(
-        SVGIO_BACKGROUND, IID_PPV_ARGS(&menu));
-    if (FAILED(hr)) {
-        log_hresult(L"IShellView::GetItemObject(SVGIO_BACKGROUND)", hr);
-        return false;
-    }
-    // Background verbs such as Directory\Background\shell commands need
-    // the hosting view as their site; it also keeps extension callbacks on
-    // the same Shell view used to create the menu.
-    (void)IUnknown_SetSite(menu.Get(), current_view_.Get());
-
-    HMENU popup = CreatePopupMenu();
-    if (popup == nullptr) return false;
-    hr = menu->QueryContextMenu(popup, 0, 1, 0x7fff, CMF_NORMAL);
-    if (FAILED(hr)) {
-        log_hresult(L"IContextMenu::QueryContextMenu", hr);
-        DestroyMenu(popup);
-        return false;
-    }
-
-    context_menu_ = std::move(menu);
-    (void)context_menu_.As(&context_menu2_);
-    (void)context_menu_.As(&context_menu3_);
     context_menu_active_ = true;
-    const HWND menu_owner = context_menu_view_window_ != nullptr
-                                ? context_menu_view_window_
-                                : owner;
-    SetForegroundWindow(owner);
-    const UINT menu_flags = TPM_RETURNCMD | TPM_RIGHTBUTTON |
-                            (align_above ? TPM_BOTTOMALIGN : 0);
-    const int command = TrackPopupMenuEx(
-        popup, menu_flags, screen_point.x, screen_point.y, menu_owner,
-        nullptr);
-    context_menu_active_ = false;
+    struct BusyReset { bool& busy; ~BusyReset() { busy = false; } } reset{context_menu_active_};
+    // Own both identity and view across every provider/modal call.
+    const auto view = current_view_;
+    const auto generation = prepared_navigation_generation_;
+    const auto location = location_;
+    const auto gate = context_menu_gate_;
+    const auto current = [&] {
+        return !destroying_ && initialized_ && current_view_.Get() == view.Get() &&
+            prepared_navigation_generation_ == generation && location_ == location &&
+            !navigation_ledger_.in_flight() && (!gate || gate());
+    };
+    Microsoft::WRL::ComPtr<IFolderView2> folder_view;
+    HRESULT hr = view.As(&folder_view);
+    if (!current() || FAILED(hr)) return false;
+    if (clear_selection) {
+        hr = view->SelectItem(nullptr, SVSI_DESELECTOTHERS);
+        if (!current() || FAILED(hr)) return false;
+    } else {
+        int selected{};
+        hr = folder_view->ItemCount(SVGIO_SELECTION, &selected);
+        if (!current() || FAILED(hr) || selected) return false;
+    }
+    Microsoft::WRL::ComPtr<IContextMenu> menu;
+    hr = view->GetItemObject(SVGIO_BACKGROUND, IID_PPV_ARGS(&menu));
+    if (!current() || FAILED(hr)) return false;
+    struct ClearSite {
+        Microsoft::WRL::ComPtr<IContextMenu> menu;
+        ~ClearSite() { (void)IUnknown_SetSite(menu.Get(), nullptr); }
+    } clear_site{menu};
+    (void)IUnknown_SetSite(menu.Get(), view.Get());
+    if (!current()) return false;
+    return track_shell_context_menu(context_menu_view_window_ ? context_menu_view_window_ : owner,
+        menu.Get(), {location.parsing_name, {}, screen_point, align_above}, current);
+} catch (...) { return false; }
 
-    if (command != 0) {
-        std::string ansi_directory;
-        if (!location_.parsing_name.empty()) {
-            const int length = WideCharToMultiByte(
-                CP_ACP, WC_NO_BEST_FIT_CHARS,
-                location_.parsing_name.c_str(), -1, nullptr, 0, nullptr,
-                nullptr);
-            if (length > 0) {
-                try {
-                    ansi_directory.resize(static_cast<std::size_t>(length));
-                    if (WideCharToMultiByte(
-                            CP_ACP, WC_NO_BEST_FIT_CHARS,
-                            location_.parsing_name.c_str(),
-                            -1, ansi_directory.data(), length, nullptr,
-                            nullptr) == 0) {
-                        ansi_directory.clear();
-                    }
-                } catch (const std::bad_alloc&) {
-                    ansi_directory.clear();
-                }
-            }
-        }
-        CMINVOKECOMMANDINFOEX invoke{};
-        invoke.cbSize = sizeof(invoke);
-        invoke.fMask = CMIC_MASK_UNICODE;
-        invoke.hwnd = owner;
-        invoke.lpVerb = MAKEINTRESOURCEA(command - 1);
-        invoke.lpVerbW = MAKEINTRESOURCEW(command - 1);
-        invoke.lpDirectory = ansi_directory.empty() ? nullptr
-                                                     : ansi_directory.c_str();
-        invoke.lpDirectoryW = location_.parsing_name.empty()
-                                  ? nullptr
-                                  : location_.parsing_name.c_str();
-        invoke.nShow = SW_SHOWNORMAL;
-        hr = context_menu_->InvokeCommand(
-            reinterpret_cast<LPCMINVOKECOMMANDINFO>(&invoke));
-        log_hresult(L"IContextMenu::InvokeCommand", hr);
-    }
-    DestroyMenu(popup);
-    PostMessageW(menu_owner, WM_NULL, 0, 0);
-    context_menu3_.Reset();
-    context_menu2_.Reset();
-    context_menu_.Reset();
-    return true;
-}
-
-LRESULT ExplorerHost::handle_context_menu_message(HWND window,
-                                                   UINT message,
-                                                   WPARAM wparam,
-                                                   LPARAM lparam) noexcept {
-    if (context_menu_active_ && context_menu3_ != nullptr &&
-        (message == WM_INITMENUPOPUP || message == WM_DRAWITEM ||
-         message == WM_MEASUREITEM || message == WM_MENUCHAR)) {
-        LRESULT result = 0;
-        if (SUCCEEDED(context_menu3_->HandleMenuMsg2(
-                message, wparam, lparam, &result))) {
-            return result;
-        }
-    }
-    if (context_menu_active_ && context_menu2_ != nullptr &&
-        (message == WM_INITMENUPOPUP || message == WM_DRAWITEM ||
-         message == WM_MEASUREITEM)) {
-        if (SUCCEEDED(context_menu2_->HandleMenuMsg(message, wparam,
-                                                    lparam))) {
-            return 0;
-        }
-    }
-    if (message == WM_CONTEXTMENU &&
-        show_background_context_menu(window, lparam)) {
-        return 0;
-    }
+LRESULT ExplorerHost::handle_context_menu_message(HWND window, UINT message,
+                                                   WPARAM wparam, LPARAM lparam) noexcept {
+    if (message == WM_CONTEXTMENU && show_background_context_menu(window, lparam)) return 0;
     return DefSubclassProc(window, message, wparam, lparam);
 }
 
@@ -1041,10 +954,6 @@ void ExplorerHost::destroy() noexcept {
     initialized_ = false;
 
     remove_context_menu_subclass();
-    context_menu_active_ = false;
-    context_menu3_.Reset();
-    context_menu2_.Reset();
-    context_menu_.Reset();
 
     if (site_ != nullptr) {
         static_cast<Site*>(site_.Get())->detach();

@@ -275,7 +275,7 @@
 | PD-236 | 自建選取接回剪貼簿與 Shell 檔案操作 | 8 | `in_progress` | PD-227, PD-246 | [PD-236](tickets/PD-236-managed-list-shell-file-operations.md) |
 | PD-237 | 自建列表 inline rename | 8 | `in_progress` | PD-232, PD-236 | [PD-237](tickets/PD-237-managed-list-inline-rename.md) |
 | PD-238 | 跨 pane 與外部 drag/drop | 8 | `in_progress` | PD-225, PD-236 | [PD-238](tickets/PD-238-managed-list-drag-drop.md) |
-| PD-239 | 原生選單目標相容性接線 | 8 | `planned` | PD-227, PD-246 | [PD-239](tickets/PD-239-managed-list-native-menu-compatibility.md) |
+| PD-239 | 原生選單目標相容性接線 | 8 | `in_progress` | PD-227, PD-246 | [PD-239](tickets/PD-239-managed-list-native-menu-compatibility.md) |
 | PD-240 | 新列表的 live resize 與 mixed DPI | 8 | `done` | PD-224 | [PD-240](tickets/PD-240-managed-list-live-resize-dpi.md) |
 | PD-241 | 自建列表相容性及效能 gate，通過後切預設 | 8 | `planned` | PD-226, PD-230, PD-231, PD-233, PD-235, PD-237, PD-238, PD-239, PD-240 | [PD-241](tickets/PD-241-managed-list-rollout-gate.md) |
 | PD-242 | contract：移除舊 Shell view 路徑 | 8 | `planned` | PD-241 | [PD-242](tickets/PD-242-managed-list-remove-shell-view.md) |

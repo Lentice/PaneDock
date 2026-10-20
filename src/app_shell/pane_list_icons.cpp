@@ -331,6 +331,18 @@ void Pane::refresh_list_icon_viewport() noexcept try {
 LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, LPARAM lp,
                                          UINT_PTR id, DWORD_PTR data) {
     auto* pane = reinterpret_cast<Pane*>(data);
+    // The common control can consume context requests before DefWindowProc
+    // forwards them. Route explicitly through the Pane's host re-entry gate.
+    if (message == WM_CONTEXTMENU)
+        return SendMessageW(pane->window(), message, wp, lp);
+    if ((message == WM_KEYUP && wp == VK_APPS) ||
+        (message == WM_KEYDOWN && wp == VK_F10)) {
+        const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        if (((wp == VK_APPS && !shift) || (wp == VK_F10 && shift)) &&
+            !(GetKeyState(VK_CONTROL) & 0x8000) && !(GetKeyState(VK_MENU) & 0x8000))
+            return SendMessageW(pane->window(), WM_CONTEXTMENU,
+                                reinterpret_cast<WPARAM>(window), MAKELPARAM(-1, -1));
+    }
     if (message == kViewportMessage) {
         pane->icon_viewport_posted_ = false;
         pane->refresh_list_icon_viewport(); return 0;

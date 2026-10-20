@@ -34,6 +34,7 @@
 #include "core/bounded_order.h"
 #include "core/navigation.h"
 #include "explorer_host/explorer_host.h"
+#include "explorer_host/context_menu.h"
 #include "shell_core/shell_core.h"
 
 namespace panedock::app_shell {
@@ -244,7 +245,17 @@ class Pane final {
     void focus_content() noexcept;
     HRESULT translate_content_accelerator(MSG *message) noexcept;
     void process_content_retry() noexcept;
+    struct ContextMenuSnapshot final {
+        FileCommandSnapshot target;
+        explorer_host::ContextMenuRequest request;
+    };
+    HRESULT context_menu_snapshot(POINT screen, bool background,
+                                  ContextMenuSnapshot& snapshot) noexcept;
+    bool show_content_context_menu(HWND target, POINT screen) noexcept;
     bool show_folder_context_menu(HWND owner, POINT screen) noexcept;
+    void use_context_menu_presenter(std::unique_ptr<explorer_host::ContextMenuPresenter> presenter) {
+        if (!realized_) context_menu_presenter_ = std::move(presenter);
+    }
 
     void capture_view_mode();
     void capture_sort();
@@ -346,6 +357,9 @@ class Pane final {
     bool suppress_history() const noexcept { return suppress_history_record_; }
 
   private:
+    bool present_context_menu(HWND owner, ContextMenuSnapshot snapshot) noexcept;
+    std::unique_ptr<explorer_host::ContextMenuPresenter> context_menu_presenter_;
+    bool context_menu_busy_{};
     friend class PaneListDropTarget;
     HRESULT register_list_drop_target() noexcept;
     void revoke_list_drop_target() noexcept;

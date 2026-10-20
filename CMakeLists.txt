@@ -75,6 +75,7 @@ target_link_libraries(panedock_window_helpers PUBLIC user32)
 panedock_set_warnings(panedock_window_helpers)
 
 add_library(panedock_explorer_host STATIC
+    src/explorer_host/context_menu.cpp
     src/explorer_host/explorer_host.cpp
     src/explorer_host/pane_error_overlay.cpp
 )
@@ -110,6 +111,7 @@ add_library(panedock_pane STATIC
     src/app_shell/pane_host.h
     src/app_shell/shell_reentry_guard.h
     src/managed_list/list_worker.cpp
+    src/app_shell/pane_context_menu.cpp
     src/app_shell/pane_list_drag_drop.cpp
     src/app_shell/pane_list_rename.cpp
     src/app_shell/pane_managed_list.cpp

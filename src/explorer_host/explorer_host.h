@@ -89,6 +89,9 @@ public:
     void destroy() noexcept;
     const core::ShellLocation& location() const noexcept { return location_; }
     bool show_folder_context_menu(HWND owner, POINT screen_point) noexcept;
+    void set_context_menu_gate(std::function<bool()> gate) {
+        context_menu_gate_ = std::move(gate);
+    }
 
     void navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept;
     void navigation_failed() noexcept;
@@ -149,9 +152,7 @@ private:
     core::NavigationLedger navigation_ledger_;
     NavigationGeneration prepared_navigation_generation_{0};
     HWND context_menu_view_window_{nullptr};
-    Microsoft::WRL::ComPtr<IContextMenu> context_menu_;
-    Microsoft::WRL::ComPtr<IContextMenu2> context_menu2_;
-    Microsoft::WRL::ComPtr<IContextMenu3> context_menu3_;
+    std::function<bool()> context_menu_gate_;
     bool context_menu_active_{false};
 };
 
