@@ -4,6 +4,43 @@
 namespace panedock::app_shell {
 namespace {
 constexpr UINT kViewportMessage = WM_APP + 229;
+struct ViewportAnchor final {
+    int index{-1};
+    POINT position{};
+    DWORD view{LV_VIEW_DETAILS};
+};
+ViewportAnchor capture_viewport(HWND window) noexcept {
+    // The style also works with comctl32 v5 (hidden test controls), where
+    // LVM_GETVIEW returns zero even for a report list. Managed cards use the
+    // same report/icon styles rather than native tile mode.
+    const auto view = static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE) & LVS_TYPEMASK);
+    const int index = view == LV_VIEW_DETAILS || view == LV_VIEW_LIST
+        ? ListView_GetTopIndex(window) : ListView_GetNextItem(window, -1, LVNI_VISIBLEONLY);
+    RECT rect{};
+    if (index < 0 || !ListView_GetItemRect(window, index, &rect, LVIR_BOUNDS)) return {};
+    return {index, {rect.left, rect.top}, view};
+}
+bool restore_viewport(HWND window, const ViewportAnchor& anchor) noexcept {
+    if (anchor.index < 0) return false;
+    // The scope verified this index still holds its saved identity. Restore only
+    // the viewport; never reset selection/focus for a live-resize frame.
+    ListView_EnsureVisible(window, anchor.index, FALSE);
+    RECT rect{};
+    if (!ListView_GetItemRect(window, anchor.index, &rect, LVIR_BOUNDS)) return true;
+    if (anchor.view == LV_VIEW_DETAILS) {
+        // Report scrolling is quantized to rows. Header/font/image changes can
+        // change the first row's y coordinate; rounding a raw pixel delta would
+        // move the anchor to its neighbour. Preserve the identity first.
+        const int height = rect.bottom - rect.top;
+        ListView_Scroll(window, 0,
+            (anchor.index - ListView_GetTopIndex(window)) * height);
+    } else {
+        ListView_Scroll(window, anchor.view == LV_VIEW_LIST ? rect.left - anchor.position.x : 0,
+                       anchor.view == LV_VIEW_LIST ? 0 : rect.top - anchor.position.y);
+    }
+    if (!ListView_GetItemRect(window, anchor.index, &rect, LVIR_BOUNDS)) return true;
+    return rect.left != anchor.position.x || rect.top != anchor.position.y;
+}
 HICON raster_icon(const shell_core::IconImage& image, int size) noexcept {
     const int stride = ((size + 15) / 16) * 2;
     if (image.pixels.size() != static_cast<std::size_t>(size * size) ||
@@ -24,6 +61,27 @@ HICON raster_icon(const shell_core::IconImage& image, int size) noexcept {
     return icon;
 }
 } // namespace
+Pane::ListGeometryScope::ListGeometryScope(Pane& pane) noexcept
+    : pane_(pane), window_(pane.list_window_), generation_(pane.list_.request.binding.generation) {
+    if (!window_) return;
+    const auto anchor = capture_viewport(window_);
+    index_ = anchor.index; position_ = anchor.position; view_ = anchor.view;
+    if (index_ >= 0 && static_cast<std::size_t>(index_) < pane.list_.rows.size()) {
+        try { identity_ = pane.list_.rows[index_].identity; }
+        catch (...) { index_ = -1; }
+    }
+}
+Pane::ListGeometryScope::~ListGeometryScope() {
+    if (pane_.list_window_ != window_ || !window_ || !IsWindow(window_) ||
+        pane_.list_.request.binding.generation != generation_ || !pane_.active() ||
+        !pane_.content_request_is_current(pane_.list_.request.binding)) return;
+    // Geometry never reorders rows. If nested work did, its own interaction
+    // restoration wins. recovery_index_ is row-backed and may be invalidated
+    // by sorting/cache replacement: never use it as a general identity map.
+    if (!identity_ || index_ < 0 || static_cast<std::size_t>(index_) >= pane_.list_.rows.size() ||
+        pane_.list_.rows[index_].identity != *identity_) return;
+    pane_.last_viewport_anchor_clamped_ = restore_viewport(window_, {index_, position_, view_});
+}
 void Pane::use_list_icons(std::unique_ptr<managed_list::IconSource> source) {
     cancel_list_icons();
     icon_source_ = std::move(source);
@@ -112,20 +170,21 @@ void Pane::set_list_icon_viewport(std::size_t first, std::size_t count) noexcept
     const auto end = first + std::min({count, managed_list::kIconInterest, list_.rows.size() - first});
     std::vector<std::size_t> rows;
     for (auto i = first; i < end; ++i) rows.push_back(i);
-    request_list_images(std::move(rows));
+    request_list_images(std::move(rows), paint_dpi_);
 } catch (...) { cancel_list_icons(); }
-void Pane::request_list_images(std::vector<std::size_t> rows) noexcept try {
+void Pane::request_list_images(std::vector<std::size_t> rows, UINT dpi) noexcept try {
     if (!managed_list_active_ || !active() ||
         !content_request_is_current(list_.request.binding)) { cancel_list_icons(); return; }
+    ListGeometryScope geometry(*this);
     const auto* tab = active_tab();
     const auto mode = shell_core::parse_view_mode(tab ? tab->view_mode : "")
         .value_or(shell_core::ViewModeSelection{FVM_DETAILS, -1});
     const int logical = mode.mode == FVM_ICON ? mode.image_size :
         (mode.mode == FVM_TILE ? 48 : mode.mode == FVM_CONTENT ? 64 : 16);
-    const int size = std::clamp(MulDiv(std::clamp(logical, 16, 512), static_cast<int>(paint_dpi_), 96),
+    const int size = std::clamp(MulDiv(std::clamp(logical, 16, 512), static_cast<int>(dpi), 96),
         16, managed_list::kMaxImageSize);
     const bool thumbnail = logical > 16;
-    if (icon_dpi_ != paint_dpi_ || icon_thumbnail_ != thumbnail) {
+    if (icon_dpi_ != dpi || icon_thumbnail_ != thumbnail) {
         cancel_list_icons();
         if (list_window_) {
             ListView_SetImageList(list_window_, nullptr, LVSIL_SMALL);
@@ -133,7 +192,7 @@ void Pane::request_list_images(std::vector<std::size_t> rows) noexcept try {
         }
         if (icon_images_) ImageList_Destroy(icon_images_);
         icon_images_ = nullptr; icon_cache_.clear();
-        icon_dpi_ = paint_dpi_; icon_thumbnail_ = thumbnail;
+        icon_dpi_ = dpi; icon_thumbnail_ = thumbnail;
     }
     if (!ensure_list_icon_images(size)) {
         property_capacity_failed_ = true;
@@ -267,7 +326,7 @@ void Pane::refresh_list_icon_viewport() noexcept try {
         if (item < 0) break;
         rows.push_back(static_cast<std::size_t>(item));
     }
-    request_list_images(std::move(rows));
+    request_list_images(std::move(rows), paint_dpi_);
 } catch (...) { cancel_list_icons(); }
 LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, LPARAM lp,
                                          UINT_PTR id, DWORD_PTR data) {
@@ -281,6 +340,10 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
         RemoveWindowSubclass(window, list_icon_subclass, id);
         return DefSubclassProc(window, message, wp, lp);
     }
+    const bool geometry = message == WM_SETFONT ||
+        message == LVM_SETIMAGELIST || message == LVM_SETICONSPACING || message == LVM_SETVIEW;
+    std::optional<ListGeometryScope> viewport;
+    if (geometry) viewport.emplace(*pane);
     const auto result = DefSubclassProc(window, message, wp, lp);
     if (pane->list_window_ != window || !IsWindow(window)) return result;
     switch (message) {
@@ -298,6 +361,7 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
 
 void Pane::apply_managed_list_view_mode() noexcept {
     if (!active() || !managed_list_active_) return;
+    ListGeometryScope geometry(*this);
     const auto* tab = active_tab();
     if (!tab) return;
     const auto mode = shell_core::parse_view_mode(tab->view_mode)

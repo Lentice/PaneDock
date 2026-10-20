@@ -1741,7 +1741,14 @@ bool Pane::set_rect(const RECT &rect) noexcept {
 Pane::LayoutResult Pane::stage_layout(const RECT& pane_rect, UINT dpi,
                                       WindowPositionBatch& outer,
                                       WindowPositionBatch& children) noexcept {
-    const bool changed = set_rect(pane_rect);
+    const bool rect_changed = set_rect(pane_rect);
+    const bool changed = rect_changed || paint_dpi_ != dpi;
+    // Capture before any deferred positioning or DPI-dependent image metrics.
+    // WM_WINDOWPOSCHANGED is too late: the native viewport may already shift.
+    if (changed && managed_list_active_ && list_window_) {
+        layout_list_geometry_.reset();
+        layout_list_geometry_.emplace(*this);
+    }
     const auto rects = pane_chrome_rects(pane_rect, dpi);
     const auto local = [origin = rects.pane_window](RECT rect) noexcept {
         OffsetRect(&rect, -origin.left, -origin.top);
@@ -1785,6 +1792,8 @@ Pane::LayoutResult Pane::stage_layout(const RECT& pane_rect, UINT dpi,
 }
 
 void Pane::finish_layout(const LayoutResult& layout, UINT dpi) noexcept {
+    // The coordinator has committed the pane and content-child batches.
+    layout_list_geometry_.reset();
     if (!layout.changed) return;
     apply_container_region(layout.container_rect.right -
                                layout.container_rect.left,
@@ -1796,15 +1805,21 @@ void Pane::finish_layout(const LayoutResult& layout, UINT dpi) noexcept {
     repaint_chrome();
 }
 
-void Pane::set_shell_rect(const RECT& rect, HDWP* deferred) noexcept {
+void Pane::set_shell_rect(const RECT& rect, WindowPositionBatch* deferred) noexcept {
     if (managed_list_active_) {
-        if (list_window_) SetWindowPos(list_window_, nullptr, rect.left, rect.top,
-            rect.right-rect.left, rect.bottom-rect.top, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (deferred) {
+            deferred->position(list_window_, nullptr, rect,
+                               SWP_NOZORDER | SWP_NOACTIVATE);
+        } else if (list_window_) {
+            ListGeometryScope geometry(*this);
+            SetWindowPos(list_window_, nullptr, rect.left, rect.top,
+                rect.right-rect.left, rect.bottom-rect.top, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
         return;
     }
     if (pane_host() == nullptr) return;
     ShellCallScope shell_call(reentry_guard());
-    explorer_host_.set_rect(rect, deferred);
+    explorer_host_.set_rect(rect, deferred ? deferred->handle() : nullptr);
 }
 
 void Pane::set_shell_visible(bool visible) noexcept {
@@ -1941,6 +1956,7 @@ void Pane::set_visible(bool visible) noexcept {
 }
 
 void Pane::apply_font(HFONT font) noexcept {
+    ListGeometryScope geometry(*this);
     set_font(tab_strip(), font);
     set_font(back_button_, font);
     set_font(forward_button_, font);
@@ -1951,6 +1967,7 @@ void Pane::apply_font(HFONT font) noexcept {
     set_font(address_bar_, font);
     set_font(status_bar_, font);
     set_font(folder_context_button_, font);
+    set_font(list_window_, font);
 }
 
 } // namespace panedock::app_shell

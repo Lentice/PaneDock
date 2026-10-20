@@ -1667,7 +1667,7 @@ HRESULT apply_layout(HWND window, AppState& state,
                 if (explorer_positions[index]->active()) {
                     shell_positions_deferred[index] = true;
                     chrome.set_shell_rect(
-                        local_rect, explorer_positions[index]->handle());
+                        local_rect, &*explorer_positions[index]);
                 } else {
                     chrome.set_shell_rect(local_rect, nullptr);
                 }

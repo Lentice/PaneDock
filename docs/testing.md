@@ -516,3 +516,55 @@ PD-244 validation (2026-10-20): LLVM-MinGW Release build succeeded for
 children; the same Ninja targets completed in the elevated execution context.
 No full suite, GUI or real-machine verification was run. Real Shell icon/property
 behavior, provider STA teardown and the PD-241 gate remain unverified.
+
+## PD-240 managed-list resize and DPI evidence
+
+2026-10-20: starting HEAD was `3fe02c8`; PD-224 was `done` in the tracker.
+The managed child now uses the existing content-parent WindowPositionBatch,
+including its recorded-position fallback. Pane captures one viewport identity
+before staging geometry/DPI metrics and restores it in finish_layout after the
+child batches commit. Window identity, current binding and navigation generation
+must still match, and the saved item key must still occupy its captured row.
+A same-generation reorder invalidates that ordinal; finish_layout skips the stale
+restore rather than consulting the row-backed recovery index or scrolling another
+item into place. Font and image-list metric changes retain scoped viewport capture.
+No whole-list selection copy, navigation, enumeration or polling is added to resize.
+DPI-only changes invalidate the geometry cache; the font reaches the native list,
+and image demand carries DPI through to the existing size/DPI-keyed IconSource.
+
+The pure geometry test combines all eight core layouts with zero/tiny/normal
+client dimensions at 96/144/192 DPI and checks non-inverted, contained chrome.
+The new `panedock_managed_list_resize` CTest uses Pane/PaneHost, hidden real
+owner-data controls and controlled value sources. It checks deferred placement
+before/after commit, list/container and tab geometry, repeated size/DPI changes,
+selected/focused/selection-mark/top-item identities with duplicate display text,
+font delivery, DPI-sized image requests, unchanged enumeration request/count,
+same-generation reordering and navigation between stage/finish. Exact pixel offset
+is checked when DPI/row metrics are unchanged. Report scrolling is row-quantized;
+font/header metric changes preserve the top item rather than promising an
+unrepresentable pixel offset. This Win32 viewport/child-batch logic cannot live in
+core; pure layout arithmetic remains independently tested.
+
+LLVM-MinGW Release configure/build succeeded (elevated build/test execution after
+the restricted Ninja build stalled). Reproduction:
+
+```powershell
+$env:PATH = "E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja;" + $env:PATH
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 4 --target PaneDock panedock_managed_list_resize_test panedock_pane_chrome_geometry_test panedock_managed_list_icons_test panedock_pane_test panedock_core_layout_test panedock_managed_list_selection_test panedock_managed_list_restore_test
+ctest --test-dir build --output-on-failure -R '^panedock_(managed_list_(resize|icons|selection|restore)|pane|pane_chrome_geometry|core_layout)$'
+git diff --check
+```
+
+Related CTests passed **7/7**; `git diff --check` passed. PaneDock was built but
+never launched. No full suite, launch smoke, GUI automation or real-machine/UI
+verification was run, as explicitly deferred by the user.
+
+**UNVERIFIED (real desktop required):** live splitter/sidebar/window-resize visual
+continuity and repainting across all eight layouts; actual 96/144/192 and
+mixed-monitor Per-Monitor-V2 transitions; native v6 rendering/hit targets;
+live focus/accessibility bounds and screen-reader announcements; Shell/network/
+OneDrive compatibility; sustained process GDI/handle/memory growth and idle
+CPU/I/O/wakeups. Hidden-control and geometry results do not imply these pass.
+Interactive acceptance evidence remains outstanding; PD-241's compatibility/
+performance gate and the legacy default are unchanged.

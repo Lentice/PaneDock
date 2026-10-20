@@ -8,6 +8,7 @@
 
 #include "app_shell/pane_chrome_geometry.h"
 #include "unit/test_util.h"
+#include "core/layout.h"
 
 namespace {
 
@@ -193,9 +194,45 @@ void test_high_dpi_scales_the_bands() {
     EXPECT(inside(rects.status_bar, rects.folder_context_button));
 }
 
+void test_all_layouts_and_degenerate_chrome_at_each_dpi() {
+    using namespace panedock::core;
+    for (const UINT dpi : {96u, 144u, 192u}) {
+        for (int width : {0, 1, 70, 320, 1600}) {
+            for (int height : {0, 1, 32, 80, 1200}) {
+                const auto check = [dpi](RECT pane) {
+                    const auto r = pane_chrome_rects(pane, dpi);
+                    EXPECT(normalized(r.pane_window));
+                    for (const auto rect : {r.tab_strip, r.address_background, r.address_bar,
+                            r.status_bar, r.folder_context_button, r.explorer_container}) {
+                        EXPECT(normalized(rect)); EXPECT(inside(pane, rect));
+                    }
+                    for (const auto rect : r.navigation_buttons) {
+                        EXPECT(normalized(rect)); EXPECT(inside(pane, rect));
+                    }
+                };
+                check({10, 20, 10 + width, 20 + height});
+                for (const auto layout : {LayoutTemplate::single, LayoutTemplate::left_right,
+                        LayoutTemplate::top_bottom, LayoutTemplate::three_pane,
+                        LayoutTemplate::two_beside_one, LayoutTemplate::one_over_two,
+                        LayoutTemplate::two_over_one, LayoutTemplate::four_pane_grid}) {
+                    const auto panes = compute_layout_rects(width, height, layout, {0.23, 0.71},
+                        scale_for_dpi(kMinimumPaneWidth, dpi), scale_for_dpi(kMinimumPaneHeight, dpi),
+                        scale_for_dpi(kDividerThickness, dpi));
+                    EXPECT(panes.size() == pane_count(layout));
+                    for (const auto& pane : panes) {
+                        EXPECT(pane.width > 0 && pane.height > 0);
+                        check({pane.x, pane.y, pane.x + pane.width, pane.y + pane.height});
+                    }
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
+    test_all_layouts_and_degenerate_chrome_at_each_dpi();
     test_roomy_pane_stacks_every_band();
     test_pane_window_surrounds_content_and_shadow();
     test_navigation_row_packs_buttons_then_address();

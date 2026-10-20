@@ -264,7 +264,7 @@ class Pane final {
                               WindowPositionBatch& outer,
                               WindowPositionBatch& children) noexcept;
     void finish_layout(const LayoutResult& layout, UINT dpi) noexcept;
-    void set_shell_rect(const RECT& rect, HDWP* deferred) noexcept;
+    void set_shell_rect(const RECT& rect, WindowPositionBatch* deferred) noexcept;
     void set_shell_visible(bool visible) noexcept;
     HRESULT configure_realized_view() noexcept;
     void set_visible(bool visible) noexcept;
@@ -425,8 +425,23 @@ class Pane final {
     bool icon_thumbnail_{};
     FOLDERVIEWMODE list_mode_{FVM_DETAILS};
     shell_core::ViewModeSelection list_view_selection_{FVM_DETAILS, -1};
+    // A geometry transaction retains one viewport item, never a row snapshot.
+    class ListGeometryScope final {
+    public:
+        explicit ListGeometryScope(Pane& pane) noexcept;
+        ~ListGeometryScope();
+    private:
+        Pane& pane_;
+        HWND window_{};
+        NavigationGeneration generation_{};
+        int index_{-1};
+        std::optional<managed_list::ItemIdentity> identity_;
+        POINT position_{};
+        DWORD view_{};
+    };
+    std::optional<ListGeometryScope> layout_list_geometry_;
     void apply_managed_list_view_mode() noexcept;
-    void request_list_images(std::vector<std::size_t> rows) noexcept;
+    void request_list_images(std::vector<std::size_t> rows, UINT dpi) noexcept;
     std::optional<LRESULT> draw_list_card(NMHDR*) noexcept;
     std::uint64_t icon_viewport_{}, icon_clock_{};
     bool icon_viewport_posted_{};

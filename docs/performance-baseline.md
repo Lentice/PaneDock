@@ -278,3 +278,16 @@ non-joining destruction. **No GUI or real-machine verification was run for this
 ticket at the user's request.** Native EXE/LNK/overlay compatibility, mixed-DPI
 rendering, OneDrive/virtual items, process memory/handles and ten-minute idle
 CPU/I/O/wakeups remain **Not measured**, and are required by PD-241.
+
+## PD-240 resize/DPI measurement boundary
+
+2026-10-20: the focused geometry and hidden PaneHost control results are recorded
+in [testing.md](testing.md#pd-240-managed-list-resize-and-dpi-evidence). Resize
+preserves one owned viewport identity per active geometry scope; restoration is
+skipped if a nested reorder changed that ordinal. It neither queries a potentially
+stale row-backed index nor copies all rows/selection or submits another enumeration. Existing image-cache and worker
+budgets are unchanged. These code/test observations are not process measurements.
+Live resize latency/visual continuity, real mixed-DPI transitions, accessibility
+bounds and sustained GDI/handle/private-byte behavior remain **Not measured**.
+Real-machine/UI verification was explicitly deferred; no GUI was launched and no
+PD-241 performance or compatibility PASS is inferred.

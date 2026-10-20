@@ -125,8 +125,8 @@ inline PaneChromeRects pane_chrome_rects(RECT pane_rect, UINT dpi) noexcept {
         (std::min)(scaled(kNavigationButtonWidth),
                    static_cast<int>(pane_rect.right - pane_rect.left) / 7);
 
-    const int button_offset_x = scaled(kNavigationButtonOffsetX);
-    const int button_offset_y = scaled(kNavigationButtonOffsetY);
+    const int button_offset_x = (std::min)(pane_width, scaled(kNavigationButtonOffsetX));
+    const int button_offset_y = (std::min)(navigation_height, scaled(kNavigationButtonOffsetY));
     const int button_height = navigation_height - button_offset_y;
     int x = pane_rect.left + button_offset_x;
     for (RECT& button : out.navigation_buttons) {
