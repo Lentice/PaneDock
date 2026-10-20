@@ -958,6 +958,7 @@ panedock::core::TabState *Pane::active_tab() const noexcept {
 }
 
 Pane::NavigationGeneration Pane::begin_navigation() {
+    cancel_list_rename();
     if (pane_host() == nullptr) return 0;
     auto *tab = active_tab();
     if (tab == nullptr) return 0;

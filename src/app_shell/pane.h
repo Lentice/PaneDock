@@ -225,6 +225,13 @@ class Pane final {
     HRESULT file_command_snapshot(file_operations::Command command,
                                   FileCommandSnapshot& snapshot) const noexcept;
     bool file_command_is_current(const FileCommandSnapshot& snapshot) const noexcept;
+    // Exactly one selected identity. Enter commits through Shell; Escape,
+    // focus loss, accepted batches, sort/geometry and navigation cancel.
+    bool handle_list_rename_key(const MSG&, bool control, bool alt, bool shift) noexcept;
+    bool begin_list_rename() noexcept;
+    void cancel_list_rename() noexcept;
+    bool list_edit_has_focus() const noexcept;
+    HRESULT list_rename_result() const noexcept { return list_rename_result_; }
     HRESULT selection_snapshot(SelectionSnapshot &snapshot) noexcept;
     panedock::core::ShellLocation content_location() const;
     void focus_content() noexcept;
@@ -427,6 +434,16 @@ class Pane final {
         IndexAllocator<unsigned char>{&index_memory_}};
     void clear_list_index() noexcept;
     bool index_list_row(std::size_t index) noexcept;
+    struct ListRename final {
+        FileCommandSnapshot snapshot;
+        managed_list::ItemIdentity identity;
+    };
+    std::optional<ListRename> list_rename_;
+    HWND list_rename_edit_{};
+    bool list_rename_busy_{};
+    HRESULT list_rename_result_{S_FALSE};
+    void commit_list_rename(std::wstring name) noexcept;
+    static LRESULT CALLBACK list_edit_subclass(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
     HWND list_window_{};
     std::unique_ptr<managed_list::IconSource> icon_source_;
     struct CachedIcon final {

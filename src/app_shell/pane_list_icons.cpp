@@ -340,6 +340,12 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
         RemoveWindowSubclass(window, list_icon_subclass, id);
         return DefSubclassProc(window, message, wp, lp);
     }
+    // An edit is positioned over one label. Cancel before geometry or scrolling
+    // can move a different row underneath it; never keep an editor by ordinal.
+    if (message == WM_VSCROLL || message == WM_HSCROLL || message == WM_MOUSEWHEEL ||
+        message == WM_SIZE || message == LVM_SCROLL || message == LVM_SETVIEW ||
+        message == WM_SETFONT || message == LVM_SETIMAGELIST)
+        pane->cancel_list_rename();
     const bool geometry = message == WM_SETFONT ||
         message == LVM_SETIMAGELIST || message == LVM_SETICONSPACING || message == LVM_SETVIEW;
     std::optional<ListGeometryScope> viewport;

@@ -46,8 +46,8 @@ class ProgressSink final
     : public panedock::ComRefCounted<ProgressSink,
                                      IFileOperationProgressSink> {
 public:
-    explicit ProgressSink(Callbacks callbacks) noexcept
-        : callbacks_(callbacks) {}
+    explicit ProgressSink(Callbacks callbacks, RenameResult* rename = nullptr) noexcept
+        : callbacks_(callbacks), rename_(rename) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid,
                                               void** object) override {
@@ -78,8 +78,26 @@ public:
     HRESULT STDMETHODCALLTYPE name signature override { return S_OK; }
     PANEDOCK_PRE_METHOD(PreRenameItem,
                        (DWORD, IShellItem*, LPCWSTR))
-    PANEDOCK_POST_METHOD(PostRenameItem,
-                        (DWORD, IShellItem*, LPCWSTR, HRESULT, IShellItem*))
+    HRESULT STDMETHODCALLTYPE PostRenameItem(DWORD, IShellItem*, LPCWSTR,
+                                               HRESULT hr, IShellItem* item) override {
+        if (!rename_) return S_OK;
+        rename_->result = hr;
+        if (FAILED(hr) || !item) return S_OK;
+        try {
+            const auto read = [&](SIGDN kind, std::wstring& target) {
+                PWSTR text{};
+                const HRESULT result = item->GetDisplayName(kind, &text);
+                std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> owned(text, CoTaskMemFree);
+                if (SUCCEEDED(result) && text) target = text;
+                return result;
+            };
+            hr = read(SIGDN_DESKTOPABSOLUTEPARSING, rename_->parsing_name);
+            if (SUCCEEDED(hr)) hr = read(SIGDN_PARENTRELATIVEPARSING, rename_->leaf_name);
+            if (SUCCEEDED(hr)) hr = read(SIGDN_NORMALDISPLAY, rename_->display_name);
+            if (FAILED(hr)) rename_->result = hr;
+        } catch (...) { rename_->result = E_OUTOFMEMORY; }
+        return S_OK;
+    }
     PANEDOCK_PRE_METHOD(PreMoveItem,
                        (DWORD, IShellItem*, IShellItem*, LPCWSTR))
     PANEDOCK_POST_METHOD(PostMoveItem,
@@ -117,6 +135,7 @@ private:
     }
 
     Callbacks callbacks_;
+    RenameResult* rename_{};
 };
 
 std::optional<std::uint32_t> preferred_effect(IDataObject& data,
@@ -346,6 +365,41 @@ static PasteResult perform_operation(
     }
     return result;
 }
+
+RenameResult rename_item(HWND owner, std::wstring_view target,
+                         std::wstring_view name, const Callbacks& callbacks) noexcept try {
+    RenameResult result;
+    if (setup_aborted(callbacks)) { result.result = E_ABORT; return result; }
+    if (target.empty() || name.empty()) { result.result = E_INVALIDARG; return result; }
+    const std::wstring source(target), replacement(name);
+    Microsoft::WRL::ComPtr<IShellItem> item;
+    Microsoft::WRL::ComPtr<IFileOperation> operation;
+    Microsoft::WRL::ComPtr<ProgressSink> sink;
+    sink.Attach(new (std::nothrow) ProgressSink(callbacks, &result));
+    if (!sink) { result.result = E_OUTOFMEMORY; return result; }
+    HRESULT hr = SHCreateItemFromParsingName(source.c_str(), nullptr, IID_PPV_ARGS(&item));
+    const auto stop = [&] {
+        if (setup_aborted(callbacks)) hr = E_ABORT;
+        if (FAILED(hr)) result.result = hr;
+        return FAILED(hr);
+    };
+    if (stop()) return result;
+    hr = CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_INPROC_SERVER,
+                          IID_PPV_ARGS(&operation));
+    if (stop()) return result;
+    hr = operation->SetOwnerWindow(owner);
+    if (stop()) return result;
+    hr = operation->SetOperationFlags(FOF_ALLOWUNDO);
+    if (stop()) return result;
+    hr = operation->RenameItem(item.Get(), replacement.c_str(), sink.Get());
+    if (stop()) return result;
+    hr = operation->PerformOperations();
+    if (FAILED(hr)) result.result = hr;
+    BOOL aborted{};
+    hr = operation->GetAnyOperationsAborted(&aborted);
+    result.aborted = FAILED(hr) || aborted != FALSE;
+    return result;
+} catch (...) { RenameResult result; result.result = E_OUTOFMEMORY; return result; }
 
 HRESULT selection_to_clipboard(std::span<const std::wstring> items, bool cut,
                                const Callbacks& callbacks) noexcept {

@@ -14,6 +14,7 @@
 #include <string_view>
 
 #include "app_shell/tab_overflow.h"
+#include "app_shell/pane.h"
 #include "core/model.h"
 
 namespace panedock::app_shell {
@@ -29,6 +30,12 @@ class PaneHost {
   public:
     virtual ~PaneHost() = default;
 
+    // Pane owns edit policy; the host supplies operation/shutdown gates only.
+    // Both adapters return owned Shell results, never a COM pointer.
+    virtual file_operations::RenameResult rename_item(
+        Pane&, const Pane::FileCommandSnapshot&, std::wstring_view) noexcept {
+        file_operations::RenameResult result; result.result = E_NOTIMPL; return result;
+    }
     virtual bool is_shutting_down() const noexcept = 0;
     virtual void schedule_session_save() noexcept = 0;
     virtual const std::string &active_group_id() const noexcept = 0;

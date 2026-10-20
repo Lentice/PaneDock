@@ -68,3 +68,34 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+
+## Implementation checkpoint（2026-10-20）
+
+Pane 自有 edit control 與公開 F2 routing 僅作用於 managed-list HWND、無 modifier 且恰好一筆 selection。sidebar F2 仍由既有 core routing rename Group；地址列不觸發檔案 rename。編輯中的文字 Ctrl+C／X／V 與 Backspace 留給 edit，Ctrl+Tab／Ctrl+W 等既有全域命令維持。F2 路由在主迴圈 legacy accelerator 的外層 ShellCallScope 之前執行；已處於真正巢狀 Shell call 時拒絕開始編輯。
+
+- Enter 才提交；Escape、失焦、目前 request 的任何 accepted batch（含 external delete／recovery）、排序（含 metadata sort 最終排列）、捲動／geometry／view mode、navigation／tab／Group／unbind／destroy 均取消。不以 row index 保存提交目標。初始 loading／cache reconciliation／notification recovery 不允許開始 rename，避免尚未完成的列舉回報舊名稱。
+- conflict／access denied／missing item／Shell cancel 保留原列與 identity；狀態列提示 F2 重試或 Refresh。空字串拒收。Shell 實際成功但無法取得完整結果 identity 時亦不猜測新 path，保留原列供通知或 Refresh 收斂。
+- Pane 透過 PaneHost 取得既有 operation／shutdown gate；file_operations 使用 IFileOperation::RenameItem／PerformOperations 與 progress sink 回傳的實際 Shell item，取得 absolute parsing identity、parent-relative parsing name 與 display name。不同名衝突可能改變實際結果，因此不從使用者輸入自行組合新 identity。參照 Microsoft [RenameItem](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifileoperation-renameitem) 與 [PostRenameItem](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifileoperationprogresssink-postrenameitem)。
+- Shell setup 每個 pump 後沿用 PD-236 owned snapshot 驗證；提交後固定原 target，回來再驗 Group／tab／generation／folder／shutdown。成功結果透過既有 bounded notification merge 更新、去重，selection／focus／anchor 隨新 identity 移動。無右鍵／menu 變更，正常預設仍是 legacy view。
+
+新邏輯依賴 edit／list HWND、PaneHost 與 Shell operation gate，不能放進禁止 Win32／COM 的 core。新增 `panedock_managed_list_rename` 使用 hidden native controls、controlled Source 與 PaneHost owned-result adapter，從公開鍵盤／begin／cancel 操作及可觀察 rows／interaction／result 驗證；沒有 fake IExplorerBrowser，也沒有進行真實檔案 rename。涵蓋 Enter／Escape／失焦、空名稱、衝突／拒絕存取／missing／cancel、通知去重、本機 leaf 與 virtual absolute identity、batch／external deletion／sort／scroll／tab／Group／unbind／shutdown 失效、modifier／sidebar／address／edit shortcut precedence、巢狀 Shell gate，以及真實 rename API 在 stale setup 時無操作地拒收。
+
+## Focused Agent checks（2026-10-20）
+
+依本次使用者指示覆寫上方全套 Agent checks，只執行以下 Release targets 與相關 CTests；沒有 full CTest、GUI、launch smoke 或實機／disposable-file 操作。
+
+```powershell
+$env:PATH = 'E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja;' + $env:PATH
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 4 --target PaneDock panedock_managed_list_rename_test panedock_managed_list_file_commands_test panedock_managed_list_selection_test panedock_managed_list_sort_test panedock_managed_list_changes_test panedock_pane_test panedock_core_key_routing_test panedock_shell_reentry_guard_test
+ctest --test-dir build --output-on-failure -R '^panedock_(managed_list_(rename|file_commands|selection|sort|changes)|pane|core_key_routing|shell_reentry_guard|single_threaded|shutdown_state|shell_reentry_gate)$'
+git diff --check
+```
+
+Configure exit 0。restricted build 無輸出後以 Ctrl+C 中止，指定 targets 改在 elevated context 建置；最終 Release build exit 0、無 compiler warnings。最終相關 CTests 11/11 PASS、exit 0；`git diff --check` exit 0。自動測試結果僅證明上述 controlled behavior，不勾選三項原始 integration acceptance criteria。
+
+## 交接區
+
+- 未解風險：真實 Shell／disposable files rename 與通知收斂、衝突時實際新名稱／identity、access denied／external deletion／cancel 的原生 UI、本機／namespace／network／OneDrive provider 行為，均「未驗證，需真實桌面」。成功但 provider 不提供完整結果 identity 時，目前保留原列並要求通知／Refresh 收斂；該復原路徑仍需實機驗證。
+- 未解風險：真正 keyboard focus、mixed DPI／各 view mode 的 edit 位置、accessibility、操作 pump 中切 tab／Group／shutdown 的 COM lifetime 及慢 provider 回應時間均未驗證。hidden-control seam 與政策掃描不構成以上項目或 PD-241 compatibility／performance／idle gate 的 PASS；原始 acceptance criteria 仍需 real integration evidence。

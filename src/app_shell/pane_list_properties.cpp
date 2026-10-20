@@ -102,6 +102,7 @@ void Pane::finish_property_batch() noexcept try {
             update_managed_list();
             return;
         }
+        cancel_list_rename();
         const auto interaction = capture_managed_list_interaction();
         property_sort_pending_ = false;
         property_order_.apply(list_.rows);

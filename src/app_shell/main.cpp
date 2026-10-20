@@ -447,6 +447,8 @@ private:
 };
 
 struct AppState : public panedock::app_shell::PaneHost {
+    panedock::file_operations::RenameResult rename_item(
+        Pane&, const Pane::FileCommandSnapshot&, std::wstring_view) noexcept override;
     bool is_shutting_down() const noexcept override;
     void schedule_session_save() noexcept override;
     const std::string &active_group_id() const noexcept override;
@@ -2773,6 +2775,31 @@ bool file_command_cancel_requested(void* context) noexcept {
     return file_operation_cancel_requested(&static_cast<FileCommandContext*>(context)->state);
 }
 
+panedock::file_operations::RenameResult AppState::rename_item(
+    Pane& pane, const Pane::FileCommandSnapshot& snapshot, std::wstring_view name) noexcept try {
+    panedock::file_operations::RenameResult result;
+    result.result = E_ABORT;
+    if (file_operation_call_active || is_shutting_down() || snapshot.items.size() != 1) return result;
+    FileCommandContext context{*this, pane, snapshot, GetForegroundWindow()};
+    if (context.foreground != main_window || !context.current()) return result;
+    shutdown_coordinator.sequence().step(panedock::core::ShutdownEvent::file_operation_call_started);
+    {
+        ShellCallScope shell_call(reentry_guard);
+        const panedock::file_operations::Callbacks callbacks{
+            &context, file_command_started, file_command_finished,
+            file_command_cancel_requested, file_command_setup_aborted};
+        result = panedock::file_operations::rename_item(main_window, snapshot.items.front(), name, callbacks);
+    }
+    shutdown_coordinator.sequence().step(panedock::core::ShutdownEvent::file_operation_finished);
+    shutdown_coordinator.sequence().step(panedock::core::ShutdownEvent::file_operation_call_finished);
+    shutdown_coordinator.complete_deferred_close();
+    return result;
+} catch (...) {
+    panedock::file_operations::RenameResult result;
+    result.result = E_OUTOFMEMORY;
+    return result;
+}
+
 bool perform_file_command(HWND window, AppState& state, Pane& pane,
                           panedock::file_operations::Command command) noexcept try {
     if (state.file_operation_call_active || state.is_shutting_down() ||
@@ -4050,11 +4077,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             input.control = GetKeyState(VK_CONTROL) < 0;
             input.alt = GetKeyState(VK_MENU) < 0;
             input.shift = GetKeyState(VK_SHIFT) < 0;
-            input.address_bar_focused = address_bar_has_focus(state.panes);
+            input.address_bar_focused = address_bar_has_focus(state.panes) ||
+                state.panes[active].list_edit_has_focus();
             input.sidebar_focused = GetFocus() == state.sidebar.window();
             input.active_pane = active;
             input.pane_count =
                 panedock::core::pane_count(group.layout_template);
+            // Pane-owned UI action runs before the legacy accelerator's outer
+            // ShellCallScope; nested Shell calls still reject beginning an edit.
+            if (state.panes[active].handle_list_rename_key(
+                    message, input.control, input.alt, input.shift)) continue;
             if (const auto command = state.panes[active].file_command_for_key(
                     message, input.control, input.alt, input.shift)) {
                 (void)perform_file_command(window, state, state.panes[active], *command);

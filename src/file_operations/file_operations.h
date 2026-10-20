@@ -41,6 +41,14 @@ struct PasteResult final {
 std::uint32_t clipboard_effect(bool cut) noexcept;
 std::optional<std::uint32_t> completed_effect(const PasteResult& result) noexcept;
 
+struct RenameResult final {
+    HRESULT result{E_UNEXPECTED};
+    bool aborted{};
+    std::wstring parsing_name, leaf_name, display_name;
+};
+RenameResult rename_item(HWND owner, std::wstring_view item,
+                         std::wstring_view name, const Callbacks& callbacks) noexcept;
+
 // Absolute parsing identities may have different parents (e.g. search results).
 HRESULT selection_to_clipboard(std::span<const std::wstring> items, bool cut,
                                const Callbacks& callbacks) noexcept;

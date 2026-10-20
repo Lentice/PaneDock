@@ -222,6 +222,7 @@ std::optional<Pane::CachedList> Pane::take_list_cache(const managed_list::Reques
     return entry;
 }
 void Pane::cancel_managed_list() noexcept {
+    cancel_list_rename();
     if (!managed_list_enabled_) return;
     prune_list_cache(true);
     if (list_source_) list_source_->cancel();
@@ -351,6 +352,7 @@ void Pane::restore_managed_list_interaction(
 }
 
 void Pane::sort_managed_list_rows() noexcept {
+    cancel_list_rename();
     auto* tab = active_tab();
     if (tab == nullptr) return;
     const auto property = panedock::shell_core::parse_sort_property(tab->sort_column)
@@ -448,6 +450,7 @@ void Pane::update_managed_list_sort_indicator() noexcept {
 }
 
 void Pane::apply_managed_list_sort() noexcept {
+    cancel_list_rename();
     if (!managed_list_active_ || !list_window_ || !active()) return;
     try {
         const auto* tab = active_tab();
@@ -602,6 +605,7 @@ void Pane::process_content_results() noexcept try {
         if (!batch) break;
         if (!active() || !content_request_is_current(batch->request.binding) ||
             !(batch->request == list_.request)) continue;
+        cancel_list_rename(); // accepted batches invalidate the native edit row
         if (!bounded_location(batch->resolved_location) || !bounded_location(batch->parent_location) ||
             (batch->parent_outcome == managed_list::ParentOutcome::value) != batch->parent_location.has_value()) {
             list_.phase = managed_list::Phase::error;
