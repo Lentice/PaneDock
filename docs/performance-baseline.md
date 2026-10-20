@@ -236,6 +236,25 @@ the restricted compiler invocation stalled. No full-suite run or app launch occu
   navigation/retry/shutdown and real desktop multi-pane/tab/Group input during a
   pending read remain unverified. The probe reports INCOMPLETE; acceptance stays open.
 
+### PD-226 fresh TEST-NET-1 UNC probe (2026-10-20; still INCOMPLETE)
+
+Command: `build\pd226\tests\panedock_managed_list_capacity_test.exe
+'\\192.0.2.1\PD226'`. This was one elevated, read-only OS UNC enumeration
+against the same TEST-NET-1 endpoint used by the prior follow-ups. No PaneDock
+window, mapping, firewall or routing configuration was changed. Measurements use
+`GetTickCount64` and are below its granularity where reported as 0 ms.
+
+| Observation | Result | Interpretation |
+|---|---|---|
+| Initial navigation and pending observation | request acknowledgement=0 ms; still loading after 5,015 ms (`WAIT_TIMEOUT`) | A real OS UNC read remained pending for the bounded five-second observation; 0 ms acknowledgement is not a sub-millisecond measurement. |
+| Other Pane and departure | 30/30 public Pane navigation acknowledgements=0 ms; leave=0 ms | Controlled public API responsiveness only; not desktop input, paint latency or a QPC sample. |
+| Cancellation | observed=1; cancel_requests=1; cancel_accepted=1; read returned=1; read aborted=1; `ERROR_OPERATION_ABORTED` (995) | This one OS read accepted cancellation and returned aborted. It does not establish cancellation for every provider or a disconnected mapped drive. |
+| Cleanup | shutdown=0 ms; cleanup wait=0 ms; workers_exited=1; retained_workers=0 | Probe cleanup completed in this run; timer granularity prevents treating the displayed durations as precise latency. |
+| Probe result | exit code 2, `INCOMPLETE` | Desktop multi-pane/tab/Group input and disconnected mapped-drive navigation/retry/shutdown remain unverified. |
+
+This is a single sample and does not replace the earlier captured retry that
+remained retained through its bounded observation window. Acceptance remains open.
+
 ## PD-229 icon bounds (implementation limits, not desktop measurements)
 
 Icon enrichment has four process-wide slots **in addition to** the existing four
