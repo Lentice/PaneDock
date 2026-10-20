@@ -282,7 +282,7 @@
 | PD-243 | PD-234 切片：列表 item identity 與顯示名稱分離 | 8 | `done` | PD-227, PD-228, PD-232, PD-233 | [PD-243](tickets/PD-243-managed-list-item-identity.md) |
 | PD-244 | PD-234 切片：圖示與屬性請求使用 Shell item identity | 8 | `done` | PD-243, PD-229, PD-230, PD-231 | [PD-244](tickets/PD-244-managed-list-enrichment-identity.md) |
 | PD-245 | PD-234 切片：Worker STA 的 namespace 列舉與 parent 值 | 8 | `done` | PD-243 | [PD-245](tickets/PD-245-managed-list-namespace-worker.md) |
-| PD-246 | PD-234 切片：Pane 虛擬導覽、預設位置與 session 還原 | 8 | `planned` | PD-225, PD-244, PD-245 | [PD-246](tickets/PD-246-managed-list-virtual-navigation.md) |
+| PD-246 | PD-234 切片：Pane 虛擬導覽、預設位置與 session 還原 | 8 | `done` | PD-225, PD-244, PD-245 | [PD-246](tickets/PD-246-managed-list-virtual-navigation.md) |
 
 
 ## 自建列表遷移（2026-10-16 使用者核准）

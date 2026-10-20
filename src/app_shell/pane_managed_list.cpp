@@ -6,6 +6,21 @@
 namespace panedock::app_shell {
 namespace {
 
+std::size_t namespace_bytes(const Pane::ListSnapshot& snapshot) noexcept {
+    std::size_t bytes{};
+    for (const auto* location : {&snapshot.resolved_location, &snapshot.parent_location})
+        if (*location) bytes += managed_list::owned_string_bytes((**location).parsing_name) +
+            managed_list::owned_string_bytes((**location).known_folder_identity) +
+            managed_list::owned_string_bytes((**location).fallback_path);
+    return bytes;
+}
+bool bounded_location(const std::optional<core::ShellLocation>& location) noexcept {
+    return !location || (!location->parsing_name.empty() &&
+        location->parsing_name.size() <= managed_list::kMaxPath &&
+        location->known_folder_identity.size() <= managed_list::kMaxPath &&
+        location->fallback_path.size() <= managed_list::kMaxPath);
+}
+
 int ordinal_compare(std::wstring_view left, std::wstring_view right,
                     bool ignore_case) noexcept {
     const int result = CompareStringOrdinal(
@@ -49,51 +64,24 @@ HRESULT Pane::navigate_content(core::ShellLocation location,
                                NavigationGeneration generation) {
     ShellCallScope shell_call(reentry_guard());
     const auto request = content_request();
-    // Syntactic routing only: no drive/provider probing on the UI STA.
-    // Virtual identities retain the legacy path; UNC and drive paths use workers.
-    const auto& path = location.parsing_name;
-    const bool local = managed_list::is_filesystem_location(path);
-    if (local == managed_list_active_ && (local || realized_))
-        return local ? start_managed_list(location, generation)
-                     : explorer_host_.navigate(location, generation);
-
+    // Every opt-in destination uses the bounded Source, including namespace
+    // identities without a filesystem fallback. No provider work on the UI STA.
+    if (managed_list_active_ && realized_)
+        return start_managed_list(location, generation);
     const auto history_target = list_history_target_;
-    // Only content is replaced. Pane and chrome HWNDs retain their identities.
-    // Destroy pumps, so invalidate the old request before entering it and
-    // check the new binding again before creating its successor.
-    cancel_managed_list();
-    managed_list_active_ = local;
+    cancel_managed_list(); // invalidate before Destroy, which can pump
+    managed_list_active_ = true;
     explorer_host_.destroy();
     if (!content_request_is_current(request)) return E_ABORT;
     list_history_target_ = history_target;
-    if (list_window_) ShowWindow(list_window_, local ? SW_SHOW : SW_HIDE);
     RECT rect{};
     GetClientRect(explorer_container_, &rect);
-    if (local) {
-        if (list_window_) { realized_ = true; return start_managed_list(location, generation); }
-        return realize_managed_list(rect, location, generation);
+    if (list_window_) {
+        ShowWindow(list_window_, SW_SHOW);
+        realized_ = true;
+        return start_managed_list(location, generation);
     }
-    // Use the same generation for initial BrowseToObject and its callbacks.
-    // Configure callbacks before Initialize, which can complete synchronously.
-    explorer_host_.set_shell_call_callback(this, [](void* context, bool entering) noexcept {
-        auto& guard = static_cast<Pane*>(context)->reentry_guard();
-        if (entering) guard.enter(); else guard.leave();
-    });
-    explorer_host_.set_navigation_callback([this](auto token, const auto& target) {
-        if (!managed_list_active_) navigation_complete(token, target);
-    });
-    explorer_host_.set_navigation_failed_callback([this](auto token) {
-        if (!managed_list_active_) navigation_failed(token);
-    });
-    const auto hr = explorer_host_.initialize(explorer_container_, rect, location, generation);
-    if (!content_request_is_current(request)) return E_ABORT;
-    realized_ = SUCCEEDED(hr);
-    if (FAILED(hr)) {
-        explorer_host_.destroy();
-        if (content_request_is_current(request)) navigation_failed(generation);
-        return hr;
-    }
-    return configure_realized_view();
+    return realize_managed_list(rect, location, generation);
 }
 
 HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& location,
@@ -168,7 +156,7 @@ void Pane::prune_list_cache(bool all) noexcept {
         const bool valid = !all && pane_state() && std::any_of(
             pane_state()->tabs.begin(), pane_state()->tabs.end(), [&](const auto& tab) {
                 return tab.id == entry.snapshot.request.binding.tab_id &&
-                    tab.location == entry.snapshot.request.location;
+                    tab.location == entry.snapshot.resolved_location.value_or(entry.snapshot.request.location);
             });
         if (valid) return false;
         cache.stats.bytes -= entry.bytes;
@@ -183,7 +171,7 @@ void Pane::save_list_cache() noexcept try {
     // Only a still-existing inactive tab at this exact location may retain rows.
     const auto found = std::find_if(pane_state()->tabs.begin(), pane_state()->tabs.end(), [&](const auto& tab) {
         return tab.id == list_.request.binding.tab_id && tab.id != pane_state()->active_tab_id &&
-            tab.location == list_.request.location;
+            tab.location == list_.resolved_location.value_or(list_.request.location);
     });
     if (found == pane_state()->tabs.end()) return;
     CachedList entry{this, {}, capture_managed_list_interaction(), 0};
@@ -197,6 +185,9 @@ void Pane::save_list_cache() noexcept try {
     entry.bytes = sizeof(CachedList) + 2 * sizeof(void*) +
         entry.snapshot.rows.capacity() * sizeof(managed_list::Row);
     const auto& request = entry.snapshot.request;
+    for (const auto* location : {&entry.snapshot.resolved_location, &entry.snapshot.parent_location})
+        if (*location) entry.bytes += string_bytes((**location).parsing_name) +
+            string_bytes((**location).known_folder_identity) + string_bytes((**location).fallback_path);
     entry.bytes += string_bytes(request.binding.group_id) + string_bytes(request.binding.tab_id) +
         string_bytes(request.location.parsing_name) + string_bytes(request.location.known_folder_identity) +
         string_bytes(request.location.fallback_path);
@@ -222,7 +213,7 @@ std::optional<Pane::CachedList> Pane::take_list_cache(const managed_list::Reques
     auto& cache = list_cache();
     const auto found = std::find_if(cache.entries.begin(), cache.entries.end(), [&](const auto& entry) {
         return entry.owner == this && entry.snapshot.request.binding.group_id == request.binding.group_id &&
-            entry.snapshot.request.binding.tab_id == request.binding.tab_id && entry.snapshot.request.location == request.location;
+            entry.snapshot.request.binding.tab_id == request.binding.tab_id && entry.snapshot.resolved_location.value_or(entry.snapshot.request.location) == request.location;
     });
     if (found == cache.entries.end()) return {};
     auto entry = std::move(*found);
@@ -242,6 +233,7 @@ void Pane::cancel_managed_list() noexcept {
     property_sort_key_.clear();
     list_navigation_pending_ = false;
     list_history_target_.reset();
+    list_retry_history_target_.reset();
     pending_list_route_.reset();
     list_name_bytes_ = 0;
     if (list_window_) {
@@ -518,9 +510,22 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
     property_capacity_failed_ = false;
     clear_list_index();
     auto cached = take_list_cache({content_request(), location});
+    if (!content_request_is_current(list_.request.binding) &&
+        list_.request.binding.group_id == pane_host()->active_group_id() &&
+        list_.request.binding.tab_id == active_tab()->id &&
+        location == list_.resolved_location.value_or(list_.request.location) &&
+        !list_.updating && (list_.phase == managed_list::Phase::complete ||
+                           list_.phase == managed_list::Phase::empty)) {
+        // Explicit Refresh retains the active snapshot just like a cache hit.
+        cached.emplace(CachedList{this, {}, capture_managed_list_interaction(), 0});
+        cached->snapshot = std::move(list_);
+    }
     save_list_cache();
     list_name_bytes_ = 0;
     list_ = { {content_request(), location}, {}, managed_list::Phase::loading, 0};
+    list_.notification = managed_list::is_filesystem_location(location.parsing_name)
+        ? managed_list::NotificationCapability::filesystem_watch
+        : managed_list::NotificationCapability::manual_refresh;
     list_navigation_pending_ = true;
     if (list_window_) {
         clear_managed_list_interaction();
@@ -529,6 +534,7 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
     if (cached) {
         list_.rows = std::move(cached->snapshot.rows);
         list_.updating = true;
+        list_.notification = cached->snapshot.notification;
         // Notifications were suspended while inactive: even equal size/time is
         // not evidence that optional properties or overlays are still current.
         icon_cache_.clear();
@@ -572,8 +578,17 @@ void Pane::resolve_list_navigation(bool success) {
     if (!list_navigation_pending_) return;
     list_navigation_pending_ = false;
     const auto request = list_.request;
-    if (success) navigation_complete(request.binding.generation, request.location);
-    else navigation_failed(request.binding.generation);
+    if (success) {
+        // Restore/Refresh canonicalization replaces the current history slot;
+        // it is not a user navigation to an extra alias destination.
+        if (active_tab() && active_tab()->location == request.location)
+            set_suppress_history(true);
+        navigation_complete(request.binding.generation,
+            list_.resolved_location.value_or(request.location));
+    } else {
+        list_retry_history_target_ = list_history_target_;
+        navigation_failed(request.binding.generation);
+    }
 }
 void Pane::process_content_results() noexcept try {
     if (!list_source_ || !active() || !managed_list_active_ ||
@@ -587,6 +602,42 @@ void Pane::process_content_results() noexcept try {
         if (!batch) break;
         if (!active() || !content_request_is_current(batch->request.binding) ||
             !(batch->request == list_.request)) continue;
+        if (!bounded_location(batch->resolved_location) || !bounded_location(batch->parent_location) ||
+            (batch->parent_outcome == managed_list::ParentOutcome::value) != batch->parent_location.has_value()) {
+            list_.phase = managed_list::Phase::error;
+            list_.error = ERROR_INVALID_DATA;
+            list_.updating = false;
+            clear_list_index();
+            list_source_->cancel();
+            resolve_list_navigation(false);
+            break;
+        }
+        if (batch->change == managed_list::Change::none && list_.phase == managed_list::Phase::loading &&
+            batch->phase != managed_list::Phase::error && batch->phase != managed_list::Phase::limited) {
+            const auto old_bytes = namespace_bytes(list_);
+            auto resolved = std::move(batch->resolved_location);
+            auto parent = std::move(batch->parent_location);
+            const auto location_bytes = [](const auto& value) {
+                return value ? managed_list::owned_string_bytes(value->parsing_name) +
+                    managed_list::owned_string_bytes(value->known_folder_identity) +
+                    managed_list::owned_string_bytes(value->fallback_path) : 0;
+            };
+            const auto bytes = location_bytes(resolved) + location_bytes(parent);
+            if (list_name_bytes_ - old_bytes + bytes + list_.rows.capacity() * sizeof(managed_list::Row) >
+                managed_list::kMaxRowBytes) {
+                list_.phase = managed_list::Phase::limited;
+                list_.updating = false;
+                clear_list_index();
+                list_source_->cancel();
+                resolve_list_navigation(false);
+                break;
+            }
+            list_name_bytes_ = list_name_bytes_ - old_bytes + bytes;
+            list_.resolved_location = std::move(resolved);
+            list_.parent_location = std::move(parent);
+            list_.parent_outcome = batch->parent_outcome;
+            list_.notification = batch->notification;
+        }
         if (batch->change != managed_list::Change::none) {
             if (list_.watch == managed_list::WatchState::failed &&
                 batch->change != managed_list::Change::watch_error) continue;
@@ -881,6 +932,8 @@ void Pane::update_managed_list() noexcept try {
     case managed_list::Phase::limited: text += L" - Row or memory limit reached (100,000 rows / 24 MiB). Open a subfolder to continue."; break;
     default: break;
     }
+    if (list_.notification == managed_list::NotificationCapability::manual_refresh)
+        text += L" - Automatic refresh unavailable. Use Refresh to update.";
     if (list_.watch == managed_list::WatchState::recovering) text += L" - Recovering changes...";
     if (list_.watch == managed_list::WatchState::failed)
         text += L" - Automatic refresh unavailable. Refresh to retry. Error " + std::to_wstring(list_.watch_error);
@@ -922,8 +975,12 @@ Pane::ListInteractionSnapshot Pane::list_interaction_snapshot() const {
 bool Pane::open_list_row(std::size_t row) {
     if (!active() || !managed_list_enabled_ || row >= list_.rows.size() ||
         !content_request_is_current(list_.request.binding) || !list_.rows[row].directory) return false;
-    // Absolute child routing belongs to PD-246. Never synthesize from display text.
-    if (list_.rows[row].identity.shell_item) return false;
+    if (list_.rows[row].identity.shell_item) {
+        if (!list_.rows[row].child_location) return false;
+        const auto target = *list_.rows[row].child_location;
+        (void)navigate_to(target);
+        return true;
+    }
     auto target = list_.request.location.parsing_name;
     if (!target.empty() && target.back() != L'\\') target += L'\\';
     target += list_.rows[row].identity.key;

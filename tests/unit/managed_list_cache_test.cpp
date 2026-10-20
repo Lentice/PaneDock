@@ -282,8 +282,6 @@ void duplicate_display_names_keep_identity_through_sort_cache_and_recovery() {
     f.state.tabs[0].sort_column = "System.DateModified";
     f.state.tabs[0].sort_ascending = false; f.pane.apply_sort(); check();
     EXPECT(index(L"::{provider}\\one") == 0);
-    EXPECT(!f.pane.open_list_row(index(L"::{provider}\\one")));
-    EXPECT(f.pane.list_snapshot().request.location == f.state.tabs[0].location);
     f.pane.switch_active_tab("1"); f.deliver({}, ml::Phase::empty);
     f.pane.switch_active_tab("0"); check();
     EXPECT(f.pane.list_snapshot().rows[index(L"::{provider}\\one")].child_location ==

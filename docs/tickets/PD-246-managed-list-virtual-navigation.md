@@ -60,11 +60,11 @@ Shell-native fallback 僅在確有既有相容性需求時保留，不以 blanke
 
 ## Acceptance criteria
 
-- [ ] PaneHost＋Source 注入測 This PC／Desktop ShellLocation 三欄位、無 fallback、同名不同 identity；新 tab／Group／最後 tab replacement 保持 My Computer。
-- [ ] Desktop→child→parent、root Up、virtual↔filesystem Back/Forward、失敗後 Refresh、canonical completion 不多記 history；舊結果／parent 在 tab／Group 更換與 shutdown 後被拒收。
-- [ ] cached-first Refresh 保持正確 selection／anchor，manual-only notification policy 可觀察且無 polling；新增 owned identity／parent 資料計入 caps。
-- [ ] session round-trip 保留 virtual parsing／known-folder／fallback 與 unknown fields，pending／error 不覆蓋良好保存值，無 schema migration。
-- [ ] focused CTest 通過；真實 Shell This PC／Desktop／known-folder restore、STA lifetime／stuck-provider shutdown 仍「未驗證，需真實桌面」。不得以 seam 取代 PD-241 gate 證據。
+- [x] PaneHost＋Source 注入測 This PC／Desktop ShellLocation 三欄位、無 fallback、同名不同 identity；新 tab／Group／最後 tab replacement 保持 My Computer。
+- [x] Desktop→child→parent、root Up、virtual↔filesystem Back/Forward、失敗後 Refresh、canonical completion 不多記 history；舊結果／parent 在 tab／Group 更換與 shutdown 後被拒收。
+- [x] cached-first Refresh 保持正確 selection／anchor，manual-only notification policy 可觀察且無 polling；新增 owned identity／parent 資料計入 caps。
+- [x] session round-trip 保留 virtual parsing／known-folder／fallback 與 unknown fields，pending／error 不覆蓋良好保存值，無 schema migration。
+- [x] focused CTest 通過；真實 Shell This PC／Desktop／known-folder restore、STA lifetime／stuck-provider shutdown 仍「未驗證，需真實桌面」。不得以 seam 取代 PD-241 gate 證據。
 
 ## Agent checks
 
@@ -79,3 +79,32 @@ git diff --check
 ```
 
 使用者延後實機／UI 驗證，不執行 launch smoke 或 full suite。交付記 exact checks 及 deferred real Shell validation；交接區僅放未解風險、不可重推結論。若實作仍超過兩天，先再拆，不擴張。
+
+
+## Agent checks 執行紀錄（2026-10-20）
+
+實作保留 process-local opt-in；正常啟動仍使用 legacy host。opt-in 的 realize、address／pinned／tab／Group restore 共用 Source routing；列開啟使用 absolute child identity，Up 使用當代 parent outcome，本機 Source 的既有 filesystem Up 語意保留。原始 Request 不改寫，成功 canonical location 才提交 model／history；Refresh 與 restore 的 canonicalization 不新增歷史項目，失敗 Back／Forward 可由 Refresh 重試原 history target。cached-first 與顯式 Refresh 沿用 identity reconciliation，保留 selection／anchor；manual-refresh capability 顯示英文提示而不建立 polling。新增 canonical／parent owned string capacities 計入 active 24 MiB 及 inactive 32 MiB 預算。
+
+新增公開 Pane／PaneHost＋Source 注入測試涵蓋 My Computer 預設、新 tab／最後 tab replacement、Group binding／restore、三欄 identity 與空 fallback、同名不同 absolute child、Desktop root／child／parent、跨 virtual／filesystem 與每 tab history、canonical restore／Refresh、失敗與 pending 保存、失敗 history Refresh、tab／Group／shutdown／completion reentry 過期結果拒收、canonical cache 命中、Refresh selection／focus／anchor／viewport、manual-only notification 與 metadata capacity 拒收。session round-trip 使用既有 serializer／SessionWriter，在跨 pane tab move 後保留 root／tab／nested shell_location unknown fields，並驗證 atomic backup 與寫入失敗後重試；未改 schema、serializer 或 core defaults。既有 cache 測試移除「Shell child 不可開啟」的過渡期斷言，實際 child routing 由 namespace 測試覆蓋。
+
+以下命令使用 LLVM-MinGW Release；未執行 GUI、launch smoke 或 full suite：
+
+```powershell
+$env:PATH = 'E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja;' + $env:PATH
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target PaneDock panedock_managed_list_namespace_test panedock_managed_list_restore_test panedock_managed_list_cache_test panedock_core_session_test
+ctest --test-dir build --output-on-failure -R '^panedock_(managed_list_(namespace|restore|cache)|core_session)$'
+git diff --check
+```
+
+- Configure：exit 0。
+- 初次 restricted build 無編譯輸出且未完成；前景 `cmake --build build --target PaneDock panedock_managed_list_namespace_test panedock_managed_list_restore_test panedock_managed_list_cache_test panedock_core_session_test -- -n` 僅回報 re-running CMake。restricted `Get-CimInstance Win32_Process` 回拒絕存取。高權限查核確認 cmake PID 20192 的完整 target 命令與 ninja PID 9396 的 parent／targets，且無編譯子程序；依使用者授權只停止這兩個本票 build 程序，未停止 PaneDock.exe。
+- 相同指定 build 在 elevated execution context：exit 0；最終邊界修正後再次 build exit 0，無編譯錯誤。
+- 四個 focused CTests 兩輪皆 4/4 PASS、exit 0。最終結果：`panedock_core_session` 0.06 s、`panedock_managed_list_cache` 0.45 s、`panedock_managed_list_restore` 0.38 s、`panedock_managed_list_namespace` 0.25 s；CTest total 1.15 s。這是測試執行時間，不是產品效能量測。
+- `git diff --check`：exit 0，無輸出。未重跑其他檢查。
+
+## 交接區
+
+- 未解風險：真實 Shell This PC／Desktop／known-folder restore、child／parent、STA COM lifetime 與 stuck-provider shutdown 仍「未驗證，需真實桌面」。使用者明確延後實機／UI 驗證；hidden controls／owned-value Source 不證明 Shell 相容性、provider 可取消性或桌面反應時間。PD-241 compatibility／performance／idle gate 未驗證；legacy 仍為正式預設。PD-226 的外部驗收仍未完成，本票不結清該票。
+- 不可重推結論：Batch 的原 Request 必須留作 stale result／enrichment 比對，canonical location 另存；cache 應以已提交 canonical location 配對 tab，而非原始 alias。session 現有 nested object merge 已能在跨 pane move 後保留未知欄位，不需 schema migration。
+- Pane 導覽邏輯擁有 Source、HWND interaction 與 host reentry gate，不能放進無 HWND／COM 的 core；已透過公開 PaneHost seam 驗證可控制行為。真實桌面補驗須涵蓋 This PC→Desktop→child→Up、跨 virtual／filesystem Back／Forward、known-folder 重啟還原、manual Refresh 與 provider pending 時切 tab／Group／正常關閉；本次皆未執行。

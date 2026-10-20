@@ -139,6 +139,11 @@ class Pane final {
         managed_list::WatchState watch{managed_list::WatchState::inactive};
         DWORD watch_error{};
         bool updating{};
+        // Keep Request untouched for batch/enrichment identity checks.
+        std::optional<core::ShellLocation> resolved_location{};
+        std::optional<core::ShellLocation> parent_location{};
+        managed_list::ParentOutcome parent_outcome{managed_list::ParentOutcome::unresolved};
+        managed_list::NotificationCapability notification{managed_list::NotificationCapability::filesystem_watch};
     };
     struct ListCacheStats final {
         std::size_t bytes{}, entries{}, hits{}, evictions{}, limit{};
@@ -355,10 +360,11 @@ class Pane final {
     void update_managed_list() noexcept;
     void apply_list_changes(managed_list::Batch& batch, ManagedListInteraction& interaction);
     bool managed_list_enabled_{}; // process opt-in, never persisted
-    bool managed_list_active_{};  // current content; namespace tabs use Shell
+    bool managed_list_active_{};  // current opt-in content
     bool list_navigation_pending_{};
     // History cursor stays at the last success until this target is accepted.
     std::optional<std::size_t> list_history_target_;
+    std::optional<std::size_t> list_retry_history_target_;
     std::optional<managed_list::Request> pending_list_route_;
     HRESULT navigate_content(core::ShellLocation location,
                              NavigationGeneration generation);

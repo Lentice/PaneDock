@@ -737,7 +737,7 @@ HRESULT Pane::selection_snapshot(SelectionSnapshot &snapshot) noexcept try {
 }
 
 panedock::core::ShellLocation Pane::content_location() const {
-    if (managed_list_active_) return active() && realized_ ? list_.request.location : core::ShellLocation{};
+    if (managed_list_active_) return active() && realized_ ? list_.resolved_location.value_or(list_.request.location) : core::ShellLocation{};
     return active() && realized_ ? explorer_host_.location()
                                  : panedock::core::ShellLocation{};
 }
@@ -908,6 +908,7 @@ Pane::NavigationGeneration Pane::begin_navigation() {
     auto *tab = active_tab();
     if (tab == nullptr) return 0;
     list_history_target_.reset();
+    list_retry_history_target_.reset();
     pending_list_route_.reset();
     auto &request = pending_navigation_;
     request.generation = explorer_host_.begin_navigation();
@@ -933,6 +934,18 @@ HRESULT Pane::navigate_up_one_level() {
     if (!active()) return E_ABORT;
     ShellCallScope shell_call(reentry_guard());
     if (managed_list_active_) {
+        if (!content_request_is_current(list_.request.binding)) return E_ABORT;
+        if ((list_navigation_pending_ || list_.phase == managed_list::Phase::error) &&
+            !managed_list::is_filesystem_location(list_.request.location.parsing_name)) return E_PENDING;
+        if (list_.parent_outcome == managed_list::ParentOutcome::root) return S_FALSE;
+        if (list_.parent_outcome == managed_list::ParentOutcome::value && list_.parent_location) {
+            const auto parent = *list_.parent_location;
+            return navigate_to(parent);
+        }
+        if (list_.parent_outcome == managed_list::ParentOutcome::failed) return E_FAIL;
+        // The local Source retains its existing syntactic filesystem Up.
+        // Never interpret a virtual fallback or display name as a parent.
+        if (!managed_list::is_filesystem_location(list_.request.location.parsing_name)) return E_PENDING;
         auto path = list_.request.location.parsing_name;
         while (path.size() > 3 && path.back() == L'\\') path.pop_back();
         if (path.starts_with(L"\\\\")) {
@@ -975,10 +988,10 @@ void Pane::navigation_complete(
     const panedock::core::ShellLocation &new_location) {
     if (!active()) return;
     if (!navigation_request_is_current(generation)) return;
-    // A legacy namespace view can itself enter a local folder (e.g. This PC).
-    // From there use the same bounded content entry as address/tab restore.
+    // Any late legacy completion in an opt-in pane uses the same bounded
+    // content entry as address/tab restore, after leaving its callback.
     if (managed_list_enabled_ && !managed_list_active_ &&
-        managed_list::is_filesystem_location(new_location.parsing_name)) {
+        !new_location.parsing_name.empty()) {
         // Never Destroy the browser from its own completion callback. A
         // single wake-up lets the outer loop route it after ShellCallScope.
         pending_list_route_ = managed_list::Request{content_request(), new_location};
@@ -1086,8 +1099,14 @@ void Pane::navigate_up() {
 
 void Pane::refresh_view() {
     if (managed_list_active_) {
-        if (active() && active_tab()) (void)navigate_to(
-            list_.phase == managed_list::Phase::idle ? active_tab()->location : list_.request.location);
+        if (active() && active_tab()) {
+            const auto target = list_.phase == managed_list::Phase::idle ? active_tab()->location :
+                list_.resolved_location.value_or(list_.request.location);
+            const auto history_target = list_retry_history_target_ ? list_retry_history_target_ : list_history_target_;
+            const auto generation = begin_navigation();
+            list_history_target_ = history_target;
+            (void)navigate_content(target, generation);
+        }
         return;
     }
     if (!active()) return;
@@ -1604,7 +1623,7 @@ void Pane::destroy() noexcept {
 
 HRESULT Pane::realize(const RECT &local_rect,
                       const panedock::core::ShellLocation &location) noexcept {
-    if (managed_list_enabled_ && managed_list::is_filesystem_location(location.parsing_name)) {
+    if (managed_list_enabled_) {
         managed_list_active_ = true;
         try { return realize_managed_list(local_rect, location, begin_navigation()); }
         catch (...) { derealize(); return E_OUTOFMEMORY; }
