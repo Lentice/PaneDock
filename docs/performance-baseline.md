@@ -255,6 +255,21 @@ window, mapping, firewall or routing configuration was changed. Measurements use
 This is a single sample and does not replace the earlier captured retry that
 remained retained through its bounded observation window. Acceptance remains open.
 
+### PD-226 authorized existing-share probe (2026-10-20; not a slow-source PASS)
+
+The user authorized a read-only probe of the existing
+`\\vianextfs06\Tmp\Lentice\test` share:
+`build\pd226\tests\panedock_managed_list_capacity_test.exe
+'\\vianextfs06\Tmp\Lentice\test'`.
+
+| Observation | Result | Interpretation |
+|---|---|---|
+| UNC enumeration | completed in 16 ms; phase=3; error=0 | Fast successful read on this sample; it does not exercise a slow or disconnected source. |
+| Other Pane and departure | 30/30 public Pane acknowledgements=0 ms; leave=0 ms | `GetTickCount64` readings are below timer granularity and are not desktop-input latency. |
+| Authorized write/read check | unique 32-byte temporary file: write=PASS; read-back=PASS; post-cleanup matching files=0 | Confirms this share path permits a small write and read; the temporary file was removed. This is not an `IFileOperation` UI test. |
+| Cancellation and cleanup | No pending read to cancel; workers_exited=1; retained_workers=0 | Confirms normal probe cleanup only. |
+| Probe result | exit code 2, `INCOMPLETE` | No slow-source, disconnected-mapping, or real desktop responsiveness conclusion. |
+
 ## PD-229 icon bounds (implementation limits, not desktop measurements)
 
 Icon enrichment has four process-wide slots **in addition to** the existing four
