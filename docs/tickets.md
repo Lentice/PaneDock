@@ -277,13 +277,19 @@
 | PD-238 | 跨 pane 與外部 drag/drop | 8 | `in_progress` | PD-225, PD-236 | [PD-238](tickets/PD-238-managed-list-drag-drop.md) |
 | PD-239 | 原生選單目標相容性接線 | 8 | `in_progress` | PD-227, PD-246 | [PD-239](tickets/PD-239-managed-list-native-menu-compatibility.md) |
 | PD-240 | 新列表的 live resize 與 mixed DPI | 8 | `done` | PD-224 | [PD-240](tickets/PD-240-managed-list-live-resize-dpi.md) |
-| PD-241 | 自建列表相容性及效能 gate，通過後切預設 | 8 | `planned` | PD-226, PD-230, PD-231, PD-233, PD-235, PD-237, PD-238, PD-239, PD-240 | [PD-241](tickets/PD-241-managed-list-rollout-gate.md) |
+| PD-241 | 自建列表相容性及效能 gate，通過後切預設 | 8 | `in_progress` | PD-226, PD-230, PD-231, PD-233, PD-235, PD-237, PD-238, PD-239, PD-240 | [PD-241](tickets/PD-241-managed-list-rollout-gate.md) |
 | PD-242 | contract：移除舊 Shell view 路徑 | 8 | `planned` | PD-241 | [PD-242](tickets/PD-242-managed-list-remove-shell-view.md) |
 | PD-243 | PD-234 切片：列表 item identity 與顯示名稱分離 | 8 | `done` | PD-227, PD-228, PD-232, PD-233 | [PD-243](tickets/PD-243-managed-list-item-identity.md) |
 | PD-244 | PD-234 切片：圖示與屬性請求使用 Shell item identity | 8 | `done` | PD-243, PD-229, PD-230, PD-231 | [PD-244](tickets/PD-244-managed-list-enrichment-identity.md) |
 | PD-245 | PD-234 切片：Worker STA 的 namespace 列舉與 parent 值 | 8 | `done` | PD-243 | [PD-245](tickets/PD-245-managed-list-namespace-worker.md) |
 | PD-246 | PD-234 切片：Pane 虛擬導覽、預設位置與 session 還原 | 8 | `done` | PD-225, PD-244, PD-245 | [PD-246](tickets/PD-246-managed-list-virtual-navigation.md) |
 
+
+### PD-241 自動化 checkpoint（2026-10-20）
+
+本回合由 Codex 執行的證據：Release PaneDock 與 16 個 managed-list unit targets 建置成功；fixture-only 修復 `a624e96` 後執行選定 20-test 集合的 CTest 命令，全部通過。另行執行的 `panedock_managed_list` 因 fixture 缺 parent HWND、`navigate_to` 失敗而失敗／segfault，排除於通過集合；其使用者既有 WIP 不修改。完整範圍與失敗證據見 [PD-241 checkpoint](tickets/PD-241-managed-list-rollout-gate.md#自動化-checkpoint2026-10-20)。
+
+依使用者指示不跑完整 CTest、GUI、launch smoke 或真實 Shell／OneDrive／network 測試；真實矩陣、10 分鐘 idle CPU／disk／memory、UNC／OneDrive、真正 Shell extensions／verbs 與 launch／session 行為仍未驗證，gate 尚未通過。保留 `IExplorerBrowser` 預設；PD-242 仍須等 PD-241 gate 通過。右鍵優先原生 Windows Shell menu，僅必要時才自訂，本次不需要。
 
 ## 自建列表遷移（2026-10-16 使用者核准）
 

@@ -56,6 +56,16 @@ Phase 8 · managed list migration
 
 執行完整 CTest、Release 實機測量與既有功能協定；保留原始樣本與摘要，量測數字寫 performance baseline，不建立虛構 PASS。
 
+## 自動化 checkpoint（2026-10-20）
+
+本節記錄本回合由 Codex 執行 Release 建置與選定 CTest 命令的自動化證據，不代表相容性及效能 gate 通過。狀態與依賴仍只以 Ticket 總覽為準。
+
+- **建置成功**：本回合 Codex 執行 Release 的 PaneDock 與 16 個 managed-list unit targets 建置，全部成功。
+- **選定測試通過**：`managed_list_capacity_test.cpp` 的 fixture-only 修復（commit `a624e96`）後，本回合 Codex 執行選定 20-test 集合的 CTest 命令，全部通過，涵蓋 cache、restore、rename、drag/drop、file commands、native context menu seam、selection、resize、icons、cloud、sort、changes、namespace、namespace_worker、capacity、Shell reentry、shutdown-state 與 policy checks。這不是完整 CTest 通過的證據；seam／cloud 等自動測試亦不代表真實 Shell／OneDrive 驗證。
+- **失敗及排除**：另行執行的 `panedock_managed_list` 失敗／segfault；其 fixture 沒有 parent HWND，`navigate_to` 失敗。此項不在上述通過集合內，不能算 PASS。`tests/unit/managed_list_test.cpp` 有使用者既有 WIP，本次不修改，該失敗仍未修復，不計為通過。
+- **未驗證**：依使用者指示跳過完整 CTest、GUI、launch smoke 與真實 Shell／OneDrive／network 測試。因此真實功能矩陣、10 分鐘 idle CPU／disk／memory、UNC／OneDrive、真正 Shell extensions／verbs，以及 launch／session 行為均未驗證；不得從選定自動測試推論通過。
+- **後續 gate 邊界**：維持既有 `IExplorerBrowser` 預設與實作；PD-242 必須等 PD-241 gate 通過後才可進行。右鍵優先使用原生 Windows Shell menu，僅必要時才考慮 custom menu；本次沒有此必要，也不實作選單變更。
+
 ## Non-goals
 
 不實作相鄰切片、不改右鍵選單產品策略、不加入程序隔離／plugin framework、不作破壞性 session migration、不改寫任何 completed ticket。開發路徑在正式 gate 前不替換既有正常預設；切預設與 contract 僅由對應票執行。
