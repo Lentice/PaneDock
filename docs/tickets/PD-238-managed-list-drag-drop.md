@@ -68,3 +68,32 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+## Checkpoint：實作邊界與限定驗證
+
+來源經 Pane 的 selection snapshot 固定 owned parsing identities，重用既有 Shell item array → IDataObject 建立流程，再交給 OLE DoDragDrop。資料建立期間逐次檢查 binding；進入 OLE 後允許既有 hover 切 Group／tab，selection IDataObject 保持存活。Escape、來源視窗失效或 shutdown 取消來源拖曳；取消不回報完成 effect，也不依回傳 effect 自行刪來源。
+
+Pane 子模組持有列表 HWND 的 OLE target，將目前 pane folder 的 Shell IDropTarget 接到 DragEnter／DragOver／Drop／DragLeave。modifier、screen point 與來源允許的 effect 原樣交 Shell，結果限制於來源允許值；不推測 volume 或自製 transfer。pending／error folder 拒絕 drop；binding 失效時先離開舊 target，再以目前已接受的 folder 建立新 target。Shell 解析／建立／callback 後重驗 identity；nested callback、外層 Shell-call 重入與 shutdown 拒絕操作。Drop 或取消會結束 session，撤銷先 detach Pane，再 RevokeDragDrop，保護 OLE 保留 target 的晚到回呼。
+
+來源與目的的 drag lifetime 經 PaneHost 接既有 ShutdownCoordinator 計數；coordinator 原有 sidebar Group hover、tab hover 延遲／取消、deferred replay 與跨 pane tab drag 路由未改。OLE source loop 不持有整段 ShellCallScope，讓既有 hover 能運作；資料建立與 target provider 呼叫各自持有 gate。沒有新增 timer／polling，沒有右鍵或 tab 自身拖曳 UX 變更。
+
+測試放在 Pane 公開 OLE 入口與 Shell resolver 邊界，因為 HWND、COM IDataObject／IDropTarget 壽命不能放入純 core。resolver double 只回報 effect／重入，不讀寫檔案，不是 Shell transfer 證據。共用 TestPaneHost 平衡 OleInitialize／OleUninitialize，讓既有列表測試也符合 RegisterDragDrop 的 STA 初始化需求。
+
+2026-10-20，LLVM-MinGW Release：
+
+~~~powershell
+$env:PATH = "E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja;" + $env:PATH
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 2 --target PaneDock panedock_managed_list_drag_drop_test panedock_managed_list_file_commands_test panedock_file_operation_effect_test panedock_shell_reentry_guard_test panedock_core_shutdown_test panedock_core_shutdown_coordinator_test
+ctest --test-dir build --output-on-failure -R "^panedock_(managed_list_drag_drop|managed_list_file_commands|file_operation_effect|shell_reentry_guard|core_shutdown|core_shutdown_coordinator|single_threaded|shell_core_boundary|shell_reentry_gate)$"
+git diff --check
+~~~
+
+Configure、限定 targets build、上述 9 項 CTests 與 diff check 通過。新測試涵蓋 effect／modifier／point 轉送與允許值遮罩、pending 轉 ready、tab hover 使用的公開切換入口、Drop 當下重驗、resolver／provider 重入、外層 Shell-call、shutdown、error、取消與 target 比 PaneHost 更長壽時的安全回呼及 IDataObject 釋放。依使用者指示未跑完整 suite、GUI、launch smoke 或任何真實檔案 transfer。
+
+原生介面契約參考：[IDropTarget::DragEnter](https://learn.microsoft.com/en-us/windows/win32/api/oleidl/nf-oleidl-idroptarget-dragenter)、[IShellItem::BindToHandler](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishellitem-bindtohandler)。folder 背景 target 使用 folder 的 IShellFolder::CreateViewObject，沒有替換原生 menu／file operation 策略。
+
+## 交接區
+
+- 依使用者明確指示，本環境刻意跳過真實檔案傳輸及桌面驗證。跨 pane／volume、Explorer 與另一 app 的外部拖入拖出、Ctrl／Shift／link、Escape／threshold、Group／tab hover 後立即 drop、provider progress 中關閉／取消、virtual namespace 與 OneDrive 語意皆**未驗證，需真實桌面**；本次測試不能宣告本票 acceptance 或 PD-241 drag/drop gate 通過。
+- 真實 Shell target 建立與拖放 provider 呼叫仍在 UI STA；慢 provider 的延遲、progress／衝突提示與實際傳輸壽命尚未量測。fake resolver 的 effect／reentry 測試不保證原生 provider 相容性或 NFR-003 通過。

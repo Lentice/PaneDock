@@ -110,6 +110,7 @@ add_library(panedock_pane STATIC
     src/app_shell/pane_host.h
     src/app_shell/shell_reentry_guard.h
     src/managed_list/list_worker.cpp
+    src/app_shell/pane_list_drag_drop.cpp
     src/app_shell/pane_list_rename.cpp
     src/app_shell/pane_managed_list.cpp
     src/app_shell/pane_list_icons.cpp
@@ -122,7 +123,7 @@ target_include_directories(panedock_pane PUBLIC src)
 target_compile_definitions(panedock_pane PRIVATE
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00
 )
-target_link_libraries(panedock_pane PUBLIC panedock_core panedock_shell_core user32 ole32 gdi32 comctl32)
+target_link_libraries(panedock_pane PUBLIC panedock_core panedock_shell_core panedock_file_operations user32 ole32 gdi32 comctl32)
 panedock_set_warnings(panedock_pane)
 
 # Its own library so the unit test can link it. Nothing else moved.

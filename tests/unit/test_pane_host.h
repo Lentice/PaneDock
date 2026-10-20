@@ -17,6 +17,12 @@
 namespace panedock::test {
 
 class TestPaneHost : public panedock::app_shell::PaneHost {
+    // A real managed list registers an OLE drop target, even when enumeration
+    // and transfer providers are replaced by deterministic value harnesses.
+    struct OleApartment final {
+        HRESULT result{OleInitialize(nullptr)};
+        ~OleApartment() { if (SUCCEEDED(result)) OleUninitialize(); }
+    } ole_;
   public:
     bool shutting_down{};
     std::string group_id{"group-a"};

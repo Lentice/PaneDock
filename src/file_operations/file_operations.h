@@ -7,6 +7,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <oleidl.h>
+#include <wrl/client.h>
 
 #include <cstdint>
 #include <optional>
@@ -15,6 +17,19 @@
 #include <string>
 
 namespace panedock::file_operations {
+
+// Shell boundary injectable by the Pane harness; production uses the folder's
+// own IDropTarget. No transfer or modifier policy is implemented here.
+class DropTargetResolver {
+public:
+    virtual ~DropTargetResolver() = default;
+    virtual HRESULT resolve(HWND owner, std::wstring_view folder,
+        Microsoft::WRL::ComPtr<IDropTarget>& target) noexcept = 0;
+};
+struct Callbacks;
+HRESULT folder_drop_target(HWND owner, std::wstring_view folder,
+    const Callbacks& callbacks, Microsoft::WRL::ComPtr<IDropTarget>& target) noexcept;
+HRESULT drag_continue(bool escape, DWORD keys, bool cancelled) noexcept;
 
 enum class Command { copy, cut, paste, delete_items };
 
@@ -30,6 +45,11 @@ struct Callbacks final {
     bool (*cancel_requested)(void* context) noexcept{};
     bool (*abort_setup)(void* context) noexcept{};
 };
+
+HRESULT selection_data_object(std::span<const std::wstring> items,
+    const Callbacks& callbacks, Microsoft::WRL::ComPtr<IDataObject>& data) noexcept;
+HRESULT drag_selection(IDataObject* data, const Callbacks& callbacks,
+                       DWORD& effect) noexcept;
 
 struct PasteResult final {
     HRESULT result{E_UNEXPECTED};

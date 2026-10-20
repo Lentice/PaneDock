@@ -36,6 +36,7 @@ class PaneHost {
         Pane&, const Pane::FileCommandSnapshot&, std::wstring_view) noexcept {
         file_operations::RenameResult result; result.result = E_NOTIMPL; return result;
     }
+    virtual void file_drag_changed(bool) noexcept {}
     virtual bool is_shutting_down() const noexcept = 0;
     virtual void schedule_session_save() noexcept = 0;
     virtual const std::string &active_group_id() const noexcept = 0;

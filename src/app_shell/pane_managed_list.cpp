@@ -117,6 +117,8 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
             (void)id;
             return DefSubclassProc(hwnd, msg, wp, lp);
         }, 224, 0)) { derealize(); return E_FAIL; }
+    const HRESULT drop_result = register_list_drop_target();
+    if (FAILED(drop_result)) { derealize(); return drop_result; }
     realized_ = true;
     (void)start_managed_list(location, generation);
     return S_OK; // enumeration failures are visible content states
@@ -993,6 +995,7 @@ bool Pane::open_list_row(std::size_t row) {
 }
 std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try {
     if (!notification || !list_window_ || notification->hwndFrom != list_window_) return {};
+    if (notification->code == LVN_BEGINDRAG) { (void)begin_list_drag(); return 0; }
     if (auto card = draw_list_card(notification)) return card;
     if (notification->code == LVN_GETDISPINFOW) {
         auto* info = reinterpret_cast<NMLVDISPINFOW*>(notification);

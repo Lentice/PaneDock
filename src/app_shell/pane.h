@@ -40,6 +40,7 @@ namespace panedock::app_shell {
 
 class PaneHost;
 class WindowPositionBatch;
+class PaneListDropTarget;
 
 // The pane card metrics and the whole pane-chrome rect computation live in
 // pane_chrome_geometry.h, which is pure and unit-tested.
@@ -232,6 +233,12 @@ class Pane final {
     void cancel_list_rename() noexcept;
     bool list_edit_has_focus() const noexcept;
     HRESULT list_rename_result() const noexcept { return list_rename_result_; }
+    // OLE entry point also used by the non-transfer harness.
+    Microsoft::WRL::ComPtr<IDropTarget> list_drop_target() const noexcept { return list_drop_target_; }
+    void use_list_drop_resolver(std::unique_ptr<file_operations::DropTargetResolver> resolver) {
+        if (!realized_) list_drop_resolver_ = std::move(resolver);
+    }
+    HRESULT begin_list_drag() noexcept;
     HRESULT selection_snapshot(SelectionSnapshot &snapshot) noexcept;
     panedock::core::ShellLocation content_location() const;
     void focus_content() noexcept;
@@ -339,6 +346,12 @@ class Pane final {
     bool suppress_history() const noexcept { return suppress_history_record_; }
 
   private:
+    friend class PaneListDropTarget;
+    HRESULT register_list_drop_target() noexcept;
+    void revoke_list_drop_target() noexcept;
+    Microsoft::WRL::ComPtr<IDropTarget> list_drop_target_;
+    std::unique_ptr<file_operations::DropTargetResolver> list_drop_resolver_;
+    bool list_source_drag_active_{};
     struct ManagedListInteraction final {
         std::vector<managed_list::ItemIdentity> selected_items;
         std::optional<managed_list::ItemIdentity> focused_item;

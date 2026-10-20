@@ -228,6 +228,70 @@ HRESULT selection_data(std::span<const std::wstring> items,
 
 }  // namespace
 
+HRESULT selection_data_object(std::span<const std::wstring> items,
+    const Callbacks& callbacks, Microsoft::WRL::ComPtr<IDataObject>& data) noexcept {
+    data.Reset();
+    return selection_data(items, callbacks, data);
+}
+
+HRESULT folder_drop_target(HWND owner, std::wstring_view folder,
+    const Callbacks& callbacks, Microsoft::WRL::ComPtr<IDropTarget>& target) noexcept try {
+    target.Reset();
+    if (setup_aborted(callbacks)) return E_ABORT;
+    const std::wstring name(folder);
+    Microsoft::WRL::ComPtr<IShellItem> item;
+    HRESULT hr = SHCreateItemFromParsingName(name.c_str(), nullptr, IID_PPV_ARGS(&item));
+    if (setup_aborted(callbacks)) return E_ABORT;
+    if (FAILED(hr)) return hr;
+    Microsoft::WRL::ComPtr<IShellFolder> shell_folder;
+    hr = item->BindToHandler(nullptr, BHID_SFObject, IID_PPV_ARGS(&shell_folder));
+    if (setup_aborted(callbacks)) return E_ABORT;
+    if (FAILED(hr)) return hr;
+    hr = shell_folder->CreateViewObject(owner, IID_PPV_ARGS(&target));
+    if (setup_aborted(callbacks)) { target.Reset(); return E_ABORT; }
+    return hr;
+} catch (...) { return E_OUTOFMEMORY; }
+
+HRESULT drag_continue(bool escape, DWORD keys, bool cancelled) noexcept {
+    if (escape || cancelled) return DRAGDROP_S_CANCEL;
+    return (keys & MK_LBUTTON) ? S_OK : DRAGDROP_S_DROP;
+}
+
+class SelectionDragSource final : public panedock::ComRefCounted<SelectionDragSource, IDropSource> {
+public:
+    explicit SelectionDragSource(Callbacks callbacks) noexcept : callbacks_(callbacks) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        if (iid != IID_IUnknown && iid != IID_IDropSource) return E_NOINTERFACE;
+        *object = static_cast<IDropSource*>(this); AddRef(); return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape, DWORD keys) override {
+        return drag_continue(escape != FALSE, keys, callbacks_.cancel_requested &&
+            callbacks_.cancel_requested(callbacks_.context));
+    }
+    HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
+private:
+    Callbacks callbacks_;
+};
+
+HRESULT drag_selection(IDataObject* data, const Callbacks& callbacks, DWORD& effect) noexcept {
+    effect = DROPEFFECT_NONE;
+    if (!data || setup_aborted(callbacks)) return E_ABORT;
+    if (callbacks.cancel_requested && callbacks.cancel_requested(callbacks.context))
+        return DRAGDROP_S_CANCEL;
+    Microsoft::WRL::ComPtr<IDataObject> owned_data(data);
+    Microsoft::WRL::ComPtr<SelectionDragSource> source;
+    source.Attach(new (std::nothrow) SelectionDragSource(callbacks));
+    if (!source) return E_OUTOFMEMORY;
+    // OLE/Shell owns transfer and performed-effect reporting, including optimized
+    // moves. Never delete source items based on the returned cursor effect.
+    const HRESULT hr = DoDragDrop(owned_data.Get(), source.Get(),
+        DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
+    if (hr != DRAGDROP_S_DROP) effect = DROPEFFECT_NONE;
+    return hr;
+}
+
 OperationKind select_operation(
     std::optional<std::uint32_t> preferred_effect) noexcept {
     if (!preferred_effect.has_value() ||

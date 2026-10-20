@@ -449,6 +449,7 @@ private:
 struct AppState : public panedock::app_shell::PaneHost {
     panedock::file_operations::RenameResult rename_item(
         Pane&, const Pane::FileCommandSnapshot&, std::wstring_view) noexcept override;
+    void file_drag_changed(bool entering) noexcept override { shutdown_coordinator.drag_changed(entering); }
     bool is_shutting_down() const noexcept override;
     void schedule_session_save() noexcept override;
     const std::string &active_group_id() const noexcept override;

@@ -1642,6 +1642,7 @@ void Pane::destroy() noexcept {
     //      child, including explorer_container_, so §9.4 requires both the
     //      browser and its container to be gone first.
     tab_strip_ui_.revoke_drag_hover_target();
+    revoke_list_drop_target();
     cancel_managed_list();
     list_source_.reset();
     destroy_list_icons();
@@ -1728,6 +1729,7 @@ HRESULT Pane::configure_realized_view() noexcept {
 }
 
 void Pane::derealize() noexcept {
+    revoke_list_drop_target();
     cancel_managed_list();
     destroy_list_icons();
     destroy_window(list_window_);
