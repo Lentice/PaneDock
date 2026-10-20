@@ -15,9 +15,12 @@
 #include <new>
 #include <optional>
 #include <string>
+#include <vector>
+#include <memory>
 
 #include <ole2.h>
 #include <shlobj.h>
+#include <shellapi.h>
 #include <wrl/client.h>
 
 #include "com_ref_counted.h"
@@ -176,6 +179,34 @@ HRESULT report_effect(IDataObject& data, const wchar_t* format_name,
     return hr;
 }
 
+// Keep absolute PIDLs owned on this STA until the Shell array is built.
+struct PidlDeleter { void operator()(ITEMIDLIST* value) const noexcept { CoTaskMemFree(value); } };
+HRESULT selection_data(std::span<const std::wstring> items,
+                       const Callbacks& callbacks,
+                       Microsoft::WRL::ComPtr<IDataObject>& data) noexcept try {
+    if (items.empty()) return E_INVALIDARG;
+    std::vector<std::unique_ptr<ITEMIDLIST, PidlDeleter>> owned;
+    std::vector<PCIDLIST_ABSOLUTE> ids;
+    owned.reserve(items.size());
+    ids.reserve(items.size());
+    for (const auto& name : items) {
+        if (setup_aborted(callbacks)) return E_ABORT;
+        PIDLIST_ABSOLUTE raw{};
+        const HRESULT hr = SHParseDisplayName(name.c_str(), nullptr, &raw, 0, nullptr);
+        owned.emplace_back(raw);
+        if (setup_aborted(callbacks)) return E_ABORT;
+        if (FAILED(hr)) return hr; // never silently operate on a partial selection
+        ids.push_back(raw);
+    }
+    Microsoft::WRL::ComPtr<IShellItemArray> array;
+    HRESULT hr = SHCreateShellItemArrayFromIDLists(static_cast<UINT>(ids.size()),
+                                                 ids.data(), &array);
+    if (setup_aborted(callbacks)) return E_ABORT;
+    if (FAILED(hr)) return hr;
+    hr = array->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(&data));
+    return setup_aborted(callbacks) ? E_ABORT : hr;
+} catch (...) { return E_OUTOFMEMORY; }
+
 }  // namespace
 
 OperationKind select_operation(
@@ -187,20 +218,25 @@ OperationKind select_operation(
     return OperationKind::unsupported;
 }
 
-PasteResult paste_from_clipboard(
-    HWND owner, std::wstring_view destination_parsing_name,
-    const Callbacks& callbacks) noexcept {
-    PasteResult result;
-    Microsoft::WRL::ComPtr<IDataObject> data;
-    result.result = OleGetClipboard(data.GetAddressOf());
-    if (setup_aborted(callbacks)) {
-        result.result = E_ABORT;
-        return result;
-    }
-    if (FAILED(result.result) || data == nullptr) return result;
+std::uint32_t clipboard_effect(bool cut) noexcept {
+    return cut ? DROPEFFECT_MOVE : DROPEFFECT_COPY;
+}
 
+std::optional<std::uint32_t> completed_effect(const PasteResult& result) noexcept {
+    if (FAILED(result.result) || result.aborted || !result.handled ||
+        result.operation == OperationKind::unsupported) return {};
+    return result.operation == OperationKind::move ? DROPEFFECT_MOVE : DROPEFFECT_COPY;
+}
+
+static PasteResult perform_operation(
+    HWND owner, std::wstring_view destination_parsing_name,
+    const Callbacks& callbacks, Microsoft::WRL::ComPtr<IDataObject> data,
+    bool deleting) noexcept {
+    PasteResult result;
+    if (setup_aborted(callbacks)) { result.result = E_ABORT; return result; }
     bool malformed = false;
-    const auto effect = preferred_effect(*data.Get(), malformed);
+    const auto effect = deleting ? std::optional<std::uint32_t>{} :
+        preferred_effect(*data.Get(), malformed);
     if (setup_aborted(callbacks)) {
         result.result = E_ABORT;
         return result;
@@ -212,7 +248,7 @@ PasteResult paste_from_clipboard(
         result.result = DV_E_FORMATETC;
         return result;
     }
-    if (destination_parsing_name.empty()) {
+    if (!deleting && destination_parsing_name.empty()) {
         result.result = E_INVALIDARG;
         return result;
     }
@@ -225,7 +261,7 @@ PasteResult paste_from_clipboard(
         return result;
     }
     Microsoft::WRL::ComPtr<IShellItem> destination;
-    result.result = SHCreateItemFromParsingName(
+    result.result = deleting ? S_OK : SHCreateItemFromParsingName(
         destination_text.c_str(), nullptr, IID_PPV_ARGS(&destination));
     if (setup_aborted(callbacks)) {
         result.result = E_ABORT;
@@ -249,6 +285,12 @@ PasteResult paste_from_clipboard(
     }
     if (FAILED(result.result)) return result;
 
+    if (deleting) {
+        result.result = operation->SetOperationFlags(FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE);
+        if (setup_aborted(callbacks)) { result.result = E_ABORT; return result; }
+        if (FAILED(result.result)) return result;
+    }
+
     Microsoft::WRL::ComPtr<ProgressSink> sink;
     sink.Attach(new (std::nothrow) ProgressSink(callbacks));
     if (sink == nullptr) {
@@ -264,7 +306,8 @@ PasteResult paste_from_clipboard(
     }
     if (FAILED(result.result)) return result;
 
-    result.result = result.operation == OperationKind::move
+    result.result = deleting ? operation->DeleteItems(data.Get()) :
+        result.operation == OperationKind::move
                         ? operation->MoveItems(data.Get(), destination.Get())
                         : operation->CopyItems(data.Get(), destination.Get());
     if (setup_aborted(callbacks)) {
@@ -288,10 +331,8 @@ PasteResult paste_from_clipboard(
     const HRESULT unadvise_result = operation->Unadvise(cookie);
     log_hresult(L"IFileOperation::Unadvise", unadvise_result);
 
-    if (SUCCEEDED(result.result) && !result.aborted) {
-        const DWORD performed = result.operation == OperationKind::move
-                                    ? DROPEFFECT_MOVE
-                                    : DROPEFFECT_COPY;
+    if (const auto effect = completed_effect(result); !deleting && effect) {
+        const DWORD performed = *effect;
         const HRESULT performed_result =
             report_effect(*data.Get(), CFSTR_PERFORMEDDROPEFFECT, performed);
         log_hresult(L"IDataObject::SetData(CFSTR_PERFORMEDDROPEFFECT)",
@@ -304,6 +345,39 @@ PasteResult paste_from_clipboard(
         }
     }
     return result;
+}
+
+HRESULT selection_to_clipboard(std::span<const std::wstring> items, bool cut,
+                               const Callbacks& callbacks) noexcept {
+    Microsoft::WRL::ComPtr<IDataObject> data;
+    HRESULT hr = selection_data(items, callbacks, data);
+    if (FAILED(hr)) return hr;
+    hr = report_effect(*data.Get(), CFSTR_PREFERREDDROPEFFECT,
+                       clipboard_effect(cut));
+    if (setup_aborted(callbacks)) return E_ABORT;
+    if (FAILED(hr)) return hr;
+    hr = OleSetClipboard(data.Get());
+    // Once published, materialize Shell formats before releasing our source.
+    // Clipboard data then survives Group changes and application shutdown.
+    if (SUCCEEDED(hr)) hr = OleFlushClipboard();
+    return hr;
+}
+
+PasteResult delete_selection(HWND owner, std::span<const std::wstring> items,
+                             const Callbacks& callbacks) noexcept {
+    Microsoft::WRL::ComPtr<IDataObject> data;
+    const HRESULT hr = selection_data(items, callbacks, data);
+    if (FAILED(hr)) { PasteResult result; result.result = hr; return result; }
+    return perform_operation(owner, {}, callbacks, std::move(data), true);
+}
+
+PasteResult paste_from_clipboard(HWND owner, std::wstring_view destination,
+                                 const Callbacks& callbacks) noexcept {
+    Microsoft::WRL::ComPtr<IDataObject> data;
+    const HRESULT hr = OleGetClipboard(&data);
+    if (setup_aborted(callbacks)) { PasteResult result; result.result = E_ABORT; return result; }
+    if (FAILED(hr) || !data) { PasteResult result; result.result = hr; return result; }
+    return perform_operation(owner, destination, callbacks, std::move(data), false);
 }
 
 }  // namespace panedock::file_operations

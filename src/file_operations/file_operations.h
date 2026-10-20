@@ -11,8 +11,12 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <span>
+#include <string>
 
 namespace panedock::file_operations {
+
+enum class Command { copy, cut, paste, delete_items };
 
 enum class OperationKind { copy, move, unsupported };
 
@@ -33,6 +37,15 @@ struct PasteResult final {
     bool aborted{};
     OperationKind operation{OperationKind::unsupported};
 };
+
+std::uint32_t clipboard_effect(bool cut) noexcept;
+std::optional<std::uint32_t> completed_effect(const PasteResult& result) noexcept;
+
+// Absolute parsing identities may have different parents (e.g. search results).
+HRESULT selection_to_clipboard(std::span<const std::wstring> items, bool cut,
+                               const Callbacks& callbacks) noexcept;
+PasteResult delete_selection(HWND owner, std::span<const std::wstring> items,
+                             const Callbacks& callbacks) noexcept;
 
 PasteResult paste_from_clipboard(HWND owner,
                                  std::wstring_view destination_parsing_name,

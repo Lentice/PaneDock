@@ -22,6 +22,7 @@
 #include <string_view>
 #include <vector>
 
+#include "file_operations/file_operations.h"
 #include "managed_list/list_worker.h"
 #include "managed_list/icon_source.h"
 #include "app_shell/pane_chrome_geometry.h"
@@ -214,6 +215,16 @@ class Pane final {
         unsigned long long selected_bytes{};
         bool selected_bytes_valid{};
     };
+    struct FileCommandSnapshot final {
+        core::NavigationRequest binding;
+        core::ShellLocation folder;
+        std::vector<std::wstring> items; // owned absolute parsing names
+    };
+    std::optional<file_operations::Command> file_command_for_key(
+        const MSG& message, bool control, bool alt, bool shift) const noexcept;
+    HRESULT file_command_snapshot(file_operations::Command command,
+                                  FileCommandSnapshot& snapshot) const noexcept;
+    bool file_command_is_current(const FileCommandSnapshot& snapshot) const noexcept;
     HRESULT selection_snapshot(SelectionSnapshot &snapshot) noexcept;
     panedock::core::ShellLocation content_location() const;
     void focus_content() noexcept;

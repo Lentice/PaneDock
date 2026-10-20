@@ -87,8 +87,8 @@ Assert-Source 'bool\s+navigate_realized_panes\(\s*AppState& state,\s*const paned
     'Group transitions share realized-pane navigation'
 Assert-Source 'ShutdownEvent::file_operation_call_started[\s\S]*paste_from_clipboard' `
     'clipboard setup is not reported as an active transfer'
-Assert-Source 'file_operation_setup_aborted[\s\S]*state\.is_shutting_down\(\)' `
-    'clipboard setup observes deferred shutdown'
+# PD-236: stale binding/shutdown setup rejection is now exercised through
+# Pane's public command seam (managed_list_file_commands), not a callback-name scan.
 Assert-Source 'case WM_CLOSE:[\s\S]*?if \(state != nullptr\) state->shutdown_coordinator\.request_close\(\);' `
     'close decisions are routed through the shutdown reducer'
 

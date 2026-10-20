@@ -272,7 +272,7 @@
 | PD-233 | tab 列表 snapshot 的全域有界快取 | 8 | `done` | PD-225, PD-228, PD-232 | [PD-233](tickets/PD-233-managed-list-tab-cache.md) |
 | PD-234 | 虛擬 Shell location 導覽（umbrella；交付拆為 PD-243～PD-246） | 8 | `planned` | PD-246 | [PD-234](tickets/PD-234-managed-list-shell-namespace.md) |
 | PD-235 | OneDrive placeholder 瀏覽 | 8 | `planned` | PD-229, PD-246 | [PD-235](tickets/PD-235-managed-list-onedrive-placeholders.md) |
-| PD-236 | 自建選取接回剪貼簿與 Shell 檔案操作 | 8 | `planned` | PD-227, PD-246 | [PD-236](tickets/PD-236-managed-list-shell-file-operations.md) |
+| PD-236 | 自建選取接回剪貼簿與 Shell 檔案操作 | 8 | `in_progress` | PD-227, PD-246 | [PD-236](tickets/PD-236-managed-list-shell-file-operations.md) |
 | PD-237 | 自建列表 inline rename | 8 | `planned` | PD-232, PD-236 | [PD-237](tickets/PD-237-managed-list-inline-rename.md) |
 | PD-238 | 跨 pane 與外部 drag/drop | 8 | `planned` | PD-225, PD-236 | [PD-238](tickets/PD-238-managed-list-drag-drop.md) |
 | PD-239 | 原生選單目標相容性接線 | 8 | `planned` | PD-227, PD-246 | [PD-239](tickets/PD-239-managed-list-native-menu-compatibility.md) |

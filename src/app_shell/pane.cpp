@@ -710,6 +710,60 @@ bool Pane::content_request_is_current(
         tab->id);
 }
 
+std::optional<file_operations::Command> Pane::file_command_for_key(
+    const MSG& message, bool control, bool alt, bool shift) const noexcept {
+    if (!active() || !managed_list_active_ || message.hwnd != list_window_ ||
+        message.message != WM_KEYDOWN || alt || shift) return {};
+    using file_operations::Command;
+    if (control) {
+        if (message.wParam == 'C') return Command::copy;
+        if (message.wParam == 'X') return Command::cut;
+        if (message.wParam == 'V') return Command::paste;
+    } else if (message.wParam == VK_DELETE) return Command::delete_items;
+    return {};
+}
+
+HRESULT Pane::file_command_snapshot(file_operations::Command command,
+                                   FileCommandSnapshot& snapshot) const noexcept try {
+    snapshot = {};
+    if (!active() || !realized_ || !active_tab()) return E_ABORT;
+    // Paste also serves the legacy host. Selection commands belong only to
+    // managed content; legacy accelerators keep their existing Shell behavior.
+    if (command != file_operations::Command::paste && !managed_list_active_)
+        return E_NOTIMPL;
+    snapshot.binding = content_request();
+    snapshot.folder = content_location();
+    if (!content_request_is_current(snapshot.binding)) return E_ABORT;
+    if (snapshot.folder.parsing_name.empty()) return E_PENDING;
+    if (managed_list_active_ && (list_.phase == managed_list::Phase::idle ||
+        list_navigation_pending_)) return E_PENDING;
+    if (command == file_operations::Command::paste) return S_OK;
+    for (int index = ListView_GetNextItem(list_window_, -1, LVNI_SELECTED);
+         index >= 0; index = ListView_GetNextItem(list_window_, index, LVNI_SELECTED)) {
+        if (static_cast<std::size_t>(index) >= list_.rows.size()) return E_ABORT;
+        const auto& row = list_.rows[index];
+        if (row.identity.shell_item) {
+            // The key itself is absolute even when no navigable child exists.
+            snapshot.items.push_back(row.identity.key);
+        } else {
+            if (!managed_list::is_filesystem_location(snapshot.folder.parsing_name))
+                return E_INVALIDARG;
+            auto target = snapshot.folder.parsing_name;
+            if (target.back() != L'\\') target += L'\\';
+            target += row.identity.key;
+            snapshot.items.push_back(std::move(target));
+        }
+    }
+    return snapshot.items.empty() ? S_FALSE : S_OK;
+} catch (...) { snapshot = {}; return E_OUTOFMEMORY; }
+
+bool Pane::file_command_is_current(const FileCommandSnapshot& snapshot) const noexcept {
+    if (!realized_ || !content_request_is_current(snapshot.binding)) return false;
+    if (managed_list_active_) return !list_navigation_pending_ &&
+        snapshot.folder == (list_.resolved_location ? *list_.resolved_location : list_.request.location);
+    return snapshot.folder == explorer_host_.location();
+}
+
 HRESULT Pane::selection_snapshot(SelectionSnapshot &snapshot) noexcept try {
     snapshot = {};
     if (!active()) return E_ABORT;

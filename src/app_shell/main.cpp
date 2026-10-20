@@ -2748,40 +2748,68 @@ bool file_operation_cancel_requested(void* context) noexcept {
     return state.cancel_file_operation || state.is_shutting_down();
 }
 
-bool file_operation_setup_aborted(void* context) noexcept {
-    if (context == nullptr) return false;
-    const auto& state = *static_cast<AppState*>(context);
-    return state.is_shutting_down();
+struct FileCommandContext final {
+    AppState& state;
+    Pane& pane;
+    Pane::FileCommandSnapshot snapshot;
+    HWND foreground{};
+    bool current() const noexcept {
+        return !state.is_shutting_down() && has_active_group(state) &&
+            active_pane_index(active_group(state)) == pane.index() &&
+            GetForegroundWindow() == foreground && pane.file_command_is_current(snapshot);
+    }
+};
+
+bool file_command_setup_aborted(void* context) noexcept {
+    return !static_cast<FileCommandContext*>(context)->current();
+}
+void file_command_started(void* context) noexcept {
+    file_operation_started(&static_cast<FileCommandContext*>(context)->state);
+}
+void file_command_finished(void* context) noexcept {
+    file_operation_finished(&static_cast<FileCommandContext*>(context)->state);
+}
+bool file_command_cancel_requested(void* context) noexcept {
+    return file_operation_cancel_requested(&static_cast<FileCommandContext*>(context)->state);
 }
 
-bool perform_clipboard_paste(HWND window, AppState& state,
-                             std::size_t pane_index) noexcept {
-    if (state.file_operation_call_active || state.is_shutting_down())
-        return true;
-    if (pane_index >= kExplorerCount || !state.panes[pane_index].realized())
-        return false;
-    const std::wstring parsing_name =
-        state.panes[pane_index].content_location().parsing_name;
-    if (parsing_name.empty()) return false;
-
+bool perform_file_command(HWND window, AppState& state, Pane& pane,
+                          panedock::file_operations::Command command) noexcept try {
+    if (state.file_operation_call_active || state.is_shutting_down() ||
+        state.reentry_guard.in_shell_call()) return true;
+    FileCommandContext context{state, pane, {}, GetForegroundWindow()};
+    if (context.foreground != window) return true;
+    const HRESULT captured = pane.file_command_snapshot(command, context.snapshot);
+    if (captured != S_OK) return command != panedock::file_operations::Command::paste;
+    if (!context.current()) return true;
     state.shutdown_coordinator.sequence().step(
         panedock::core::ShutdownEvent::file_operation_call_started);
     panedock::file_operations::PasteResult result;
     {
         ShellCallScope shell_call(state.reentry_guard);
-        result = panedock::file_operations::paste_from_clipboard(
-            window, parsing_name,
-            {&state, file_operation_started, file_operation_finished,
-             file_operation_cancel_requested,
-             file_operation_setup_aborted});
+        const panedock::file_operations::Callbacks callbacks{
+            &context, file_command_started, file_command_finished,
+            file_command_cancel_requested, file_command_setup_aborted};
+        using panedock::file_operations::Command;
+        if (command == Command::paste)
+            result = panedock::file_operations::paste_from_clipboard(
+                window, context.snapshot.folder.parsing_name, callbacks);
+        else if (command == Command::delete_items)
+            result = panedock::file_operations::delete_selection(
+                window, context.snapshot.items, callbacks);
+        else {
+            result.result = panedock::file_operations::selection_to_clipboard(
+                context.snapshot.items, command == Command::cut, callbacks);
+            result.handled = true;
+        }
     }
     state.shutdown_coordinator.sequence().step(
         panedock::core::ShutdownEvent::file_operation_finished);
     state.shutdown_coordinator.sequence().step(
         panedock::core::ShutdownEvent::file_operation_call_finished);
     state.shutdown_coordinator.complete_deferred_close();
-    return state.is_shutting_down() || result.handled;
-}
+    return state.is_shutting_down() || !context.current() || result.handled;
+} catch (...) { return true; }
 
 bool activate_main_window_on_own_thread(HWND window) noexcept;
 
@@ -4027,6 +4055,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             input.active_pane = active;
             input.pane_count =
                 panedock::core::pane_count(group.layout_template);
+            if (const auto command = state.panes[active].file_command_for_key(
+                    message, input.control, input.alt, input.shift)) {
+                (void)perform_file_command(window, state, state.panes[active], *command);
+                continue;
+            }
             const auto routing = panedock::core::resolve_key(input);
 
             // S_OK means the Shell view consumed the key; anything else
@@ -4060,7 +4093,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 state.sidebar.begin_rename();
                 break;
             case panedock::core::KeyAction::paste:
-                handled = perform_clipboard_paste(window, state, active);
+                handled = perform_file_command(window, state, state.panes[active],
+                    panedock::file_operations::Command::paste);
                 break;
             case panedock::core::KeyAction::focus_next_pane:
             case panedock::core::KeyAction::focus_previous_pane:
