@@ -40,6 +40,8 @@ Pane stage_layout／finish_layout／set_shell_rect、window position batching、
 
 ## Acceptance criteria
 
+程式實作與相關自動檢查已完成。需要真實桌面操作的 splitter／live resize、mixed-DPI、accessibility 與 GDI／handle 驗收依使用者指示延期，詳見 [PD-240 測試證據](../testing.md#pd-240-managed-list-resize-and-dpi-evidence)；此票完成不代表 PD-241 gate 通過。
+
 - [ ] 八種版型與小視窗矩形正確，拖 splitter 時 chrome／內容不中斷或錯位。
 - [ ] 96／144／192 DPI 或真實 mixed-DPI 轉移後文字／選取／hit target 一致，必要 accessibility bounds 更新。
 - [ ] resize 不發出多餘導覽／列舉，沒有 GDI／handles 單調增加；無慢縮放節流掩蓋不一致。
