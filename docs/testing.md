@@ -425,6 +425,19 @@ stalled. CTest excludes launch smoke to preserve the user's running singleton. N
 verification or new application launch is implied. Recorded evidence and remaining
 external-environment gaps are in `docs/performance-baseline.md`.
 
+## PD-235 placeholder metadata
+
+`panedock_managed_list_cloud` tests controlled directory attributes/tag values,
+Availability row text through hidden Win32 controls, stable selection identity
+through delta/rescan/Refresh, stale-generation rejection, and cloud enrichment
+fallback. It does not observe OneDrive or prove absence of hydration. Recognized
+cloud/recall/offline/pin entries retain generic icons and skip item-specific
+icon/overlay, thumbnail and optional property handlers. Unknown metadata alone
+does not suppress existing ordinary/virtual enrichment. See the
+[API boundary and exact unverified observations](research/2026-10-20-placeholder-metadata-boundary.md).
+Real online-only, locally available, always available, transitions and offline
+observations remain UNVERIFIED; PD-235 stays in progress in the tracker.
+
 ## PD-229 visible item icons and overlays
 
 The icon acquisition boundary exchanges owned raster values; it never transfers

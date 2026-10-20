@@ -54,7 +54,7 @@ struct Fixture {
     Rows* rows{};
     Icons* icons{};
     HWND parent{};
-    Fixture(bool controls = false) {
+    Fixture(bool controls = true) {
         pane.set_host(&host); pane.set_reentry_guard(&host.guard); pane.bind(&state);
         if (controls) {
             EXPECT(app_shell::Pane::register_window_class(GetModuleHandleW(nullptr)));
@@ -126,10 +126,10 @@ void absolute_identity_interest_completion_and_cache() {
     f.icons->deliver(requests[0]); f.pane.process_icon_results();
     EXPECT(f.pane.list_item_image(0) >= 2);
     EXPECT(f.pane.list_item_image(0) != f.pane.list_item_image(1));
-    // A display-only rename keeps its cached image; a changed absolute child
-    // value does not borrow the image even when key/size/time are unchanged.
-    f.navigate(); first.name = L"Renamed display";
-    f.deliver({first});
+    // Display text is not part of the icon identity. Renewed viewport interest
+    // with unchanged metadata reuses the image in this active list.
+    first.name = L"Renamed display";
+    EXPECT(requests.front().key.matches(first));
     const auto replacements = f.icons->replacements;
     f.viewport(0, 1); EXPECT(f.icons->replacements == replacements);
     EXPECT(f.pane.list_item_image(0) >= 2);
@@ -245,8 +245,8 @@ void bounded_cache_eviction_and_resource_cleanup() {
         EXPECT(f.pane.list_item_image(0) == 0); // LRU image evicted, no stale slot mapping
         f.viewport(0, 1); EXPECT(f.icons->interest.size() == 1); f.finish();
         EXPECT(f.pane.list_item_image(0) >= 2);
-        // Identical identities on a new navigation reuse cached decoration.
-        f.navigate(); f.deliver({rows.front()});
+        // Renewed interest in unchanged metadata reuses cached decoration.
+        // Explicit navigation/Refresh has its own PD-238 invalidation contract.
         const auto requests = f.icons->replacements;
         f.viewport(0, 1); EXPECT(f.icons->replacements == requests);
         EXPECT(f.pane.list_item_image(0) >= 2);

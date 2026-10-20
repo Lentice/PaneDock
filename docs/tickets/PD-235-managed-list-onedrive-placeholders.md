@@ -76,3 +76,26 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+## 實作與驗證紀錄（2026-10-20）
+
+API 依據、caller 追查與免 hydration 邊界見[中繼資料研究](../research/2026-10-20-placeholder-metadata-boundary.md)。基本列舉共用 attributes/tag 值型轉換；Availability 欄位與 enrichment key 使用相同 metadata。已辨識 cloud／recall／offline／pin 項目保留本機 generic icon，不呼叫未建立免 hydration 契約的 item icon／overlay、thumbnail 或 property handler。未知 metadata 不全域停用一般／虛擬項目的原有 enrichment。
+
+`panedock_managed_list_cloud` 使用受控 attributes、隱藏 Win32 控制項與 PaneHost，驗證列文字、delta／rescan／Refresh、selection identity、過期 generation 與 worker fallback。此邏輯位於 Windows 列舉／列表邊界，不能放入禁止 windows.h 的 core；不需要真實 Shell view。受控測試不是 hydration 證明。
+
+Release configure 使用 LLVM-MinGW toolchain；sandbox build 停滯後改在 elevated context 建置。最終限定命令：
+
+~~~powershell
+cmake --build build --target panedock_managed_list_icons_test panedock_managed_list_cloud_test
+ctest --test-dir build --output-on-failure -R '^panedock_managed_list_(icons|cloud)$'
+git diff --check
+~~~
+
+結果：兩個 CTests 通過；diff check 通過。前次直接相關 cache／restore／sort／changes／namespace／namespace_worker CTests 已通過，但當時 icons／cloud 失敗，不能把該次執行當整批 PASS。首次失敗是 icons fixture 沒有 parent HWND 卻進入 child-list realization；補齊隱藏控制項，並將舊跨 Refresh cache 假設改為同一列表內未變 metadata 重用檢查，未改正式 cache 語意。unknown metadata 的過廣 worker 限制也已移除，雲端變化另由 IconKey 匹配測試保護。
+
+依使用者要求未執行 GUI／完整 CTest／真實 OneDrive 帳戶驗證。總覽維持 in_progress，以上不勾選實機 acceptance。
+
+## 交接區
+
+- online-only、locally available、always available 三種真實檔案的列舉／圖示前後 residency、狀態轉換通知及 Refresh、離線／未同步恢復、selection／導航與其他 pane 回應性全部未驗證，需真實桌面；Windows／OneDrive client 版本與檔案前後狀態亦未取得。具體待觀測項目見研究文件，不得用 controlled attributes 測試推論 hydration PASS。
+- 未知 metadata 的虛擬 provider 沿用既有 enrichment；沒有足夠證據宣稱它或排程後變動的 provider 狀態永遠不 hydration。此次安全限制只依列舉已辨識的 cloud／recall／offline／pin metadata 生效。

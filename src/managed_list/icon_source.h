@@ -37,9 +37,11 @@ struct IconKey final {
     UINT dpi{96};
     bool thumbnail{};
     std::optional<core::ShellLocation> child_location{};
+    CloudAttributes cloud{};
     bool matches(const Row& row) const noexcept {
         return identity == row.identity && child_location == row.child_location &&
-            bytes == row.bytes && modified == row.date_modified && directory == row.directory;
+            bytes == row.bytes && modified == row.date_modified && directory == row.directory &&
+            cloud == row.cloud;
     }
     // Value-only target selection. Only local leaf identities are joined.
     // All parsing/provider work stays on the existing worker STA.

@@ -14,6 +14,7 @@
 #include <vector>
 #include "core/model.h"
 #include "core/navigation.h"
+#include "managed_list/cloud_attributes.h"
 
 namespace panedock::managed_list {
 // Four worker slots process-wide, INCLUDING abandoned reads. Each has one
@@ -73,7 +74,19 @@ struct Row final {
     std::array<PropertyValue, 3> properties{};
     ItemIdentity identity{};
     std::optional<core::ShellLocation> child_location{};
+    CloudAttributes cloud{};
 };
+// Shared by initial enumeration, notification deltas and recovery rescans.
+inline Row basic_row(const WIN32_FIND_DATAW& data, std::wstring name) {
+    Row row{std::move(name),
+        (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow,
+        (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0,
+        (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) |
+            data.ftLastWriteTime.dwLowDateTime};
+    row.cloud = {data.dwFileAttributes,
+        (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ? data.dwReserved0 : 0};
+    return row;
+}
 inline std::size_t owned_row_bytes(const Row& row) noexcept {
     auto bytes = owned_string_bytes(row.name) + owned_string_bytes(row.identity.key);
     if (row.child_location) {

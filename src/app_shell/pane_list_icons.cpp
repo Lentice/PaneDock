@@ -90,7 +90,7 @@ void Pane::use_list_icons(std::unique_ptr<managed_list::IconSource> source) {
 managed_list::IconKey Pane::list_icon_key(std::size_t row) const {
     const auto& item = list_.rows[row];
     return {list_.request.location, item.identity, item.bytes, item.date_modified,
-        item.directory, icon_size_, icon_dpi_, icon_thumbnail_ && !item.directory, item.child_location};
+        item.directory, icon_size_, icon_dpi_, icon_thumbnail_ && !item.directory, item.child_location, item.cloud};
 }
 void Pane::cancel_list_icons() noexcept {
     ++icon_viewport_;

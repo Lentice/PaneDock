@@ -368,11 +368,7 @@ void enumerate(const std::shared_ptr<State>& state, std::uint64_t serial,
             if (name.size() > kMaxName) {
                 batch.phase = Phase::error; batch.error = ERROR_BUFFER_OVERFLOW; break;
             }
-            batch.rows.push_back({std::move(name),
-                (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow,
-                (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0,
-                (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) |
-                    data.ftLastWriteTime.dwLowDateTime});
+            batch.rows.push_back(basic_row(data, std::move(name)));
             ++count;
             if (batch.rows.size() == kBatchRows) {
                 if (!publish(state, serial, std::move(batch))) return;
@@ -418,13 +414,6 @@ struct DirectoryWatch final {
         return ERROR_SUCCESS;
     }
 };
-Row basic_row(const WIN32_FIND_DATAW& data, std::wstring name) {
-    return {std::move(name),
-        (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow,
-        (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0,
-        (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) |
-            data.ftLastWriteTime.dwLowDateTime};
-}
 bool leaf_name(std::wstring_view name) {
     return !name.empty() && name.size() <= kMaxName && name != L"." && name != L".." &&
         name.find_first_of(L"\\/:*?\"") == std::wstring::npos;
@@ -970,6 +959,11 @@ void run_icons(std::shared_ptr<IconState> state) noexcept {
                 const int size = result.request.key.size;
                 result.image.pixels.assign(static_cast<std::size_t>(size * size), 0xff336699);
                 result.image.mask.assign(static_cast<std::size_t>(((size + 15) / 16) * 2 * size), 0);
+            } else if (result.request.key.cloud.metadata_only()) {
+                // PD-235: no item-specific icon/overlay, thumbnail or property
+                // handler has a documented non-hydrating contract here. Keep
+                // local placeholders and unavailable optional properties.
+                result.property.state = PropertyState::missing;
             } else if (SUCCEEDED(apartment) && !result.request.property.empty())
                 result.property = read_property(result.request);
             else if (SUCCEEDED(apartment)) {

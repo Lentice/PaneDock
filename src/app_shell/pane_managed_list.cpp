@@ -100,9 +100,9 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
     ListView_SetExtendedListViewStyle(list_window_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     LVCOLUMNW column{};
     column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
-    const std::array<std::pair<const wchar_t*, int>, 5> columns{{
+    const std::array<std::pair<const wchar_t*, int>, 6> columns{{
         {L"Name", 320}, {L"Size", 160}, {L"Date Modified", 180},
-        {L"Type", 160}, {L"Duration", 120}}};
+        {L"Type", 160}, {L"Duration", 120}, {L"Availability", 200}}};
     for (int index = 0; index < static_cast<int>(columns.size()); ++index) {
         column.pszText = const_cast<wchar_t*>(columns[index].first);
         column.cx = columns[index].second;
@@ -855,7 +855,8 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
             // notifications invalidate properties even if size/time are equal.
             const bool unchanged = batch.change == Change::rescan && found->bytes == row.bytes &&
                 found->date_modified == row.date_modified && found->directory == row.directory &&
-                found->name == row.name && found->child_location == row.child_location;
+                found->name == row.name && found->child_location == row.child_location &&
+                found->cloud == row.cloud;
             if (!unchanged) {
                 const auto old_bytes = row_bytes(*found);
                 const auto new_bytes = row_bytes(row);
@@ -1011,6 +1012,7 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
                 text = row.directory ? L"Folder" : std::to_wstring(row.bytes) + L" bytes";
             else if (info->item.iSubItem == 2)
                 text = format_modified_time(row.date_modified);
+            else if (info->item.iSubItem == 5) text = row.cloud.text();
             else if (info->item.iSubItem == 3 || info->item.iSubItem == 4) {
                 const auto& value = row.properties[info->item.iSubItem - 3];
                 if (value.state == managed_list::PropertyState::unresolved)
