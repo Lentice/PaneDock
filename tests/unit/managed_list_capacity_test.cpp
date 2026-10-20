@@ -12,11 +12,27 @@ struct Fixture {
     test::TestPaneHost host;
     core::PaneState state{"pane", {{"tab", {L"C:\\", {}, {}}, {}, {}, true, {}, 0}}, "tab"};
     app_shell::Pane pane;
+    HWND parent{};
+    bool realized{};
     explicit Fixture(std::unique_ptr<ml::Source> source = {}) {
         pane.set_host(&host); pane.set_reentry_guard(&host.guard);
-        pane.bind(&state); pane.use_managed_list(std::move(source));
+        pane.bind(&state);
+        EXPECT(app_shell::Pane::register_window_class(GetModuleHandleW(nullptr)));
+        parent = CreateWindowExW(0, L"STATIC", L"capacity test", 0,
+            0, 0, 800, 600, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        EXPECT(parent != nullptr);
+        EXPECT(pane.create(parent, 0));
+        pane.bind(&state);
+        pane.use_managed_list(std::move(source));
     }
-    void navigate(core::ShellLocation location) { EXPECT(SUCCEEDED(pane.navigate_to(location))); }
+    ~Fixture() { pane.destroy(); if (parent) DestroyWindow(parent); }
+    void navigate(core::ShellLocation location) {
+        const auto result = realized
+            ? pane.navigate_to(location)
+            : pane.realize({0, 0, 640, 420}, location);
+        EXPECT(SUCCEEDED(result));
+        realized = SUCCEEDED(result);
+    }
 };
 const core::ShellLocation blocked{L"\\\\pd226-controlled\\share\\blocked", L"known-folder-identity", L"Z:\\fallback"};
 void complete(app_shell::Pane& pane) {
