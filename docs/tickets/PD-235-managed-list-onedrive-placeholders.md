@@ -109,3 +109,5 @@ PD-242 移除 legacy Shell view 後，Release 設定下 `panedock_managed_list_i
 範圍僅 `D:\OneDrive - via.com.tw` 的 metadata／status，未讀檔案內容，未改 hydration 或可用性，未啟動 PaneDock。OneDrive 同步服務 `OneDrive.Sync.Service` 26.183.0920.0005 執行中，D: 為 NTFS。根目錄只有三項：`附件`（目錄，attributes `0x410` Directory+ReparsePoint，無 `RECALL_ON_DATA_ACCESS`）、`.849C9593-D756-4E56-8D6E-42412F2A707B`（63 bytes，`0x180026`，無 recall 位元）、`desktop.ini`（Hidden+System）。沒有任何 `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`（`0x400000`）或 OFFLINE 的 online-only 檔案；列舉 `附件` 可能觸發雲端目錄填入，因此未展開。
 
 沒有明確適用的 placeholder，三項 acceptance（瀏覽不 hydration、狀態更新指向同一 identity 與離線恢復、不宣稱永不 hydration）全部維持未驗證；需要使用者提供或同步一個 online-only 檔案後才能執行。
+
+補充（同日 10:05，metadata-only 複查）：根目錄 `D:\OneDrive - via.com.tw` attributes `0x431`（ReadOnly, Directory, Archive, ReparsePoint）；三個已知 top-level 項目的 `Get-Item` attributes／length 與上段一致，`recall_on_data_access`、offline 皆為 False。原始輸出：`build\manual-test\pd235-metadata.txt`（未納入版控）。依指示未進入 `附件` 或任何未知同步子目錄。無 online-only 檔案，因此 5.1（瀏覽不 hydration）與 5.2（狀態更新／離線恢復）維持未驗證。
