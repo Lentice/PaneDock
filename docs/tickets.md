@@ -300,6 +300,14 @@
 
 依同日 sequencing-only waiver 實作 managed-list-only，移除 legacy host 及 view-only targets，保留 Pane HWND／list realization 與 Shell 原生 menu／namespace／operations／OLE／drag-drop。Release build 在 ticket 變更及測試 fixture 更新後通過；相關 27 項 CTest 均通過（26 項於一次聚焦執行通過，`panedock_managed_list` 補上 Pane parent HWND 後重跑通過）。該測試在目前身分無法改寫臨時目錄 DACL 時，明確跳過真實 ACL-denial 分支；受控 source 的錯誤 seam 有測試。完整 CTest 與實機驗收未執行，resource lifetime／binary gate 仍未完成。詳見 [PD-242 交接區](tickets/PD-242-managed-list-remove-shell-view.md#交接區)；總覽維持 `in_progress`。
 
+### PD-197 範圍複驗 checkpoint（2026-10-21）
+
+指定的四支 Pane 成員、完整 `Pane::navigation_complete` 與兩個過渡 hook 的清除均已存在；本次沒有剩餘可在原 scope 內完成的程式搬移。完整逐項對照、六處 `pane_index` 命中與驗證命令見 [PD-197 本次複驗](tickets/PD-197-pane-command-and-chrome-consolidation.md#範圍複驗2026-10-21)。2026-09-05 全檔盤點與模組契約更新現存於 [ticket history](ticket-history.md#2026-09-05--pd-197-全檔複驗指定整併完成剩餘局部行為開-pd-198)，tab-strip 候選的刪除線仍在本頁。
+
+目前 `main.cpp` 為 **4,246 行**，距 Acceptance 5 的嚴格「3,300 行以下」仍須減少至少 **947 行**。剩餘類別為跨 pane tab drag／hover／active-pane、layout／splitter／全視窗繪製、Group CRUD／rebind／sidebar、app header／全域 popup manager、startup／single-instance／message loop／DPI、session／shutdown／file-operation gates 與 singleton hover 狀態；各自涉及多 pane、全域資源或 app 生命週期，均屬原票明列的 coordinator non-goals。目標 pane 的訊息解碼仍經共同 shutdown／re-entry gate 後委派 Pane；PaneHost 的 rename／drag adapter 供應全域 operation／shutdown gates。沒有發現原系列仍漏搬的 pane-only 行為，也沒有為行數門檻搬走這些 non-goals。
+
+focused Release `panedock_pane_test` 建置為最新，`panedock_pane` **1/1 通過**；`address_bar_failure_check.ps1` 與 `shell_reentry_gate_check.ps1` 均通過。未執行完整 CTest、launch smoke、GUI、真實 Shell 或實機測試。跳過驗證的授權不改寫需求：行數落差及行為／視覺未驗證仍存在，總覽保留 `in_progress`。
+
 ## 自建列表遷移（2026-10-16 使用者核准）
 
 本地 tracker 承接已核准的 21 個切片，詳見 [功能規格](research/2026-10-16-managed-list-spec.md)。

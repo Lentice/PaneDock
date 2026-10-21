@@ -112,6 +112,45 @@ $p.HasExited   # 必須為 True，且無殘留行程
 12. 關閉 App → 重開 → 四個 pane 的資料夾、tab、檢視模式、排序、捲動位置全部還原。
 13. 關閉時無殘留行程、無 `IExplorerBrowser` 洩漏（`live_view_count` 診斷檔為 0）。
 
+## 範圍複驗（2026-10-21）
+
+以 `c63a1dc` 的現有 source 複驗，保留使用者既有 WIP。本節補充目前證據，不改寫下方 2026-09-05 的歷史量測，也不重定義 acceptance。PD-242 已依排序豁免移除 legacy view；目前的 managed-list 實作不能當成本票原始 Shell／視覺驗收的替代證據。
+
+| Acceptance | 目前程式與證據 |
+|---|---|
+| 1 四支函式為 Pane 成員 | `handle_command`、`draw_control`、`refresh_status_bar`、`refresh_navigation_chrome` 均在 `pane.h/.cpp`；main 的控制通知與 popup 路由委派 Pane，strip 直接刷新 Pane chrome。 |
+| 2 完整 navigation completion | `Pane::navigation_complete` 保有 identity 檢查、location/history、view/sort、strip/status 與 save scheduling；src/tests 無 `handle_navigation_complete` 或 `record_navigation_result`。 |
+| 3 移除過渡 hook | src/tests 無 `tab_strip_needs_refresh`；PaneHost 也無舊 `refresh_navigation_chrome(Pane&)` bridge。 |
+| 4 pane_index 命中只留跨 pane 協調 | 目前六處命中如下，舊 paste／view-mode／pinned 命中已不存在；現在的命中均屬跨 pane layout／drag 協調及分派。 |
+| 5 main 少於 3,300 行 | **未達：4,246 行**；嚴格少於 3,300 需要再減至少 947 行。指定搬移已結清，剩餘 coordinator 類別見 tracker 本次全檔複驗；把它們切走會超出本票明列 non-goals，不能在原 scope 內滿足此數值。 |
+| 6 全檔複驗條目 | 原條目與契約更新已隨歷史整理移至 `docs/ticket-history.md`；本次在 `docs/tickets.md` 新增目前分類與本節連結，tab-strip 候選仍有刪除線。 |
+| 7 零行為／視覺變更 | 本次僅補文件，產品程式零 diff。既有整串變更的行為／視覺驗收仍未驗證，不能由本次 source review 或 focused tests 宣告通過。 |
+
+目前 `rg -n 'std::size_t pane_index' src/app_shell/main.cpp` 的逐行盤點（行號只代表本次 source）：
+
+| 行 | 所在位置 | 保留理由 |
+|---|---|---|
+| 400 | `LayoutFailure::pane_index` | whole-layout pass 回報哪個 pane 失敗，屬跨 pane 診斷。 |
+| 2077 | `AppState::tab_drag_layout` | 同時比較來源及目標 pane 並計算 placeholder。 |
+| 2121 | `register_tab_drag_hover_targets` | 全 pane 註冊迴圈，共用 app drag lifetime、timer 與 message 分派。 |
+| 2398 | `tab_strip_paint_state` | 彙整全域 active-pane 及跨 pane dragged／placeholder 值。 |
+| 3442 | `window_proc`／`kDragHoverMessage` | app timer ID 解碼目標 pane，分派延後 OLE hover。 |
+| 3623 | `window_proc`／`WM_TIMER` | 全域 hover timer ID 解碼目標 pane；事件啟動的 hover 分派，不是 idle polling。 |
+
+三個過渡點均已結清。view-mode／pinned 的 `TrackPopupMenu` 仍以 pane `window_` 為 owner 並以 `TPM_RETURNCMD` 回傳，再送主視窗路由；folder-context 仍由 global command 協調 active pane 並提供主視窗 owner。drawing helpers 仍在 pane 匿名 namespace；main 的 `fill_rounded_rect` 只供 header／sidebar，`scaled_value` 在共用 window helpers，沒有新搬移需求。
+
+本次只執行直接相關的 checks（LLVM-MinGW／Ninja PATH）：
+
+```powershell
+cmake --build build --target panedock_pane_test --parallel 4
+ctest --test-dir build --output-on-failure -R '^panedock_pane$'
+powershell -NoProfile -File tests/release/address_bar_failure_check.ps1
+powershell -NoProfile -File tests/release/shell_reentry_gate_check.ps1
+git diff --check
+```
+
+建置回報 `ninja: no work to do`；Pane 單元測試 **1/1 通過（0.12 秒）**，兩項 source checks 均通過。Pane 測試使用受控 PaneHost／hidden Win32 controls，沒有啟動 PaneDock 或 live Shell view。完整 CTest、launch smoke、GUI、自動或人工實機／Shell tests 均未執行。使用者授權延後這些驗證及繼續後續票，不代表原 acceptance、idle／shutdown 或實機清單通過；本次只處理 PD-197，未推進其他票。
+
 ## 交接區
 
 ### 實作與三個過渡點
