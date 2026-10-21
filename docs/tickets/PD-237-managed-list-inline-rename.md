@@ -95,6 +95,14 @@ git diff --check
 
 Configure exit 0。restricted build 無輸出後以 Ctrl+C 中止，指定 targets 改在 elevated context 建置；最終 Release build exit 0、無 compiler warnings。最終相關 CTests 11/11 PASS、exit 0；`git diff --check` exit 0。自動測試結果僅證明上述 controlled behavior，不勾選三項原始 integration acceptance criteria。
 
+## Post-PD-242 focused checkpoint（2026-10-21）
+
+在 `5ad7d14` 與 `4ba2e0a` 後重新追查 F2／edit shortcut routing、Pane edit lifecycle／identity snapshot、notification merge，以及 coordinator setup／shutdown gate 與 `IFileOperation::RenameItem`／progress sink 結果接線，未發現需要補作的 PD-237 自動化接線缺口。native Shell rename／衝突與取消語意維持，不重做已提交行為。
+
+重跑上節指定的 Release configure 與 build targets，均 exit 0（build：`ninja: no work to do`）。先前兩輪 CTest 均被 Ctrl+C 中止，不作測試結果；其後完整執行一次上節精確的 11-test selection，命令自然完成，**11/11 PASS、exit 0**，total 26.41 s（測試時間，非效能證據）。`git diff --check` exit 0。未執行 full CTest、GUI、launch smoke、真實 Shell／provider 互動或 disposable real-file rename；使用者既有 WIP 未修改。
+
+剩餘缺口為下列真實桌面／provider integration evidence，三項原始 acceptance criteria 保持未勾選；controlled seam 不證明實際焦點、原生衝突 UI、provider identity／通知收斂或 COM pump lifetime。依既有 sequencing-only waiver，下一張可繼續檢查剩餘工作的票為 PD-238（跨 pane 與外部 drag/drop），不代表本票或 PD-241 通過實機驗收；追蹤表維持原值。
+
 ## 交接區
 
 - 未解風險：真實 Shell／disposable files rename 與通知收斂、衝突時實際新名稱／identity、access denied／external deletion／cancel 的原生 UI、本機／namespace／network／OneDrive provider 行為，均「未驗證，需真實桌面」。成功但 provider 不提供完整結果 identity 時，目前保留原列並要求通知／Refresh 收斂；該復原路徑仍需實機驗證。
