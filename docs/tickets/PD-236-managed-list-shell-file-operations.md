@@ -97,6 +97,14 @@ git diff --check
 
 Configure exit 0。restricted build 無輸出，使用 Ctrl+C 中止（exit 1），改用 elevated context 執行相同 targets。前兩次 elevated build 分別發現 `FOF_ALLOWUNDO` 缺少 shellapi.h、effect test 啟用 Release assertions 後缺少 ole2.h；補上對應 headers 後最終 build exit 0。首次 focused CTest 10/11：只有舊 callback 名稱掃描失敗；移除被公開行為測試取代的該項掃描後，最終 CTest **11/11 PASS、exit 0**，total 3.25 s（測試執行時間，不是效能量測）。`git diff --check` exit 0。
 
+## Post-PD-242 focused checkpoint（2026-10-21）
+
+在 `5ad7d14`（PD-242 移除 legacy Shell view）後重新追查 Pane selection snapshot、鍵盤與既有 Paste routing、coordinator setup／shutdown callbacks，以及 file_operations 公開入口與 rename／drag-drop 共用 callers。Copy／Cut 仍由 absolute identity 建立 Shell `IDataObject` 並 materialize clipboard；Paste／Delete 仍使用既有 `IFileOperation` 與原生進度／衝突處理，未發現需要補作的 PD-236 程式接線。未修改右鍵選單或重做既有實作。
+
+重跑上節相同的指定 Release build targets 與 11 項 focused CTests：build exit 0（`ninja: no work to do`）；CTest **11/11 PASS、exit 0**，total 3.55 s（測試時間，非效能證據）；`git diff --check` exit 0。未執行完整 CTest、GUI、launch smoke、真實 Shell／clipboard／provider、OneDrive 或 network 測試。
+
+本票剩餘缺口僅為下列交接區已列明的真實桌面／provider integration evidence，三項原始 acceptance criteria 均不勾選；自動化 seam 不證明跨來源 lifetime、跨 volume／衝突／取消／部分失敗或真實泵點安全。追蹤表維持原值。依既有 sequencing-only waiver，下一張可繼續檢查剩餘工作的票為 PD-237（inline rename）；不代表 PD-236 或 PD-241 已通過實機驗收。
+
 ## 交接區
 
 - 未解風險：三項原始 integration acceptance criteria 仍未完整驗證，tracker 不因此標示 done。真實本機／Shell namespace／network／OneDrive Copy／Cut／Paste／Delete、clipboard formats materialization 與跨 Group／來源關閉後 data lifetime、同／跨 volume、conflict／cancel／partial failure 的原生 UI 與 preferred／performed／paste-succeeded effect，均「未驗證，需真實桌面」。不同 parent 的真實 Shell data object provider 支援亦待驗證；seam 只能證明傳入的 identity 沒有被改成同 parent 或顯示名稱。
