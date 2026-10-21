@@ -298,13 +298,20 @@ void real_local_directory() {
     if (!changed && acl_error == ERROR_ACCESS_DENIED)
         std::cout << "SKIP real ACL denial branch: current identity cannot set DACL\n";
     if (descriptor) LocalFree(descriptor);
-    if (changed) {
+    // An elevated or backup-privileged identity can still enumerate the denied
+    // directory; the real denial branch is then not observable.
+    std::error_code probe_error;
+    const bool still_listable = changed &&
+        (std::filesystem::directory_iterator(denied, probe_error), !probe_error);
+    if (still_listable)
+        std::cout << "SKIP real ACL denial branch: current identity can still enumerate\n";
+    if (changed && !still_listable) {
         EXPECT(SUCCEEDED(pane.navigate_to({denied.wstring(), {}, {}})));
         wait_for_complete(pane);
         EXPECT(pane.list_snapshot().phase == managed_list::Phase::error);
         EXPECT(pane.list_snapshot().error == ERROR_ACCESS_DENIED);
-        EXPECT(SetFileSecurityW(denied.c_str(), DACL_SECURITY_INFORMATION, original.data()));
     }
+    if (changed) EXPECT(SetFileSecurityW(denied.c_str(), DACL_SECURITY_INFORMATION, original.data()));
     // Replace an in-flight request, and destroy while its successor may still
     // be in FindFirst/FindNext or blocked by bounded queue backpressure.
     EXPECT(SUCCEEDED(pane.navigate_to({root.wstring(), {}, {}})));

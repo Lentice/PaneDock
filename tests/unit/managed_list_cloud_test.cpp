@@ -120,6 +120,7 @@ void protected_enrichment() {
                             row(FILE_ATTRIBUTE_OFFLINE).cloud}) {
         ml::IconRequest request;
         request.key.cloud = cloud;
+        request.key.location = request.request.location = {L"C:\\nonexistent-pd235", {}, {}};
         request.key.identity = {L"C:\\nonexistent-pd235\\same.txt", true};
         request.key.thumbnail = true;
         for (const auto property : {"", "System.Media.Duration"}) {

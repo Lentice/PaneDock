@@ -25,7 +25,7 @@ struct ShellLocation final {
     std::wstring known_folder_identity;
     std::wstring fallback_path;
     // The containing Shell location as enumerated. A parsing name can resolve
-    // to a different PIDL chain, so the natural PIDL parent may lose namespace
+    // to a different Shell item chain, so the natural parent may lose namespace
     // context (for example, a child opened from the merged Desktop root).
     std::optional<ShellLocationParent> navigation_parent{};
     // Some Shell namespace roots (notably Desktop) also have a filesystem
