@@ -105,3 +105,11 @@ Configure、限定 targets build、上述 9 項 CTests 與 diff check 通過。�
 
 - 依使用者明確指示，本環境刻意跳過真實檔案傳輸及桌面驗證。跨 pane／volume、Explorer 與另一 app 的外部拖入拖出、Ctrl／Shift／link、Escape／threshold、Group／tab hover 後立即 drop、provider progress 中關閉／取消、virtual namespace 與 OneDrive 語意皆**未驗證，需真實桌面**；本次測試不能宣告本票 acceptance 或 PD-241 drag/drop gate 通過。
 - 真實 Shell target 建立與拖放 provider 呼叫仍在 UI STA；慢 provider 的延遲、progress／衝突提示與實際傳輸壽命尚未量測。fake resolver 的 effect／reentry 測試不保證原生 provider 相容性或 NFR-003 通過。
+
+## 實機自動化診斷（2026-10-21，未驗證；是否為產品缺陷待判斷）
+
+Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（2026-10-21 08:47:31 建置）；隔離 `LOCALAPPDATA=build\manual-test\la-pd238d`（絕對路徑，正式 session 未被修改）；單一實例，正常關閉且無殘留行程。拋棄式資料：`build\manual-test\dnd\A`（`d1.txt`～`d3.txt`）與空的 `dnd\B`，pane 0／pane 1 各顯示其一。
+
+前置條件皆成立：拖曳來源座標以 `LVM_HITTEST` 命中 pane 0 的 item 0（`d1.txt`，`flags=0x4`），選取數為 1；來源與目的座標的 `WindowFromPoint` 分別等於 pane 0 與 pane 1 的 `SysListView32`；PaneDock 主視窗為前景。以 `SendInput`（絕對座標、virtual-desktop）送 `move`／`down`／20 個 `move`／`up`，23 個事件每次回傳 1，游標落點與目標相差約 1 px。結果：拖曳後 A 仍為 `d1.txt,d2.txt,d3.txt`、B 仍為空，狀態列未變，未出現任何原生 UI 或額外視窗。
+
+只能說明在此 harness 條件下沒有觀察到 drop；不能由此判定產品缺陷，也未涵蓋 `LVN_BEGINDRAG` 是否被觸發，需由另行 triage 判斷。同 pane、跨 volume、Explorer 拖入／拖出、取消、hover 切 Group／tab、快速重入全部維持未驗證，需真實桌面。早先一次使用相對路徑 `LOCALAPPDATA` 的 PD-238 嘗試誤用了正式 session，其結果作廢。
