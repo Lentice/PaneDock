@@ -68,3 +68,21 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+## 自動化驗證 checkpoint（2026-10-21）
+
+PD-243～PD-246 已提交；本次只驗證 PD-242 移除 legacy host 後的現行 managed-list 路徑，不新增實作。已核對 worker 的 owned child／canonical／parent 值與共用容量、Pane routing／Up／history／stale-result／re-entry／shutdown，以及 session identity／unknown-field 保存契約。
+
+使用 LLVM-MinGW Clang／LLD Release，執行子票 Agent checks 的 focused targets／CTest 聯集：
+
+```powershell
+$env:PATH = 'E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja;' + $env:PATH
+cmake -S . -B build -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target PaneDock panedock_managed_list_selection_test panedock_managed_list_sort_test panedock_managed_list_changes_test panedock_managed_list_cache_test panedock_managed_list_restore_test panedock_managed_list_icons_test panedock_managed_list_namespace_worker_test panedock_managed_list_capacity_test panedock_managed_list_namespace_test panedock_core_session_test
+ctest --test-dir build --output-on-failure -R '^panedock_(managed_list_(selection|sort|changes|cache|restore|icons|namespace_worker|capacity|namespace)|core_session)$'
+git diff --check
+```
+
+Configure 與指定 targets 建置皆 exit 0（Ninja: no work to do）；CTest 10/10 PASS、exit 0，總時間 9.99 秒；diff check 通過。Configure／build／CTest 使用 elevated execution context，並非產品需要 elevation。證據涵蓋 identity／selection／sort／enrichment／cache／Refresh、Pane navigation／history／session restore，以及 controlled namespace worker capacity／late delivery／re-entry／non-joining shutdown；CTest 時間不是產品效能量測。使用者既有 WIP 保留，未納入本次文件提交。
+
+依本次授權未執行完整 CTest、GUI、launch smoke、真實 Shell／Desktop／known-folder／OneDrive／network／provider 測試。This PC／Desktop 的實際 children／parent、known-folder 重啟還原、provider STA COM lifetime 與卡住 provider 的安全 shutdown 仍「未驗證，需真實桌面」；以上自動化 PASS 不勾選本票產品 acceptance，亦不代表 PD-226 或 PD-241 gate 通過。下一個本 umbrella 剩餘 gate 是上述真實 Shell 驗收；相鄰 PD-235 的真實 OneDrive 驗收仍待完成，後續整體相容性／效能證據依 PD-241 保留，sequencing waiver 不等於 gate PASS。

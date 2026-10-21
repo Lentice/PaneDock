@@ -271,7 +271,7 @@
 | PD-231 | 昂貴屬性欄位與排序 | 8 | `done` | PD-228 | [PD-231](tickets/PD-231-managed-list-expensive-properties.md) |
 | PD-232 | 本機變更通知與恢復掃描 | 8 | `done` | PD-228 | [PD-232](tickets/PD-232-managed-list-change-notifications.md) |
 | PD-233 | tab 列表 snapshot 的全域有界快取 | 8 | `done` | PD-225, PD-228, PD-232 | [PD-233](tickets/PD-233-managed-list-tab-cache.md) |
-| PD-234 | 虛擬 Shell location 導覽（umbrella；交付拆為 PD-243～PD-246） | 8 | `planned` | PD-246 | [PD-234](tickets/PD-234-managed-list-shell-namespace.md) |
+| PD-234 | 虛擬 Shell location 導覽（umbrella；交付拆為 PD-243～PD-246） | 8 | `in_progress` | PD-246 | [PD-234](tickets/PD-234-managed-list-shell-namespace.md) |
 | PD-235 | OneDrive placeholder 瀏覽 | 8 | `in_progress` | PD-229, PD-246 | [PD-235](tickets/PD-235-managed-list-onedrive-placeholders.md) |
 | PD-236 | 自建選取接回剪貼簿與 Shell 檔案操作 | 8 | `in_progress` | PD-227, PD-246 | [PD-236](tickets/PD-236-managed-list-shell-file-operations.md) |
 | PD-237 | 自建列表 inline rename | 8 | `in_progress` | PD-232, PD-236 | [PD-237](tickets/PD-237-managed-list-inline-rename.md) |
@@ -310,6 +310,10 @@ PD-222～PD-242 的狀態與依賴只以以上 Ticket 總覽為準；先 expand 
 這是使用者直接變更產品方向，不再以 Phase 0 No-Go 或 PD-209 量測作為「允許規劃自建列表」的前提；
 實際效能改善仍須量測，既有 Shell 路徑未隨切票改變。舊 completed ticket 與未結案工作不在本次重寫。
 GitHub tracker／triage 尚未設定，本系列未發布為 GitHub issues；本地工作可依總覽 frontier 開始。
+
+### PD-234 自動化驗證 checkpoint（2026-10-21）
+
+PD-242 後，PD-243～PD-246 focused Release targets 聯集建置成功，10 項 CTests 全數通過（9.99 秒）；覆蓋 virtual identity／enumeration 值、Pane navigation／history／session restore、controlled worker capacity／re-entry／shutdown。詳見 [PD-234 checkpoint](tickets/PD-234-managed-list-shell-namespace.md#自動化驗證-checkpoint2026-10-21)。僅自動化契約通過；真實 This PC／Desktop／known-folder restore、provider STA lifetime／shutdown 未驗證，需真實桌面。未執行完整 CTest、GUI、launch smoke、真實 Shell／OneDrive／network／provider 測試。產品 acceptance 與 PD-241 gate 不宣告 PASS；下一個本票 gate 是真實 Shell 驗收。
 
 ### PD-234 切分依據（2026-10-19）
 
