@@ -112,7 +112,7 @@ Configure exit 0。restricted build 無輸出，使用 Ctrl+C 中止（exit 1）
 
 ## 實機自動化嘗試（2026-10-21，未驗證）
 
-Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（2026-10-21 08:47:31 建置）；隔離 `LOCALAPPDATA`，單一實例，兩次嘗試皆正常關閉且無殘留行程；拋棄式資料位於 `build\manual-test\fileops\{A,B,C}` 與已授權 UNC 測試目錄的子資料夾（結束後移除，僅移除本次建立的空目錄）。
+Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（2026-10-21 08:47:31 建置）；單一實例，兩次嘗試皆正常關閉且無殘留行程。**更正**：此前寫「隔離 `LOCALAPPDATA`」不實——harness 變數被覆寫，`LOCALAPPDATA` 成為相對路徑，兩次嘗試實際讀寫了使用者的正式 session（已改動其中數個 tab 位置並新增 Group，見回報）；後續測試已改為檢查絕對隔離路徑；拋棄式資料位於 `build\manual-test\fileops\{A,B,C}` 與已授權 UNC 測試目錄的子資料夾（結束後移除，僅移除本次建立的空目錄）。
 
 兩次嘗試中 harness 的 `SendInput` 鍵盤（Ctrl+C／X／V、Delete）都沒有產生任何檔案變化：最終 A 仍為原有 4 個測試檔、B／C／UNC 目的地為空，也未出現 Windows 衝突或刪除對話框。同一輪中 harness 在新增 Group 後取不到 pane／list HWND（`Cannot convert argument ... null to IntPtr`），因此不能判斷是焦點、選取未進入 list，還是 harness 本身。這代表 harness 沒有取得有效的 pane HWND，不是產品失敗，也不是通過。
 
