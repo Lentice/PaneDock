@@ -341,7 +341,35 @@ std::optional<ShellLocation> decode_shell_location(const Json::Object& value) {
     const auto known_wide = known ? wide(*known) : std::nullopt;
     const auto fallback_wide = fallback ? wide(*fallback) : std::nullopt;
     if (!parsing_wide || !known_wide || !fallback_wide) return std::nullopt;
-    return ShellLocation{*parsing_wide, *known_wide, *fallback_wide};
+    const Json* namespace_json = field(value, "namespace_location");
+    const auto* namespace_location = namespace_json
+        ? std::get_if<bool>(&namespace_json->value) : nullptr;
+    if (namespace_json && !namespace_location) return std::nullopt;
+    ShellLocation result{*parsing_wide, *known_wide, *fallback_wide};
+    result.namespace_location = namespace_location && *namespace_location;
+    if (const Json* parent_json = field(value, "navigation_parent")) {
+        const auto* parent = object(*parent_json);
+        if (!parent) return std::nullopt;
+        const auto* parent_parsing = as<std::string>(*parent, "parsing_name");
+        const auto* parent_known = as<std::string>(*parent, "known_folder_identity");
+        const auto* parent_fallback = as<std::string>(*parent, "fallback_path");
+        const Json* parent_namespace_json = field(*parent, "namespace_location");
+        const auto* parent_namespace = parent_namespace_json
+            ? std::get_if<bool>(&parent_namespace_json->value) : nullptr;
+        if (parent_namespace_json && !parent_namespace) return std::nullopt;
+        const bool has_parent_fields = field(*parent, "parsing_name") ||
+            field(*parent, "known_folder_identity") || field(*parent, "fallback_path");
+        if (!has_parent_fields) return result; // Preserve only future fields in preserved_json.
+        const auto parent_parsing_wide = parent_parsing ? wide(*parent_parsing) : std::nullopt;
+        const auto parent_known_wide = parent_known ? wide(*parent_known) : std::nullopt;
+        const auto parent_fallback_wide = parent_fallback ? wide(*parent_fallback) : std::nullopt;
+        if (!parent_parsing_wide || parent_parsing_wide->empty() ||
+            !parent_known_wide || !parent_fallback_wide) return std::nullopt;
+        result.navigation_parent = ShellLocationParent{
+            *parent_parsing_wide, *parent_known_wide, *parent_fallback_wide,
+            parent_namespace && *parent_namespace};
+    }
+    return result;
 }
 
 std::optional<int> integer(const Json::Object& value, std::string_view name) {
@@ -424,6 +452,29 @@ Json encode(const ApplicationState& application, Json root,
                 location["parsing_name"] = Json{utf8(tab.location.parsing_name)};
                 location["known_folder_identity"] = Json{utf8(tab.location.known_folder_identity)};
                 location["fallback_path"] = Json{utf8(tab.location.fallback_path)};
+                location["namespace_location"] = Json{tab.location.namespace_location};
+                if (tab.location.navigation_parent) {
+                    Json::Object parent;
+                    if (const Json* old_parent = field(location, "navigation_parent");
+                        old_parent && object(*old_parent)) parent = *object(*old_parent);
+                    parent["parsing_name"] = Json{utf8(tab.location.navigation_parent->parsing_name)};
+                    parent["known_folder_identity"] = Json{utf8(tab.location.navigation_parent->known_folder_identity)};
+                    parent["fallback_path"] = Json{utf8(tab.location.navigation_parent->fallback_path)};
+                    parent["namespace_location"] =
+                        Json{tab.location.navigation_parent->namespace_location};
+                    location["navigation_parent"] = Json{std::move(parent)};
+                } else {
+                    if (const Json* old_parent = field(location, "navigation_parent");
+                        old_parent && object(*old_parent)) {
+                        Json::Object parent = *object(*old_parent);
+                        parent.erase("parsing_name");
+                        parent.erase("known_folder_identity");
+                        parent.erase("fallback_path");
+                        parent.erase("namespace_location");
+                        if (parent.empty()) location.erase("navigation_parent");
+                        else location["navigation_parent"] = Json{std::move(parent)};
+                    }
+                }
                 encoded_tab["shell_location"] = Json{std::move(location)};
                 encoded_tab["view_mode"] = Json{tab.view_mode};
                 encoded_tab["sort_column"] = Json{tab.sort_column};
@@ -450,6 +501,29 @@ Json encode(const ApplicationState& application, Json root,
         encoded["known_folder_identity"] =
             Json{utf8(pinned.known_folder_identity)};
         encoded["fallback_path"] = Json{utf8(pinned.fallback_path)};
+        encoded["namespace_location"] = Json{pinned.namespace_location};
+        if (pinned.navigation_parent) {
+            Json::Object parent;
+            if (const Json* old_parent = field(encoded, "navigation_parent");
+                old_parent && object(*old_parent)) parent = *object(*old_parent);
+            parent["parsing_name"] = Json{utf8(pinned.navigation_parent->parsing_name)};
+            parent["known_folder_identity"] = Json{utf8(pinned.navigation_parent->known_folder_identity)};
+            parent["fallback_path"] = Json{utf8(pinned.navigation_parent->fallback_path)};
+            parent["namespace_location"] =
+                Json{pinned.navigation_parent->namespace_location};
+            encoded["navigation_parent"] = Json{std::move(parent)};
+        } else {
+            if (const Json* old_parent = field(encoded, "navigation_parent");
+                old_parent && object(*old_parent)) {
+                Json::Object parent = *object(*old_parent);
+                parent.erase("parsing_name");
+                parent.erase("known_folder_identity");
+                parent.erase("fallback_path");
+                parent.erase("namespace_location");
+                if (parent.empty()) encoded.erase("navigation_parent");
+                else encoded["navigation_parent"] = Json{std::move(parent)};
+            }
+        }
         pinned_locations.push_back(Json{std::move(encoded)});
     }
     result["pinned_locations"] = Json{std::move(pinned_locations)};

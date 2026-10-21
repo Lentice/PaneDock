@@ -61,6 +61,26 @@ struct ItemIdentity final {
 inline std::size_t owned_string_bytes(const std::wstring& value) noexcept {
     return (value.capacity() + 1) * sizeof(wchar_t);
 }
+inline std::size_t owned_location_bytes(const core::ShellLocation& location) noexcept {
+    auto bytes = owned_string_bytes(location.parsing_name) +
+        owned_string_bytes(location.known_folder_identity) +
+        owned_string_bytes(location.fallback_path);
+    if (location.navigation_parent) bytes +=
+        owned_string_bytes(location.navigation_parent->parsing_name) +
+        owned_string_bytes(location.navigation_parent->known_folder_identity) +
+        owned_string_bytes(location.navigation_parent->fallback_path);
+    return bytes;
+}
+inline bool valid_shell_location(const core::ShellLocation& location) noexcept {
+    return !location.parsing_name.empty() && location.parsing_name.size() <= kMaxPath &&
+        location.known_folder_identity.size() <= kMaxPath &&
+        location.fallback_path.size() <= kMaxPath &&
+        (!location.navigation_parent ||
+            (!location.navigation_parent->parsing_name.empty() &&
+             location.navigation_parent->parsing_name.size() <= kMaxPath &&
+             location.navigation_parent->known_folder_identity.size() <= kMaxPath &&
+             location.navigation_parent->fallback_path.size() <= kMaxPath));
+}
 struct Row final {
     std::wstring name; // display text; retained for existing Source aggregates
     std::uint64_t bytes{};
@@ -89,11 +109,7 @@ inline Row basic_row(const WIN32_FIND_DATAW& data, std::wstring name) {
 }
 inline std::size_t owned_row_bytes(const Row& row) noexcept {
     auto bytes = owned_string_bytes(row.name) + owned_string_bytes(row.identity.key);
-    if (row.child_location) {
-        bytes += owned_string_bytes(row.child_location->parsing_name) +
-            owned_string_bytes(row.child_location->known_folder_identity) +
-            owned_string_bytes(row.child_location->fallback_path);
-    }
+    if (row.child_location) bytes += owned_location_bytes(*row.child_location);
     for (const auto& property : row.properties)
         bytes += owned_string_bytes(property.text);
     return bytes;
@@ -116,7 +132,11 @@ inline bool prepare_row(Row& row) {
     if (!row.child_location) return true;
     const auto& child = *row.child_location;
     return child.parsing_name == row.identity.key && child.parsing_name.size() <= kMaxPath &&
-        child.known_folder_identity.size() <= kMaxPath && child.fallback_path.size() <= kMaxPath;
+        child.known_folder_identity.size() <= kMaxPath && child.fallback_path.size() <= kMaxPath &&
+        (!child.navigation_parent || valid_shell_location({
+            child.navigation_parent->parsing_name,
+            child.navigation_parent->known_folder_identity,
+            child.navigation_parent->fallback_path}));
 }
 enum class Change { none, delta, rescan_begin, rescan, watching, watch_error };
 enum class WatchState { inactive, watching, recovering, failed };
@@ -144,16 +164,10 @@ inline std::size_t owned_batch_bytes(const Batch& batch) noexcept {
     std::size_t bytes = sizeof(Batch) + batch.rows.capacity() * sizeof(Row) +
         batch.removed.capacity() * sizeof(std::wstring) +
         batch.renamed.capacity() * sizeof(std::pair<std::wstring, std::wstring>) +
-        owned_string_bytes(batch.request.location.parsing_name) +
-        owned_string_bytes(batch.request.location.known_folder_identity) +
-        owned_string_bytes(batch.request.location.fallback_path) +
+        owned_location_bytes(batch.request.location) +
         batch.request.binding.group_id.capacity() + 1 + batch.request.binding.tab_id.capacity() + 1;
-    if (batch.resolved_location) bytes += owned_string_bytes(batch.resolved_location->parsing_name) +
-        owned_string_bytes(batch.resolved_location->known_folder_identity) +
-        owned_string_bytes(batch.resolved_location->fallback_path);
-    if (batch.parent_location) bytes += owned_string_bytes(batch.parent_location->parsing_name) +
-        owned_string_bytes(batch.parent_location->known_folder_identity) +
-        owned_string_bytes(batch.parent_location->fallback_path);
+    if (batch.resolved_location) bytes += owned_location_bytes(*batch.resolved_location);
+    if (batch.parent_location) bytes += owned_location_bytes(*batch.parent_location);
     for (const auto& row : batch.rows) bytes += owned_row_bytes(row);
     for (const auto& name : batch.removed) bytes += owned_string_bytes(name);
     for (const auto& [old_name, new_name] : batch.renamed)
@@ -177,5 +191,8 @@ std::unique_ptr<Source> make_local_source() noexcept;
 inline bool is_filesystem_location(std::wstring_view path) noexcept {
     return (path.size() >= 3 && path[1] == L':' && path[2] == L'\\') ||
         (path.size() > 2 && path[0] == L'\\' && path[1] == L'\\');
+}
+inline bool uses_shell_namespace(const core::ShellLocation& location) noexcept {
+    return location.namespace_location || !is_filesystem_location(location.parsing_name);
 }
 } // namespace panedock::managed_list

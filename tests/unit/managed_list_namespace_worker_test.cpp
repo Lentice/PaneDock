@@ -181,6 +181,13 @@ void cancellation_and_capacity() {
 }
 }
 int main() {
+    EXPECT(ml::uses_shell_namespace(core::ShellLocation{L"shell:Desktop", {}, {}}));
+    auto physical_desktop = core::ShellLocation{
+        L"D:\\Documents\\Desktop", L"{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}",
+        L"D:\\Documents\\Desktop"};
+    EXPECT(!ml::uses_shell_namespace(physical_desktop));
+    physical_desktop.namespace_location = true;
+    EXPECT(ml::uses_shell_namespace(physical_desktop));
     owned_metadata(); bounds(); cancellation_and_capacity();
     EXPECT(ml::testing::counts().workers == 0);
     std::cout << "owned values only; four shared slots; two queued batches; "

@@ -153,6 +153,33 @@ void virtual_navigation_and_history() {
     EXPECT(*f.pane.active_tab() == first_tab); // each tab keeps its own history
     EXPECT(f.pane.window() != nullptr && f.list == FindWindowExW(f.pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr));
 }
+void namespace_child_keeps_enumerating_parent() {
+    Fixture f;
+    auto desktop_root = core::ShellLocation{
+        L"D:\\Documents\\Desktop", L"{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}",
+        L"D:\\Documents\\Desktop"};
+    desktop_root.namespace_location = true;
+    const core::ShellLocationParent desktop_identity{
+        desktop_root.parsing_name, desktop_root.known_folder_identity,
+        desktop_root.fallback_path, desktop_root.namespace_location};
+    auto child_location = child;
+    child_location.navigation_parent = desktop_identity;
+
+    EXPECT(SUCCEEDED(f.pane.navigate_to(desktop_root)));
+    f.complete(desktop_root, {}, {folder(child_location, L"CpuDieId")});
+    EXPECT(f.pane.open_list_row(0));
+    EXPECT(f.source->submitted.back().location.navigation_parent == desktop_identity);
+    f.complete(child_location);
+    EXPECT(f.pane.list_snapshot().parent_outcome == ml::ParentOutcome::root);
+    EXPECT(SUCCEEDED(f.pane.navigate_up_one_level()));
+    EXPECT(f.source->submitted.back().location == desktop_root);
+    f.complete(desktop_root);
+    f.pane.navigate_history(true);
+    EXPECT(f.source->submitted.back().location == child_location);
+    f.complete(child_location);
+    EXPECT(SUCCEEDED(f.pane.navigate_up_one_level()));
+    EXPECT(f.source->submitted.back().location == desktop_root);
+}
 void defaults_restore_and_stale_parent() {
     Fixture f;
     f.complete(pc, desktop);
@@ -236,11 +263,18 @@ void canonical_cache_and_refresh_interaction() {
     EXPECT(f.source->submitted.size() == count); // no work from idle dispatch
 }
 void namespace_metadata_bounds() {
-    for (int field = 0; field < 2; ++field) {
+    for (int field = 0; field < 3; ++field) {
         Fixture f;
         auto result = f.batch(pc, desktop);
-        auto& location = field == 0 ? *result.resolved_location : *result.parent_location;
-        location.fallback_path.reserve(ml::kMaxRowBytes / sizeof(wchar_t));
+        if (field < 2) {
+            auto& location = field == 0 ? *result.resolved_location : *result.parent_location;
+            location.fallback_path.reserve(ml::kMaxRowBytes / sizeof(wchar_t));
+        } else {
+            result.resolved_location->navigation_parent = core::ShellLocationParent{
+                L"::parent", {}, {}};
+            result.resolved_location->navigation_parent->fallback_path.reserve(
+                ml::kMaxRowBytes / sizeof(wchar_t));
+        }
         f.deliver(std::move(result));
         EXPECT(f.pane.list_snapshot().phase == ml::Phase::limited);
         EXPECT(f.pane.active_tab()->location == pc);
@@ -263,25 +297,44 @@ void namespace_metadata_bounds() {
     EXPECT(f.pane.list_snapshot().phase == ml::Phase::error);
     EXPECT(f.pane.active_tab()->location == pc);
 }
+void namespace_route_session_round_trip() {
+    auto app = sample();
+    core::ShellLocation desktop_root{
+        L"D:\\Documents\\Desktop", L"{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}",
+        L"D:\\Documents\\Desktop"};
+    desktop_root.namespace_location = true;
+    app.groups[0].panes[0].tabs[0].location = desktop_root;
+    auto document = core::deserialize_session(core::serialize_session({app, {}, true}));
+    EXPECT(document.has_value());
+    if (!document) return;
+    EXPECT(document->application.groups[0].panes[0].tabs[0].location == desktop_root);
+}
 void session_identity_and_unknown_fields() {
     auto app = sample();
-    app.groups[0].panes[0].tabs[0].location = child;
+    auto child_with_parent = child;
+    child_with_parent.navigation_parent = core::ShellLocationParent{
+        L"::{Desktop}", L"Desktop-id", L"C:\\Desktop", true};
+    app.groups[0].panes[0].tabs[0].location = child_with_parent;
     auto json = core::serialize_session({app, {}, true});
     json.insert(json.find('{') + 1, "\"future-root\":{\"keep\":246},");
     json.insert(json.find("\"view_mode\""), "\"future-tab\":[246],");
     const auto nested = json.find('{', json.find("\"shell_location\""));
     json.insert(nested + 1, "\"future-location\":{\"keep\":true},");
+    const auto navigation_parent = json.find('{', json.find("\"navigation_parent\""));
+    json.insert(navigation_parent + 1, "\"future-parent\":{\"keep\":true},");
     auto document = core::deserialize_session(json); EXPECT(document.has_value());
     if (!document) return;
+    EXPECT(core::serialize_session(*document).find(
+        "\"future-parent\":{\"keep\":true}") != std::string::npos);
     Fixture f(document->application);
-    EXPECT(f.source->submitted.back().location == child);
-    f.complete(child, desktop);
+    EXPECT(f.source->submitted.back().location == child_with_parent);
+    f.complete(child_with_parent, desktop);
     auto& group = f.app.groups[0];
     EXPECT(core::move_tab(group.panes[0], group.panes[1], "tab-a", 0, pc, "replacement"));
     EXPECT(group.panes[0].tabs[0].location == pc);
     f.pane.bind(&group.panes[1]);
     EXPECT(SUCCEEDED(f.pane.navigate_to(f.pane.active_tab()->location)));
-    f.complete(child, desktop);
+    f.complete(child_with_parent, desktop);
     auto root = std::filesystem::current_path() / ("pd246-session-" + std::to_string(GetCurrentProcessId()));
     EXPECT(!std::filesystem::exists(root));
     app_shell::SessionWriter writer; writer.set_directory(root); writer.adopt(*document);
@@ -296,10 +349,11 @@ void session_identity_and_unknown_fields() {
         EXPECT(saved.find("\"future-root\":{\"keep\":246}") != std::string::npos);
         EXPECT(saved.find("\"future-tab\":[246]") != std::string::npos);
         EXPECT(saved.find("\"future-location\":{\"keep\":true}") != std::string::npos);
+        EXPECT(saved.find("\"future-parent\":{\"keep\":true}") != std::string::npos);
         EXPECT(restored.document.application.schema_version == 1);
     };
-    EXPECT(SUCCEEDED(f.pane.navigate_to(desktop))); verify(child); // pending save
-    f.fail(); verify(child); // error save preserves good identity
+    EXPECT(SUCCEEDED(f.pane.navigate_to(desktop))); verify(child_with_parent); // pending save
+    f.fail(); verify(child_with_parent); // error save preserves good identity
     f.pane.refresh_view(); EXPECT(f.source->submitted.back().location == desktop);
     f.complete(desktop); verify(desktop); // empty fallback is retained
     EXPECT(std::filesystem::exists(root / core::kSessionBackupFileName));
@@ -313,9 +367,11 @@ void session_identity_and_unknown_fields() {
 int main() {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
     EXPECT(InitCommonControlsEx(&controls));
-    virtual_navigation_and_history(); defaults_restore_and_stale_parent();
+    virtual_navigation_and_history(); namespace_child_keeps_enumerating_parent();
+    defaults_restore_and_stale_parent();
     reentrant_completion(); canonical_cache_and_refresh_interaction();
-    namespace_metadata_bounds(); session_identity_and_unknown_fields();
+    namespace_metadata_bounds(); namespace_route_session_round_trip();
+    session_identity_and_unknown_fields();
     EXPECT(app_shell::Pane::list_cache_stats().bytes == 0);
     return test::summary("managed_list_namespace");
 }

@@ -11,10 +11,26 @@ namespace panedock::core {
 inline constexpr int kDefaultSidebarWidth = 194;
 inline constexpr std::size_t kMaxPaneCount = 4;
 
+struct ShellLocationParent final {
+    std::wstring parsing_name;
+    std::wstring known_folder_identity;
+    std::wstring fallback_path;
+    bool namespace_location{};
+
+    bool operator==(const ShellLocationParent&) const = default;
+};
+
 struct ShellLocation final {
     std::wstring parsing_name;
     std::wstring known_folder_identity;
     std::wstring fallback_path;
+    // The containing Shell location as enumerated. A parsing name can resolve
+    // to a different PIDL chain, so the natural PIDL parent may lose namespace
+    // context (for example, a child opened from the merged Desktop root).
+    std::optional<ShellLocationParent> navigation_parent{};
+    // Some Shell namespace roots (notably Desktop) also have a filesystem
+    // parsing name. Keep their enumeration route separate from that name.
+    bool namespace_location{};
 
     bool operator==(const ShellLocation&) const = default;
 };

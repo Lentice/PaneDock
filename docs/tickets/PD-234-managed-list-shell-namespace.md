@@ -40,8 +40,8 @@ ShellLocation identity／resolve_location、ExplorerHost navigate／navigate_up 
 
 ## Acceptance criteria
 
-- [ ] 新 tab／新 Group／最後 tab replacement 的預設 My Computer 可用，Desktop→child→parent 與歷史正確。
-- [ ] 保存後重啟保留虛擬 identity，不能因無 filesystem path 丟棄項目或 session 欄位。
+- [x] 新 tab／新 Group／最後 tab replacement 的預設 My Computer 可用，Desktop→child→parent 與歷史正確。
+- [x] 保存後重啟保留虛擬 identity，不能因無 filesystem path 丟棄項目或 session 欄位。
 - [ ] 慢 provider 回覆仍受 request identity／capacity／shutdown 契約約束，無 UI-owned COM 跨 thread 使用。
 
 ## Testing decisions
@@ -101,3 +101,18 @@ Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（Release，2026-10-21 08:47:31
 - Desktop→child→parent：鍵盤 Down＋Enter 與 `SendInput` 滑鼠雙擊皆未能進入子資料夾（原始碼只在 `NM_DBLCLK` 開啟列，Enter 無對應處理；滑鼠按鍵事件未被控制項處理，診斷限時後放棄），`Up` 結果因此無法判讀。
 - 新 tab 與「最後一個 tab replacement」的分頁數量變化未以畫面確認；This PC 子項目、Desktop 子項目名稱未讀出（UIA 對該 ListView 無 item 節點）。
 - 慢 provider 的 request identity／capacity／shutdown、provider STA COM lifetime、卡住 provider 的安全關閉：無環境。
+
+## 實機 Shell namespace 回歸（2026-10-21）
+
+追查舊 checkpoint 的 Desktop→child→parent 缺口後，確認從 merged Desktop 列舉出的 child，其 parsing name 再解析會得到不同 PIDL parent；單靠 path 與 known-folder identity 不能還原原本 namespace parent。`ShellLocation` 現在額外保存 owned navigation-parent 值及 namespace-route flag（不保存 PIDL／COM pointer），session v1 以可保留未知欄位的 additive optional 欄位保存；Up 優先使用 parent hint，namespace root 仍送往 Shell namespace worker。一般 filesystem location 仍走原本路徑。
+
+Pane seam 回歸涵蓋新預設 tab、最後 tab replacement、新 Group、Desktop child parent／Back history 及 stale result；session 測試涵蓋 namespace route 與 parent unknown-field round trip。實機用 Windows 11 Pro 10.0.26300、Release `PaneDock.exe`、隔離 `LOCALAPPDATA=build\\manual-test\\la-pd234p`，每次只啟動一個實例並正常關閉。Claude 的 Windows UI harness 在 `shell:Desktop` 顯示 75 項，進入 `CpuDieId` 子資料夾為 12 項；Up 回 75 項 merged Desktop，Back 回 12 項 child，Forward 回 75 項 Desktop。正常關閉重啟後從 child Up 亦回 75 項；session 分別保存 child 的 Desktop parent hint 與 root 的 `namespace_location=true`。未修改測試資料，兩次均正常關閉且行程歸零。測試檔及輸出保留在 ignored `build\\manual-test\\pd234p`。
+
+移除臨時診斷輸出後執行 Release 增量建置，以及以下 focused CTest，8/8 PASS（6.09 秒）；`git diff --check` 通過：
+
+```powershell
+cmake --build build --target PaneDock panedock_managed_list_namespace_test panedock_core_session_test panedock_managed_list_namespace_worker_test panedock_managed_list_icons_test panedock_managed_list_cache_test panedock_managed_list_restore_test panedock_core_model_test
+ctest --test-dir build --output-on-failure -R '^panedock_(managed_list_namespace|core_session|managed_list_namespace_worker|managed_list_icons|managed_list_cache|managed_list_restore|core_model|single_threaded)$'
+```
+
+因此已勾選前兩項 acceptance。PD-234 維持 `in_progress`：本次實機驗證只覆蓋本機 merged Desktop／單一 child 與重開；慢 provider 的 request identity／capacity、provider STA COM lifetime、卡住 provider 的 bounded shutdown 仍未驗證，不由本次結果推論通過，也不替代 PD-226／PD-241 gate。

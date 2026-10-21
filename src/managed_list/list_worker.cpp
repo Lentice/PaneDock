@@ -99,8 +99,17 @@ DWORD provider_error(HRESULT result) {
     return HRESULT_FACILITY(result) == FACILITY_WIN32 ? HRESULT_CODE(result) : ERROR_INVALID_DATA;
 }
 bool bounded_location(const core::ShellLocation& value) {
-    return !value.parsing_name.empty() && value.parsing_name.size() <= kMaxPath &&
-        value.known_folder_identity.size() <= kMaxPath && value.fallback_path.size() <= kMaxPath;
+    return valid_shell_location(value);
+}
+core::ShellLocationParent parent_identity(const core::ShellLocation& location) {
+    return {location.parsing_name, location.known_folder_identity,
+            location.fallback_path, location.namespace_location};
+}
+core::ShellLocation location_from_parent(const core::ShellLocationParent& parent) {
+    core::ShellLocation location{
+        parent.parsing_name, parent.known_folder_identity, parent.fallback_path};
+    location.namespace_location = parent.namespace_location;
+    return location;
 }
 bool copy_provider_text(PCWSTR text, std::size_t limit, std::wstring& output) {
     if (!text) return false;
@@ -214,9 +223,19 @@ void enumerate_shell_namespace(const std::shared_ptr<State>& state, std::uint64_
     core::ShellLocation resolved;
     result = shell_location(state, serial, absolute.value, resolved);
     if (FAILED(result)) { fail(result); return; }
+    // A persisted parsing name can re-resolve to a different PIDL chain than
+    // the item returned by its containing namespace folder. Keep the owned
+    // parent value through navigation and restart; never persist the PIDL.
+    resolved.navigation_parent = request.location.navigation_parent;
+    resolved.namespace_location = request.location.namespace_location || ILIsEmpty(absolute.value);
     metadata.resolved_location = std::move(resolved);
-    metadata.parent_outcome = ParentOutcome::root;
-    if (!ILIsEmpty(absolute.value)) {
+    if (request.location.navigation_parent) {
+        metadata.parent_location = location_from_parent(*request.location.navigation_parent);
+        metadata.parent_outcome = ParentOutcome::value;
+    } else {
+        metadata.parent_outcome = ParentOutcome::root;
+    }
+    if (!request.location.navigation_parent && !ILIsEmpty(absolute.value)) {
         metadata.parent_outcome = ParentOutcome::failed;
         Pidl parent;
         parent.value = ILCloneFull(absolute.value);
@@ -280,6 +299,7 @@ void enumerate_shell_namespace(const std::shared_ptr<State>& state, std::uint64_
         if (FAILED(result)) { finish(Phase::error, provider_error(result)); return; }
         row.directory = (attributes & SFGAO_FOLDER) != 0;
         row.identity = {child_location.parsing_name, true};
+        child_location.navigation_parent = parent_identity(*metadata.resolved_location);
         row.child_location = std::move(child_location);
         // Optional properties belong to the existing visible-item enrichment
         // path; no size/date provider query delays the first operable batch.
@@ -306,7 +326,7 @@ void enumerate(const std::shared_ptr<State>& state, std::uint64_t serial,
     Batch batch{request, {}, Phase::loading, 0};
     if (recovery) batch.change = Change::rescan;
     const auto& path = request.location.parsing_name;
-    if (!is_filesystem_location(path)) {
+    if (uses_shell_namespace(request.location)) {
         enumerate_shell_namespace(state, serial, request);
         return;
     }
@@ -709,14 +729,10 @@ class LocalSource final : public Source {
         return true;
     }
     bool submit(Request request) noexcept override try {
-        if (request.location.parsing_name.size() > kMaxPath ||
-            request.location.fallback_path.size() > kMaxPath ||
-            request.location.known_folder_identity.size() > kMaxPath ||
+        if (!valid_shell_location(request.location) ||
             request.binding.group_id.size() > 256 || request.binding.tab_id.size() > 256)
             return false;
-        const auto request_bytes = owned_string_bytes(request.location.parsing_name) +
-            owned_string_bytes(request.location.known_folder_identity) +
-            owned_string_bytes(request.location.fallback_path) +
+        const auto request_bytes = owned_location_bytes(request.location) +
             request.binding.group_id.capacity() + request.binding.tab_id.capacity();
         if (request_bytes > kMaxBatchOwnedBytes / 4) return false;
         bool retire = false;
@@ -1003,18 +1019,13 @@ class WorkerIcons final : public IconSource {
             bytes += owned_icon_request_bytes(r);
             const auto& identity = r.key.identity;
             const auto& child = r.key.child_location;
-            if (bytes > kIconValueBytes || identity.key.empty() ||
+            if (bytes > kIconValueBytes || !valid_shell_location(r.key.location) ||
+                !valid_shell_location(r.request.location) || identity.key.empty() ||
                 identity.key.size() > (identity.shell_item ? kMaxPath : kMaxName) ||
                 (!identity.shell_item && (child || identity.key == L"." || identity.key == L".." ||
                     identity.key.find_first_of(L"\\/:*?\"") != std::wstring::npos)) ||
                 (child && (child->parsing_name != identity.key ||
-                    child->known_folder_identity.size() > kMaxPath || child->fallback_path.size() > kMaxPath)) ||
-                r.key.location.parsing_name.size() > kMaxPath ||
-                r.key.location.fallback_path.size() > kMaxPath ||
-                r.key.location.known_folder_identity.size() > kMaxPath ||
-                r.request.location.parsing_name.size() > kMaxPath ||
-                r.request.location.fallback_path.size() > kMaxPath ||
-                r.request.location.known_folder_identity.size() > kMaxPath ||
+                    !valid_shell_location(*child))) ||
                 r.request.binding.group_id.size() > 256 || r.request.binding.tab_id.size() > 256 ||
                 r.property.size() > 128 || r.property_slot < 0 || r.property_slot > 2 ||
                 r.key.size < 16 || r.key.size > kMaxImageSize) return false;

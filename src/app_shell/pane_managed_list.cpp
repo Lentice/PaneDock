@@ -9,16 +9,14 @@ namespace {
 std::size_t namespace_bytes(const Pane::ListSnapshot& snapshot) noexcept {
     std::size_t bytes{};
     for (const auto* location : {&snapshot.resolved_location, &snapshot.parent_location})
-        if (*location) bytes += managed_list::owned_string_bytes((**location).parsing_name) +
-            managed_list::owned_string_bytes((**location).known_folder_identity) +
-            managed_list::owned_string_bytes((**location).fallback_path);
+        if (*location) bytes += managed_list::owned_location_bytes(**location);
     return bytes;
 }
+bool bounded_shell_location(const core::ShellLocation& location) noexcept {
+    return managed_list::valid_shell_location(location);
+}
 bool bounded_location(const std::optional<core::ShellLocation>& location) noexcept {
-    return !location || (!location->parsing_name.empty() &&
-        location->parsing_name.size() <= managed_list::kMaxPath &&
-        location->known_folder_identity.size() <= managed_list::kMaxPath &&
-        location->fallback_path.size() <= managed_list::kMaxPath);
+    return !location || bounded_shell_location(*location);
 }
 
 int ordinal_compare(std::wstring_view left, std::wstring_view right,
@@ -182,11 +180,9 @@ void Pane::save_list_cache() noexcept try {
         entry.snapshot.rows.capacity() * sizeof(managed_list::Row);
     const auto& request = entry.snapshot.request;
     for (const auto* location : {&entry.snapshot.resolved_location, &entry.snapshot.parent_location})
-        if (*location) entry.bytes += string_bytes((**location).parsing_name) +
-            string_bytes((**location).known_folder_identity) + string_bytes((**location).fallback_path);
+        if (*location) entry.bytes += managed_list::owned_location_bytes(**location);
     entry.bytes += string_bytes(request.binding.group_id) + string_bytes(request.binding.tab_id) +
-        string_bytes(request.location.parsing_name) + string_bytes(request.location.known_folder_identity) +
-        string_bytes(request.location.fallback_path);
+        managed_list::owned_location_bytes(request.location);
     for (const auto& row : entry.snapshot.rows) {
         entry.bytes += managed_list::owned_row_bytes(row);
     }
@@ -616,9 +612,7 @@ void Pane::process_content_results() noexcept try {
             auto resolved = std::move(batch->resolved_location);
             auto parent = std::move(batch->parent_location);
             const auto location_bytes = [](const auto& value) {
-                return value ? managed_list::owned_string_bytes(value->parsing_name) +
-                    managed_list::owned_string_bytes(value->known_folder_identity) +
-                    managed_list::owned_string_bytes(value->fallback_path) : 0;
+                return value ? managed_list::owned_location_bytes(*value) : 0;
             };
             const auto bytes = location_bytes(resolved) + location_bytes(parent);
             if (list_name_bytes_ - old_bytes + bytes + list_.rows.capacity() * sizeof(managed_list::Row) >

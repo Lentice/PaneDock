@@ -54,10 +54,6 @@ struct IconKey final {
     }
     bool operator==(const IconKey&) const = default;
 };
-inline std::size_t owned_location_bytes(const core::ShellLocation& location) noexcept {
-    return owned_string_bytes(location.parsing_name) +
-        owned_string_bytes(location.known_folder_identity) + owned_string_bytes(location.fallback_path);
-}
 inline std::size_t owned_icon_key_bytes(const IconKey& key) noexcept {
     return owned_location_bytes(key.location) + owned_string_bytes(key.identity.key) +
         (key.child_location ? owned_location_bytes(*key.child_location) : 0);

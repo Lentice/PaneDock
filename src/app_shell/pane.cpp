@@ -902,6 +902,13 @@ HRESULT Pane::navigate_up_one_level() {
     if (!content_request_is_current(list_.request.binding)) return E_ABORT;
     if ((list_navigation_pending_ || list_.phase == managed_list::Phase::error) &&
         !managed_list::is_filesystem_location(list_.request.location.parsing_name)) return E_PENDING;
+    if (list_.request.location.navigation_parent) {
+        const auto& parent = *list_.request.location.navigation_parent;
+        core::ShellLocation target{
+            parent.parsing_name, parent.known_folder_identity, parent.fallback_path};
+        target.namespace_location = parent.namespace_location;
+        return navigate_to(target);
+    }
     if (list_.parent_outcome == managed_list::ParentOutcome::root) return S_FALSE;
     if (list_.parent_outcome == managed_list::ParentOutcome::value && list_.parent_location) {
         const auto parent = *list_.parent_location;
