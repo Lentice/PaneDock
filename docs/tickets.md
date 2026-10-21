@@ -246,7 +246,7 @@
 | PD-206 | Group transition 全程抑制 location capture，避免半切換狀態污染新 Group | 7 | `done` | PD-203, PD-204 | [PD-206](tickets/PD-206-suppress-location-capture-across-the-whole-group-transition.md) |
 | PD-207 | 移除切換熱路徑上的冗餘 Shell 呼叫與重繪 | 7 | `done` | PD-206 | [PD-207](tickets/PD-207-drop-redundant-work-from-the-switching-hot-path.md) |
 | PD-208 | Group 切換時 realize 失敗必須有使用者可見提示 | 7 | `done` | PD-093 | [PD-208](tickets/PD-208-group-switch-realization-failure-is-user-visible.md) |
-| PD-209 | Group 切換／tab realize 的延遲計時儀器（覆寫 PD-026 的儀器排除） | 7 | `in_progress` | PD-024, PD-026 | [PD-209](tickets/PD-209-switching-latency-instrumentation.md) |
+| PD-209 | Group 切換／tab realize 的延遲計時儀器（覆寫 PD-026 的儀器排除） | 7 | `done` | PD-024, PD-026 | [PD-209](tickets/PD-209-switching-latency-instrumentation.md) |
 | PD-210 | 同步失敗的導覽必須把 `latest_navigation_generation_` 還給仍在飛的請求 | 7 | `done` | PD-199, PD-207 | [PD-210](tickets/PD-210-restore-latest-generation-when-a-navigation-fails-synchronously.md) |
 | PD-211 | PaneDock 自己的 popup 選單必須持有 `ShellCallScope` | 7 | `done` | PD-171, PD-205 | [PD-211](tickets/PD-211-our-own-popup-menus-must-hold-a-shell-call-scope.md) |
 | PD-212 | 延遲的指標／hover 訊息只保留最後一筆意圖 | 7 | `done` | PD-205 | [PD-212](tickets/PD-212-deferred-pointer-messages-keep-only-the-latest-intent.md) |

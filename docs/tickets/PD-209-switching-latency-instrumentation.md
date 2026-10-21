@@ -114,7 +114,7 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-2026-09-18 儀器部分完成。2026-10-20 已取得本機 Group/tab 量測；網路路徑仍未測，本票尚未完成。
+2026-09-18 儀器完成。2026-10-20 取得本機 Group/tab 基線；2026-10-21 取得 pending UNC Group-switch timing 與單次 UNC error completion observation。
 
 - `write_live_view_count` 的寫出邏輯抽成
   `panedock::app_shell::write_diagnostic_line(key, value)`，與新的
@@ -169,12 +169,18 @@ ctest --test-dir build --output-on-failure
   `failed to activate captured window`，故操作結果未確認且未重試。尚無第二個
   Group 或任何延遲樣本；依 Computer Use 恢復規則停止自動 UI 操作。
 
-### 剩下的工作（下一位接手者）
+### 測量邊界（本票單一路徑樣本之外）
 
-`docs/performance-baseline.md` 已記錄本機 Group/tab 的 20 筆量測，以及 2026-10-21 一次真實 managed-list UNC pending 期間的 Group-switch timing。該 UNC pane 在 3.4 秒觀察期間維持 `Loading...`、UI ping 0 ms；request 沒有觀察到最終完成或錯誤，因此實際 provider completion／error latency 仍未測。此次 Group-list 操作使用 Win32 合成 mouse click，不是實體輸入；樣本為 n=1，不能由此推論其他 provider 或容量耗盡行為。後續只在有明確價值時補測，不重跑完整本機矩陣。
+`docs/performance-baseline.md` 記錄本機 Group/tab 各 n=20、pending UNC 期間 Group switch handler timing，以及另一筆同一 TEST-NET path 的 completion/error observation。兩筆 UNC 樣本分別回答切換是否等待列舉、以及這次單一 OS request 何時回錯；都不是其他 provider、一般權限網路、容量耗盡或任意慢 provider 的推論。若未來有具體價值再擴充 provider 矩陣，不重跑已完成的本機量測。
 
 ### 2026-10-21 隔離 UNC pending switch（部分量測）
 
 Claude 以目前 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586`）啟動兩組、每組四個 pane 的新 session：Group A 四個本機 marker folder；Group B 三個本機 folder 加 `\\192.0.2.1\PD226`。使用絕對隔離 `LOCALAPPDATA=build\manual-test\pd209u\run-261021153356\la`，確認載入兩個正確 Groups 後，只做 A→B 與一次 B→A；stdout／stderr 明確導向隔離檔案，stderr 為空。A→B 輸出 `panedock.group_switch_navigate_ms=6.1204` 與 `panedock.group_switch_ms=15.8231`；點擊後約 177 ms 時三個本機 pane 各顯示 1 item，UNC pane 顯示 `0 items - Loading...`。約 3.4 秒觀察期間 `SendMessageTimeout(WM_NULL)` 均回 `0 ms, hung=False`，UNC 仍 pending。B→A 為 6.057 ms／14.4854 ms，UI 同樣回應。
 
 正常關閉約 145 ms、無殘留 PaneDock process；正式 session 檔案時間與大小不變。輸出／截圖在 ignored `build\manual-test\pd209u\run.out.txt` 與 `run-261021153356`。此結果填補 baseline 網路 Group-switch row 的 handler timing 與 pending UI responsiveness 單次樣本；不等於量到 provider 最終阻塞／完成時間、不可達性全貌、capacity exhaustion 或 stuck-provider shutdown。三列已不再全為未量測，但本票其餘 checks／完整測試證據仍須遵循使用者目前「只跑相關測試」指示；本次僅記錄部分證據。
+
+### 2026-10-21 單次 UNC 錯誤完成時間觀察
+
+Claude 使用同一 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586`）與隔離 `LOCALAPPDATA=build\manual-test\pd209-completion\run-261021160646\la`。Windows 11 Pro 10.0.26300 x64、Intel Core i7-12700K、63.7 GB RAM；PaneDock 以提升權限執行。對 `\\192.0.2.1\PD226` 只送出一次唯讀列舉：首個 2 ms 樣本顯示 `0 items - Loading...`，100 ms 間隔記錄 187 筆；於 20,988 ms 首次觀察到 `0 items - Cannot read this location. Refresh to retry. Error 53`。每筆都呼叫 `SendMessageTimeout(WM_NULL)`，最大 ping 2 ms，未逾時。此為外部讀取列表狀態的觀測時間，不是 provider 內部精確完成時刻；也只量到錯誤回傳，沒有量成功或取消路徑。
+
+觀察結束後 `WM_CLOSE` 約 187 ms 退出，PaneDock process count 為 0；正式 session metadata 未變、stdout 只有 live-list 計數、stderr 空白，未碰 clipboard、未做檔案操作或修改 source。Process exit code 未取得。CSV、stdout／stderr 與前後截圖保留在 ignored `build\manual-test\pd209-completion\run-261021160646\`。
