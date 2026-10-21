@@ -92,3 +92,12 @@ ctest --test-dir build --output-on-failure -R '^panedock_launch_smoke$'
 `launch_smoke.ps1` 設定 `LOCALAPPDATA=build\smoke-localappdata`（未碰使用者 session），以 `--diagnostic` 單次啟動，經主視窗正常關閉結束，未強制終止。兩次執行皆 PASS（1.35 秒、1.23 秒），輸出 `launch smoke test passed (live_list_count reached 0)`，exit code 0；隔離 `session.json` 寫入 `clean_shutdown: true`，預設 4 pane 皆為 This PC（`::{20D04FE0-3AEA-1069-A2D8-08002B30309D}`）；結束後無 PaneDock 行程殘留。
 
 只支持「正常啟動／關閉、關閉時 managed-list 計數歸 0」。仍未驗證：session 恢復、四 pane 切換、native menu／operations、真實 Shell／network／OneDrive、idle／resource lifetime 量測、stuck provider 的 bounded shutdown、完整 CTest；全部 acceptance 維持未勾選，狀態維持 `in_progress`。
+
+## 實機 idle 資源量測（2026-10-21，發現異常，待判斷）
+
+Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（2026-10-21 08:47:31 建置）；隔離 `LOCALAPPDATA`（`build\manual-test\la-pd242`、`la-pd242b`，絕對路徑）；各單一實例，無輸入，harness 僅取樣行程計數器；視窗位於第二螢幕，非前景。原始輸出：`build\manual-test\pd242.log`、`pd242b.log`（未納入版控）。
+
+- 首次量測（4-pane，啟動後 5 秒起算、120.1 秒 idle）：`TotalProcessorTime` 增加 104.36 秒（約單核 86.9%）；私有記憶體 11.41→10.99 MB、handles 809→792、threads 19→13；`ReadOperationCount`／`WriteOperationCount`／傳輸 bytes 增量皆為 0（沒有磁碟 I/O）。結束時 `live_list_count` 歸 0、`clean_shutdown=true`、正常關閉無殘留行程。
+- 獨立重量測（8 個 5 秒視窗）：CPU 80.8%～88.3% 單核；10 秒的 per-thread 增量顯示單一 thread（狀態 Running）占 8.078 秒，其餘 thread 皆 ≤0.031 秒；以 `SC_MINIMIZE` 最小化後同樣 10 秒量得 0%。
+
+AGENTS.md 要求 idle 時 0% CPU；本次量測的視窗可見時 idle CPU 遠高於此，且隨視窗最小化消失。這支持「可見狀態下有持續繁忙的 UI thread」的觀察，但尚未排除與此 harness 環境（第二螢幕、非前景、`SetWindowPos` 搬移視窗）相關的因素，也未定位原因，不判定為產品缺陷，需由後續 triage 以不經 harness 搬移的視窗重測。10 分鐘 idle、記憶體長期趨勢、binary／runtime 依賴、完整 CTest 與 stuck provider bounded shutdown 仍未驗證；PD-242 維持 `in_progress`，acceptance 未勾選。
