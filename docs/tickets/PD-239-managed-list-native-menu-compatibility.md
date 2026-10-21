@@ -110,3 +110,11 @@ Release configure／build 成功；指定的 8 個 CTests 全部通過（2.77 �
 
 - 真實原生 verbs、folder background menu（含需要 view site 的 verbs）、installed shell extensions、legacy／managed 桌面對照、實際焦點及 mixed-DPI keyboard anchor 均未驗證，需真實桌面；本次依使用者要求略過。Pane seam PASS 不代表上述 Shell 相容性 PASS，也不代表選單延遲改善。
 - namespace provider 是否接受目前的 parsing identity 並回傳單節 child PIDL，尤其 Desktop／This PC／虛擬 location，以及 OneDrive／網路環境的選單行為，仍需實機確認；不能由受控 namespace row 推論支援已通過。
+
+## 實機自動化嘗試（2026-10-21，未驗證）
+
+Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（2026-10-21 08:47:31 建置）；隔離 `LOCALAPPDATA=build\manual-test\la-pd239`（絕對路徑）；單一實例，正常關閉且無殘留行程；拋棄式資料夾 `build\manual-test\menu`（`m1.txt`～`m3.txt`，操作後內容不變）。
+
+前置條件僅部分成立：`LVM_HITTEST` 命中 item 0（`flags=0x4`），空白處座標命中無 item（`iItem=-1`）。但以 `SendInput`（絕對座標）對 item 右鍵後選取數仍為 0，焦點留在地址列（截圖中地址文字為選取狀態）；對該狀態送 Shift+F10、Menu key 與空白處右鍵，PaneDock 行程下均未出現選單視窗，也未在截圖中看到選單。因為選取與焦點沒有進入 list，這些結果不能判斷原生選單是否正確，也不是產品失敗。
+
+滑鼠選取／Shift+F10／Menu key／空白處／footer 開啟的 target 正確性、modal pump 中切換或關閉後的 stale 防護、與 File Explorer 原生 verbs 的對照全部維持未驗證，需真實桌面；未執行任何會改檔案的 verb。截圖在 `build\manual-test\pd239-*.png`（未納入版控）。
