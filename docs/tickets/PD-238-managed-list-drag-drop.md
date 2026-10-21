@@ -93,6 +93,14 @@ Configure、限定 targets build、上述 9 項 CTests 與 diff check 通過。�
 
 原生介面契約參考：[IDropTarget::DragEnter](https://learn.microsoft.com/en-us/windows/win32/api/oleidl/nf-oleidl-idroptarget-dragenter)、[IShellItem::BindToHandler](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishellitem-bindtohandler)。folder 背景 target 使用 folder 的 IShellFolder::CreateViewObject，沒有替換原生 menu／file operation 策略。
 
+## Post-PD-242 focused checkpoint（2026-10-21）
+
+在 `5ad7d14`、`4ba2e0a` 與 `a81cbe4` 後重新追查 selection snapshot → Shell `IDataObject` → OLE source、目前 folder 的 `IDropTarget`、Group／tab hover，以及 STA re-entry／shutdown／revoke lifetime。既有實作已提交，未發現需補作的 PD-238 自動化接線缺口；維持 Shell transfer／`IFileOperation` 邊界，不新增自製 transfer 或 context menu。
+
+重跑上節精確指定的 Release configure、7 個 build targets 與 9 項 focused CTests，命令皆自然完成：configure／build exit 0（build：`ninja: no work to do`），CTest **9/9 PASS、exit 0**，total 2.45 s（測試時間，非效能證據）；`git diff --check` exit 0。未執行完整 CTest、GUI、launch smoke、真實外部拖放或 Shell／provider／network／OneDrive 整合測試；既有使用者 WIP 保留。
+
+剩餘缺口僅為下列真實桌面／provider integration evidence；三項 acceptance criteria 保持未勾選，追蹤表維持原值。依既有 sequencing-only waiver，下一張可繼續核對剩餘工作的票為 PD-239（原生選單目標相容性接線），不代表本票或 PD-241 通過實機驗收。
+
 ## 交接區
 
 - 依使用者明確指示，本環境刻意跳過真實檔案傳輸及桌面驗證。跨 pane／volume、Explorer 與另一 app 的外部拖入拖出、Ctrl／Shift／link、Escape／threshold、Group／tab hover 後立即 drop、provider progress 中關閉／取消、virtual namespace 與 OneDrive 語意皆**未驗證，需真實桌面**；本次測試不能宣告本票 acceptance 或 PD-241 drag/drop gate 通過。
