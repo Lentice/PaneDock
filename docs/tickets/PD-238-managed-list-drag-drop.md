@@ -103,7 +103,7 @@ Configure、限定 targets build、上述 9 項 CTests 與 diff check 通過。�
 
 ## 交接區
 
-- 依使用者明確指示，本環境刻意跳過真實檔案傳輸及桌面驗證。跨 pane／volume、Explorer 與另一 app 的外部拖入拖出、Ctrl／Shift／link、Escape／threshold、Group／tab hover 後立即 drop、provider progress 中關閉／取消、virtual namespace 與 OneDrive 語意皆**未驗證，需真實桌面**；本次測試不能宣告本票 acceptance 或 PD-241 drag/drop gate 通過。
+- 尚未完成真實 transfer 矩陣：已確認同 volume 單檔 pane-to-pane move、同 volume Ctrl-copy，以及一例跨 volume 預設 pane-to-pane copy（均由檔案狀態推論）；Explorer 外部拖入仍 inconclusive。跨 volume modifier、外部拖入／拖出、Shift／link、Escape／threshold、Group／tab hover 後立即 drop、provider progress 中關閉／取消、virtual namespace 與 OneDrive 語意仍**未驗證，需真實桌面**；目前證據不構成本票 acceptance 或 PD-241 drag/drop gate 通過。
 - 真實 Shell target 建立與拖放 provider 呼叫仍在 UI STA；慢 provider 的延遲、progress／衝突提示與實際傳輸壽命尚未量測。fake resolver 的 effect／reentry 測試不保證原生 provider 相容性或 NFR-003 通過。
 
 ## 實機自動化診斷（2026-10-21，未驗證；是否為產品缺陷待判斷）
@@ -115,3 +115,33 @@ Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（2026-10-21 08:47:31 建置）
 只能說明在此 harness 條件下沒有觀察到 drop；不能由此判定產品缺陷，也未涵蓋 `LVN_BEGINDRAG` 是否被觸發，需由另行 triage 判斷。同 pane、跨 volume、Explorer 拖入／拖出、取消、hover 切 Group／tab、快速重入全部維持未驗證，需真實桌面。早先一次使用相對路徑 `LOCALAPPDATA` 的 PD-238 嘗試誤用了正式 session，其結果作廢。
 
 第二次獨立重現（同日，`pd238e`，與 `pd238d` 除 run 名稱、截圖名稱、`LOCALAPPDATA` 外完全相同；起始無 PaneDock 行程，正常關閉後無殘留，正式 session 檔案時間未變）：`LVM_HITTEST` 命中 item 0（`flags=0x4`）、選取數 1、來源／目的 `WindowFromPoint` 皆為正確的 list、主視窗為前景、23 個 `SendInput` 事件皆回傳 1；拖曳後 A 仍為 `d1.txt,d2.txt,d3.txt`、B 仍為空、無原生 UI。結果與第一次相同。原始輸出：`build\manual-test\pd238d.log`、`pd238e.log` 與 `pd238e-before.png`／`pd238e-after.png`（未納入版控）；交由後續 triage 判斷是否為產品缺陷。
+
+## Claude cross-pane drag revalidation（2026-10-21；限定單一情境）
+
+Claude 以新隔離資料夾與絕對 `LOCALAPPDATA`，使用修正版 Release binary `build\manual-test\pd242trace\final2\PaneDock-fixed.exe`，只啟動一個 PaneDock 實例。拖曳前確認來源 `LVM_HITTEST` 命中 item 0、selection count 為 1，來源／目的 `WindowFromPoint` 分別命中 pane 0／pane 1 的 list，主視窗為 foreground。除 `SendInput` 回傳值外，另觀察到按下時 capture 屬於來源 `SysListView32`，移動後 capture 轉為 `CLIPBRDWNDCLASS`、drag cursor 持續至放開，支持真實 OLE drag 已開始。新建的 `pd238f.txt` 從 A 消失並出現在 B，觀察結果為同 volume move；未直接讀取 effect API 回傳值。主視窗正常關閉，163 ms 後程序數為 0。隔離目錄 `build\manual-test\pd238f` 的原始 `pd238f.log`、`out.txt`、`before.png` 與 `during.png` 未納入版控。
+
+這證明單一同 volume、單檔、pane-to-pane move 情境可工作，不能推論先前兩次記錄的原因是舊 build 或 harness，也不構成 PD-238／PD-241 acceptance。前次 triage 未取得產品缺陷證據；本次沒有新增 defect 證據。尚未驗證跨 volume、外部應用程式、copy/link modifier、取消、hover 後切 Group／tab、provider／shutdown 交錯及 OneDrive；原始 acceptance criteria 與 tracker 狀態維持不變。Claude 的測試腳本在 action 後的資訊輸出行有 typo，但不影響已記錄的 OLE capture 過程、關閉後檔案狀態或正常關閉證據。
+
+## Cross-volume and Explorer drag attempt（2026-10-21；Explorer case inconclusive）
+
+Claude 用單一隔離 PaneDock 實例與新資料夾，測試 C: → E: 跨 volume pane-to-pane 預設拖放。來源 row hit test、selection、來源／目的 WindowFromPoint 與 OLE capture 均確認；拖放後 C: 來源保留、E: 目的新增且 SHA-256 一致，兩個 list 各有一列。由檔案狀態推論此次預設效果為 copy；未直接讀取 effect API。
+
+另測 Windows Explorer（C:）→ PaneDock（E:）：Explorer UIA 選取為 true、拖動期間 capture 轉為 `CLIPBRDWNDCLASS`，放開前游標位於正確 PaneDock list；但選取座標的 UIA element 是同列的 Date 欄而非檔名，拖曳游標未呈現可解讀 effect，目的資料夾仍空。尚未證明 Explorer 送出的 IDataObject 含目標檔案，也沒有觀察 PaneDock `DragEnter`／`Drop` 是否被呼叫，因此結果 inconclusive，不列為產品缺陷。
+
+測試 binary `build\PaneDock.exe` SHA-256：`9C585990E8DB931A84122C810F6D24FD35A02914EF88454A70F1933EDEC039AD`。run log／screenshots 位於 `build\manual-test\pd238g\run-20261021-120254`；PaneDock 正常關閉且無殘留行程。仍未驗證 Explorer 外部拖入／拖出、modifier、取消、跨 Group／tab hover、provider／shutdown 交錯及 OneDrive 等情境。
+
+## Explorer 外部拖入重測（2026-10-21；仍未驗證）
+
+Claude 在 `build\manual-test\pd238h\run-20261021-143407` 以單一 isolated `LOCALAPPDATA`、新建 source／destination 資料夾與唯一文字檔重測；使用 Release `build\PaneDock.exe`，SHA-256 `9C585990E8DB931A84122C810F6D24FD35A02914EF88454A70F1933EDEC039AD`。Explorer 新視窗的 UIA `ListItem` 僅一項，名稱及 `名稱` column value 都是 `pd238h_explorer_20261021-143407.txt`，`IsSelected=True`、container selection count 1；這次精確來源選取已證明，補足先前 Date 欄位造成的不確定性。
+
+拖曳時 capture 從 Explorer `DirectUIHWND` 轉到 `CLIPBRDWNDCLASS`，放開前游標落在 PaneDock destination `SysListView32`。放開後 source 檔仍存在且 hash 未變、destination 空、PaneDock 無額外視窗或對話框。沒有可讀的 drop effect，也無法證明 PaneDock 是否收到 `DragEnter`／`Drop`；因此不判定為產品缺陷或 transfer PASS。新 Explorer 視窗關閉、既有 Explorer HWND 保留；PaneDock 正常於 117ms 退出、無殘留行程；只移除本次新建 source／destination 資料夾，logs／screenshots 保留於該 run 目錄。較早 run `143345` 的腳本欄位查找失敗並在拖曳前停止，未作為測試結果。
+
+此重測仍未驗證 Explorer 外部 transfer、其他 app、modifier／取消、hover 切 Group／tab、provider／OneDrive 或 shutdown 交錯；三項 acceptance 與 tracker 維持 `in_progress`。
+
+## Claude same-volume Ctrl-copy probe（2026-10-21；單檔）
+
+Claude 使用 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586`）、一個 PaneDock process 與絕對隔離 `LOCALAPPDATA`。測試資料在同一 volume 的新建 `A`／`B` 資料夾；唯一來源檔 `pd238cc_marker_261021155539.txt` 的原始 SHA-256 為 `A3F58B87D928D027CE192CE56FB538A2AC3F5D74DAD0BE2CF2A2DE196192FCCE`。拖曳前 `LVM_HITTEST` 命中來源 row、selection count 1、焦點在來源 list，兩個 `WindowFromPoint` 分別命中 pane 0／pane 1 的 `SysListView32`，PaneDock 為 foreground。
+
+滑鼠按下後 capture 在來源 list；拖動中 capture 轉至 `CLIPBRDWNDCLASS`，確認真實 OLE drag 已開始。Claude 在移動期間按下 Ctrl，`GetAsyncKeyState` 確認按住，並在 Ctrl 仍按住時將游標放在目的 list 後 release。結果來源仍有原檔、目的地新增同名檔，兩邊 SHA-256 都與原始值相同；Pane 0／1 各顯示該 row。此結果由檔案狀態推論為 copy，沒有讀取 drop effect API。
+
+PaneDock 以 `WM_CLOSE` 約 185 ms 正常退出，process count 歸零；正式 session metadata 未變、stderr 空白，未用 clipboard、未刪除資料。原始輸出與前後截圖留在 ignored `build\manual-test\pd238-ctrl-copy\run-261021155539\`。這是單一同 volume 單檔樣本；Ctrl 在 drag 開始後才按，尚未驗證拖曳前按住 Ctrl、跨 volume modifier、Shift／Alt／取消、外部來源、Group／tab hover 及 provider／shutdown 交錯。原始 acceptance 與總覽狀態維持 `in_progress`。
