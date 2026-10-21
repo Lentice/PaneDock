@@ -95,6 +95,10 @@ git diff --check
 
 依使用者要求未執行 GUI／完整 CTest／真實 OneDrive 帳戶驗證。總覽維持 in_progress，以上不勾選實機 acceptance。
 
+### PD-242 後聚焦回歸檢查（2026-10-21）
+
+PD-242 移除 legacy Shell view 後，Release 設定下 `panedock_managed_list_icons_test` 與 `panedock_managed_list_cloud_test` targets 已是最新；聚焦 CTests `panedock_managed_list_icons`、`panedock_managed_list_cloud` 通過（2/2）。此結果僅覆蓋受控 metadata、列表狀態與 icon identity 更新路徑，不代表真實 OneDrive hydration／provider 行為。未執行完整 CTest、GUI、launch smoke、OneDrive、網路、Shell/provider interaction 或 hydration 測試。tracker 維持 `in_progress`；剩餘實機驗收仍依下方交接區執行。
+
 ## 交接區
 
 - online-only、locally available、always available 三種真實檔案的列舉／圖示前後 residency、狀態轉換通知及 Refresh、離線／未同步恢復、selection／導航與其他 pane 回應性全部未驗證，需真實桌面；Windows／OneDrive client 版本與檔案前後狀態亦未取得。具體待觀測項目見研究文件，不得用 controlled attributes 測試推論 hydration PASS。
