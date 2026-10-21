@@ -114,7 +114,7 @@ ctest --test-dir build --output-on-failure
 
 ## 交接區
 
-2026-09-18 儀器部分完成，**量測部分尚未執行**（本票仍未完成）。
+2026-09-18 儀器部分完成。2026-10-20 已取得本機 Group/tab 量測；網路路徑仍未測，本票尚未完成。
 
 - `write_live_view_count` 的寫出邏輯抽成
   `panedock::app_shell::write_diagnostic_line(key, value)`，與新的
@@ -134,17 +134,47 @@ ctest --test-dir build --output-on-failure
 - `ctest`：33/33 通過。`panedock_launch_smoke` 通過即證明
   `write_diagnostic_line` 的輸出格式沒有退化（該測試會解析
   `panedock.live_view_count=N`）。
+- 2026-10-20 的單次隔離 GUI 重試仍未取得延遲樣本：stdout 停在
+  `panedock.live_view_count=0,1,3`，等待後 `sky.list_windows()` 仍沒有
+  PaneDock 視窗，且正常關閉要求在 5 秒內未完成。這不是 Group／tab 延遲
+  證據；診斷啟動的視窗就緒問題仍待查明。
+- 2026-10-20 再次以單次 `Start-Process` 啟動隔離設定（兩個 Group 均只用
+  本機測試資料夾）重試，未呼叫第二次 launch。等待 3 秒並重新列舉後仍無
+  PaneDock 視窗；stdout 仍只有 `panedock.live_view_count=0,1,3`，沒有任何
+  latency 行。對同一 PID 發出正常關閉要求後 5 秒仍未結束；最後觀察到該
+  PID `Responding=true`、標題空白。沒有啟動第二個實例，也沒有取得有效樣本。
+- 後續 Computer Use 重查時，`sky.list_apps()` 與 `sky.list_windows()` 均未列出
+  PaneDock。對原測試 PID 再送一次正常 `CloseMainWindow` 後，程序回報
+  `Responding=true`、標題 `PaneDock — Diagnostic Mode`，但該 HWND 仍未出現在
+  Computer Use 的視窗清單，無法安全地進行 Group/tab 互動；未再啟動新實例。
+- 2026-10-20 重新執行一次隔離診斷啟動，PID 27008。LOCALAPPDATA 隔離設定有
+  成功寫出 session；stdout 仍只有 `panedock.live_view_count=0,1,3`，stderr
+  空白，Computer Use 的 fresh `list_apps()`／`list_windows()` 均未列出視窗；
+  Task Manager 顯示程序執行中、CPU 00。正常 `CloseMainWindow` 回報已送達，
+  等待 15 秒程序仍存活。檢查隔離 session 發現它沿用 3-pane Groups 且帶有
+  大量 tabs，並非票面要求的兩個四-pane 測試組；此次不能當作延遲或相容性樣本。
+  根因仍未證實；需先以最小、正確的四-pane 測試 session 重現，再釐清啟動視窗
+  不可見／正常關閉未完成的原因。依 AGENTS.md 單實例規則，此 PID 未退出前不
+  再啟動另一份 PaneDock。
+- 使用者於同日手動啟動 `build\\PaneDock.exe` 後確認主視窗正常出現。Computer Use
+  fresh enumeration 也列出唯一 `PaneDock` 視窗，截圖顯示正常模式與已載入的
+  Groups；因此前述不可見現象只在隔離 `Start-Process` 診斷啟動中觀察到，尚未
+  證明是產品一般啟動缺陷。此正常模式沒有 `--diagnostic` 計時輸出。對現有視窗
+  嘗試一次 tab 操作失敗；依程序重新列舉並重選後，`activate_window` 仍回報
+  `failed to activate captured window`，已停止 UI 操作；沒有完成 Group/tab 延遲量測。
+- 使用者依隔離命令啟動 Diagnostic Mode 後，Computer Use 成功列舉唯一視窗並
+  擷取畫面；標題為 `PaneDock — Diagnostic Mode`，隔離 session 顯示一個本機
+  `Group 1`、4 panes、每 pane 一個 tab。對 `New Group` 的單次操作回報失敗；
+  fresh re-list 仍列出同一視窗，但重新選取後 `activate_window` 再次回報
+  `failed to activate captured window`，故操作結果未確認且未重試。尚無第二個
+  Group 或任何延遲樣本；依 Computer Use 恢復規則停止自動 UI 操作。
 
 ### 剩下的工作（下一位接手者）
 
-填寫 `docs/performance-baseline.md:14-16` 三列。需要**實機互動**（點 sidebar
-切 Group、點 tab），無法自動化——UI 自動化是本專案已否決的方向，而
-`panedock_launch_smoke` 只啟動與關閉。步驟：
+`docs/performance-baseline.md` 已記錄本機 Group/tab 的 20 筆量測，以及 2026-10-21 一次真實 managed-list UNC pending 期間的 Group-switch timing。該 UNC pane 在 3.4 秒觀察期間維持 `Loading...`、UI ping 0 ms；request 沒有觀察到最終完成或錯誤，因此實際 provider completion／error latency 仍未測。此次 Group-list 操作使用 Win32 合成 mouse click，不是實體輸入；樣本為 n=1，不能由此推論其他 provider 或容量耗盡行為。後續只在有明確價值時補測，不重跑完整本機矩陣。
 
-1. 準備一份 `%LOCALAPPDATA%\PaneDock\session.json`，含兩個四 pane Group；
-   其中一個 Group 的一個 pane 指向不可達 UNC（例如 `\\10.255.255.1\share`）。
-2. `build\PaneDock.exe --diagnostic > timing.txt`，來回切換 Group 與 tab 各
-   10 次以上，關閉。
-3. 從 `timing.txt` 取 `group_switch_ms`／`group_switch_navigate_ms`／
-   `tab_realize_ms` 的中位數與最大值，連同機器與樣本數填進
-   `docs/performance-baseline.md`。
+### 2026-10-21 隔離 UNC pending switch（部分量測）
+
+Claude 以目前 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586`）啟動兩組、每組四個 pane 的新 session：Group A 四個本機 marker folder；Group B 三個本機 folder 加 `\\192.0.2.1\PD226`。使用絕對隔離 `LOCALAPPDATA=build\manual-test\pd209u\run-261021153356\la`，確認載入兩個正確 Groups 後，只做 A→B 與一次 B→A；stdout／stderr 明確導向隔離檔案，stderr 為空。A→B 輸出 `panedock.group_switch_navigate_ms=6.1204` 與 `panedock.group_switch_ms=15.8231`；點擊後約 177 ms 時三個本機 pane 各顯示 1 item，UNC pane 顯示 `0 items - Loading...`。約 3.4 秒觀察期間 `SendMessageTimeout(WM_NULL)` 均回 `0 ms, hung=False`，UNC 仍 pending。B→A 為 6.057 ms／14.4854 ms，UI 同樣回應。
+
+正常關閉約 145 ms、無殘留 PaneDock process；正式 session 檔案時間與大小不變。輸出／截圖在 ignored `build\manual-test\pd209u\run.out.txt` 與 `run-261021153356`。此結果填補 baseline 網路 Group-switch row 的 handler timing 與 pending UI responsiveness 單次樣本；不等於量到 provider 最終阻塞／完成時間、不可達性全貌、capacity exhaustion 或 stuck-provider shutdown。三列已不再全為未量測，但本票其餘 checks／完整測試證據仍須遵循使用者目前「只跑相關測試」指示；本次僅記錄部分證據。
