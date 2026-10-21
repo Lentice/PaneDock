@@ -13,7 +13,7 @@
    New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
    ```
 3. 以 `Start-Process build\PaneDock.exe -ArgumentList '--diagnostic' -RedirectStandardOutput <輸出檔>` 啟動一次並記下 PID。需要重啟的步驟，必須先正常關閉前一個行程、確認已結束，才可再啟動。
-4. 只在你自行建立的拋棄式資料夾或已授權路徑上操作（本機兩個資料夾 A、B，最好分屬不同 volume；網路僅限 `\vianextfs06\Tmp\Lentice\test`）。不得對使用者資料執行刪除、改名或會改檔案的 verb。
+4. 只在你自行建立的拋棄式資料夾或已授權路徑上操作（本機兩個資料夾 A、B，最好分屬不同 volume；網路僅限 `\\vianextfs06\Tmp\Lentice\test`）。不得對使用者資料執行刪除、改名或會改檔案的 verb。
 5. 不要建立、變更或中斷任何網路磁碟機對應；不要變更使用者設定。
 6. 右鍵選單一律保留 Windows 原生 Shell menu，不測也不要求自訂選單。
 7. 每項證據都必須記錄：OS 版本（`[Environment]::OSVersion`／`winver`）、`build\PaneDock.exe` 建置時間與版本、相關 provider 版本（OneDrive、SMB 等，可得時）、日期，以及**原始**輸出與計時（貼原文或原始錄影，不要只寫摘要）。
@@ -35,12 +35,12 @@
 
 - 設定：以 `--diagnostic` 啟動；建立至少 2 個 Group、4 pane、各 pane 2 個以上 tab。
 - 操作：手動切換 Group 至少 5 次、切換 tab 至少 5 次。
-- 記錄：輸出檔中所有 `panedock.*_ms=` 原始行（Group 切換、tab 啟用兩類）；機器規格、pane／tab 數、每次操作的大約時間點。
+- 記錄：輸出檔中 `panedock.group_switch_ms=`、`panedock.group_switch_navigate_ms=`、`panedock.tab_realize_ms=` 的所有原始行（Group 切換、tab 啟用兩類）；機器規格、pane／tab 數、每次操作的大約時間點。
 - 判定：兩類計時行都出現且數值可讀 → 驗收 1 有證據；未帶 `--diagnostic` 時無計時輸出需在前一行程關閉後另行啟動確認，未做 → 驗收 2 未驗證。performance-baseline 三列由使用者決定何時填入，本清單不修改。「單一不可達網路路徑」一列見第 3 節，不得以本機結果代替。
 
 ## 3. PD-226 慢網路、容量與 shutdown
 
-來源：PD-226 三項驗收。已知限制：先前 `\192.0.2.1\PD226` 約 1.7 秒就回 Error 53，不是慢源證據；沒有既有的 mapped drive，也不得建立或中斷；真實 UNC pending 不能替代 mapped drive 的驗收。
+來源：PD-226 三項驗收。已知限制：先前 `\\192.0.2.1\PD226` 約 1.7 秒就回 Error 53，不是慢源證據；沒有既有的 mapped drive，也不得建立或中斷；真實 UNC pending 不能替代 mapped drive 的驗收。
 
 - 設定：需要一般權限下能維持 pending 的真實來源（慢或不可達的 UNC）。若有**既有**、本來就存在的 mapped drive 且處於斷線狀態，才可用於 mapped-drive 項；沒有則該項記為未驗證，不要求任何人建立或中斷對應。
 - 3.1 pending 期間的操作性：導覽某 pane 到該來源；pending 期間操作其他 pane、其他 tab、切 Group、改目的地，用計時或錄影記錄每個操作是否立即回應。離開後再重試，確認 parsing／fallback identity 保留。
