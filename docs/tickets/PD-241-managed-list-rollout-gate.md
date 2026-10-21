@@ -13,6 +13,8 @@ Phase 8 · managed list migration
 
 滿足明確 gate 後才覆寫 IExplorerBrowser 預設路徑；不放寬 idle gate 與 menu 故障邊界。
 
+2026-10-21 使用者明確授權的排序例外見 [PD-242 Overrides](PD-242-managed-list-remove-shell-view.md#overrides) 與 [design-spec Phase 8 override](../design-spec.md#phase-8-override2026-10-21)：rollout measurement gate 僅就後續實作排序豁免，並未通過。下列原始範圍、驗收條件及證據完整保留；其中要求 gate 通過才繼續的排序限制由該例外覆寫，不得將未驗證項目改算 PASS。
+
 ## 綁定限制（引用與適用方式）
 
 - design-spec NFR-003：「Group 切換、版型切換、tab 切換不得因為某個 Shell location 緩慢或無法連線而凍結 UI。」
@@ -67,6 +69,8 @@ Phase 8 · managed list migration
 - **後續 gate 邊界**：維持既有 `IExplorerBrowser` 預設與實作；PD-242 必須等 PD-241 gate 通過後才可進行。右鍵優先使用原生 Windows Shell menu，僅必要時才考慮 custom menu；本次沒有此必要，也不實作選單變更。
 
 ## Non-goals
+
+2026-10-21 waiver checkpoint 僅記錄使用者授權，不改實作、不執行真實測試／GUI／launch smoke／完整 CTest。上述 2026-10-20 checkpoint 的等待 gate 限制及下列正式 gate 前不替換預設的限制，僅就排序由 PD-242 Overrides 覆寫；功能／資源標準與未驗證風險不變。
 
 不實作相鄰切片、不改右鍵選單產品策略、不加入程序隔離／plugin framework、不作破壞性 session migration、不改寫任何 completed ticket。開發路徑在正式 gate 前不替換既有正常預設；切預設與 contract 僅由對應票執行。
 

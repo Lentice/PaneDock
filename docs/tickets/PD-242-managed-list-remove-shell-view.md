@@ -7,11 +7,17 @@ Phase 8 · managed list migration
 2026-10-16 使用者回報偶發 tab 列表刷新延遲，明確決定自行管理列表，並確認 21 個切片的粒度與依賴。
 功能來源：[自建列表規格](../research/2026-10-16-managed-list-spec.md)。本票的狀態與阻擋關係以 Ticket 總覽為唯一來源。
 
-**What to build：**在新列表已通過驗收並成為預設後，移除無人使用的舊 view 路徑，留下清楚可維護的單一列表實作。
+**What to build：**依下列使用者授權的排序豁免，推進 managed-list-only code 並移除舊 view 路徑，留下清楚可維護的單一列表實作；不宣稱新列表已通過真實驗收。
 
 ## Overrides
 
-contract 只在 rollout gate 完成後移除舊實作；不改寫 completed tickets 的歷史內容。
+2026-10-21 使用者明確授權覆寫：
+
+> user authorized skipping real validation and proceeding through later tickets; the rollout measurement gate is waived for sequencing only, not passed.
+
+此授權覆寫原先「contract 只在 rollout gate 完成後移除舊實作」及本票 Non-goals 中「正式 gate 前不替換既有正常預設」的排序限制，允許繼續 managed-list-only 實作。產品權威同步見 [design-spec Phase 8 override](../design-spec.md#phase-8-override2026-10-21)；狀態與阻擋關係只見 Ticket 總覽。
+
+PD-241 所有未勾選驗收條件、未驗證風險、失敗與既有自動化證據均保留；這不是相容性／效能 PASS，不放寬功能、資源、有界安全退出或原生 menu／operations 契約，不改寫 completed tickets 的歷史內容。本次 waiver checkpoint 只改文件，不改實作，不執行真實測試、GUI、launch smoke 或完整測試套件；下列驗收條件及 checks 保留為後續工作要求，不能因排序豁免宣告通過。
 
 ## 綁定限制（引用與適用方式）
 

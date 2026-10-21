@@ -9,11 +9,17 @@
 | 文件狀態 | 現行預設仍為 Shell view；Phase 8 managed-list 契約已核准 |
 | 目標平台 | Windows 10 22H2／Windows 11，x64 |
 | 技術基準 | C++20、原生 Win32、Shell COM（WRL ComPtr） |
-| 最後更新 | 2026-10-16 |
+| 最後更新 | 2026-10-21 |
 
 ## 1 文件目的
 
 本文件是 PaneDock 的產品權威。ticket 引用本文件的條款（`§FR-005`、`§9.2` 或 `docs/design-spec.md:120` 形式），不得與本文件衝突。若產品決策變更，**先更新本文件，再調整受影響的 ticket**。
+
+### Phase 8 override（2026-10-21）
+
+使用者明確授權跳過真實驗證並繼續後續 tickets，詳見 [PD-242 Overrides](tickets/PD-242-managed-list-remove-shell-view.md#overrides)。PD-241 rollout measurement gate 僅就工作排序予以豁免，並未通過；本文件各處「gate 通過才切預設／移除 legacy」的排序限制由本註記覆寫，允許 PD-242 推進 managed-list-only code。這是使用者授權的實作選擇，不是相容性或效能證據，也不表示本次文件 checkpoint 已改變執行路徑。
+
+所有未驗證條件與既有證據保留於 [PD-241](tickets/PD-241-managed-list-rollout-gate.md) 及 `docs/performance-baseline.md`：真實功能矩陣、10 分鐘 idle CPU／disk／memory 與資源 budgets、UNC／OneDrive、Shell extensions／verbs、焦點／accessibility、launch／session／shutdown（含 provider 有界安全退出）仍未驗證；`panedock_managed_list` 既有失敗仍未修復。這些風險不因排序豁免而消失，既有功能、安全退出、資源與證據標準不變，不得宣稱 PASS。
 
 ## 2 產品定義
 
