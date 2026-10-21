@@ -86,3 +86,18 @@ git diff --check
 Configure 與指定 targets 建置皆 exit 0（Ninja: no work to do）；CTest 10/10 PASS、exit 0，總時間 9.99 秒；diff check 通過。Configure／build／CTest 使用 elevated execution context，並非產品需要 elevation。證據涵蓋 identity／selection／sort／enrichment／cache／Refresh、Pane navigation／history／session restore，以及 controlled namespace worker capacity／late delivery／re-entry／non-joining shutdown；CTest 時間不是產品效能量測。使用者既有 WIP 保留，未納入本次文件提交。
 
 依本次授權未執行完整 CTest、GUI、launch smoke、真實 Shell／Desktop／known-folder／OneDrive／network／provider 測試。This PC／Desktop 的實際 children／parent、known-folder 重啟還原、provider STA COM lifetime 與卡住 provider 的安全 shutdown 仍「未驗證，需真實桌面」；以上自動化 PASS 不勾選本票產品 acceptance，亦不代表 PD-226 或 PD-241 gate 通過。下一個本 umbrella 剩餘 gate 是上述真實 Shell 驗收；相鄰 PD-235 的真實 OneDrive 驗收仍待完成，後續整體相容性／效能證據依 PD-241 保留，sequencing waiver 不等於 gate PASS。
+
+## 實機自動化 checkpoint（2026-10-21，部分驗證）
+
+Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（Release，2026-10-21 08:47:31 建置）；隔離 `LOCALAPPDATA=build\manual-test\la-pd234a`，每次僅一個 PaneDock 實例、正常關閉後才再啟動。操作為 PowerShell 5.1／.NET harness（`build\manual-test`，非產品碼、未納入版控）：地址列以 `WM_SETTEXT` 加 `PostMessage(WM_KEYDOWN VK_RETURN)`、pane 按鈕以 `BM_CLICK`、鍵盤以 `SendInput`；是腳本訊息，不是實體滑鼠操作。證據：stdout、`build\manual-test\pd234*.png`、隔離 `session.json`。
+
+已觀察到：
+- 啟動時 4 個 pane 皆為 This PC（`::{20D04FE0-3AEA-1069-A2D8-08002B30309D}`，3 items）；New Group 後 pane 0 位置仍為 This PC。
+- 地址列輸入 `shell:Desktop` 導覽成功（75 items）；`Back` 回 This PC（3 items）；`Forward` 回到 Desktop，此時地址列顯示 `D:\Documents\Desktop`、狀態 `57 items`（無 refresh 後綴的載入中狀態，未等待收斂，不作為差異結論）。`shell:Downloads` 導覽成功（1442 items）。
+- 正常關閉（結束碼未由 `Start-Process` 回報，視窗關閉後行程消失）後，`session.json` 的 `clean_shutdown=true`，Downloads 分頁保存 `parsing_name='D:\Downloads'`、`known_folder_identity={374DE290-123F-4565-9164-39C4925E467B}`、`fallback_path='D:\Downloads'`；Desktop 分頁為 `D:\Documents\Desktop`／`{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}`／同路徑；其餘分頁保存 This PC 的 parsing name 與 known-folder id。
+- 同一隔離 session 重啟後 pane 0 還原為 `D:\Downloads`（1443 items）、pane 1 還原為 `D:\Documents\Desktop`。
+
+未驗證（不勾選任何 acceptance）：
+- Desktop→child→parent：鍵盤 Down＋Enter 與 `SendInput` 滑鼠雙擊皆未能進入子資料夾（原始碼只在 `NM_DBLCLK` 開啟列，Enter 無對應處理；滑鼠按鍵事件未被控制項處理，診斷限時後放棄），`Up` 結果因此無法判讀。
+- 新 tab 與「最後一個 tab replacement」的分頁數量變化未以畫面確認；This PC 子項目、Desktop 子項目名稱未讀出（UIA 對該 ListView 無 item 節點）。
+- 慢 provider 的 request identity／capacity／shutdown、provider STA COM lifetime、卡住 provider 的安全關閉：無環境。
