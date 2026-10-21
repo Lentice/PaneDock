@@ -107,7 +107,7 @@ Configure exit 0。restricted build 無輸出，使用 Ctrl+C 中止（exit 1）
 
 ## 交接區
 
-- 未解風險：三項原始 integration acceptance criteria 仍未完整驗證，tracker 不因此標示 done。真實本機／Shell namespace／network／OneDrive Copy／Cut／Paste／Delete、clipboard formats materialization 與跨 Group／來源關閉後 data lifetime、同／跨 volume、conflict／cancel／partial failure 的原生 UI 與 preferred／performed／paste-succeeded effect，均「未驗證，需真實桌面」。不同 parent 的真實 Shell data object provider 支援亦待驗證；seam 只能證明傳入的 identity 沒有被改成同 parent 或顯示名稱。
+- 未解風險：三項原始 integration acceptance criteria 仍未完整驗證，tracker 不因此標示 done。真實本機／Shell namespace／network／OneDrive Copy／Cut／Paste、clipboard formats materialization 與跨 Group／來源關閉後 data lifetime、同／跨 volume、conflict／cancel／partial failure 的原生 UI 與 preferred／performed／paste-succeeded effect，均「未驗證，需真實桌面」。Delete 目前僅一個本機 disposable 檔案證明進入 Shell Recycle Bin；其他位置與失敗／取消語意仍未驗證。不同 parent 的真實 Shell data object provider 支援亦待驗證；seam 只能證明傳入的 identity 沒有被改成同 parent 或顯示名稱。
 - 未解風險：真實 foreground／active pane／背景點擊與操作泵點切 tab／Group／shutdown 的 native focus、COM lifetime／progress cancellation，以及卡住 provider 的反應時間尚未驗證。單元測試與政策掃描不構成這些項目的 PASS，也不構成 PD-241 compatibility／performance／idle gate 證據。使用者明確延後上述實機／GUI 驗證；本票不啟動應用程式或改寫使用者 session。
 
 ## 實機自動化嘗試（2026-10-21，未驗證）
@@ -117,3 +117,9 @@ Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（2026-10-21 08:47:31 建置）
 兩次嘗試中 harness 的 `SendInput` 鍵盤（Ctrl+C／X／V、Delete）都沒有產生任何檔案變化：最終 A 仍為原有 4 個測試檔、B／C／UNC 目的地為空，也未出現 Windows 衝突或刪除對話框。同一輪中 harness 在新增 Group 後取不到 pane／list HWND（`Cannot convert argument ... null to IntPtr`），因此不能判斷是焦點、選取未進入 list，還是 harness 本身。這代表 harness 沒有取得有效的 pane HWND，不是產品失敗，也不是通過。
 
 Copy／Cut／Paste／Delete、跨 Group clipboard、同／跨 volume、衝突／取消／部分失敗、操作中切 tab／Group 全部維持未驗證，需真實桌面（或修正 harness 後重測）；本次不再重試。
+
+## 隔離本機 Delete 驗證（2026-10-21；單一操作）
+
+使用目前 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586`），啟動前確認 PaneDock 行程數 0；新建唯一 disposable 資料夾與 `.txt`，使用絕對隔離 `LOCALAPPDATA=build\manual-test\pd236d\run-261021153009\la`，只有一個 PaneDock 實例。列表地址與 row name 均吻合新建資料夾／檔案，`LVM_HITTEST` 命中 row 0，點擊後 selected count 1、focused row 0 且焦點在 list。按一般 Delete（未按 Shift），無需額外確認；原檔消失、列表變空。Shell Recycle Bin 新增一個 `$I` item，記錄的 original path 精確指向本次檔案，對應 `$R` payload 的 SHA-256 與原檔相同。未清除該 Recycle Bin 項目。Clipboard format count 前後同為 3；正式 session 檔案時間與大小未變。PaneDock 118 ms 正常關閉且 process 數歸零，只移除確認為空的測試資料夾。
+
+原始輸出與截圖位於 ignored `build\manual-test\pd236d\run.out.txt` 與 `run-261021153009`。剪貼簿 Copy/Cut/Paste 樣本因起始 clipboard 非空（14 formats）而遵守安全條件停止，沒有啟動 app、沒有讀取內容或改變 clipboard；結果記錄於 `build\manual-test\pd236c\run.out.txt`。本次只驗證單一本機 Delete，三項 acceptance 尚未全數完成。這份 Delete 證據可供 PD-242 一般 Shell operation 驗收參考，但不代表該票其他 acceptance 或本票整體通過。
