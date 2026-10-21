@@ -163,3 +163,13 @@ Claude 使用 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49
 Claude 對已確認的 main HWND `PostMessage(WM_CLOSE)`，回傳成功；接下來 5 秒內 process、main window 與 menu 都仍存在，UI ping 是 `0 ms, hung=False`。只送一次 Escape 後，menu 消失；在之後 800 ms 觀察點 process 已退出，之後才送出的第二個 `WM_CLOSE` 沒有用來促成退出。沒有發生 crash；PaneDock process count 為 0，stderr 空白，唯一測試檔仍存在且 hash 未變，正式 session metadata 未變。未執行 menu verb，未讀寫 clipboard。原始輸出、腳本與截圖在 ignored `build\manual-test\pd239-menu-close\run-261021160402\`。
 
 此單一樣本證明 modal menu 關閉後第一次 close request 可安全完成；沒有證明視窗能在 menu 仍開啟時立即關閉，也沒有測 tab／Group 切換、pane destruction 或 stale target invocation。原生 Shell/provider 與其他 acceptance 仍未完整驗證，總覽狀態維持 `in_progress`。
+
+## Claude modal Group switch Properties target check（2026-10-21；單一本機項目）
+
+Claude 使用 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586`），啟動前確認 PaneDock process count 為 0；使用單一 process、fresh isolated `LOCALAPPDATA=build\manual-test\pd239-group-target\run-261021161627\la`，以及兩個新建、同名但內容不同的 disposable `.txt`，分置於 folder A、folder B。A 為 active Group，pane 0 列出 A marker；以真實左鍵選取 row 0 並確認 list focus，再用 Shift+F10 開啟同 PID 可見原生 `#32768` menu（19 項）。
+
+在 menu 保持開啟時，外部 harness 以 `LB_SETCURSEL(1)` 加 `WM_COMMAND(LBN_SELCHANGE)` 對 Group list 派送既有選取通知。回讀確認 Group B 已選取、menu 仍開啟、pane 0 仍顯示 folder A marker，UI ping 為 0 ms。只叫用 menu 的 Properties 項；新 `#32770` 對話框標題及 filename 欄位均為 A marker，location 等於 folder A 且不等於 folder B。這證明此單一受控 Group 切換期間，已開啟 menu 的 Properties target 保持原始 A item，沒有被新 Group 的列表位置改寫。
+
+僅關閉本次 Properties 視窗，再對隔離 PaneDock 主視窗送 `WM_CLOSE`；程序正常退出且沒有殘留 PaneDock process。A、B marker 的 SHA-256 都經前後比對保持不變；stderr 為空，未使用 clipboard、未修改正式 session，未執行其他 verb。診斷輸出記錄 `group_switch_navigate_ms=7.7457`、`group_switch_ms=20.5412`。原始腳本、輸出與截圖保留於 ignored `build\manual-test\pd239-group-target\`，有效樣本為 `run-261021161627`。
+
+此樣本的 Group 選取透過 `LB_SETCURSEL`／`WM_COMMAND` 注入，並非使用者在 modal menu 中的實體滑鼠／鍵盤切換；也未觀察 menu 關閉後 pane 是否已顯示 B。它只覆蓋單一本機檔案的 Properties target，不涵蓋 tab／pane 關閉後的 command、其他 verbs、namespace／OneDrive／network providers，或與 File Explorer 的逐項 menu 對照。
