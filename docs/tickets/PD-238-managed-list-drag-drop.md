@@ -113,3 +113,5 @@ Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（2026-10-21 08:47:31 建置）
 前置條件皆成立：拖曳來源座標以 `LVM_HITTEST` 命中 pane 0 的 item 0（`d1.txt`，`flags=0x4`），選取數為 1；來源與目的座標的 `WindowFromPoint` 分別等於 pane 0 與 pane 1 的 `SysListView32`；PaneDock 主視窗為前景。以 `SendInput`（絕對座標、virtual-desktop）送 `move`／`down`／20 個 `move`／`up`，23 個事件每次回傳 1，游標落點與目標相差約 1 px。結果：拖曳後 A 仍為 `d1.txt,d2.txt,d3.txt`、B 仍為空，狀態列未變，未出現任何原生 UI 或額外視窗。
 
 只能說明在此 harness 條件下沒有觀察到 drop；不能由此判定產品缺陷，也未涵蓋 `LVN_BEGINDRAG` 是否被觸發，需由另行 triage 判斷。同 pane、跨 volume、Explorer 拖入／拖出、取消、hover 切 Group／tab、快速重入全部維持未驗證，需真實桌面。早先一次使用相對路徑 `LOCALAPPDATA` 的 PD-238 嘗試誤用了正式 session，其結果作廢。
+
+第二次獨立重現（同日，`pd238e`，與 `pd238d` 除 run 名稱、截圖名稱、`LOCALAPPDATA` 外完全相同；起始無 PaneDock 行程，正常關閉後無殘留，正式 session 檔案時間未變）：`LVM_HITTEST` 命中 item 0（`flags=0x4`）、選取數 1、來源／目的 `WindowFromPoint` 皆為正確的 list、主視窗為前景、23 個 `SendInput` 事件皆回傳 1；拖曳後 A 仍為 `d1.txt,d2.txt,d3.txt`、B 仍為空、無原生 UI。結果與第一次相同。原始輸出：`build\manual-test\pd238d.log`、`pd238e.log` 與 `pd238e-before.png`／`pd238e-after.png`（未納入版控）；交由後續 triage 判斷是否為產品缺陷。
