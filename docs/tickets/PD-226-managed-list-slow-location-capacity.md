@@ -80,4 +80,19 @@ git diff --check
 ## 交接區
 
 - 尚缺既有 disconnected mapped drive 的實際讀取、離開／重試及 pending shutdown 證據；本機唯讀盤點沒有目前或持久化映射，未獲授權建立或中斷映射。真實 UNC pending probe 不能替代 mapped drive 驗收。
-- 未驗證，需真實桌面：慢網路期間實際多 pane／tab／Group input。TEST-NET-1 的一個真實 OS 讀取已觀察到取消後返回並退出 worker；後續 retry 在有界 shutdown 觀察窗內仍占用額度，最終返回未驗證，不能宣稱所有 provider／retry 可取消。受控 worker 的有界 abandonment／無 join 只能證明自身生命週期；快成功或粗粒度計時不能推論完整驗收通過。測量與重跑方式見 performance baseline／testing。
+- Claude 後續以提升權限觀察到單一 TEST-NET UNC pending 時，另一 pane 可載入本機資料，且離開 UNC 後的本機結果在約 10 秒內未被改寫；證據見下方 2026-10-21 checkpoint。這不是一般使用者權限下的結果，也沒有觀察到 UNC 的晚到／最終結果；多操作、容量壓力、Group／tab 互動及不可取消 provider 的 worker 清理仍未驗證。受控 worker 的有界 abandonment／無 join 只能證明自身生命週期；快成功或粗粒度計時不能推論完整驗收通過。測量與重跑方式見 performance baseline／testing。
+- 2026-10-20 normal-integrity managed-list UI probe：4-pane session 可啟動，但 `\\192.0.2.1\PD226` 約 1.7 秒內顯示 `Error 53`，沒有 pending 期間可操作其他 pane／tab／Group；這不是慢源 UX 證據，也不能用提升權限下的 pending 結果代表一般使用者。下次需取得一般使用者權限下可維持 pending 的來源，或由使用者決定是否另行授權提升權限驗證。
+
+### PD-226 授權 UNC 路徑單次實測（2026-10-21）
+
+Claude 使用隔離 Release `build\PaneDock.exe`（SHA-256 `9C585990E8DB931A84122C810F6D24FD35A02914EF88454A70F1933EDEC039AD`），啟動前確認 PaneDock process count 為 0；單一 PID 31632 正常關閉約 137ms 後 process count 歸 0。唯一測試路徑為使用者授權的 `\\vianextfs06\Tmp\Lentice\test`，僅導覽讀取，沒有在 share 建立、修改、更名或刪除資料。
+
+新隔離 `LOCALAPPDATA` 位於 `build\manual-test\pd226u\run-20261021-142914\la`。UNC 導覽在第一個 7ms 輪詢時已顯示 `This folder is empty.`，列表 0 items；整段 UI thread ping 為 0ms、`hung=False`。在 UNC 已完成後，pane 1 tab pill 點擊耗時 166ms 並成功切換，接著本機隔離資料夾導覽顯示 1 item。因沒有觀察到 UNC pending／loading 狀態，這只能證明該次路徑很快返回且完成後 UI 可操作，不能證明慢網路期間的回應能力；也無法判斷 share 為真空資料夾或其他原因顯示空列表。證據／截圖在 ignored `build\manual-test\pd226u\run.out.txt` 與 `run-20261021-142914\`。真實慢／不可達 UNC、耗盡與晚到結果、mapped drive、取消及 bounded shutdown acceptance 均未補足，PD-226 與 tracker 維持 `in_progress`。
+
+### PD-226 pending UNC 與目的地替換觀察（2026-10-21；單次、有限樣本）
+
+Claude 使用 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586`），隔離設定在 `build\manual-test\pd226-late-result\run-261021154917\la`，測試資料只在相鄰新建的 `local1`／`local2`。啟動前 PaneDock process count 為 0；截圖顯示一個 Group、四 pane。Pane 0 導覽到 `\\192.0.2.1\PD226` 後，在約 1.4 秒仍顯示 `0 items - Loading...`。Pane 1 同時導覽到 `local1` 並顯示唯一 marker1；約 t=1.75 秒，Pane 0 離開 UNC 到 `local2`，8 ms 後已顯示正確位址及唯一 marker2。接下來約 10 秒，Pane 0 的位址、狀態與 row 未被改寫；各觀察點的 UI ping 為 0 ms、`hung=False`。
+
+此程式以提升權限執行；一般權限下相同 TEST-NET UNC 曾快速回 Error 5，因此本次不能代表一般使用者行為。觀察期間沒有看到舊 UNC request 的最終結果或晚到 batch；只能記錄新目的地在約 10 秒窗口內保持穩定，不能宣稱已驗證 late-result discard 或 worker 退出。測試結束 PaneDock 以 `WM_CLOSE` 約 125 ms 正常退出，process count 為 0；正式 session metadata 未變、stderr 空白，未用 clipboard、未執行檔案 verb、未刪除 marker。marker 前後 hash 相同，結束時 SHA-256 為 local1 `074EA36F4876404935748B81577DF9B17879CD4888D4CEE9C595DC99CA742CDE`、local2 `35B4AA07E579368065FA71FCF5D60653E5BA9E1F639B5CC30A92A6E816F57AC0`。輸出／截圖留在 ignored `build\manual-test\pd226-late-result\run-261021154917\`。
+
+這是單一 provider、單次導覽與本機目的地替換樣本；沒有涵蓋 30 次其他 pane command、capacity exhaustion、retry identity、disconnected mapped drive，或真正觀察到晚到結果後的丟棄。三項 acceptance 仍未全數達成，總覽維持 `in_progress`。
