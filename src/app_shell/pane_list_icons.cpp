@@ -349,6 +349,15 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
             return SendMessageW(pane->window(), WM_CONTEXTMENU,
                                 reinterpret_cast<WPARAM>(window), MAKELPARAM(-1, -1));
     }
+    if (message == kRestoreListFocusMessage) {
+        pane->restore_posted_list_focus();
+        return 0;
+    }
+    if (message == WM_TIMER && wp == kListFocusRestoreTimerId) {
+        KillTimer(window, kListFocusRestoreTimerId);
+        pane->restore_posted_list_focus();
+        return 0;
+    }
     if (message == kViewportMessage) {
         pane->icon_viewport_posted_ = false;
         pane->refresh_list_icon_viewport(); return 0;

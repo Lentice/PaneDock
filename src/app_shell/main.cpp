@@ -107,6 +107,7 @@ constexpr UINT_PTR kSessionSaveTimerId =
 constexpr UINT kDeferredLayoutMessage = WM_APP + 55;
 // PD-171: replay model-changing commands after an app-owned Shell call.
 constexpr UINT kDeferredCommandMessage = WM_APP + 56;
+constexpr UINT kDeferredListFocusRestoreMessage = WM_APP + 57;
 using panedock::core::kSidebarMaximumWidth;
 using panedock::core::kSidebarMinimumWidth;
 constexpr std::size_t kExplorerCount = 4;
@@ -3398,6 +3399,18 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 }
             }
             return 0;
+        case kDeferredListFocusRestoreMessage:
+            if (state != nullptr && !state->is_shutting_down()) {
+                if (state->reentry_guard.in_shell_call()) {
+                    state->reentry_guard.hold(
+                        window, kDeferredListFocusRestoreMessage, 0, 0, true);
+                } else {
+                    const auto& group = active_group(*state);
+                    const auto active = active_pane_index(group);
+                    state->panes[active].restore_list_focus_after_activation();
+                }
+            }
+            return 0;
         case kDeferredLayoutMessage:
             if (state != nullptr && state->layout_message_queued) {
                 state->layout_message_queued = false;
@@ -3562,6 +3575,33 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     report_shell_failure(*state, L"WM_SIZE", hr);
             }
             return 0;
+        case WM_ACTIVATE:
+            if (state != nullptr && LOWORD(wparam) != WA_INACTIVE &&
+                HIWORD(wparam) == 0 && !state->is_shutting_down()) {
+                const auto& group = active_group(*state);
+                const auto active = active_pane_index(group);
+                if (state->reentry_guard.in_shell_call()) {
+                    state->panes[active].note_list_focus_activation();
+                    state->reentry_guard.hold(
+                        window, kDeferredListFocusRestoreMessage, 0, 0, true);
+                } else {
+                    state->panes[active].restore_list_focus_after_activation();
+                }
+            }
+            break;
+        case WM_SETFOCUS:
+            if (state != nullptr && !state->is_shutting_down()) {
+                const auto& group = active_group(*state);
+                const auto active = active_pane_index(group);
+                if (state->reentry_guard.in_shell_call()) {
+                    state->panes[active].note_list_focus_activation();
+                    state->reentry_guard.hold(
+                        window, kDeferredListFocusRestoreMessage, 0, 0, true);
+                } else {
+                    state->panes[active].restore_list_focus_after_activation();
+                }
+            }
+            break;
         case WM_DPICHANGED: {
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);
             Pane::release_navigation_icon_font();

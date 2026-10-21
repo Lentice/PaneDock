@@ -103,10 +103,16 @@ Configure exit 0。restricted build 無輸出後以 Ctrl+C 中止，指定 targe
 
 剩餘缺口為下列真實桌面／provider integration evidence，三項原始 acceptance criteria 保持未勾選；controlled seam 不證明實際焦點、原生衝突 UI、provider identity／通知收斂或 COM pump lifetime。依既有 sequencing-only waiver，下一張可繼續檢查剩餘工作的票為 PD-238（跨 pane 與外部 drag/drop），不代表本票或 PD-241 通過實機驗收；追蹤表維持原值。
 
+## Focused real-Shell validation（2026-10-21）
+
+使用 Claude 的 PowerShell／Win32 harness，單一 clean `build\PaneDock.exe`、隔離 `LOCALAPPDATA`、新建 disposable 本機資料夾，正常關閉且確認無殘留行程。最終建置 SHA-256：`9C585990E8DB931A84122C810F6D24FD35A02914EF88454A70F1933EDEC039AD`；run log／screenshots 位於 `build\manual-test\pd237s\run-20261021-115850`。
+
+在含 `a_before.txt` 與 `z_keep.txt` 的資料夾選取第一列，F2 編輯為 `m_after.txt` 並按 Enter：舊名稱消失、新名稱存在、檔案內容雜湊相同、另一檔未變；selection/focused row 留在改名後的列，鍵盤焦點立即及 0.5 秒後都在 `SysListView32`。再按一次 Down，focused/selected row 前進到 `z_keep.txt`。這是 clean build 的單次成功驗證；同一 harness 在先前 clean build 曾連續四次未恢復焦點，因此仍需重複性證據。衝突、拒絕存取、取消、外部移除、不同 provider、混合 DPI 與慢速 Shell 路徑仍未實測，其他原始 acceptance criteria 維持未勾選。
+
 ## 交接區
 
-- 未解風險：真實 Shell／disposable files rename 與通知收斂、衝突時實際新名稱／identity、access denied／external deletion／cancel 的原生 UI、本機／namespace／network／OneDrive provider 行為，均「未驗證，需真實桌面」。成功但 provider 不提供完整結果 identity 時，目前保留原列並要求通知／Refresh 收斂；該復原路徑仍需實機驗證。
-- 未解風險：真正 keyboard focus、mixed DPI／各 view mode 的 edit 位置、accessibility、操作 pump 中切 tab／Group／shutdown 的 COM lifetime 及慢 provider 回應時間均未驗證。hidden-control seam 與政策掃描不構成以上項目或 PD-241 compatibility／performance／idle gate 的 PASS；原始 acceptance criteria 仍需 real integration evidence。
+- 未解風險：Shell rename 的衝突時實際新名稱／identity、access denied／external deletion／cancel 原生 UI、本機／namespace／network／OneDrive provider 行為仍「未驗證，需真實桌面」。目前只驗證一次一般本機成功 rename、內容雜湊、列表焦點與後續鍵盤導覽；同 harness 過去四次 clean build 未恢復焦點，修正後只成功一次，穩定性未建立。provider 不回傳完整 identity 時保留原列並要求通知／Refresh 收斂的復原路徑也未實測。
+- 未解風險：mixed DPI／各 view mode 的 edit 位置、accessibility、操作 pump 中切 tab／Group／shutdown 的 COM lifetime 及慢 provider 回應時間均未驗證。hidden-control seam 與單次真實互動不構成以上項目或 PD-241 compatibility／performance／idle gate 的 PASS；其他原始 acceptance criteria 仍需 real integration evidence。
 
 ## 實機自動化嘗試（2026-10-21，未驗證）
 

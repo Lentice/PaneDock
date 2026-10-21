@@ -59,6 +59,65 @@ void Pane::cancel_list_rename() noexcept {
     if (focused && active() && list_window_) SetFocus(list_window_);
 }
 
+void Pane::restore_posted_list_focus() noexcept {
+    const HWND root = GetAncestor(window(), GA_ROOT);
+    if (!pending_list_focus_restore_ || !list_window_ || !root ||
+        list_navigation_pending_ ||
+        !content_request_is_current(*pending_list_focus_restore_)) {
+        list_focus_restore_posted_ = false;
+        pending_list_focus_restore_.reset();
+        KillTimer(list_window_, kListFocusRestoreTimerId);
+        list_focus_restore_timer_used_ = false;
+        list_focus_restore_activation_seen_ = false;
+        return;
+    }
+    // A modal Shell operation can temporarily leave a destroyed popup as the
+    // reported foreground window. A recent WM_ACTIVATE is the authoritative
+    // signal to restore the list when that stale handle is still reported.
+    const HWND foreground = GetForegroundWindow();
+    const bool foreground_destroyed = !foreground || !IsWindow(foreground);
+    const bool activated = list_focus_restore_activation_seen_;
+    if ((foreground != root && !(activated && foreground_destroyed)) ||
+        (GetFocus() != root && !activated)) {
+        list_focus_restore_posted_ = false;
+        if (!list_focus_restore_timer_used_) {
+            list_focus_restore_timer_used_ = true;
+            // One bounded retry lets transient Shell activation settle; the
+            // timer is killed on its first tick and is never used for polling.
+            if (!SetTimer(list_window_, kListFocusRestoreTimerId, 250, nullptr))
+                list_focus_restore_timer_used_ = false;
+        }
+        return;
+    }
+    list_focus_restore_posted_ = false;
+    pending_list_focus_restore_.reset();
+    KillTimer(list_window_, kListFocusRestoreTimerId);
+    list_focus_restore_timer_used_ = false;
+    list_focus_restore_activation_seen_ = false;
+    SetFocus(list_window_);
+}
+
+void Pane::restore_list_focus_after_activation() noexcept {
+    const HWND root = GetAncestor(window(), GA_ROOT);
+    if (!pending_list_focus_restore_ || !active() ||
+        !list_window_ || !root || list_navigation_pending_ ||
+        !content_request_is_current(*pending_list_focus_restore_)) return;
+    list_focus_restore_activation_seen_ = true;
+    if (list_focus_restore_posted_) return;
+    list_focus_restore_posted_ = true;
+    if (!PostMessageW(list_window_, kRestoreListFocusMessage, 0, 0))
+        list_focus_restore_posted_ = false;
+}
+
+void Pane::note_list_focus_activation() noexcept {
+    const HWND root = GetAncestor(window(), GA_ROOT);
+    if (pending_list_focus_restore_ && active() && list_window_ && root &&
+        !list_navigation_pending_ &&
+        content_request_is_current(*pending_list_focus_restore_)) {
+        list_focus_restore_activation_seen_ = true;
+    }
+}
+
 LRESULT CALLBACK Pane::list_edit_subclass(HWND window, UINT message, WPARAM wp,
                                          LPARAM lp, UINT_PTR id, DWORD_PTR data) try {
     auto* pane = reinterpret_cast<Pane*>(data);
@@ -104,6 +163,11 @@ void Pane::commit_list_rename(std::wstring name) noexcept try {
     managed_list::Row replacement = *original;
     auto interaction = capture_managed_list_interaction();
     const auto old_identity = edit->identity;
+    pending_list_focus_restore_ = edit->snapshot.binding;
+    list_focus_restore_posted_ = false;
+    list_focus_restore_timer_used_ = false;
+    list_focus_restore_activation_seen_ = false;
+    KillTimer(list_window_, kListFocusRestoreTimerId);
     list_rename_busy_ = true;
     file_operations::RenameResult result;
     {
@@ -111,6 +175,19 @@ void Pane::commit_list_rename(std::wstring name) noexcept try {
         result = pane_host()->rename_item(*this, edit->snapshot, name);
     }
     list_rename_busy_ = false;
+    if (!content_request_is_current(edit->snapshot.binding)) {
+        pending_list_focus_restore_.reset();
+        list_focus_restore_posted_ = false;
+        list_focus_restore_activation_seen_ = false;
+        return;
+    }
+    if (!list_focus_restore_posted_) {
+        list_focus_restore_posted_ = true;
+        if (!PostMessageW(list_window_, kRestoreListFocusMessage, 0, 0)) {
+            list_focus_restore_posted_ = false;
+            pending_list_focus_restore_.reset();
+        }
+    }
     if (!file_command_is_current(edit->snapshot)) return;
     list_rename_result_ = result.aborted ? HRESULT_FROM_WIN32(ERROR_CANCELLED) : result.result;
     if (FAILED(list_rename_result_) || result.parsing_name.empty() ||

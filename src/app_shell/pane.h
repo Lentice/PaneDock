@@ -38,6 +38,9 @@
 
 namespace panedock::app_shell {
 
+inline constexpr UINT kRestoreListFocusMessage = WM_APP + 230;
+inline constexpr UINT_PTR kListFocusRestoreTimerId = 0x5044;
+
 class PaneHost;
 class WindowPositionBatch;
 class PaneListDropTarget;
@@ -230,6 +233,9 @@ class Pane final {
     bool handle_list_rename_key(const MSG&, bool control, bool alt, bool shift) noexcept;
     bool begin_list_rename() noexcept;
     void cancel_list_rename() noexcept;
+    void restore_posted_list_focus() noexcept;
+    void note_list_focus_activation() noexcept;
+    void restore_list_focus_after_activation() noexcept;
     bool list_edit_has_focus() const noexcept;
     HRESULT list_rename_result() const noexcept { return list_rename_result_; }
     // OLE entry point also used by the non-transfer harness.
@@ -448,6 +454,10 @@ class Pane final {
         managed_list::ItemIdentity identity;
     };
     std::optional<ListRename> list_rename_;
+    std::optional<core::NavigationRequest> pending_list_focus_restore_;
+    bool list_focus_restore_posted_{};
+    bool list_focus_restore_timer_used_{};
+    bool list_focus_restore_activation_seen_{};
     HWND list_rename_edit_{};
     bool list_rename_busy_{};
     HRESULT list_rename_result_{S_FALSE};
