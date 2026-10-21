@@ -1,6 +1,9 @@
 #pragma once
 
-#include "explorer_host/explorer_host.h"
+#include <functional>
+#include <string>
+#include <windows.h>
+#include <shobjidl.h>
 #include <vector>
 
 namespace panedock::explorer_host {
@@ -24,7 +27,7 @@ public:
 };
 bool show_native_context_menu(HWND owner, const ContextMenuRequest& request,
                               const MenuTargetCurrent& current) noexcept;
-// Shared by the legacy view's background entry and the managed-list bridge.
+// Native menu tracking with Shell extension message forwarding.
 bool track_shell_context_menu(HWND owner, IContextMenu* menu,
     const ContextMenuRequest& request, const MenuTargetCurrent& current) noexcept;
 

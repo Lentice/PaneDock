@@ -2,6 +2,8 @@
 #include <commctrl.h>
 #include <shellapi.h>
 #include <memory>
+#include <wrl/client.h>
+#include <shlobj.h>
 
 namespace panedock::explorer_host {
 namespace {

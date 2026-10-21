@@ -49,8 +49,7 @@ public:
 private:
     enum class Action { enter, over, drop };
     bool current() const noexcept {
-        return !cancelled_ && pane_ && pane_->managed_list_active_ &&
-            pane_->list_window_ && pane_->list_.phase != managed_list::Phase::error &&
+        return !cancelled_ && pane_ &&     pane_->list_window_ && pane_->list_.phase != managed_list::Phase::error &&
             pane_->file_command_is_current(snapshot_);
     }
     void leave_target() noexcept {
@@ -69,8 +68,7 @@ private:
     HRESULT synchronize(DWORD keys, POINTL point, DWORD allowed, DWORD& effect) {
         if (target_ && current()) return S_OK;
         leave_target(); // may pump: capture the new binding only afterwards
-        if (!pane_ || cancelled_ || !pane_->managed_list_active_ ||
-            pane_->list_.phase == managed_list::Phase::error) return E_ABORT;
+        if (!pane_ || cancelled_ ||     pane_->list_.phase == managed_list::Phase::error) return E_ABORT;
         if (pane_->file_command_snapshot(file_operations::Command::paste, snapshot_) != S_OK)
             return E_PENDING;
         const auto folder = snapshot_.folder; // owned over provider calls

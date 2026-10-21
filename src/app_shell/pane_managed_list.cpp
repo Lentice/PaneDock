@@ -64,14 +64,10 @@ HRESULT Pane::navigate_content(core::ShellLocation location,
                                NavigationGeneration generation) {
     ShellCallScope shell_call(reentry_guard());
     const auto request = content_request();
-    // Every opt-in destination uses the bounded Source, including namespace
-    // identities without a filesystem fallback. No provider work on the UI STA.
-    if (managed_list_active_ && realized_)
-        return start_managed_list(location, generation);
+    // All destinations use bounded owned Source batches, including namespace items.
+    if (realized_) return start_managed_list(location, generation);
     const auto history_target = list_history_target_;
-    cancel_managed_list(); // invalidate before Destroy, which can pump
-    managed_list_active_ = true;
-    explorer_host_.destroy();
+    cancel_managed_list();
     if (!content_request_is_current(request)) return E_ABORT;
     list_history_target_ = history_target;
     RECT rect{};
@@ -126,12 +122,10 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
 }
 void Pane::use_managed_list(std::unique_ptr<managed_list::Source> source) {
     if (realized_) return;
-    managed_list_enabled_ = true;
-    managed_list_active_ = true;
     list_source_ = std::move(source); // create lazily after the content HWND exists
 }
 HANDLE Pane::content_event() const noexcept {
-    return managed_list_enabled_ && list_source_ ? list_source_->event() : nullptr;
+    return list_source_ ? list_source_->event() : nullptr;
 }
 Pane::ListCache& Pane::list_cache() noexcept {
     static ListCache cache;
@@ -225,7 +219,6 @@ std::optional<Pane::CachedList> Pane::take_list_cache(const managed_list::Reques
 }
 void Pane::cancel_managed_list() noexcept {
     cancel_list_rename();
-    if (!managed_list_enabled_) return;
     prune_list_cache(true);
     if (list_source_) list_source_->cancel();
     cancel_list_icons();
@@ -237,7 +230,6 @@ void Pane::cancel_managed_list() noexcept {
     list_navigation_pending_ = false;
     list_history_target_.reset();
     list_retry_history_target_.reset();
-    pending_list_route_.reset();
     list_name_bytes_ = 0;
     if (list_window_) {
         clear_managed_list_interaction();
@@ -453,7 +445,7 @@ void Pane::update_managed_list_sort_indicator() noexcept {
 
 void Pane::apply_managed_list_sort() noexcept {
     cancel_list_rename();
-    if (!managed_list_active_ || !list_window_ || !active()) return;
+    if (!list_window_ || !active()) return;
     try {
         const auto* tab = active_tab();
         if (tab && property_sort_key_ != tab->sort_column) {
@@ -488,7 +480,7 @@ void Pane::apply_managed_list_sort() noexcept {
 void Pane::set_managed_list_sort(
     panedock::shell_core::SortProperty property) {
     auto* tab = active_tab();
-    if (!tab || !managed_list_active_) return;
+    if (!tab) return;
     const auto current = panedock::shell_core::parse_sort_property(tab->sort_column)
         .value_or(panedock::shell_core::SortProperty::name);
     if (current == property) {
@@ -596,7 +588,7 @@ void Pane::resolve_list_navigation(bool success) {
     }
 }
 void Pane::process_content_results() noexcept try {
-    if (!list_source_ || !active() || !managed_list_active_ ||
+    if (!list_source_ || !active() ||
         (reentry_guard_ && reentry_guard().in_shell_call())) return;
     std::optional<ManagedListInteraction> interaction;
     bool rows_changed = false;
@@ -922,7 +914,6 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
     if (icon_images_) ImageList_SetImageCount(icon_images_, 2);
 }
 void Pane::update_managed_list() noexcept try {
-    if (!managed_list_active_) return;
     if (list_window_ && ListView_GetItemCount(list_window_) !=
             static_cast<int>(list_.rows.size()))
         ListView_SetItemCountEx(list_window_, static_cast<int>(list_.rows.size()),
@@ -951,7 +942,7 @@ void Pane::update_managed_list() noexcept try {
 Pane::ListInteractionSnapshot Pane::list_interaction_snapshot() const {
     ListInteractionSnapshot snapshot;
     snapshot.viewport_anchor_clamped = last_viewport_anchor_clamped_;
-    if (!managed_list_active_ || !list_window_) return snapshot;
+    if (!list_window_) return snapshot;
 
     const std::wstring_view location{list_.request.location.parsing_name};
     const auto identity_at = [&](int index) -> std::optional<ListItemIdentity> {
@@ -980,7 +971,7 @@ Pane::ListInteractionSnapshot Pane::list_interaction_snapshot() const {
     return snapshot;
 }
 bool Pane::open_list_row(std::size_t row) {
-    if (!active() || !managed_list_enabled_ || row >= list_.rows.size() ||
+    if (!active() || row >= list_.rows.size() ||
         !content_request_is_current(list_.request.binding) || !list_.rows[row].directory) return false;
     if (list_.rows[row].identity.shell_item) {
         if (!list_.rows[row].child_location) return false;
@@ -1032,7 +1023,6 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
         return 0;
     }
     if (notification->code == LVN_COLUMNCLICK) {
-        if (!managed_list_active_) return 0;
         const auto* click = reinterpret_cast<const NMLISTVIEW*>(notification);
         switch (click->iSubItem) {
             case 0: set_managed_list_sort(panedock::shell_core::SortProperty::name); break;

@@ -74,3 +74,9 @@ git diff --check
 - Shell／網路／OneDrive／真正焦點與 accessibility 需要實機驗證；無環境時明記「未驗證,需真實桌面」，不得由 unit test 推論 PASS。launch smoke 使用隔離 session，不讀寫使用者真實 session。
 - 僅在確實存在未解風險或不可重推結論時新增交接區；測量數字放 performance baseline，已否決方向放 tracker。不要附空白交接模板或把 diff 摘要當交接。
 - 這是半天至兩天目標的單一切片；若實作追查證明超出，先在 tracker 拆分，不擴張到相鄰票。實作前重讀依賴交付的公開入口與 caller，不假設尚未建立的類型已存在。
+
+## 交接區
+
+- `panedock_managed_list` now uses a hidden parent HWND and Pane window, matching the managed-list realization contract. Its focused CTest passes; the test skips only the real ACL-denial branch when setting the disposable directory DACL returns `ERROR_ACCESS_DENIED`. The controlled-source permission-denied seam remains covered, but real filesystem ACL denial is unverified in this environment.
+- `IExplorerBrowser`／`IShellView` view hosting has been removed while the native Shell context-menu target remains in `panedock_shell_menu`. Native menu／operation behavior and managed-list compatibility still require real desktop/provider validation; automated seam tests do not establish that evidence.
+- Full CTest, GUI／launch smoke, real Shell namespace／network／OneDrive checks, resource lifetime measurements, idle power checks, and bounded shutdown against a stuck provider remain unverified. Keep this ticket `in_progress` until its required evidence is supplied; the PD-241 sequencing waiver is not a pass.

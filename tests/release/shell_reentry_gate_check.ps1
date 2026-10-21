@@ -1,17 +1,13 @@
 param(
     [string] $SourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\main.cpp'),
     [string] $PaneSourcePath = (Join-Path $PSScriptRoot '..\..\src\app_shell\pane.cpp'),
-    [string] $ShellCoreSourcePath = (Join-Path $PSScriptRoot '..\..\src\shell_core\shell_core.cpp'),
-    [string] $ExplorerHostSourcePath = (Join-Path $PSScriptRoot '..\..\src\explorer_host\explorer_host.cpp'),
-    [string] $ExplorerHostHeaderPath = (Join-Path $PSScriptRoot '..\..\src\explorer_host\explorer_host.h')
+    [string] $ShellCoreSourcePath = (Join-Path $PSScriptRoot '..\..\src\shell_core\shell_core.cpp')
 )
 
 $ErrorActionPreference = 'Stop'
 $source = Get-Content -LiteralPath $SourcePath -Raw
 $paneSource = Get-Content -LiteralPath $PaneSourcePath -Raw
 $shellCoreSource = Get-Content -LiteralPath $ShellCoreSourcePath -Raw
-$explorerHostSource = Get-Content -LiteralPath $ExplorerHostSourcePath -Raw
-$explorerHostHeader = Get-Content -LiteralPath $ExplorerHostHeaderPath -Raw
 $guardSource = Get-Content -LiteralPath (
     Join-Path $PSScriptRoot '..\..\src\app_shell\shell_reentry_guard.h') -Raw
 
@@ -68,16 +64,7 @@ if ($windowProcStart -lt 0 -or $windowSwitch -lt 0 -or
     throw 'Shell re-entry invariant failed: interaction gate must precede main dispatch'
 }
 Assert-Source 'ShellCallScope shell_call\(state\.reentry_guard\)' `
-    'ExplorerHost callers use the shared Shell-call gate'
-$realizeStart = $paneSource.IndexOf('HRESULT Pane::realize(')
-$realizeEnd = $paneSource.IndexOf('HRESULT Pane::configure_realized_view()', $realizeStart)
-if ($realizeStart -lt 0 -or $realizeEnd -lt 0 -or
-    $paneSource.Substring($realizeStart, $realizeEnd - $realizeStart) -notmatch
-        'set_shell_call_callback\([\s\S]*reentry_guard_->enter\(\)[\s\S]*reentry_guard_->leave\(\)[\s\S]*explorer_host_\.initialize') {
-    throw 'Shell re-entry invariant failed: Pane must connect the app Shell-call gate before initialization'
-}
-# PD-214: one guard owns the leave logic; the RAII scope and the ExplorerHost
-# callback both reach it, so there is no second leave path to drift.
+    'Shell integration callers use the shared Shell-call gate'
 if ($guardSource -notmatch '~ShellCallScope\(\) noexcept \{ guard_\.leave\(\); \}') {
     throw 'Shell re-entry invariant failed: RAII ShellCallScope uses the shared leave logic'
 }
@@ -140,69 +127,6 @@ if ([regex]::Matches(
     [regex]::Matches($navigationCallSiteSource,
         'navigate_realized_panes\((?!\))').Count -ne 1) {
     throw 'Shell re-entry invariant failed: both Group transitions must use the shared helper'
-}
-
-function Assert-ExplorerHostSource([string] $Pattern, [string] $Name) {
-    if ($explorerHostSource -notmatch $Pattern) {
-        throw "Shell re-entry invariant failed: $Name"
-    }
-}
-
-if ($explorerHostHeader -notmatch 'using\s+ShellCallCallback\s*=\s*void\s*\(\*\)\(void\*\s+context,\s*bool\s+entering\)\s*noexcept') {
-    throw 'Shell re-entry invariant failed: ExplorerHost exposes a non-owning Shell-call callback'
-}
-Assert-ExplorerHostSource 'ExplorerHost::ShellCallScope::ShellCallScope' `
-    'ExplorerHost exposes a non-owning Shell-call callback'
-Assert-ExplorerHostSource 'set_shell_call_callback\(\s*void\*\s+context,\s*ShellCallCallback\s+callback\)\s*noexcept' `
-    'ExplorerHost stores the app gate without a new COM abstraction'
-
-$navigateStart = $explorerHostSource.IndexOf(
-    'HRESULT ExplorerHost::navigate(const core::ShellLocation& location)')
-$navigateEnd = $explorerHostSource.IndexOf(
-    'HRESULT ExplorerHost::refresh()', $navigateStart)
-if ($navigateStart -lt 0 -or $navigateEnd -lt 0) {
-    throw 'Shell re-entry invariant failed: value navigation body missing'
-}
-$navigateBody = $explorerHostSource.Substring(
-    $navigateStart, $navigateEnd - $navigateStart)
-if ($navigateBody -notmatch 'ShellCallScope shell_call\(\*this\);[\s\S]*shell_core::resolve_location') {
-    throw 'Shell re-entry invariant failed: location resolution is unguarded'
-}
-
-$navigationStart = $explorerHostSource.IndexOf(
-    'void ExplorerHost::navigation_complete(PCIDLIST_ABSOLUTE pidl) noexcept')
-$navigationEnd = $explorerHostSource.IndexOf(
-    'void ExplorerHost::navigation_failed() noexcept', $navigationStart)
-if ($navigationStart -lt 0 -or $navigationEnd -lt 0) {
-    throw 'Shell re-entry invariant failed: navigation callback bodies missing'
-}
-$navigationBody = $explorerHostSource.Substring(
-    $navigationStart, $navigationEnd - $navigationStart)
-if ($navigationBody -notmatch 'ShellCallScope shell_call\(\*this\);[\s\S]*view_window') {
-    throw 'Shell re-entry invariant failed: navigation_complete is unguarded'
-}
-$failedStart = $navigationEnd
-$failedEnd = $explorerHostSource.IndexOf(
-    'void ExplorerHost::destroy() noexcept', $failedStart)
-if ($failedEnd -lt 0) {
-    throw 'Shell re-entry invariant failed: navigation_failed body missing'
-}
-$failedBody = $explorerHostSource.Substring($failedStart, $failedEnd - $failedStart)
-if ($failedBody -notmatch 'ShellCallScope shell_call\(\*this\);') {
-    throw 'Shell re-entry invariant failed: navigation_failed is unguarded'
-}
-
-$viewCallbackStart = $explorerHostSource.IndexOf(
-    'HRESULT STDMETHODCALLTYPE MessageSFVCB')
-$viewCallbackEnd = $explorerHostSource.IndexOf(
-    'private:', $viewCallbackStart)
-if ($viewCallbackStart -lt 0 -or $viewCallbackEnd -lt 0) {
-    throw 'Shell re-entry invariant failed: ViewCallback body missing'
-}
-$viewCallbackBody = $explorerHostSource.Substring(
-    $viewCallbackStart, $viewCallbackEnd - $viewCallbackStart)
-if ($viewCallbackBody -notmatch 'ShellCallScope shell_call\(\*host_\);[\s\S]*previous_->MessageSFVCB') {
-    throw 'Shell re-entry invariant failed: ViewCallback callback chain is unguarded'
 }
 
 $helperStart = $source.IndexOf(
@@ -281,23 +205,14 @@ if ($chromeStart -lt 0 -or $statusStart -lt $chromeStart -or $statusEnd -lt $sta
 }
 $chromeBody = $paneSource.Substring($chromeStart, $statusStart - $chromeStart)
 $statusBody = $paneSource.Substring($statusStart, $statusEnd - $statusStart)
-if ($chromeBody -notmatch 'ShellCallScope shell_call\(reentry_guard\(\)\);[\s\S]*panedock::shell_core::display_text_for_parsing_name' -or
+# Address repaint now uses owned list/model identity; it must keep its
+# binding check and must not introduce a synchronous provider display lookup.
+if ($chromeBody -match 'shell_core::display_text_for_parsing_name' -or
     $chromeBody -notmatch 'current != bound') {
-    throw 'Shell re-entry invariant failed: Pane address display lost its Shell gate or binding check'
+    throw 'Shell re-entry invariant failed: Pane address display must use owned identity and recheck binding'
 }
-# PD-223: the actual Shell call now lives in the shared content query.
-$snapshotStart = $paneSource.IndexOf('HRESULT Pane::selection_snapshot(')
-$snapshotEnd = $paneSource.IndexOf('panedock::core::ShellLocation Pane::content_location(', $snapshotStart)
-if ($snapshotStart -lt 0 -or $snapshotEnd -lt $snapshotStart) {
-    throw 'Shell re-entry invariant failed: Pane selection snapshot body missing'
-}
-$snapshotBody = $paneSource.Substring($snapshotStart, $snapshotEnd - $snapshotStart)
-# Binding invalidation is exercised through Pane in pane_test.cpp. This is
-# only the policy gate for the real COM call's Shell scope.
-if ($snapshotBody -notmatch 'ShellCallScope shell_call\(reentry_guard\(\)\);\s*hr = explorer_host_\.item_counts\(counts\);') {
-    throw 'Shell re-entry invariant failed: Pane selection query lost its Shell gate'
-}
-
+# Managed-list selection is local; native menu/operation binding behavior is
+# exercised through the controlled Pane seams, alongside the guard unit test.
 # PD-198: popup selection still returns through main WM_COMMAND; only the
 # selected pane's option execution moves behind PaneHost's existing gate.
 $commandStart = $paneSource.IndexOf('bool Pane::handle_command(')

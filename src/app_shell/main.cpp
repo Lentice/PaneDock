@@ -55,7 +55,6 @@
 #include "core/shutdown.h"
 #include "core/shutdown_coordinator.h"
 #include "core/tab_drag.h"
-#include "explorer_host/explorer_host.h"
 #include "file_operations/file_operations.h"
 #include "resource.h"
 #include "shell_core/shell_core.h"
@@ -372,10 +371,12 @@ Microsoft::WRL::ComPtr<DragHoverTarget> make_drag_hover_target(
     return target;
 }
 
-void write_live_view_count(bool diagnostic_mode) noexcept {
+void write_live_list_count(bool diagnostic_mode,
+                           std::span<const panedock::app_shell::Pane> panes) noexcept {
     if (!diagnostic_mode) return;
-    panedock::app_shell::write_diagnostic_line("live_view_count",
-                          panedock::explorer_host::live_view_count());
+    const auto count = std::count_if(panes.begin(), panes.end(),
+        [](const auto& pane) { return pane.realized(); });
+    panedock::app_shell::write_diagnostic_line("live_list_count", count);
 }
 
 
@@ -521,7 +522,7 @@ struct AppState : public panedock::app_shell::PaneHost {
     // WM_CLOSE to a half-created HWND); shown by wWinMain after create returns.
     std::wstring startup_error_message;
     // A recoverable startup problem the window can still open with (e.g. one
-    // pane's Shell view could not be realized, or tab drag-and-drop failed).
+    // pane's list could not be realized, or tab drag-and-drop failed).
     // Shown by wWinMain after the window is created; never an inside-WM_CREATE
     // modal box. It remains pending until the modeless startup notification is
     // created or until a fatal pre-window path reports it synchronously.
@@ -591,7 +592,7 @@ void AppReentryEffects::begin_shutdown_now() noexcept {
 }
 
 // PD-206: activate_group writes active_group_id, then rebind_panes points the
-// panes at the incoming Group's PaneState -- but the live IExplorerBrowsers
+// panes at the incoming Group's PaneState -- but the live lists
 // still show the outgoing Group until navigate_realized_panes runs. Anything
 // that captures a live view's location in between would write the outgoing
 // Group's folders into the incoming Group's tabs. refresh_tab_strips sits in
@@ -1436,7 +1437,7 @@ std::optional<std::size_t> last_failed_pane(const AppState& state) noexcept {
 // the short detail line (see format_shell_failure_detail).
 void report_shell_failure(const AppState& state, const wchar_t* site,
                           HRESULT result) noexcept try {
-    std::wstring message = L"PaneDock: Shell view realization failed site=";
+    std::wstring message = L"PaneDock: list realization failed site=";
     message += site;
     message += L' ';
     message += panedock::app_shell::format_shell_failure_detail(
@@ -1453,7 +1454,7 @@ void report_shell_failure(const AppState& state, const wchar_t* site,
     OutputDebugStringW(message.c_str());
 } catch (...) {
     // Never let diagnostics be the thing that breaks a message handler.
-    OutputDebugStringW(L"PaneDock: Shell view realization failed\n");
+    OutputDebugStringW(L"PaneDock: list realization failed\n");
 }
 
 // The call-site vocabulary the release checks police (which paths may write
@@ -1512,17 +1513,14 @@ void rebuild_pinned_location_menu(AppState& state) {
     }
 }
 
-// PD-183: Pane::destroy() now folds ExplorerHost::destroy() into its own
-// fixed destroy order (see pane.cpp), so tearing down every pane's chrome
-// and Shell view is this one loop everywhere shutdown needs it — each
-// destroy() call is still wrapped in its own ShellCallScope since it may
-// perform a Shell call (ExplorerHost::destroy()).
+// OLE revocation and Shell interfaces can re-enter even without a hosted view.
+// Keep teardown inside the shared gate; Pane destroys its list before parents.
 void destroy_panes(AppState& state) noexcept {
     for (auto& chrome : state.panes) {
         ShellCallScope shell_call(state.reentry_guard);
         chrome.destroy();
     }
-    write_live_view_count(state.diagnostic_mode);
+    write_live_list_count(state.diagnostic_mode, state.panes);
 }
 
 class LayoutPassScope final {
@@ -1556,8 +1554,7 @@ private:
 HRESULT apply_layout(HWND window, AppState& state,
                      bool realize_deferred_panes = false,
                      bool recompute_content = true) {
-    // A close torn down the Shell views; any message re-dispatched by the
-    // IExplorerBrowser::Destroy pump must not re-create a live view while the
+    // OLE/Shell teardown can pump; nested layout must not recreate content while the
     // parent HWND is being destroyed (§9.4). Guard the shared entry, not every
     // caller.
     if (state.is_shutting_down()) return E_ABORT;
@@ -1594,7 +1591,7 @@ HRESULT apply_layout(HWND window, AppState& state,
         if (!main_positions.commit())
             state.sidebar.set_rect(sidebar_list_rect, GetDpiForWindow(window));
         InvalidateRect(window, nullptr, FALSE);
-        if (recompute_content) write_live_view_count(state.diagnostic_mode);
+        if (recompute_content) write_live_list_count(state.diagnostic_mode, state.panes);
         return S_OK;
     }
     ShowWindow(state.empty_message, SW_HIDE);
@@ -1740,7 +1737,7 @@ HRESULT apply_layout(HWND window, AppState& state,
         std::any_of(changed_panes.begin(), changed_panes.end(),
                     [](bool changed) noexcept { return changed; }))
         InvalidateRect(window, nullptr, FALSE);
-    if (recompute_content) write_live_view_count(state.diagnostic_mode);
+    if (recompute_content) write_live_list_count(state.diagnostic_mode, state.panes);
     // `group` above outlived every Shell call in this pass; a changed group
     // count means one of them re-entered a Group mutation and the reference
     // was dangling.
@@ -1847,7 +1844,7 @@ void perform_group_transition(HWND window, AppState& state,
             if (hr == E_ABORT) return;
             append_startup_warning(
                 state_,
-                L"PaneDock could not open the Shell view for one or more "
+                L"PaneDock could not open the list for one or more "
                 L"panes. Some panes may be empty. " +
                     panedock::app_shell::format_shell_failure_detail(
                         hr, last_failed_pane(state_)));
@@ -2630,9 +2627,8 @@ bool AppShutdownEffects::ask_keep_open_after_save_failure() noexcept {
 void AppShutdownEffects::destroy_views(bool session_ending) noexcept {
     auto& state = state_;
     const HWND window = state.main_window;
-    // Keep the owner window visible while the synchronous Shell teardown runs:
-    // do not destroy the parent before every initialized ExplorerBrowser has
-    // been destroyed.
+    // Keep the owner visible while revoking OLE and releasing list resources.
+    // Pane destroys list children before their parent HWNDs.
     // The caption is a progress surface for a user who is watching. At an OS
     // session end nobody is, and RedrawWindow(RDW_UPDATENOW | RDW_FRAME)
     // forces a synchronous non-client paint while DWM is itself shutting
@@ -2650,8 +2646,9 @@ void AppShutdownEffects::destroy_views(bool session_ending) noexcept {
     // The leak invariant must be checkable in the shipped build: assert() is
     // compiled out by -DNDEBUG in Release, which is the configuration the
     // launch smoke test runs. Emit the count so the test can assert on it.
-    write_live_view_count(state.diagnostic_mode);
-    assert(panedock::explorer_host::live_view_count() == 0);
+    write_live_list_count(state.diagnostic_mode, state.panes);
+    assert(std::none_of(state.panes.begin(), state.panes.end(),
+        [](const auto& pane) { return pane.realized(); }));
 }
 
 void AppShutdownEffects::destroy_window() noexcept {
@@ -2930,7 +2927,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
         auto& chrome = state.panes[index];
         // PaneDock.Pane owns this pane's chrome. Its explorer container stays
-        // a plain STATIC used only for clipping and ExplorerHost parenting.
+        // a plain STATIC used only for clipping and list parenting.
         chrome.set_host(&state);
         chrome.set_reentry_guard(&state.reentry_guard);
         chrome.set_capture_gate(&state.session.capture_gate());
@@ -2993,7 +2990,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
         report_shell_failure(state, L"create", hr);
         append_startup_warning(
             state,
-            L"PaneDock could not open the Shell view for one or more panes. "
+            L"PaneDock could not open the list for one or more panes. "
             L"Some panes may be empty. " +
                 panedock::app_shell::format_shell_failure_detail(
                     hr, last_failed_pane(state)));
@@ -3417,13 +3414,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             const HRESULT hr = realize_startup_panes(window, *state);
             if (state->is_shutting_down()) return 0;
             if (FAILED(hr)) {
-                // A pane whose Shell view could not be realized stays blank;
+                // A pane whose list could not be realized stays blank;
                 // update the non-blocking startup notification instead of
                 // entering a modal loop after the app is already usable.
                 report_shell_failure(*state, L"deferred_realize", hr);
                 append_startup_warning(
                     *state,
-                    L"PaneDock could not open the Shell view for one or more "
+                    L"PaneDock could not open the list for one or more "
                     L"panes. Some panes may be empty. " +
                         panedock::app_shell::format_shell_failure_detail(
                             hr, last_failed_pane(*state)));
@@ -3828,12 +3825,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     }
 
     bool diagnostic_mode = false;
-    bool managed_list_requested = false;
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (argv != nullptr) {
-        for (int i = 1; i < argc; ++i)
-            if (std::wstring_view(argv[i]) == L"--managed-list") managed_list_requested = true;
         const bool requested = panedock::app_shell::diagnostic_requested(
             argc, argv);
         LocalFree(argv);
@@ -3884,8 +3878,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
 
     AppState state;
     state.diagnostic_mode = diagnostic_mode;
-    if (managed_list_requested)
-        for (auto& pane : state.panes) pane.use_managed_list();
     std::optional<std::filesystem::path> directory;
     {
         ShellCallScope shell_call(state.reentry_guard);
@@ -3957,8 +3949,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         instance, &state);
     if (window == nullptr) {
         destroy_panes(state);
-        write_live_view_count(state.diagnostic_mode);
-        assert(panedock::explorer_host::live_view_count() == 0);
+        write_live_list_count(state.diagnostic_mode, state.panes);
+        assert(std::none_of(state.panes.begin(), state.panes.end(),
+        [](const auto& pane) { return pane.realized(); }));
         std::wstring fatal_message = state.startup_error_message;
         if (!state.startup_warning_message.empty()) {
             if (!fatal_message.empty()) fatal_message += L"\n\n";
@@ -3988,13 +3981,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         if (!PostMessageW(window, kDeferredRealizeMessage, 0,
                           static_cast<LPARAM>(generation))) {
             OutputDebugStringW(
-                L"PaneDock: could not queue deferred Shell view realization\n");
+                L"PaneDock: could not queue deferred list realization\n");
             const HRESULT hr = realize_startup_panes(window, state);
             if (FAILED(hr) && !state.is_shutting_down()) {
                 report_shell_failure(state, L"startup_realize", hr);
                 append_startup_warning(
                     state,
-                    L"PaneDock could not open the Shell view for one or more "
+                    L"PaneDock could not open the list for one or more "
                     L"panes. Some panes may be empty. " +
                         panedock::app_shell::format_shell_failure_detail(
                             hr, last_failed_pane(state)));
@@ -4165,8 +4158,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         }
         TranslateMessage(&message);
         DispatchMessageW(&message);
-        for (auto& chrome : state.panes)
-            chrome.process_content_retry();
         apply_pinned_locations_dialog_result(state);
         handle_transfer_close_dialog_result(state);
         // win32: a nested modal loop can consume the WM_QUIT posted in
@@ -4181,8 +4172,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     destroy_panes(state);
     // assert() is compiled out in Release; the emitted count is what the
     // launch smoke test checks. See AppShutdownEffects::destroy_views.
-    write_live_view_count(state.diagnostic_mode);
-    assert(panedock::explorer_host::live_view_count() == 0);
+    write_live_list_count(state.diagnostic_mode, state.panes);
+    assert(std::none_of(state.panes.begin(), state.panes.end(),
+        [](const auto& pane) { return pane.realized(); }));
     finalize_process(state);
     CloseHandle(single_instance_mutex);
     return exit_code;

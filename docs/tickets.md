@@ -296,6 +296,10 @@
 
 使用者明確授權跳過真實驗證並繼續後續 tickets；rollout measurement gate 僅就工作排序豁免，並未通過。具體覆寫見 [PD-242 Overrides](tickets/PD-242-managed-list-remove-shell-view.md#overrides) 與 [design-spec Phase 8 override](design-spec.md#phase-8-override2026-10-21)。原有未勾選驗收條件、未驗證風險、失敗與自動化證據全部保留，不得解讀為 PASS 或完成。此 checkpoint 只改文件，不改實作，也不執行真實測試、GUI、launch smoke 或完整測試套件。
 
+### PD-242 implementation checkpoint（2026-10-21）
+
+依同日 sequencing-only waiver 實作 managed-list-only，移除 legacy host 及 view-only targets，保留 Pane HWND／list realization 與 Shell 原生 menu／namespace／operations／OLE／drag-drop。Release build 在 ticket 變更及測試 fixture 更新後通過；相關 27 項 CTest 均通過（26 項於一次聚焦執行通過，`panedock_managed_list` 補上 Pane parent HWND 後重跑通過）。該測試在目前身分無法改寫臨時目錄 DACL 時，明確跳過真實 ACL-denial 分支；受控 source 的錯誤 seam 有測試。完整 CTest 與實機驗收未執行，resource lifetime／binary gate 仍未完成。詳見 [PD-242 交接區](tickets/PD-242-managed-list-remove-shell-view.md#交接區)；總覽維持 `in_progress`。
+
 ## 自建列表遷移（2026-10-16 使用者核准）
 
 本地 tracker 承接已核准的 21 個切片，詳見 [功能規格](research/2026-10-16-managed-list-spec.md)。

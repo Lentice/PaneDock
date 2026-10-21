@@ -84,8 +84,8 @@ $finishOrder = @(
        Name = 'save timer cancelled before panes' },
     @{ Pattern = 'destroy_panes\(state\);'
        Name = 'panes destroyed' },
-    @{ Pattern = 'write_live_view_count\(state\.diagnostic_mode\);'
-       Name = 'live view count emitted after teardown' }
+    @{ Pattern = 'write_live_list_count\(state\.diagnostic_mode, state\.panes\);'
+       Name = 'live list count emitted after teardown' }
 )
 $previousIndex = -1
 $previousName = 'start of destroy_views'

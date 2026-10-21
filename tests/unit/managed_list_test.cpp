@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <iostream>
 #include <sddl.h>
 
 using namespace panedock;
@@ -33,13 +34,21 @@ struct Fixture final {
     test::TestPaneHost host;
     core::PaneState state{"pane", {{"tab", {L"C:\\A", {}, {}}, "details", "preserved-sort", true, {}, 0}}, "tab"};
     app_shell::Pane pane;
+    HWND parent{};
     Controlled* source{};
     Fixture() {
+        const auto instance = GetModuleHandleW(nullptr);
+        EXPECT(app_shell::Pane::register_window_class(instance));
+        parent = CreateWindowExW(0, L"STATIC", L"managed-list test", 0,
+            0, 0, 800, 600, nullptr, nullptr, instance, nullptr);
+        EXPECT(parent != nullptr);
         pane.set_host(&host); pane.set_reentry_guard(&host.guard);
+        EXPECT(pane.create(parent, 0));
         pane.bind(&state);
         auto controlled = std::make_unique<Controlled>(); source = controlled.get();
         pane.use_managed_list(std::move(controlled));
     }
+    ~Fixture() { pane.destroy(); if (parent) DestroyWindow(parent); }
     void navigate(const wchar_t* path) { EXPECT(SUCCEEDED(pane.navigate_to({path, {}, {}}))); }
     void deliver(managed_list::Phase phase, std::vector<managed_list::Row> rows = {}, DWORD error = 0) {
         source->deliver({pane.list_snapshot().request, std::move(rows), phase, error});
@@ -93,8 +102,12 @@ void reentrant_acknowledgement() {
         }
     } host;
     core::PaneState state{"pane", {{"tab", {}, {}, {}, true, {}, 0}}, "tab"};
+    EXPECT(app_shell::Pane::register_window_class(GetModuleHandleW(nullptr)));
+    const HWND parent = CreateWindowExW(0, L"STATIC", L"reentry test", 0,
+        0, 0, 800, 600, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
     app_shell::Pane pane; host.pane = &pane;
-    pane.set_host(&host); pane.set_reentry_guard(&host.guard); pane.bind(&state);
+    pane.set_host(&host); pane.set_reentry_guard(&host.guard);
+    EXPECT(pane.create(parent, 0)); pane.bind(&state);
     auto source = std::make_unique<Controlled>(); auto* delivery = source.get();
     pane.use_managed_list(std::move(source));
     EXPECT(SUCCEEDED(pane.navigate_to({L"C:\\original", {}, {}})));
@@ -105,6 +118,8 @@ void reentrant_acknowledgement() {
     pane.process_content_results();
     EXPECT(pane.list_snapshot().phase == managed_list::Phase::complete);
     EXPECT(pane.list_snapshot().rows.size() == 1);
+    pane.destroy();
+    if (parent) DestroyWindow(parent);
 }
 void binding_errors_and_cleanup() {
     Fixture f;
@@ -197,10 +212,18 @@ void real_local_directory() {
         core::PaneState unavailable_state{"pane", {{"tab", {L"C:\\", {}, {}}, {}, {}, true, {}, 0}}, "tab"};
         app_shell::Pane unavailable;
         unavailable.set_host(&unavailable_host); unavailable.set_reentry_guard(&unavailable_host.guard);
+        const auto instance = GetModuleHandleW(nullptr);
+        EXPECT(app_shell::Pane::register_window_class(instance));
+        const HWND unavailable_parent = CreateWindowExW(0, L"STATIC", L"capacity test", 0,
+            0, 0, 800, 600, nullptr, nullptr, instance, nullptr);
+        EXPECT(unavailable_parent != nullptr);
+        EXPECT(unavailable.create(unavailable_parent, 0));
         unavailable.bind(&unavailable_state); unavailable.use_managed_list();
         EXPECT(SUCCEEDED(unavailable.navigate_to({L"C:\\", {}, {}})));
         EXPECT(unavailable.list_snapshot().phase == managed_list::Phase::error);
         EXPECT(unavailable.list_snapshot().error == ERROR_NO_SYSTEM_RESOURCES);
+        unavailable.destroy();
+        if (unavailable_parent) DestroyWindow(unavailable_parent);
     }
     const auto root = std::filesystem::current_path() /
         (L"pd224-test-" + std::to_wstring(GetCurrentProcessId()));
@@ -267,7 +290,13 @@ void real_local_directory() {
     EXPECT(ConvertStringSecurityDescriptorToSecurityDescriptorW(
         L"D:(D;;0x1;;;WD)", SDDL_REVISION_1, &descriptor, nullptr));
     const BOOL changed = descriptor && SetFileSecurityW(denied.c_str(), DACL_SECURITY_INFORMATION, descriptor);
-    EXPECT(changed);
+    const DWORD acl_error = changed ? ERROR_SUCCESS : GetLastError();
+    // Some restricted test identities cannot change the DACL even on a
+    // disposable directory they created. Keep the denied-provider seam tests
+    // deterministic and report the real-filesystem branch as skipped.
+    EXPECT(changed || acl_error == ERROR_ACCESS_DENIED);
+    if (!changed && acl_error == ERROR_ACCESS_DENIED)
+        std::cout << "SKIP real ACL denial branch: current identity cannot set DACL\n";
     if (descriptor) LocalFree(descriptor);
     if (changed) {
         EXPECT(SUCCEEDED(pane.navigate_to({denied.wstring(), {}, {}})));

@@ -89,7 +89,7 @@ void Pane::accept_property_result(managed_list::IconResult& result) {
                                          static_cast<int>(request.row_index));
 }
 void Pane::finish_property_batch() noexcept try {
-    if (!active() || !managed_list_active_ ||
+    if (!active() ||
         !content_request_is_current(list_.request.binding) || !enrichment_interest_.empty()) return;
     if (property_sort_pending_ && list_.watch != managed_list::WatchState::recovering &&
         list_.phase != managed_list::Phase::loading &&

@@ -10,7 +10,7 @@ bool Pane::list_edit_has_focus() const noexcept {
 }
 
 bool Pane::handle_list_rename_key(const MSG& message, bool control, bool alt, bool shift) noexcept {
-    if (!active() || !managed_list_active_ || message.hwnd != list_window_ ||
+    if (!active() || message.hwnd != list_window_ ||
         message.message != WM_KEYDOWN || message.wParam != VK_F2 || control || alt || shift)
         return false;
     (void)begin_list_rename();
@@ -18,7 +18,7 @@ bool Pane::handle_list_rename_key(const MSG& message, bool control, bool alt, bo
 }
 
 bool Pane::begin_list_rename() noexcept try {
-    if (list_rename_busy_ || list_rename_ || !active() || !managed_list_active_ ||
+    if (list_rename_busy_ || list_rename_ || !active() ||
         !list_window_ || list_.phase != managed_list::Phase::complete || list_.updating || list_.watch == managed_list::WatchState::recovering ||
         (reentry_guard_ && reentry_guard().in_shell_call())) return false;
     FileCommandSnapshot snapshot;

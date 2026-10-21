@@ -7,7 +7,7 @@ namespace {
 using panedock::test::TestPaneHost;
 
 void test_replacement_navigation_does_not_inherit_history_suppression() {
-    for (const bool shell_initiated : {false, true}) {
+    for (const bool reject_future_result : {false, true}) {
         TestPaneHost host;
         panedock::app_shell::Pane pane;
         pane.set_host(&host);
@@ -20,12 +20,15 @@ void test_replacement_navigation_does_not_inherit_history_suppression() {
             "pane", {{"tab", b, {}, {}, true, {a, b}, 1}}, "tab"};
         pane.bind(&state);
 
-        // Back has changed the model, but its Shell completion is pending.
+        // A pending history move must not leak suppression to its replacement.
         EXPECT(panedock::core::navigate_tab_back(*pane.active_tab()));
         const auto back = pane.begin_navigation();
         pane.set_suppress_history(true);
-        const auto replacement = shell_initiated ? back + 1
-                                                : pane.begin_navigation();
+        const auto replacement = pane.begin_navigation();
+        if (reject_future_result) {
+            pane.navigation_complete(replacement + 1, a);
+            EXPECT(pane.active_tab()->location == a);
+        }
         pane.navigation_complete(replacement, c);
         pane.navigation_complete(back, a); // late Back must stay ignored
 
@@ -329,11 +332,9 @@ void test_content_operations_without_a_live_view_preserve_model_and_windows() {
     key.wParam = VK_RETURN;
     EXPECT(pane.translate_content_accelerator(&key) == S_FALSE);
     pane.focus_content();
-    pane.process_content_retry();
     EXPECT(!pane.show_folder_context_menu(parent, {0, 0}));
 
-    // A real, unrealized ExplorerHost declines navigation. The public Pane
-    // command must roll back the history move, including its suppression.
+    // An unrealized managed list declines navigation without changing history.
     pane.navigate_history(true);
     EXPECT(state == original);
     EXPECT(!pane.suppress_history());
@@ -349,7 +350,6 @@ void test_content_operations_without_a_live_view_preserve_model_and_windows() {
     EXPECT(pane.selection_snapshot(selection) == E_ABORT);
     EXPECT(pane.translate_content_accelerator(&key) == S_FALSE);
     pane.focus_content();
-    pane.process_content_retry();
     EXPECT(!pane.show_folder_context_menu(parent, {0, 0}));
     EXPECT(state == original);
     pane.derealize();
@@ -360,10 +360,10 @@ void test_content_operations_without_a_live_view_preserve_model_and_windows() {
     DestroyWindow(parent);
 }
 
-void test_content_results_are_discarded_when_replay_changes_the_binding() {
+void test_local_content_queries_do_not_pump_deferred_commands() {
     using namespace panedock::app_shell;
-    // Exercise the real guard's unwind/replay boundary without a Shell fake.
-    // A replay sink can invalidate the binding before a content call returns.
+    // Local list queries no longer call a hosted view or pump the Shell gate.
+    // The queued mutation must wait for an actual Shell-call unwind.
     class ReplayEffects final : public ShellReentryEffects {
       public:
         TestPaneHost &host;
@@ -401,16 +401,18 @@ void test_content_results_are_discarded_when_replay_changes_the_binding() {
             if (accelerator) {
                 MSG key{};
                 key.message = WM_KEYDOWN;
-                // The empty host declines, but a stale key must be consumed
-                // rather than routed to a command on the replacement tab.
-                EXPECT(pane.translate_content_accelerator(&key) == S_OK);
+                EXPECT(pane.translate_content_accelerator(&key) == S_FALSE);
             } else {
                 Pane::SelectionSnapshot snapshot{1, 1, 1, true};
-                EXPECT(pane.selection_snapshot(snapshot) == E_ABORT);
+                EXPECT(pane.selection_snapshot(snapshot) == E_UNEXPECTED);
                 EXPECT(snapshot.total == 0 && snapshot.selected == 0);
                 EXPECT(snapshot.selected_bytes == 0);
                 EXPECT(!snapshot.selected_bytes_valid);
             }
+            EXPECT(pane.pane_state() == &state);
+            EXPECT(host.group_id == "group-a" && !host.shutting_down);
+            EXPECT(state.active_tab_id == "tab");
+            { ShellCallScope call(guard); }
             EXPECT(!guard.in_shell_call());
             EXPECT(host.session_saves == 0);
         }
@@ -672,7 +674,7 @@ void test_tab_paint_stops_at_the_shortest_of_visuals_model_and_rects() {
 } // namespace
 
 int main() {
-    test_content_results_are_discarded_when_replay_changes_the_binding();
+    test_local_content_queries_do_not_pump_deferred_commands();
     test_content_operations_without_a_live_view_preserve_model_and_windows();
     test_button_erase_preserves_pixels_until_owner_draw();
     test_tab_commands_schedule_only_successful_changes();

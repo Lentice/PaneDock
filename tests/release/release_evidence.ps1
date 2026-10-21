@@ -91,17 +91,17 @@ function Get-Snapshot([System.Diagnostics.Process]$Process) {
     }
 }
 
-function Get-LiveViewCounts([string[]]$Lines) {
+function Get-LiveListCounts([string[]]$Lines) {
     $counts = [System.Collections.Generic.List[uint32]]::new()
     foreach ($line in @($Lines)) {
-        if ($line -notmatch '^panedock\.live_view_count=(.*)$') { continue }
+        if ($line -notmatch '^panedock\.live_list_count=(.*)$') { continue }
         $payload = $Matches[1]
         if ($payload -notmatch '^\d+$') {
-            throw "Invalid live view count: $line"
+            throw "Invalid live list count: $line"
         }
         [uint32]$value = 0
         if (-not [uint32]::TryParse($payload, [ref]$value)) {
-            throw "Invalid live view count: $line"
+            throw "Invalid live list count: $line"
         }
         $counts.Add($value)
     }
@@ -147,8 +147,8 @@ try {
     $thumbnailDelta = $null
     $appDebuggerAttached = 'Not measured'
     $measurementOutput = @()
-    $liveViewCounts = @()
-    $liveViewParseError = $null
+    $liveListCounts = @()
+    $liveListParseError = $null
     $ac005Response = 'Not measured'
 
     if ($CollectMeasurements -and -not $failed) {
@@ -195,9 +195,9 @@ try {
         Read-Host 'Close PaneDock normally, then press Enter' | Out-Null
         $measurementOutput = @(Complete-PaneDock $run)
         try {
-            $liveViewCounts = @(Get-LiveViewCounts $measurementOutput)
+            $liveListCounts = @(Get-LiveListCounts $measurementOutput)
         } catch {
-            $liveViewParseError = $_.Exception.Message
+            $liveListParseError = $_.Exception.Message
         }
 
         for ($soak = 1; $soak -le 3; $soak++) {
@@ -302,19 +302,19 @@ try {
     }
     $thumbValue = if ($null -eq $thumbnailDelta) { 'Not measured' } else { "$thumbnailDelta bytes" }
     $lines.Add("| Thumbnail pipeline memory contribution | $thumbValue | WorkingSet64(thumbnail folders) - WorkingSet64(text-only folders). |")
-    if ($liveViewParseError) {
-        $lines.Add("| Live view count after 20 switches | Not measured | Could not parse PaneDock stdout: $liveViewParseError |")
-    } elseif ($liveViewCounts.Count -ge 2) {
-        $beforeSwitches = $liveViewCounts[0]
-        $afterSwitches = if ($liveViewCounts.Count -ge 3) {
-            $liveViewCounts[$liveViewCounts.Count - 2]
+    if ($liveListParseError) {
+        $lines.Add("| Live list count after 20 switches | Not measured | Could not parse PaneDock stdout: $liveListParseError |")
+    } elseif ($liveListCounts.Count -ge 2) {
+        $beforeSwitches = $liveListCounts[0]
+        $afterSwitches = if ($liveListCounts.Count -ge 3) {
+            $liveListCounts[$liveListCounts.Count - 2]
         } else {
-            $liveViewCounts[-1]
+            $liveListCounts[-1]
         }
-        $closedValue = $liveViewCounts[-1]
-        $lines.Add("| Live view count after 20 switches | before=$beforeSwitches; after=$afterSwitches; closed=$closedValue | Parsed $($liveViewCounts.Count) stdout samples; final sample is emitted after destroy. |")
+        $closedValue = $liveListCounts[-1]
+        $lines.Add("| Live list count after 20 switches | before=$beforeSwitches; after=$afterSwitches; closed=$closedValue | Parsed $($liveListCounts.Count) stdout samples; final sample is emitted after destroy. |")
     } else {
-        $lines.Add('| Live view count after 20 switches | Not measured | No live-view stdout was collected; requires -CollectMeasurements and a normal interactive close. |')
+        $lines.Add('| Live list count after 20 switches | Not measured | No live-view stdout was collected; requires -CollectMeasurements and a normal interactive close. |')
     }
     $lines.Add('| Group switch latency | Not measured | Measuring this requires product timing instrumentation, outside this ticket; no blocking threshold is defined. |')
     $lines.Add('| Tab realize latency | Not measured | Measuring this requires product timing instrumentation, outside this ticket; no blocking threshold is defined. |')

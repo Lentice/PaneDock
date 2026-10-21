@@ -4,7 +4,7 @@ namespace panedock::app_shell {
 HRESULT Pane::context_menu_snapshot(POINT screen, bool background,
                                     ContextMenuSnapshot& snapshot) noexcept try {
     snapshot = {};
-    if (!active() || !managed_list_active_ || !list_window_ || !realized_) return E_ABORT;
+    if (!active() || !list_window_ || !realized_) return E_ABORT;
     if (!content_request_is_current(list_.request.binding) || list_navigation_pending_) return E_PENDING;
     const auto binding = content_request();
     const bool keyboard = screen.x == -1 && screen.y == -1;
@@ -61,7 +61,7 @@ bool Pane::present_context_menu(HWND owner, ContextMenuSnapshot snapshot) noexce
     ShellCallScope call(reentry_guard());
     context_menu_busy_ = true;
     struct Reset { bool& busy; ~Reset() { busy = false; } } reset{context_menu_busy_};
-    const auto current = [&] { return managed_list_active_ && file_command_is_current(snapshot.target); };
+    const auto current = [&] { return file_command_is_current(snapshot.target); };
     focus_content();
     if (!current()) return false;
     return context_menu_presenter_ ? context_menu_presenter_->show(owner, snapshot.request, current) :
@@ -69,7 +69,7 @@ bool Pane::present_context_menu(HWND owner, ContextMenuSnapshot snapshot) noexce
 } catch (...) { return false; }
 
 bool Pane::show_content_context_menu(HWND target, POINT screen) noexcept {
-    if (!managed_list_active_ || !list_window_ || target != list_window_) return false;
+    if (!list_window_ || target != list_window_) return false;
     if (!active() || context_menu_busy_ || reentry_guard().in_shell_call()) return true;
     ContextMenuSnapshot snapshot;
     if (context_menu_snapshot(screen, false, snapshot) == S_OK)
@@ -79,16 +79,10 @@ bool Pane::show_content_context_menu(HWND target, POINT screen) noexcept {
 
 bool Pane::show_folder_context_menu(HWND owner, POINT screen) noexcept try {
     if (!active() || !active_tab() || !realized_ || context_menu_busy_) return false;
-    if (managed_list_active_) {
-        ContextMenuSnapshot snapshot;
-        if (context_menu_snapshot(screen, true, snapshot) != S_OK) return false;
-        snapshot.request.align_above = true;
-        return present_context_menu(owner, std::move(snapshot));
-    }
-    const auto request = content_request();
-    focus_content();
-    if (!content_request_is_current(request)) return false;
-    ShellCallScope call(reentry_guard());
-    return explorer_host_.show_folder_context_menu(owner, screen);
+    ContextMenuSnapshot snapshot;
+    if (context_menu_snapshot(screen, true, snapshot) != S_OK) return false;
+    snapshot.request.align_above = true;
+    return present_context_menu(owner, std::move(snapshot));
+
 } catch (...) { return false; }
 } // namespace panedock::app_shell

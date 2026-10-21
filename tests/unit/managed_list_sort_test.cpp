@@ -221,7 +221,6 @@ void unicode_name_order_and_unknown_sort_fallback_are_stable() {
         EXPECT(fallback[3].name == L"A.txt");
         EXPECT(fallback[4].name == L"a.txt");
     }
-    f.pane.capture_sort();
     EXPECT(f.state.tabs.front().sort_column == "future.property.key");
 }
 

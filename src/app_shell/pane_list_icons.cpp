@@ -173,7 +173,7 @@ void Pane::set_list_icon_viewport(std::size_t first, std::size_t count) noexcept
     request_list_images(std::move(rows), paint_dpi_);
 } catch (...) { cancel_list_icons(); }
 void Pane::request_list_images(std::vector<std::size_t> rows, UINT dpi) noexcept try {
-    if (!managed_list_active_ || !active() ||
+    if (!active() ||
         !content_request_is_current(list_.request.binding)) { cancel_list_icons(); return; }
     ListGeometryScope geometry(*this);
     const auto* tab = active_tab();
@@ -264,7 +264,7 @@ void Pane::process_icon_results() noexcept try {
         auto result = icon_source_->take();
         if (!result) break;
         const auto& request = result->request;
-        if (!active() || !managed_list_active_ ||
+        if (!active() ||
             !content_request_is_current(request.request.binding) ||
             !(request.request == list_.request) || request.viewport != icon_viewport_ ||
             request.key.size != icon_size_ || !icon_images_) continue;
@@ -378,7 +378,7 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
 }
 
 void Pane::apply_managed_list_view_mode() noexcept {
-    if (!active() || !managed_list_active_) return;
+    if (!active()) return;
     ListGeometryScope geometry(*this);
     const auto* tab = active_tab();
     if (!tab) return;

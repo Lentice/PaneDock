@@ -33,7 +33,6 @@
 #include "core/model.h"
 #include "core/bounded_order.h"
 #include "core/navigation.h"
-#include "explorer_host/explorer_host.h"
 #include "explorer_host/context_menu.h"
 #include "shell_core/shell_core.h"
 
@@ -50,7 +49,7 @@ inline RECT to_win32_rect(const TabStripRect &rect) noexcept {
     return {rect.left, rect.top, rect.right, rect.bottom};
 }
 
-// A stable identity slot owning its Shell view, child windows and tab strip.
+// A stable identity slot owning its managed list, child windows and tab strip.
 class Pane final {
   public:
     struct LayoutResult final {
@@ -116,8 +115,7 @@ class Pane final {
         return pending_navigation_;
     }
 
-    using NavigationGeneration =
-        panedock::explorer_host::ExplorerHost::NavigationGeneration;
+    using NavigationGeneration = std::uint64_t;
     NavigationGeneration begin_navigation();
     HRESULT navigate_to(const panedock::core::ShellLocation &location);
     HRESULT navigate_up_one_level();
@@ -131,7 +129,7 @@ class Pane final {
     void navigate_up();
     void refresh_view();
 
-    // Process-local development content choice; set before realize(). The source
+    // Optional controlled Source; set before realize(). The source
     // seam accepts controlled owned batches in behavioral tests, never a Shell host.
     void use_managed_list(std::unique_ptr<managed_list::Source> source = {});
     struct ListSnapshot final {
@@ -244,7 +242,6 @@ class Pane final {
     panedock::core::ShellLocation content_location() const;
     void focus_content() noexcept;
     HRESULT translate_content_accelerator(MSG *message) noexcept;
-    void process_content_retry() noexcept;
     struct ContextMenuSnapshot final {
         FileCommandSnapshot target;
         explorer_host::ContextMenuRequest request;
@@ -257,8 +254,6 @@ class Pane final {
         if (!realized_) context_menu_presenter_ = std::move(presenter);
     }
 
-    void capture_view_mode();
-    void capture_sort();
     void apply_view_mode();
     void apply_sort();
     void capture_location();
@@ -335,18 +330,8 @@ class Pane final {
     const std::optional<RECT> &laid_out_pane_rect() const noexcept {
         return laid_out_pane_rect_;
     }
-    // --- Shell view lifetime (PD-183) --------------------------------
-    //
-    // Pane holds the ExplorerHost and its parent container HWND, so
-    // realize()/derealize() can only be called through Pane's own
-    // destroy() ordering (see pane.cpp) — the coordinator decides *when*
-    // to realize/derealize via core::plan_realization, Pane just carries
-    // that decision out. Pane never calls plan_realization itself.
-
-    // Wraps ExplorerHost::initialize() against this pane's own
-    // explorer_container(). Returns the initialize() HRESULT (not `bool`
-    // per the ticket's literal signature) because callers need the exact
-    // HRESULT to report first-failure diagnostics; see PD-183 交接區.
+    // Pane owns list realization and child HWND lifetime. The coordinator
+    // chooses visibility via core::plan_realization; Pane applies that plan.
     HRESULT realize(const RECT &local_rect,
                     const panedock::core::ShellLocation &location) noexcept;
     void derealize() noexcept;
@@ -404,13 +389,10 @@ class Pane final {
                                NavigationGeneration generation);
     void update_managed_list() noexcept;
     void apply_list_changes(managed_list::Batch& batch, ManagedListInteraction& interaction);
-    bool managed_list_enabled_{}; // process opt-in, never persisted
-    bool managed_list_active_{};  // current opt-in content
     bool list_navigation_pending_{};
     // History cursor stays at the last success until this target is accepted.
     std::optional<std::size_t> list_history_target_;
     std::optional<std::size_t> list_retry_history_target_;
-    std::optional<managed_list::Request> pending_list_route_;
     HRESULT navigate_content(core::ShellLocation location,
                              NavigationGeneration generation);
     void resolve_list_navigation(bool success);
@@ -562,15 +544,9 @@ class Pane final {
     HWND pinned_button_{nullptr};
     HWND folder_context_button_{nullptr};
     std::optional<RECT> laid_out_pane_rect_;
-    panedock::explorer_host::ExplorerHost explorer_host_;
+    NavigationGeneration navigation_generation_{};
     bool realized_{};
     bool suppress_history_record_{};
-    // The history slot navigate_history left, kept until that navigation is
-    // resolved so navigation_failed can put the tab back. Carries the
-    // generation it belongs to: a later navigation that fails must not roll
-    // back a history move that already completed.
-    std::optional<std::pair<NavigationGeneration, std::size_t>>
-        history_rollback_;
     RECT navigation_background_{};
     // Pane-local bottom of the navigation row: the card band tinted while the
     // pane is active.
