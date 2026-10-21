@@ -98,6 +98,14 @@ git diff --check
 
 Release configure／build 成功；指定的 8 個 CTests 全部通過（2.77 秒）。其中 `shell_reentry_gate` 與 `single_threaded` 是政策檢查，不作為原生選單行為證據。`git diff --check` 通過。
 
+## Post-PD-242 focused checkpoint（2026-10-21）
+
+在 `5ad7d14`、`4ba2e0a`、`a81cbe4` 與 `b3cbc46` 後重新追查 mouse／Menu key／Shift+F10／footer routing、owned identity snapshot、原生 menu acquisition／message forwarding／verb invocation，以及 deferred replay／STA re-entry／shutdown 邊界；未發現剩餘的 PD-239 自動化接線缺口。Windows 原生 `IContextMenu` 路徑保留，不新增 custom menu。前一 checkpoint 的 legacy `GetItemObject(SVGIO_BACKGROUND)` 描述僅屬移除前紀錄；目前背景入口共用 managed-list snapshot，經目前 folder 的 `IShellFolder::CreateViewObject` 取得原生選單。
+
+重跑上節精確指定的 Release configure、7 個 build targets 與 8 項 focused CTests，命令皆自然完成：configure／build exit 0（build：`ninja: no work to do`），CTest **8/8 PASS、exit 0**；`git diff --check` exit 0。政策檢查與 presenter seam 不作為真實原生選單／provider 相容性證據。未執行完整 CTest、GUI、launch smoke、真實 Shell-menu interaction、OneDrive、network 或 provider tests；既有使用者 WIP 保留。
+
+剩餘缺口為下列真實選單／桌面／provider evidence，acceptance criteria 保持未勾選，追蹤表維持原值。依 sequencing-only waiver，下一張可繼續核對剩餘工作的票為 PD-242（PD-240 已完成、PD-241 為排序豁免）；不代表本票或 rollout gate 通過實機驗收。
+
 ## 交接區
 
 - 真實原生 verbs、folder background menu（含需要 view site 的 verbs）、installed shell extensions、legacy／managed 桌面對照、實際焦點及 mixed-DPI keyboard anchor 均未驗證，需真實桌面；本次依使用者要求略過。Pane seam PASS 不代表上述 Shell 相容性 PASS，也不代表選單延遲改善。
