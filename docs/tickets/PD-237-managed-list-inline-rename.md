@@ -107,3 +107,11 @@ Configure exit 0。restricted build 無輸出後以 Ctrl+C 中止，指定 targe
 
 - 未解風險：真實 Shell／disposable files rename 與通知收斂、衝突時實際新名稱／identity、access denied／external deletion／cancel 的原生 UI、本機／namespace／network／OneDrive provider 行為，均「未驗證，需真實桌面」。成功但 provider 不提供完整結果 identity 時，目前保留原列並要求通知／Refresh 收斂；該復原路徑仍需實機驗證。
 - 未解風險：真正 keyboard focus、mixed DPI／各 view mode 的 edit 位置、accessibility、操作 pump 中切 tab／Group／shutdown 的 COM lifetime 及慢 provider 回應時間均未驗證。hidden-control seam 與政策掃描不構成以上項目或 PD-241 compatibility／performance／idle gate 的 PASS；原始 acceptance criteria 仍需 real integration evidence。
+
+## 實機自動化嘗試（2026-10-21，未驗證）
+
+Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（2026-10-21 08:47:31 建置）；隔離 `LOCALAPPDATA`，單一實例，正常關閉且無殘留行程；拋棄式資料夾 `build\manual-test\rename`（`r1.txt`～`r3.txt`）。
+
+harness 以 `SendInput` 把焦點移到 pane list 並送 Down、F2：`LVM_GETSELECTEDCOUNT` 為 0、focused item 為 -1，F2 後 list 下沒有 rename `Edit`，目錄維持 `r1.txt,r2.txt,r3.txt`。選取與焦點沒有進入 list，無法到達 rename 路徑；這是 harness 輸入未生效，不是產品失敗，也不是通過。
+
+Enter／Esc／focus loss、衝突／拒絕存取／外部移除、成功 rename 後名稱／selection／focus 收斂、F2 與其他快捷鍵優先順序全部維持未驗證，需真實桌面；本次不再重試。
