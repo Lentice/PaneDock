@@ -145,3 +145,13 @@ Claude 使用 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49
 滑鼠按下後 capture 在來源 list；拖動中 capture 轉至 `CLIPBRDWNDCLASS`，確認真實 OLE drag 已開始。Claude 在移動期間按下 Ctrl，`GetAsyncKeyState` 確認按住，並在 Ctrl 仍按住時將游標放在目的 list 後 release。結果來源仍有原檔、目的地新增同名檔，兩邊 SHA-256 都與原始值相同；Pane 0／1 各顯示該 row。此結果由檔案狀態推論為 copy，沒有讀取 drop effect API。
 
 PaneDock 以 `WM_CLOSE` 約 185 ms 正常退出，process count 歸零；正式 session metadata 未變、stderr 空白，未用 clipboard、未刪除資料。原始輸出與前後截圖留在 ignored `build\manual-test\pd238-ctrl-copy\run-261021155539\`。這是單一同 volume 單檔樣本；Ctrl 在 drag 開始後才按，尚未驗證拖曳前按住 Ctrl、跨 volume modifier、Shift／Alt／取消、外部來源、Group／tab hover 及 provider／shutdown 交錯。原始 acceptance 與總覽狀態維持 `in_progress`。
+
+## Claude PaneDock-to-Explorer Ctrl-copy probe（2026-10-21；單一本機項目）
+
+Claude 使用 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586`），啟動前確認 PaneDock process count 為 0；使用單一 PaneDock process、fresh isolated `LOCALAPPDATA=build\manual-test\pd238-external-out\run-261021162712\la`，並在新建 source／destination 資料夾建立唯一 marker `.txt`。兩個資料夾同在 E: volume。PaneDock row 被選取、focused row 為 0；來源點命中 PaneDock list，PaneDock 為前景。目的地是新開且識別到 URL 的 Explorer 視窗，UIA `UIItemsView` 顯示 0 個項目；放置點位於該 UIA view 範圍內，WindowFromPoint 的祖先鏈一路回到這個 Explorer HWND。
+
+使用真實滑鼠 OLE drag：按下時 capture 在 PaneDock `SysListView32`，移動後轉至 `CLIPBRDWNDCLASS`；drag 開始後按下 Ctrl，保持至放開。完成後 source marker 仍存在，Explorer destination 恰有同名 marker；兩邊 SHA-256 均等於起始值 `6AF85769A2B84AB3556252C1A90A7055A7BEECC40BBDD29B08B5B1D0D837AE17`。這由檔案狀態推論為 copy；未讀取 OLE drop-effect API。未使用 clipboard API、Shell `CopyHere`、直接複製或合成 `IDataObject`。
+
+只關閉本次新開的 Explorer 視窗；PaneDock 主視窗經 `WM_CLOSE` 正常結束，結束後沒有 PaneDock process。正式 session 未用，未編輯 source／ticket docs。原始輸出、腳本與截圖保留於 ignored `build\manual-test\pd238-external-out\`，有效樣本為 `run-261021162712`；前一輪在拖放前發現 harness 選錯 Explorer 子視窗，已安全停止且沒有檔案操作，不作產品行為結論。
+
+此樣本只驗證同 volume、單檔、PaneDock source 到 Explorer 空白資料夾的 Ctrl-copy；Ctrl 在 drag 開始後才按。沒有驗證 Explorer 到 PaneDock、跨 volume、其他 app、拖到資料夾項目、取消、Group／tab hover、快速重入或 shutdown 交錯。
