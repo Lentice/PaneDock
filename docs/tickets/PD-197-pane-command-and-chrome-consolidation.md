@@ -230,3 +230,11 @@ glyph、footer 色票及 pane-only metrics 搬入 pane 匿名 namespace；layout
 - Runtime probe 的限制：第一次 diagnostic 的 Process wrapper 在退出後回報空 ExitCode，雖 `HasExited=True`／live count 0，仍使暫存腳本錯判；先持有 Process handle 後重跑，另一次 `CloseMainWindow()` 未關閉實際 `PaneDockMainWindow`。依既有 smoke 的 PID/class 定位補送 `WM_CLOSE`，5 秒內退出、exit code 0、live count 0，無殘留。不把這兩次 probe 問題隱藏為首次全部通過，亦未因此改動 shutdown。
 - `git diff --check` 通過；`src/core`、`shell_core`、`file_operations`、`tab_overflow.h` 與 session schema 零 diff。舊 navigation helper、record helper 與兩個過渡刷新 hook 對 src/tests 搜尋皆無命中。
 - 「使用者實機檢查」1–13 **未執行完整清單，需真實桌面人工驗證**；尤其多版型／四 pane 按鈕、拖曳、不同 DPI、檔案操作進度重入及視覺比對。只驗證上述啟動／關閉／live-view 診斷與資料測試，不代替全部實機驗收。
+
+## 2026-10-21 實機與原始碼補充檢查（部分驗證）
+
+`build\PaneDock.exe`（2026-10-21 08:47:31 建置）在隔離 `LOCALAPPDATA` 下的自動化操作中（PD-209／PD-234 的 4-pane、多 Group、多 tab、tab 開／關／切換、Back／Forward、New Group、版面按鈕）可正常啟動、操作與正常關閉；這不是與改版前的逐項視覺／行為對照，也沒有 tab hover／拖曳／overflow 的實測，不能代表「零視覺、零行為變更」。
+
+原始碼現況：`Pane` 已有 `handle_command`、`draw_control`、`refresh_status_bar`、`refresh_navigation_chrome`、`navigation_complete`；`handle_navigation_complete` 與 `tab_strip_needs_refresh` 在 `src` 中無匹配；`main.cpp` 的 `std::size_t pane_index` 仍有 6 處（行 400、2077、2121、2398、3442、3623，需對照本票逐行理由）。`main.cpp` 為 4246 行，**高於**驗收條件 5 的 3,300 行上限。
+
+驗收條件 5 以字面數字目前不成立、7（零視覺／行為變更）未對照驗證；本票狀態不變。
