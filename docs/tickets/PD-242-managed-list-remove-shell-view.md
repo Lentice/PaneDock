@@ -101,3 +101,11 @@ Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（2026-10-21 08:47:31 建置）
 - 獨立重量測（8 個 5 秒視窗）：CPU 80.8%～88.3% 單核；10 秒的 per-thread 增量顯示單一 thread（狀態 Running）占 8.078 秒，其餘 thread 皆 ≤0.031 秒；以 `SC_MINIMIZE` 最小化後同樣 10 秒量得 0%。
 
 AGENTS.md 要求 idle 時 0% CPU；本次量測的視窗可見時 idle CPU 遠高於此，且隨視窗最小化消失。這支持「可見狀態下有持續繁忙的 UI thread」的觀察，但尚未排除與此 harness 環境（第二螢幕、非前景、`SetWindowPos` 搬移視窗）相關的因素，也未定位原因，不判定為產品缺陷，需由後續 triage 以不經 harness 搬移的視窗重測。10 分鐘 idle、記憶體長期趨勢、binary／runtime 依賴、完整 CTest 與 stuck provider bounded shutdown 仍未驗證；PD-242 維持 `in_progress`，acceptance 未勾選。
+
+### PD-242 idle viewport feedback follow-up（2026-10-21）
+
+以不移動視窗、不輸入的隔離 Release binary 重測，確認可見 4-pane idle 的熱點是 UI 執行緒。暫時訊息計數顯示 `WM_APP+229` viewport refresh 持續自我排入，列舉與圖示 worker 均在等待。根因是每次 viewport refresh 建立 `ListGeometryScope`，其 viewport restore 即使位置完全沒變仍送出 `ListView_Scroll(..., 0)`。list subclass 收到 `LVM_SCROLL` 後排入下一個 viewport refresh，形成 UI 訊息回授循環。短樣本 CPU 數字記在 [performance baseline](../performance-baseline.md#pd-242-short-idle-loop-diagnostic-repeat-2026-10-21-not-the-release-gate)。
+
+`restore_viewport` 現在於錨點位置未變時直接返回，並略過零距離的水平／垂直 scroll。新增可見 ListView 測試 `visible_idle_viewport_stops_after_one_refresh`，完成圖示結果後派送 viewport 訊息並確認訊息佇列收斂。`managed_list_icons` focused test 通過；修正版隔離 Release binary 的 12 秒 CPU 樣本見 performance baseline。
+
+上述短樣本只確認已定位的 idle loop 不再出現，不代替 10 分鐘的 PD-241 idle CPU／disk／memory／power 門檻。完整 CTest、Claude 一般使用流程複驗、Shell／OneDrive／network 相容性、長期資源趨勢與 stuck-provider bounded shutdown 仍未驗證；acceptance 與 tracker 狀態維持原值。

@@ -22,21 +22,27 @@ ViewportAnchor capture_viewport(HWND window) noexcept {
 }
 bool restore_viewport(HWND window, const ViewportAnchor& anchor) noexcept {
     if (anchor.index < 0) return false;
+    RECT rect{};
+    // Most ListGeometryScope uses do not change list geometry. Do not issue a
+    // zero-distance scroll in that case: the list subclass observes LVM_SCROLL
+    // and schedules another viewport refresh, creating an idle message loop.
+    if (ListView_GetItemRect(window, anchor.index, &rect, LVIR_BOUNDS) &&
+        rect.left == anchor.position.x && rect.top == anchor.position.y) return false;
     // The scope verified this index still holds its saved identity. Restore only
     // the viewport; never reset selection/focus for a live-resize frame.
     ListView_EnsureVisible(window, anchor.index, FALSE);
-    RECT rect{};
     if (!ListView_GetItemRect(window, anchor.index, &rect, LVIR_BOUNDS)) return true;
     if (anchor.view == LV_VIEW_DETAILS) {
         // Report scrolling is quantized to rows. Header/font/image changes can
         // change the first row's y coordinate; rounding a raw pixel delta would
         // move the anchor to its neighbour. Preserve the identity first.
         const int height = rect.bottom - rect.top;
-        ListView_Scroll(window, 0,
-            (anchor.index - ListView_GetTopIndex(window)) * height);
+        const int scroll = (anchor.index - ListView_GetTopIndex(window)) * height;
+        if (scroll) ListView_Scroll(window, 0, scroll);
     } else {
-        ListView_Scroll(window, anchor.view == LV_VIEW_LIST ? rect.left - anchor.position.x : 0,
-                       anchor.view == LV_VIEW_LIST ? 0 : rect.top - anchor.position.y);
+        const int scroll_x = anchor.view == LV_VIEW_LIST ? rect.left - anchor.position.x : 0;
+        const int scroll_y = anchor.view == LV_VIEW_LIST ? 0 : rect.top - anchor.position.y;
+        if (scroll_x || scroll_y) ListView_Scroll(window, scroll_x, scroll_y);
     }
     if (!ListView_GetItemRect(window, anchor.index, &rect, LVIR_BOUNDS)) return true;
     return rect.left != anchor.position.x || rect.top != anchor.position.y;

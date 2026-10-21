@@ -347,6 +347,28 @@ void hidden_control_mode_layout_and_restore() {
         ListView_SetItemState(list, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
     }
 }
+void visible_idle_viewport_stops_after_one_refresh() {
+    Fixture f(true);
+    f.deliver({{L"file.txt", 10, false}, {L"folder", 0, true}});
+    const HWND list = FindWindowExW(f.pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr);
+    EXPECT(list != nullptr);
+    ShowWindow(f.parent, SW_SHOWNOACTIVATE);
+    UpdateWindow(f.parent);
+    f.viewport(0, 2);
+    f.finish();
+
+    constexpr UINT viewport_message = WM_APP + 229;
+    MSG message{};
+    unsigned dispatched = 0;
+    while (dispatched < 16 && PeekMessageW(&message, list, viewport_message,
+                                            viewport_message, PM_REMOVE)) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+        ++dispatched;
+    }
+    EXPECT(dispatched <= 2);
+    EXPECT(!PeekMessageW(&message, list, viewport_message, viewport_message, PM_NOREMOVE));
+}
 void production_worker_capacity_cancel_and_backpressure() {
     auto gate = std::make_shared<ml::testing::IconGate>();
     std::array<std::unique_ptr<ml::IconSource>, ml::kIconWorkers> sources;
@@ -443,6 +465,7 @@ int main() {
     bounded_cache_eviction_and_resource_cleanup();
     thumbnails_modes_stale_failure_and_budget();
     hidden_control_mode_layout_and_restore();
+    visible_idle_viewport_stops_after_one_refresh();
     production_worker_capacity_cancel_and_backpressure();
     worker_identity_length_capacity_and_target_contract();
     return test::summary("managed_list_icons");
