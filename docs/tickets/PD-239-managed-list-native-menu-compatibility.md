@@ -109,6 +109,7 @@ Release configure／build 成功；指定的 8 個 CTests 全部通過（2.77 �
 ## 交接區
 
 - 只以一個 disposable 本機 `.txt` 驗證原生 `Properties` verb 指向的檔名與 folder；其他原生 verbs、folder background menu（含需要 view site 的 verbs）、installed shell extensions、legacy／managed 桌面對照、mixed-DPI keyboard anchor 均未驗證，需真實桌面。Pane seam PASS 不代表上述 Shell 相容性 PASS，也不代表選單延遲改善。
+- 原生 menu 開啟時向主視窗送一次 `WM_CLOSE`，menu 保持開啟且 UI ping 正常；一次 Escape 收起 menu 後，第一次 close request 已在 800 ms 觀察窗內讓 PaneDock 退出。此測試未觸發 tab／Group 切換，不證明那些 stale-target 邊界。
 - namespace provider 是否接受目前的 parsing identity 並回傳單節 child PIDL，尤其 Desktop／This PC／虛擬 location，以及 OneDrive／網路環境的選單行為，仍需實機確認；不能由受控 namespace row 推論支援已通過。
 
 ## 實機自動化嘗試（2026-10-21，未驗證）
@@ -154,3 +155,11 @@ Claude 使用 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49
 只關閉本次 Properties 視窗與隔離 PaneDock；PaneDock 以 `WM_CLOSE` 約 145 ms 正常結束，process count 歸零。stderr 為空，正式 session metadata 未變；未讀寫 clipboard、未執行其他 verb、未刪除測試檔。原始輸出、腳本與截圖保留於 ignored `build\manual-test\pd239-modal-target\`，有效樣本為 `run-261021154506`。
 
 這證明一次受控底層 selection 變更沒有改寫已開啟 menu 的 Properties target。selection 變更由 `LVM_SETITEMSTATE` 注入，尚未驗證使用者滑鼠／鍵盤在 modal menu 中的行為；切 tab／Group／關閉 pane 後的 stale target、其他 verbs、background／virtual／network／OneDrive provider 仍未驗證。Acceptance criteria 不全，總覽狀態維持 `in_progress`。
+
+## Claude native-menu close during modal loop（2026-10-21；一個本機項目）
+
+Claude 使用 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586`）、單一 PaneDock process、絕對隔離 `LOCALAPPDATA=build\manual-test\pd239-menu-close\run-261021160402\la`，以及一個新建 disposable `.txt`。啟動前 process count 為 0；先確認列表 row 被選取、焦點在 list，再以 Shift+F10 開啟同 PID 可見原生 `#32768` menu。
+
+Claude 對已確認的 main HWND `PostMessage(WM_CLOSE)`，回傳成功；接下來 5 秒內 process、main window 與 menu 都仍存在，UI ping 是 `0 ms, hung=False`。只送一次 Escape 後，menu 消失；在之後 800 ms 觀察點 process 已退出，之後才送出的第二個 `WM_CLOSE` 沒有用來促成退出。沒有發生 crash；PaneDock process count 為 0，stderr 空白，唯一測試檔仍存在且 hash 未變，正式 session metadata 未變。未執行 menu verb，未讀寫 clipboard。原始輸出、腳本與截圖在 ignored `build\manual-test\pd239-menu-close\run-261021160402\`。
+
+此單一樣本證明 modal menu 關閉後第一次 close request 可安全完成；沒有證明視窗能在 menu 仍開啟時立即關閉，也沒有測 tab／Group 切換、pane destruction 或 stale target invocation。原生 Shell/provider 與其他 acceptance 仍未完整驗證，總覽狀態維持 `in_progress`。
