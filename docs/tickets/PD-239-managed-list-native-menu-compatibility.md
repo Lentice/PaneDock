@@ -108,7 +108,7 @@ Release configure／build 成功；指定的 8 個 CTests 全部通過（2.77 �
 
 ## 交接區
 
-- 真實原生 verbs、folder background menu（含需要 view site 的 verbs）、installed shell extensions、legacy／managed 桌面對照、實際焦點及 mixed-DPI keyboard anchor 均未驗證，需真實桌面；本次依使用者要求略過。Pane seam PASS 不代表上述 Shell 相容性 PASS，也不代表選單延遲改善。
+- 只以一個 disposable 本機 `.txt` 驗證原生 `Properties` verb 指向的檔名與 folder；其他原生 verbs、folder background menu（含需要 view site 的 verbs）、installed shell extensions、legacy／managed 桌面對照、mixed-DPI keyboard anchor 均未驗證，需真實桌面。Pane seam PASS 不代表上述 Shell 相容性 PASS，也不代表選單延遲改善。
 - namespace provider 是否接受目前的 parsing identity 並回傳單節 child PIDL，尤其 Desktop／This PC／虛擬 location，以及 OneDrive／網路環境的選單行為，仍需實機確認；不能由受控 namespace row 推論支援已通過。
 
 ## 實機自動化嘗試（2026-10-21，未驗證）
@@ -117,4 +117,40 @@ Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（2026-10-21 08:47:31 建置）
 
 前置條件僅部分成立：`LVM_HITTEST` 命中 item 0（`flags=0x4`），空白處座標命中無 item（`iItem=-1`）。但以 `SendInput`（絕對座標）對 item 右鍵後選取數仍為 0，焦點留在地址列（截圖中地址文字為選取狀態）；對該狀態送 Shift+F10、Menu key 與空白處右鍵，PaneDock 行程下均未出現選單視窗，也未在截圖中看到選單。因為選取與焦點沒有進入 list，這些結果不能判斷原生選單是否正確，也不是產品失敗。
 
-滑鼠選取／Shift+F10／Menu key／空白處／footer 開啟的 target 正確性、modal pump 中切換或關閉後的 stale 防護、與 File Explorer 原生 verbs 的對照全部維持未驗證，需真實桌面；未執行任何會改檔案的 verb。截圖在 `build\manual-test\pd239-*.png`（未納入版控）。
+在該輪嘗試中，滑鼠選取／Shift+F10／Menu key／空白處／footer 開啟的 target 正確性、modal pump 中切換或關閉後的 stale 防護、與 File Explorer 原生 verbs 的對照未驗證，需真實桌面；未執行任何會改檔案的 verb。截圖在 `build\manual-test\pd239-*.png`（未納入版控）。後續局部驗證見下方 checkpoint。
+
+## Claude managed-list native-menu checks（2026-10-21；限定相容性樣本）
+
+Claude 使用修正版隔離 Release binary `build\manual-test\pd242trace\final2\PaneDock-fixed.exe`，每次以新的絕對 `LOCALAPPDATA`、新建測試檔及單一 PaneDock 實例驗證；全部正常關閉，結束後 PaneDock 程序數為 0，未叫用會改檔案的 verb：
+
+- 選取列滑鼠右鍵：先以真實左鍵證明 list focus、選取數 1、focused item 0；右鍵後觀察到同 PID 的可見 `#32768` popup。檔案 SHA256 前後相同。
+- Shift+F10：同樣證明 list focus／單列選取；按鍵前沒有 `#32768`，按後出現同 PID 可見選單，Escape 後重新列舉為無可見選單。測試檔 hash 不變。
+- Windows Menu key（`VK_APPS`）：與 Shift+F10 相同，按後同 PID 可見 `#32768`，Escape 後消失；測試檔 hash 不變。
+- 資料夾背景右鍵：`WindowFromPoint` 確認點位在 pane list，`LVM_HITTEST` 得 `iItem=-1`／`LVHT_NOWHERE`；右鍵後同 PID 可見 `#32768`，Escape 後消失。新建測試檔 hash 不變。
+- Footer 入口：狀態列的 “1 items” 是被動 Static，未對它右鍵；實際互動目標是可見／啟用的 “Folder context menu” Button。`WindowFromPoint` 確認點中該按鈕後，同 PID 出現可見 `#32768`，popup 底邊對齊按鈕上緣；Escape 後重新列舉為無可見 menu。測試檔 hash 不變。
+
+截圖／原始輸出分別位於 ignored `build\manual-test\pd239f`、`pd239g`、`pd239h`、`pd239i`、`pd239j`。此為選單取得與取消的局部桌面證據，不代表選單 verbs／內容對照或 ticket acceptance 通過；截圖中的 menu item 未逐項檢視。selection／Group／tab 在 modal menu pump 中變更後的 stale-target 防護、Shell provider 與 File Explorer 對照仍未驗證；總覽狀態及原始 acceptance criteria 維持不變。
+
+## Claude native Properties target check（2026-10-21；限定本機單檔）
+
+Claude 使用目前 `build\PaneDock.exe`、fresh absolute `LOCALAPPDATA`、一個新建 disposable `.txt` 及單一 PaneDock instance。修正一次腳本字串比對（未執行 verb）後，選取列的原生 Shell menu 顯示「內容(&R)」；只叫用此 Properties verb，新增的 `#32770` 對話框標題、檔名欄位與位置欄位均指向同一個測試檔。關閉新開的 Properties 視窗後檔案仍存在且 SHA-256 未變；PaneDock 正常關閉，無殘留程序。未驗證 canonical verb 名稱、多選、namespace／network／OneDrive 或 modal 期間切換／關閉。
+
+Binary SHA-256：`9C585990E8DB931A84122C810F6D24FD35A02914EF88454A70F1933EDEC039AD`。run log／screenshots 位於 `build\manual-test\pd239k\run-20261021-120610`；第一個腳本比對失敗 run 在叫用任何項目前按 Escape 停止，檔案未變，第二次修正後執行為上述有效結果。
+
+## 隔離原生選單互動複驗（2026-10-21；部分驗證）
+
+Claude 使用 Release `build\PaneDock.exe`（SHA-256 `9C585990E8DB931A84122C810F6D24FD35A02914EF88454A70F1933EDEC039AD`）、單一 PaneDock process 與新 isolated `LOCALAPPDATA`，對唯一本機 `.txt` 測試檔執行。重跑前確認 row hit-test 命中列表，真實左鍵後 selected count 1、focused row 0、焦點在 `SysListView32`。`Shift+F10` 出現同 PID `#32768` 原生 Shell 選單（19 項）；只點選文字「內容(&R)」，新 `#32770` Properties 視窗的 filename／location 欄位都吻合該測試檔與資料夾。Hash 前後相同。這只驗證本機單檔 Properties；沒有驗證 canonical verb 名稱。
+
+同一列表可見空白處的 `LVM_HITTEST` 為 `iItem=-1`，右鍵開啟同 PID 背景 `#32768` 選單（11 項），Escape 收起且沒有執行 verb。背景選單打開時第一次點另一 pane 的 tab pill 只關閉選單，PaneDock ping 0ms／`hung=False`，active pane 不變；第二次點擊才切換到 pane 1。沒有 command 被呼叫，測試檔仍存在且 hash 未變。PaneDock 正常關閉約 135ms 後 process count 為 0；只刪除本次新建的 `data` 資料夾，logs／screenshots 保留在 ignored `build\manual-test\pd239m\run-261021143933\`。此前兩輪腳本在選單顯示後、執行任何項目前因 HMENU 參數解析錯誤停止；修正後第三輪為上述結果。
+
+此複驗覆蓋單選檔案 Shift+F10、背景右鍵選單與一次 tab-pills dismiss 行為；canonical verb、footer menu、modal pump 中切 Group／tab 後 command target、selection 改變、namespace／OneDrive／network、多選及其他 verbs 仍未驗證。三項 acceptance 不全，PD-239 與 tracker 維持 `in_progress`。
+
+## Claude modal selection snapshot check（2026-10-21；單一本機情境）
+
+Claude 使用 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586`），確認啟動前 PaneDock process count 為 0；使用單一 process、隔離 `LOCALAPPDATA=build\manual-test\pd239-modal-target\run-261021154506\la`，以及兩個新建的 33-byte marker files。列表只載入該測試資料夾，row 0 是 A、row 1 是 B。對 A 做真實左鍵選取並確認 selected count 1、focused row 0、focus 在 list，接著以 Shift+F10 開啟同 PID 原生 `#32768` 選單。
+
+選單仍顯示期間，Claude 由外部 harness 對底層 ListView 發送 `LVM_SETITEMSTATE`：先選取／focus B，再清除 A 的 selected state。回讀確認底層唯一選取項已是 B；原生 menu 仍開啟，`WM_NULL` UI ping 為 0 ms、`hung=False`。只叫用 Properties；新增 `#32770` 視窗的標題與 filename 欄位均為 A，location 是測試資料夾，非目前選取的 B。兩個檔案均未改動：測試開始 SHA-256 分別為 A `3E67A14B87C1C83EF051FE12F5030B71A422D15FBBB6D401031CEB676E7163A6`、B `602F73E053CE1150AB288B13EA82B732FF9726F5FF8EE547771A0D54FA9104E8`；結束後獨立重算仍相同。記錄腳本的 `hash unchanged: False` 是 PowerShell 變數名稱覆蓋錯誤，不能採作檔案變更證據。
+
+只關閉本次 Properties 視窗與隔離 PaneDock；PaneDock 以 `WM_CLOSE` 約 145 ms 正常結束，process count 歸零。stderr 為空，正式 session metadata 未變；未讀寫 clipboard、未執行其他 verb、未刪除測試檔。原始輸出、腳本與截圖保留於 ignored `build\manual-test\pd239-modal-target\`，有效樣本為 `run-261021154506`。
+
+這證明一次受控底層 selection 變更沒有改寫已開啟 menu 的 Properties target。selection 變更由 `LVM_SETITEMSTATE` 注入，尚未驗證使用者滑鼠／鍵盤在 modal menu 中的行為；切 tab／Group／關閉 pane 後的 stale target、其他 verbs、background／virtual／network／OneDrive provider 仍未驗證。Acceptance criteria 不全，總覽狀態維持 `in_progress`。
