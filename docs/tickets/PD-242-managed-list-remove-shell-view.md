@@ -80,3 +80,15 @@ git diff --check
 - `panedock_managed_list` now uses a hidden parent HWND and Pane window, matching the managed-list realization contract. Its focused CTest passes; the test skips only the real ACL-denial branch when setting the disposable directory DACL returns `ERROR_ACCESS_DENIED`. The controlled-source permission-denied seam remains covered, but real filesystem ACL denial is unverified in this environment.
 - `IExplorerBrowser`／`IShellView` view hosting has been removed while the native Shell context-menu target remains in `panedock_shell_menu`. Native menu／operation behavior and managed-list compatibility still require real desktop/provider validation; automated seam tests do not establish that evidence.
 - Full CTest, GUI／launch smoke, real Shell namespace／network／OneDrive checks, resource lifetime measurements, idle power checks, and bounded shutdown against a stuck provider remain unverified. Keep this ticket `in_progress` until its required evidence is supplied; the PD-241 sequencing waiver is not a pass.
+
+## 隔離 launch smoke checkpoint（2026-10-21）
+
+僅為隔離 launch smoke／啟動關閉結果，不是相容性或 lifetime 驗收。Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（Release，2026-10-21 08:47:31 建置）；執行前確認沒有 PaneDock 行程。
+
+```powershell
+ctest --test-dir build --output-on-failure -R '^panedock_launch_smoke$'
+```
+
+`launch_smoke.ps1` 設定 `LOCALAPPDATA=build\smoke-localappdata`（未碰使用者 session），以 `--diagnostic` 單次啟動，經主視窗正常關閉結束，未強制終止。兩次執行皆 PASS（1.35 秒、1.23 秒），輸出 `launch smoke test passed (live_list_count reached 0)`，exit code 0；隔離 `session.json` 寫入 `clean_shutdown: true`，預設 4 pane 皆為 This PC（`::{20D04FE0-3AEA-1069-A2D8-08002B30309D}`）；結束後無 PaneDock 行程殘留。
+
+只支持「正常啟動／關閉、關閉時 managed-list 計數歸 0」。仍未驗證：session 恢復、四 pane 切換、native menu／operations、真實 Shell／network／OneDrive、idle／resource lifetime 量測、stuck provider 的 bounded shutdown、完整 CTest；全部 acceptance 維持未勾選，狀態維持 `in_progress`。
