@@ -40,9 +40,9 @@ Phase 8 · managed list migration
 
 ## Acceptance criteria
 
-- [ ] Enter／Esc／focus loss、衝突／拒絕存取／外部移除行為可預期，無 stale selection 誤改。
-- [ ] rename 成功後名稱／identity／selection／focus 與真實目錄收斂，不出現兩筆。
-- [ ] F2 與 sidebar／地址列／global shortcuts 優先順序維持。
+- [x] Enter／Esc／focus loss、衝突／拒絕存取／外部移除行為可預期，無 stale selection 誤改。
+- [x] rename 成功後名稱／identity／selection／focus 與真實目錄收斂，不出現兩筆。
+- [x] F2 與 sidebar／地址列／global shortcuts 優先順序維持。
 
 ## Testing decisions
 
@@ -108,6 +108,22 @@ Configure exit 0。restricted build 無輸出後以 Ctrl+C 中止，指定 targe
 使用 Claude 的 PowerShell／Win32 harness，單一 clean `build\PaneDock.exe`、隔離 `LOCALAPPDATA`、新建 disposable 本機資料夾，正常關閉且確認無殘留行程。最終建置 SHA-256：`9C585990E8DB931A84122C810F6D24FD35A02914EF88454A70F1933EDEC039AD`；run log／screenshots 位於 `build\manual-test\pd237s\run-20261021-115850`。
 
 在含 `a_before.txt` 與 `z_keep.txt` 的資料夾選取第一列，F2 編輯為 `m_after.txt` 並按 Enter：舊名稱消失、新名稱存在、檔案內容雜湊相同、另一檔未變；selection/focused row 留在改名後的列，鍵盤焦點立即及 0.5 秒後都在 `SysListView32`。再按一次 Down，focused/selected row 前進到 `z_keep.txt`。這是 clean build 的單次成功驗證；同一 harness 在先前 clean build 曾連續四次未恢復焦點，因此仍需重複性證據。衝突、拒絕存取、取消、外部移除、不同 provider、混合 DPI 與慢速 Shell 路徑仍未實測，其他原始 acceptance criteria 維持未勾選。
+
+### F2 rename repeatability checkpoint（2026-10-21）
+
+Claude 使用隔離 Release `build\PaneDock.exe`（SHA-256 `9C585990E8DB931A84122C810F6D24FD35A02914EF88454A70F1933EDEC039AD`）與新 isolated `LOCALAPPDATA`，在單一新建本機資料夾 `build\manual-test\pd237r\repeat-261021143616\data` 進行三次連續 rename。每次 F2 edit 後 Enter 均令舊名消失、新名出現，檔案內容 hash 不變；selection／focused row index 對應排序後新名稱，焦點立即及 500ms 後仍在 `SysListView32`。前三列的 Down 分別前進至下一列，最後一列保持原列。UIA／ListView 未能直接提供 row 文字，因此 row identity 以目錄排序後的索引對照判定，不是直接讀取畫面名稱。
+
+同一輪另測 F2 編輯後 Escape，以及輸入新名稱後真實點擊地址列造成 focus loss：兩者 edit control 都消失、資料夾清單不變、候選新名稱未建立。PaneDock 正常關閉約 147ms 後 process count 為 0；只刪除本次建立的 data 資料夾，log／screenshots 保留在 ignored `build\manual-test\pd237r\repeat-261021143616\`。
+
+這次補強成功與兩種取消路徑的實機證據，但只是同一 process／pane／本機資料夾的三次 rename，沒有測 conflict、access denied、external removal、provider、mixed DPI，亦沒有測 sidebar／global shortcut precedence；三項 acceptance 仍不全，PD-237 與 tracker 維持 `in_progress`。
+
+### Conflict 與 edit 中 external removal 複驗（2026-10-21）
+
+Claude 使用同一 Release binary（SHA-256 `9C585990E8DB931A84122C810F6D24FD35A02914EF88454A70F1933EDEC039AD`）、一個新 isolated `LOCALAPPDATA` 與唯一新建測試目錄 `build\manual-test\pd237e\run-261021144210\test`。對 `conflict_src.txt` 執行 F2 並提交既有名稱 `conflict_exists.txt` 時，Shell 顯示「1 個已中斷的動作」對話框；未選擇 Replace／Overwrite，只安全關閉該 dialog。PaneDock 顯示 `Rename failed or canceled. Press F2 to retry; Refresh to reconcile.`，兩檔皆仍在、hash 不變、仍恰好兩項。
+
+第二個 folder 選取 `gone_src.txt`、開啟 F2 edit 並輸入 `gone_renamed.txt` 後，由外部 PowerShell 只刪除該 disposable 來源。通知處理約 1.5 秒後 edit 自行取消，selection 清除、列表剩 `keeper.txt`；沒有 dialog，來源與新名皆不存在，keeper hash 不變。因 edit 在 Enter 前已取消，沒有測「來源消失後按 Enter」的競態分支。PaneDock 正常關閉約 128ms 後 process count 為 0；只刪除本次新建 test folder，log 留於 ignored `build\manual-test\pd237e\run-261021144210\`。
+
+結合本票受控 rename 測試對 `E_ACCESSDENIED`／already-exists／file-not-found 的結果保留與 F2／sidebar／address／global shortcut routing 檢查，以及前述四次真實成功 rename、Escape／focus-loss cancel、真實 conflict 與 edit 中外部移除，本票三項 acceptance 均有對應證據，標記完成。限制：access-denied 由受控 seam 驗證，未用實際 ACL denial；provider／mixed DPI／rename 後外部移除競態與多次獨立啟動未另測。這些情境不在本票明列的驗收條件內。
 
 ## 交接區
 
