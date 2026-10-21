@@ -103,3 +103,9 @@ PD-242 移除 legacy Shell view 後，Release 設定下 `panedock_managed_list_i
 
 - online-only、locally available、always available 三種真實檔案的列舉／圖示前後 residency、狀態轉換通知及 Refresh、離線／未同步恢復、selection／導航與其他 pane 回應性全部未驗證，需真實桌面；Windows／OneDrive client 版本與檔案前後狀態亦未取得。具體待觀測項目見研究文件，不得用 controlled attributes 測試推論 hydration PASS。
 - 未知 metadata 的虛擬 provider 沿用既有 enrichment；沒有足夠證據宣稱它或排程後變動的 provider 狀態永遠不 hydration。此次安全限制只依列舉已辨識的 cloud／recall／offline／pin metadata 生效。
+
+## 實機環境盤點（2026-10-21，未驗證）
+
+範圍僅 `D:\OneDrive - via.com.tw` 的 metadata／status，未讀檔案內容，未改 hydration 或可用性，未啟動 PaneDock。OneDrive 同步服務 `OneDrive.Sync.Service` 26.183.0920.0005 執行中，D: 為 NTFS。根目錄只有三項：`附件`（目錄，attributes `0x410` Directory+ReparsePoint，無 `RECALL_ON_DATA_ACCESS`）、`.849C9593-D756-4E56-8D6E-42412F2A707B`（63 bytes，`0x180026`，無 recall 位元）、`desktop.ini`（Hidden+System）。沒有任何 `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`（`0x400000`）或 OFFLINE 的 online-only 檔案；列舉 `附件` 可能觸發雲端目錄填入，因此未展開。
+
+沒有明確適用的 placeholder，三項 acceptance（瀏覽不 hydration、狀態更新指向同一 identity 與離線恢復、不宣稱永不 hydration）全部維持未驗證；需要使用者提供或同步一個 online-only 檔案後才能執行。
