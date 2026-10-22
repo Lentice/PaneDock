@@ -260,6 +260,29 @@ void type_icons_come_first_and_cover_rows_before_their_own_icon() {
     f.finish();
     EXPECT(f.pane.list_item_image(a) >= 2 && f.pane.list_item_image(a) != shared);
 }
+void off_screen_types_are_loaded_ahead_and_stay_cached() {
+    Fixture f;
+    std::vector<ml::Row> rows;
+    for (int n = 0; n < 300; ++n) rows.push_back({L"file-" + std::to_wstring(n) + L".txt", 1, false, 1});
+    rows.push_back({L"far-away.png", 1, false, 1});
+    for (std::size_t first = 0; first < rows.size(); first += ml::kBatchRows) { // batches are size-bounded
+        const auto last = std::min(rows.size(), first + ml::kBatchRows);
+        f.deliver({rows.begin() + first, rows.begin() + last},
+                  last == rows.size() ? ml::Phase::complete : ml::Phase::loading);
+    }
+    f.viewport(0, 10); // the .png row is nowhere near the viewport
+    const auto png = [&] {
+        return std::any_of(f.icons->type_interest.begin(), f.icons->type_interest.end(),
+            [](const auto& r) { return r.key.identity.key == L"~.png"; });
+    };
+    EXPECT(png());
+    f.finish_types();
+    const auto png_row = f.row(L"far-away.png");
+    EXPECT(f.pane.list_item_image(png_row) >= 2); // already there when it scrolls into view
+    // Per-file icons for many rows must not push the type icons out of the cache.
+    for (std::size_t first = 0; first < 300; first += 32) { f.viewport(first, 32); f.finish(); }
+    EXPECT(f.pane.list_item_image(png_row) >= 2);
+}
 void failed_type_icon_is_not_retried_in_a_loop() {
     Fixture f;
     f.deliver({{L"a.txt", 1, false, 1}});
@@ -511,6 +534,7 @@ int main() {
     stale_identity_failure_and_reuse();
     type_icons_come_first_and_cover_rows_before_their_own_icon();
     failed_type_icon_is_not_retried_in_a_loop();
+    off_screen_types_are_loaded_ahead_and_stay_cached();
     bounded_cache_eviction_and_resource_cleanup();
     thumbnails_modes_stale_failure_and_budget();
     hidden_control_mode_layout_and_restore();

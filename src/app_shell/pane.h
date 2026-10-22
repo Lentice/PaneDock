@@ -519,6 +519,11 @@ class Pane final {
     bool icon_seam_{};
     std::array<bool, managed_list::kIconInterest> image_attempted_{};
     std::vector<managed_list::IconKey> type_attempted_; // stage-one requests tried this viewport
+    // Every distinct file type of the list (capped), so type icons are loaded ahead of
+    // scrolling and stay cached; found by scanning rows incrementally (PD-258).
+    std::vector<managed_list::IconKey> type_pool_;
+    std::size_t type_pool_cursor_{};
+    managed_list::Request type_pool_request_;
     std::vector<managed_list::IconRequest> enrichment_interest_;
     std::size_t property_sort_cursor_{};
     bool property_sort_pending_{};

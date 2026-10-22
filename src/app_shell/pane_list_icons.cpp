@@ -124,18 +124,35 @@ std::optional<managed_list::IconKey> Pane::list_type_icon_key(std::size_t row) c
 }
 void Pane::append_type_icon_requests(std::vector<managed_list::IconRequest>& requests,
                                      const std::vector<std::size_t>& visible) {
+    const auto request_type = [&](const managed_list::IconKey& key) {
+        const auto cached = std::find_if(icon_cache_.begin(), icon_cache_.end(),
+            [&](const auto& entry) { return entry.key == key; });
+        if (cached != icon_cache_.end()) { cached->used = ++icon_clock_; return true; }
+        if (std::find(type_attempted_.begin(), type_attempted_.end(), key) != type_attempted_.end()) return true;
+        if (!managed_list::append_icon_request(requests,
+                {list_.request, icon_viewport_, key, {}, 0, 0, true})) return false;
+        type_attempted_.push_back(key);
+        return true;
+    };
     for (const auto index : visible) {
         if (index >= list_.rows.size()) continue;
-        auto key = list_type_icon_key(index);
-        if (!key) continue;
-        const auto cached = std::find_if(icon_cache_.begin(), icon_cache_.end(),
-            [&](const auto& entry) { return entry.key == *key; });
-        if (cached != icon_cache_.end()) { cached->used = ++icon_clock_; continue; }
-        if (std::find(type_attempted_.begin(), type_attempted_.end(), *key) != type_attempted_.end()) continue;
-        if (!managed_list::append_icon_request(requests,
-                {list_.request, icon_viewport_, *key, {}, 0, 0, true})) break;
-        type_attempted_.push_back(std::move(*key));
+        if (const auto key = list_type_icon_key(index)) if (!request_type(*key)) return;
     }
+    // Then the rest of the folder's types, so a fast scroll or scrollbar drag finds them
+    // already cached. Rows are scanned a slice at a time; the pool is capped so per-file
+    // icons keep most of the cache, and pooled entries are refreshed so LRU keeps them.
+    constexpr std::size_t kPoolTypes = 96, kScanSlice = 1024;
+    if (!(type_pool_request_ == list_.request) || type_pool_cursor_ > list_.rows.size()) {
+        type_pool_.clear(); type_pool_cursor_ = 0; type_pool_request_ = list_.request;
+    }
+    for (std::size_t scanned = 0; scanned < kScanSlice && type_pool_cursor_ < list_.rows.size();
+         ++scanned, ++type_pool_cursor_) {
+        if (type_pool_.size() >= kPoolTypes) { type_pool_cursor_ = list_.rows.size(); break; }
+        auto key = list_type_icon_key(type_pool_cursor_);
+        if (key && std::find(type_pool_.begin(), type_pool_.end(), *key) == type_pool_.end())
+            type_pool_.push_back(std::move(*key));
+    }
+    for (const auto& key : type_pool_) if (!request_type(key)) return;
 }
 void Pane::cancel_list_icons() noexcept {
     ++icon_viewport_;
@@ -143,6 +160,7 @@ void Pane::cancel_list_icons() noexcept {
     enrichment_interest_.clear();
     image_attempted_.fill(false);
     type_attempted_.clear();
+    type_pool_.clear(); type_pool_cursor_ = 0; // keys carry the size/dpi: rebuild
     property_sort_cursor_ = 0;
     property_order_.clear();
     if (icon_source_) icon_source_->cancel();
