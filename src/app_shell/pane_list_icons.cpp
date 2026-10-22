@@ -1,4 +1,5 @@
 #include "app_shell/pane.h"
+#include "managed_list/capacity_text.h"
 #include <algorithm>
 
 namespace panedock::app_shell {
@@ -397,13 +398,18 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
     return result;
 }
 
+bool Pane::this_pc_cards() const noexcept {
+    return list_.phase != managed_list::Phase::idle &&
+        managed_list::is_this_pc_location(list_.resolved_location.value_or(list_.request.location));
+}
 void Pane::apply_managed_list_view_mode() noexcept {
     if (!active()) return;
     ListGeometryScope geometry(*this);
     const auto* tab = active_tab();
     if (!tab) return;
-    const auto mode = shell_core::parse_view_mode(tab->view_mode)
-        .value_or(shell_core::ViewModeSelection{FVM_DETAILS, -1});
+    const auto mode = this_pc_cards() ? shell_core::ViewModeSelection{FVM_TILE, -1} :
+        shell_core::parse_view_mode(tab->view_mode)
+            .value_or(shell_core::ViewModeSelection{FVM_DETAILS, -1});
     if (mode != list_view_selection_) {
         cancel_list_icons();
         if (list_window_) {
@@ -466,7 +472,29 @@ std::optional<LRESULT> Pane::draw_list_card(NMHDR* notification) noexcept try {
     DrawTextW(dc, row.name.c_str(), -1, &title, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     TEXTMETRICW metrics{}; GetTextMetricsW(dc, &metrics);
     rect.top += metrics.tmHeight + pad;
-    auto detail = row.directory ? std::wstring(L"Folder") : std::to_wstring(row.bytes) + L" bytes";
+    std::wstring detail = row.directory ? std::wstring(L"Folder") : std::to_wstring(row.bytes) + L" bytes";
+    if (this_pc_cards()) {
+        detail.clear();
+        if (row.capacity_bytes != 0) {
+            // Usage bar like Explorer's drive cards: red from 90% used. Nothing is
+            // drawn until the worker supplied a size, never a fake 0%.
+            const auto scale = [&](int n) { return MulDiv(n, static_cast<int>(paint_dpi_), 96); };
+            RECT bar{rect.left, rect.top, rect.right, rect.top + scale(12)};
+            const double used = static_cast<double>(row.capacity_bytes - row.free_bytes) /
+                static_cast<double>(row.capacity_bytes);
+            HBRUSH track = CreateSolidBrush(selected ? RGB(210, 225, 245) : RGB(230, 230, 230));
+            HBRUSH fill = CreateSolidBrush(
+                managed_list::capacity_nearly_full(row.free_bytes, row.capacity_bytes)
+                    ? RGB(218, 38, 38) : RGB(38, 160, 218));
+            if (track) FillRect(dc, &bar, track);
+            bar.right = bar.left + static_cast<LONG>((bar.right - bar.left) * used);
+            if (fill) FillRect(dc, &bar, fill);
+            if (track) DeleteObject(track);
+            if (fill) DeleteObject(fill);
+            rect.top += scale(12) + scale(4);
+            detail = managed_list::capacity_free_text(row.free_bytes, row.capacity_bytes);
+        }
+    }
     if (list_mode_ == FVM_CONTENT && row.date_modified != 0) {
         FILETIME utc{static_cast<DWORD>(row.date_modified), static_cast<DWORD>(row.date_modified >> 32)};
         FILETIME local{}; SYSTEMTIME time{}; wchar_t date[64]{};

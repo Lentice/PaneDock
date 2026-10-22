@@ -243,6 +243,23 @@ void arm_namespace_watches(const std::shared_ptr<State>& state, std::uint64_t se
         out.watches.push_back(std::move(watch));
     }
 }
+// Used and total size of a local fixed or removable drive root such as "C:\".
+// Network and optical drives are skipped: their calls can block on a provider,
+// and the cards simply show no bar for them. Failure (no media) leaves it unknown.
+void fill_drive_space(Row& row, const std::wstring& root) {
+    if (root.size() != 3 || root[1] != L':' || root[2] != L'\\') return;
+    const UINT type = GetDriveTypeW(root.c_str());
+    if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) return;
+    DWORD previous{};
+    SetThreadErrorMode(SEM_FAILCRITICALERRORS, &previous); // never raise a "no disk" dialog
+    ULARGE_INTEGER total{}, free{};
+    if (GetDiskFreeSpaceExW(root.c_str(), nullptr, &total, &free) && total.QuadPart != 0 &&
+        free.QuadPart <= total.QuadPart) {
+        row.capacity_bytes = total.QuadPart;
+        row.free_bytes = free.QuadPart;
+    }
+    SetThreadErrorMode(previous, nullptr);
+}
 void enumerate_shell_namespace(const std::shared_ptr<State>& state, std::uint64_t serial,
                                const Request& request, bool recovery = false,
                                NamespaceWatches* watch_out = nullptr) {
@@ -328,6 +345,7 @@ void enumerate_shell_namespace(const std::shared_ptr<State>& state, std::uint64_
             if (!interested(state, serial)) return;
         }
     }
+    const bool this_pc = is_this_pc_location(resolved) || is_this_pc_location(request.location);
     metadata.resolved_location = std::move(resolved);
     if (request.location.navigation_parent) {
         metadata.parent_location = location_from_parent(*request.location.navigation_parent);
@@ -404,6 +422,7 @@ void enumerate_shell_namespace(const std::shared_ptr<State>& state, std::uint64_
         result = provider_call(state, serial, [&] { return folder->GetAttributesOf(1, &relative, &attributes); });
         if (FAILED(result)) { finish(Phase::error, provider_error(result)); return; }
         row.directory = (attributes & SFGAO_FOLDER) != 0;
+        if (this_pc) fill_drive_space(row, child_location.fallback_path);
         // A filesystem child's PIDL already carries its size and write time, so
         // this reads no provider; virtual items without find data stay at 0.
         WIN32_FIND_DATAW find{};

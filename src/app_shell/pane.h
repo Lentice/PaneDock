@@ -494,6 +494,8 @@ class Pane final {
     };
     std::optional<ListGeometryScope> layout_list_geometry_;
     void apply_managed_list_view_mode() noexcept;
+    // "This PC" always shows drive cards; the tab's own view mode is untouched.
+    bool this_pc_cards() const noexcept;
     void request_list_images(std::vector<std::size_t> rows, UINT dpi) noexcept;
     std::optional<LRESULT> draw_list_card(NMHDR*) noexcept;
     std::uint64_t icon_viewport_{}, icon_clock_{};

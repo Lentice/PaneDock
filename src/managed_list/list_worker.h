@@ -95,6 +95,9 @@ struct Row final {
     ItemIdentity identity{};
     std::optional<core::ShellLocation> child_location{};
     CloudAttributes cloud{};
+    // Local drive size for the This PC cards. capacity_bytes == 0 means unknown.
+    std::uint64_t capacity_bytes{};
+    std::uint64_t free_bytes{};
 };
 // Shared by initial enumeration, notification deltas and recovery rescans.
 inline Row basic_row(const WIN32_FIND_DATAW& data, std::wstring name) {
@@ -191,6 +194,13 @@ std::unique_ptr<Source> make_local_source() noexcept;
 inline bool is_filesystem_location(std::wstring_view path) noexcept {
     return (path.size() >= 3 && path[1] == L':' && path[2] == L'\\') ||
         (path.size() > 2 && path[0] == L'\\' && path[1] == L'\\');
+}
+// The Shell's "This PC" folder, by parsing name or by known-folder identity.
+inline bool is_this_pc_location(const core::ShellLocation& location) noexcept {
+    return _wcsicmp(location.parsing_name.c_str(),
+                    L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") == 0 ||
+        _wcsicmp(location.known_folder_identity.c_str(),
+                 L"{0AC0837C-BBF8-452A-850D-79D08E667CA7}") == 0;
 }
 inline bool uses_shell_namespace(const core::ShellLocation& location) noexcept {
     return location.namespace_location || !is_filesystem_location(location.parsing_name);

@@ -245,6 +245,28 @@ void real_namespace_watch() {
     source.reset(); EXPECT(ml::testing::wait_for_workers(10000));
     std::filesystem::remove_all(dir);
 }
+// This PC lists the drives; a local fixed drive carries its size for the cards.
+void real_this_pc_capacity() {
+    auto source = ml::make_local_source();
+    EXPECT(source != nullptr);
+    auto this_pc = request();
+    this_pc.location = core::ShellLocation{L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", {}, {}};
+    EXPECT(source->submit(this_pc));
+    std::vector<ml::Row> rows;
+    for (int n = 0; n < 6; ++n) {
+        auto batch = take(*source);
+        for (auto& row : batch.rows) rows.push_back(std::move(row));
+        if (batch.phase != ml::Phase::loading) break;
+    }
+    int with_capacity = 0;
+    for (const auto& row : rows) {
+        if (row.capacity_bytes == 0) { EXPECT(row.free_bytes == 0); continue; }
+        EXPECT(row.free_bytes <= row.capacity_bytes);
+        ++with_capacity;
+    }
+    EXPECT(with_capacity >= 1);
+    source.reset(); EXPECT(ml::testing::wait_for_workers(10000));
+}
 int main() {
     EXPECT(ml::uses_shell_namespace(core::ShellLocation{L"shell:Desktop", {}, {}}));
     auto physical_desktop = core::ShellLocation{
@@ -253,7 +275,7 @@ int main() {
     EXPECT(!ml::uses_shell_namespace(physical_desktop));
     physical_desktop.namespace_location = true;
     EXPECT(ml::uses_shell_namespace(physical_desktop));
-    owned_metadata(); bounds(); cancellation_and_capacity(); real_namespace_size(); real_namespace_watch();
+    owned_metadata(); bounds(); cancellation_and_capacity(); real_namespace_size(); real_namespace_watch(); real_this_pc_capacity();
     EXPECT(ml::testing::counts().workers == 0);
     std::cout << "owned values only; four shared slots; two queued batches; "
               << "2 MiB per batch; controlled teardown only; real Shell UNVERIFIED\n";

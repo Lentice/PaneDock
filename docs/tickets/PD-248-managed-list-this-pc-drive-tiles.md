@@ -12,6 +12,8 @@ Phase 8 · 目標 1–2 天
 
 design-spec 沒有列出此功能，也沒有列入「不在範圍」。本票新增它；若實作需要改 design-spec，只補「本機」的顯示描述，不改其他 FR。沿用 PD-247：列表不提供 accessibility provider，本票不新增。
 
+實作覆寫下方「具體範圍」第 1 點：容量改用 `GetDiskFreeSpaceExW`，只查本機 `DRIVE_FIXED`／`DRIVE_REMOVABLE` 磁碟機根目錄（worker 內，`SEM_FAILCRITICALERRORS`），網路與光碟機不查、不畫用量條。理由：Shell 屬性路徑會在斷線的網路磁碟機上阻塞整次列舉，而本機呼叫不會；網路磁碟機的用量條留待之後用非阻塞路徑再做。
+
 ## 綁定限制（引用）
 
 - AGENTS：「Event-driven idle path only. No busy loops, no polling timers.」用量只在進入／Refresh 時取得，不輪詢。
@@ -65,4 +67,6 @@ git diff --check
 
 ## 交接區
 
-（完成時只填未解風險與不可重推的結論。）
+- 未驗證：卡片實際外觀（用量條位置、文字截斷、選取色）、100%／150% DPI、紅藍條切換，以及網路磁碟機斷線時整頁仍即時顯示；自動測試只覆蓋容量文字格式與 worker 取得本機容量。
+- 結論：「本機」卡片由 `Pane::this_pc_cards()` 強制為 `FVM_TILE`，不改 tab 持久化的 `view_mode`，離開後自動還原。用量只在列舉時取得（含手動 Refresh），不監看。
+- 結論：沒有容量的列（網路、光碟、無媒體的卸除式磁碟）只畫圖示與名稱，不畫 0% 用量條。
