@@ -1,5 +1,6 @@
 #include "app_shell/pane.h"
 #include "app_shell/pane_host.h"
+#include "app_shell/incremental_sort.h"
 #include "managed_list/size_text.h"
 #include <windowsx.h>
 #include <shlwapi.h>
@@ -374,7 +375,7 @@ void Pane::restore_managed_list_interaction(
     }
 }
 
-void Pane::sort_managed_list_rows() noexcept {
+void Pane::sort_managed_list_rows(std::size_t sorted_prefix) noexcept {
     cancel_list_rename();
     auto* tab = active_tab();
     if (tab == nullptr) return;
@@ -422,7 +423,19 @@ void Pane::sort_managed_list_rows() noexcept {
         if (left.date_modified != right.date_modified) return left.date_modified < right.date_modified;
         return left.identity < right.identity;
     };
-    std::sort(list_.rows.begin(), list_.rows.end(), less);
+    if (sorted_prefix > list_.rows.size()) sorted_prefix = 0;
+    if (sorted_prefix == 0) {
+        std::sort(list_.rows.begin(), list_.rows.end(), less);
+    } else {
+        const auto middle = list_.rows.begin() + static_cast<std::ptrdiff_t>(sorted_prefix);
+        try {
+            detail::sort_appended_and_merge(list_.rows.begin(), middle, list_.rows.end(), less);
+        } catch (...) {
+            // A temporary merge buffer is optional. Keep the noexcept Pane path
+            // correct if it cannot be allocated by falling back to the old sort.
+            std::sort(list_.rows.begin(), list_.rows.end(), less);
+        }
+    }
 }
 
 bool Pane::property_row_less(std::size_t left_index, std::size_t right_index) const noexcept {
@@ -625,6 +638,9 @@ void Pane::process_content_results() noexcept try {
         (reentry_guard_ && reentry_guard().in_shell_call())) return;
     std::optional<ManagedListInteraction> interaction;
     bool rows_changed = false;
+    const std::size_t sorted_prefix = list_.rows.size();
+    bool append_only = list_.watch != managed_list::WatchState::recovering &&
+        !list_.updating;
     // At most two batches per dispatch. Leave the event signalled if more
     // arrived, and let the main loop dispatch input before consuming again.
     for (std::size_t n = 0; n < managed_list::kQueuedBatches; ++n) {
@@ -668,6 +684,7 @@ void Pane::process_content_results() noexcept try {
             list_.notification = batch->notification;
         }
         if (batch->change != managed_list::Change::none) {
+            if (batch->change != managed_list::Change::watching) append_only = false;
             if (list_.watch == managed_list::WatchState::failed &&
                 batch->change != managed_list::Change::watch_error) continue;
             const bool commit = batch->change == managed_list::Change::delta ||
@@ -705,6 +722,7 @@ void Pane::process_content_results() noexcept try {
         // Session/chrome callbacks may re-enter and replace the tab or Group.
         if (!content_request_is_current(request.binding) || !(request == list_.request)) continue;
         if (list_.updating) {
+            append_only = false;
             const bool terminal = batch->phase != managed_list::Phase::loading;
             if (terminal && !interaction) interaction.emplace(capture_managed_list_interaction());
             batch->change = managed_list::Change::rescan;
@@ -762,7 +780,8 @@ void Pane::process_content_results() noexcept try {
     }
     if (rows_changed) {
         cancel_list_icons();
-        if (list_.watch != managed_list::WatchState::recovering) sort_managed_list_rows();
+        if (list_.watch != managed_list::WatchState::recovering)
+            sort_managed_list_rows(append_only ? sorted_prefix : 0);
     }
     update_managed_list();
     if (rows_changed) {

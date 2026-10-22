@@ -2,8 +2,11 @@
 #include "core/columns.h"
 #include "unit/test_util.h"
 #include "managed_list/icon_source_test.h"
+#include "app_shell/incremental_sort.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <optional>
 #include <string>
@@ -251,6 +254,65 @@ void names_sort_naturally_and_descending_puts_folders_last() {
         EXPECT(reversed[3].name == L"dir10");
         EXPECT(reversed[4].name == L"dir2");
     }
+}
+
+void incremental_sort_matches_full_prefix_sorts_with_less_work() {
+    struct WorkRow final {
+        std::uint64_t key{};
+        std::uint32_t identity{};
+        bool operator==(const WorkRow&) const = default;
+    };
+    constexpr std::size_t row_count = 100'000;
+    constexpr std::size_t batch_rows = managed_list::kBatchRows;
+    constexpr std::size_t batches_per_dispatch = managed_list::kQueuedBatches;
+    const auto less_values = [](const WorkRow& left, const WorkRow& right) {
+        return left.key < right.key ||
+            (left.key == right.key && left.identity < right.identity);
+    };
+    std::uint64_t incremental_comparisons = 0;
+    std::uint64_t full_sort_comparisons = 0;
+    const auto incremental_less = [&](const WorkRow& left, const WorkRow& right) {
+        ++incremental_comparisons;
+        return less_values(left, right);
+    };
+    const auto full_sort_less = [&](const WorkRow& left, const WorkRow& right) {
+        ++full_sort_comparisons;
+        return less_values(left, right);
+    };
+
+    std::vector<WorkRow> incremental;
+    std::vector<WorkRow> full_sort;
+    incremental.reserve(row_count);
+    full_sort.reserve(row_count);
+    std::uint64_t random = 0x9e3779b97f4a7c15ULL;
+    std::size_t produced = 0;
+    while (produced < row_count) {
+        const auto sorted_prefix = incremental.size();
+        for (std::size_t batch = 0; batch < batches_per_dispatch && produced < row_count; ++batch) {
+            const auto count = std::min(batch_rows, row_count - produced);
+            for (std::size_t index = 0; index < count; ++index, ++produced) {
+                random ^= random << 13;
+                random ^= random >> 7;
+                random ^= random << 17;
+                const WorkRow row{random, static_cast<std::uint32_t>(produced)};
+                incremental.push_back(row);
+                full_sort.push_back(row);
+            }
+        }
+        // Baseline: sort the full accumulated prefix once after each UI dispatch,
+        // which consumes up to two 128-row batches.
+        std::sort(full_sort.begin(), full_sort.end(), full_sort_less);
+        const auto middle = incremental.begin() +
+            static_cast<std::ptrdiff_t>(sorted_prefix);
+        app_shell::detail::sort_appended_and_merge(
+            incremental.begin(), middle, incremental.end(), incremental_less);
+        EXPECT(std::is_sorted(incremental.begin(), incremental.end(), less_values));
+    }
+    EXPECT(incremental == full_sort);
+    EXPECT(incremental_comparisons * 5 < full_sort_comparisons);
+    std::printf("incremental sort comparisons: %llu; full-prefix baseline: %llu\n",
+        static_cast<unsigned long long>(incremental_comparisons),
+        static_cast<unsigned long long>(full_sort_comparisons));
 }
 
 void columns_can_be_hidden_and_keep_clicks_and_cell_text_correct() {
@@ -817,6 +879,7 @@ int main() {
     quick_repeat_on_a_column_title_still_flips_the_sort();
     unicode_name_order_and_unknown_sort_fallback_are_stable();
     names_sort_naturally_and_descending_puts_folders_last();
+    incremental_sort_matches_full_prefix_sorts_with_less_work();
     columns_can_be_hidden_and_keep_clicks_and_cell_text_correct();
     out_of_order_batches_and_sort_changes_preserve_item_and_viewport_identity();
     expensive_sort_commits_once_and_preserves_interaction();

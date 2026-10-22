@@ -401,7 +401,9 @@ class Pane final {
     void restore_managed_list_interaction(
         const ManagedListInteraction& interaction) noexcept;
     void apply_managed_list_sort() noexcept;
-    void sort_managed_list_rows() noexcept;
+    // sorted_prefix is the prior, already ordered run for a pure enumeration append.
+    // Zero keeps the full-sort behavior for sort changes and row mutations.
+    void sort_managed_list_rows(std::size_t sorted_prefix = 0) noexcept;
     void update_managed_list_sort_indicator() noexcept;
     void set_managed_list_sort(panedock::shell_core::SortProperty property);
     HRESULT start_managed_list(const core::ShellLocation& location,
