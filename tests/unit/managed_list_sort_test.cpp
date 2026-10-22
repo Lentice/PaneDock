@@ -712,6 +712,26 @@ void long_shell_property_batches_finish_within_byte_budget() {
 }
 } // namespace
 
+void quick_repeat_on_a_column_title_still_flips_the_sort() {
+    Fixture f;
+    f.deliver(managed_list::Phase::complete, {{L"a.txt", 1, false, 10}, {L"b.txt", 2, false, 20}});
+    const HWND header = ListView_GetHeader(f.list);
+    EXPECT(header != nullptr);
+    const LPARAM title = MAKELPARAM(40, 8);
+    const auto press = [&](UINT down) {
+        SendMessageW(header, down, MK_LBUTTON, title);
+        SendMessageW(header, WM_LBUTTONUP, 0, title);
+        MSG message;
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&message);
+    };
+    press(WM_LBUTTONDOWN);
+    const bool first = f.state.tabs.front().sort_ascending;
+    press(WM_LBUTTONDBLCLK); // the second click of a quick repeat arrives as a double-click
+    EXPECT(f.state.tabs.front().sort_ascending != first);
+    press(WM_LBUTTONDOWN);
+    EXPECT(f.state.tabs.front().sort_ascending == first);
+}
+
 int main() {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
     EXPECT(InitCommonControlsEx(&controls));
@@ -719,6 +739,7 @@ int main() {
     long_shell_property_batches_finish_within_byte_budget();
     duplicate_display_names_preserve_viewport_and_interaction_on_reorder();
     basic_keys_group_directories_and_keep_deterministic_ties();
+    quick_repeat_on_a_column_title_still_flips_the_sort();
     unicode_name_order_and_unknown_sort_fallback_are_stable();
     out_of_order_batches_and_sort_changes_preserve_item_and_viewport_identity();
     expensive_sort_commits_once_and_preserves_interaction();

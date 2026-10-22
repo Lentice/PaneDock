@@ -1,5 +1,6 @@
 #include "app_shell/pane.h"
 #include "app_shell/pane_host.h"
+#include <windowsx.h>
 #include <algorithm>
 #include <cstdint>
 
@@ -79,6 +80,19 @@ HRESULT Pane::navigate_content(core::ShellLocation location,
 }
 
 namespace {
+// A header sends no click notification for the second click of a double-click, so a
+// quick repeat on a column title would not flip the sort (PD-251). Treat a double
+// click on a title as a plain click; dividers keep their auto-size double-click.
+LRESULT CALLBACK header_double_click_proc(HWND header, UINT message, WPARAM wp, LPARAM lp,
+                                          UINT_PTR, DWORD_PTR) {
+    if (message == WM_LBUTTONDBLCLK) {
+        HDHITTESTINFO hit{{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}, 0, 0};
+        SendMessageW(header, HDM_HITTEST, 0, reinterpret_cast<LPARAM>(&hit));
+        if (hit.flags & HHT_ONHEADER) message = WM_LBUTTONDOWN;
+    }
+    return DefSubclassProc(header, message, wp, lp);
+}
+
 // comctl32 raises WinEvents from inside the ListView; an in-process UIA/MSAA hook
 // then walks the LVS_OWNERDATA rows through the class-specific proxy, blocking the
 // UI for seconds per sort/navigation. A superclass with the same window procedure
@@ -110,6 +124,7 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
         derealize(); return E_FAIL;
     }
     ListView_SetExtendedListViewStyle(list_window_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+    SetWindowSubclass(ListView_GetHeader(list_window_), header_double_click_proc, 230, 0);
     LVCOLUMNW column{};
     column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
     const std::array<std::pair<const wchar_t*, int>, 6> columns{{
