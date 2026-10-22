@@ -284,6 +284,8 @@
 | PD-244 | PD-234 切片：圖示與屬性請求使用 Shell item identity | 8 | `done` | PD-243, PD-229, PD-230, PD-231 | [PD-244](tickets/PD-244-managed-list-enrichment-identity.md) |
 | PD-245 | PD-234 切片：Worker STA 的 namespace 列舉與 parent 值 | 8 | `done` | PD-243 | [PD-245](tickets/PD-245-managed-list-namespace-worker.md) |
 | PD-247 | 列表不提供 accessibility provider（修正排序／複製卡頓） | 8 | `done` | PD-227 | [PD-247](tickets/PD-247-managed-list-no-accessibility-provider.md) |
+| PD-248 | 「本機」磁碟並排顯示與容量用量條 | 8 | `ready` | PD-247 | [PD-248](tickets/PD-248-managed-list-this-pc-drive-tiles.md) |
+| PD-249 | 有實體路徑的 Shell namespace 自動更新（桌面） | 8 | `ready` | PD-247 | [PD-249](tickets/PD-249-managed-list-namespace-auto-refresh.md) |
 | PD-246 | PD-234 切片：Pane 虛擬導覽、預設位置與 session 還原 | 8 | `done` | PD-225, PD-244, PD-245 | [PD-246](tickets/PD-246-managed-list-virtual-navigation.md) |
 
 
