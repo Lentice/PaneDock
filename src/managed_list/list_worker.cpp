@@ -14,6 +14,11 @@
 #include "shell_core/shell_core.h"
 
 namespace panedock::managed_list {
+HiddenFilePolicy read_hidden_file_policy() noexcept {
+    SHELLSTATEW state{};
+    SHGetSetSettings(reinterpret_cast<LPSHELLSTATE>(&state), SSF_SHOWALLOBJECTS | SSF_SHOWSUPERHIDDEN, FALSE);
+    return {state.fShowAllObjects != 0, state.fShowSuperHidden != 0};
+}
 namespace {
 struct State final {
     std::mutex mutex;
@@ -380,8 +385,13 @@ void enumerate_shell_namespace(const std::shared_ptr<State>& state, std::uint64_
     if (FAILED(result) || !folder) { fail(FAILED(result) ? result : E_FAIL); return; }
     Microsoft::WRL::ComPtr<IEnumIDList> enumerator;
     result = provider_call(state, serial, [&] {
+        const auto policy = read_hidden_file_policy();
+        constexpr SHCONTF kIncludeSuperHidden = static_cast<SHCONTF>(0x10000);
         return folder->EnumObjects(nullptr,
-            SHCONTF_FOLDERS | SHCONTF_NONFOLDERS | SHCONTF_INCLUDEHIDDEN, &enumerator);
+            SHCONTF_FOLDERS | SHCONTF_NONFOLDERS |
+                (policy.show_hidden ? SHCONTF_INCLUDEHIDDEN : 0) |
+                (policy.show_hidden && policy.show_protected ? kIncludeSuperHidden : 0),
+            &enumerator);
     });
     if (result == S_FALSE) {
         metadata.phase = Phase::empty; publish(state, serial, std::move(metadata)); return;
@@ -517,10 +527,11 @@ void enumerate(const std::shared_ptr<State>& state, std::uint64_t serial,
         publish(state, serial, std::move(batch)); return;
     }
     std::size_t count = 0;
+    const auto hidden_policy = read_hidden_file_policy();
     for (;;) {
         if (!interested(state, serial)) return;
         std::wstring name(data.cFileName);
-        if (name != L"." && name != L"..") {
+        if (name != L"." && name != L".." && !hidden_policy.hides(data.dwFileAttributes)) {
             if (count == kMaxRows) { batch.phase = Phase::limited; break; }
             if (name.size() > kMaxName) {
                 batch.phase = Phase::error; batch.error = ERROR_BUFFER_OVERFLOW; break;
@@ -583,6 +594,7 @@ bool decode_changes(const std::shared_ptr<State>& state, std::uint64_t serial,
             info->NextEntryOffset % alignof(DWORD) || info->NextEntryOffset >= bytes - offset) return false;
         offset += info->NextEntryOffset;
     }
+    const auto hidden_policy = read_hidden_file_policy();
     for (auto& name : names) {
         if (!interested(state, serial)) return false;
         auto path = batch.request.location.parsing_name;
@@ -591,7 +603,9 @@ bool decode_changes(const std::shared_ptr<State>& state, std::uint64_t serial,
         WIN32_FIND_DATAW data{};
         FindHandle find{FindFirstFileExW(path.c_str(), FindExInfoBasic, &data,
             FindExSearchNameMatch, nullptr, 0)};
-        if (find.value != INVALID_HANDLE_VALUE) batch.rows.push_back(basic_row(data, std::move(name)));
+        if (find.value != INVALID_HANDLE_VALUE && hidden_policy.hides(data.dwFileAttributes))
+            batch.removed.push_back(std::move(name)); // became hidden: leaves the list
+        else if (find.value != INVALID_HANDLE_VALUE) batch.rows.push_back(basic_row(data, std::move(name)));
         else {
             const DWORD error = GetLastError();
             if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) return false;

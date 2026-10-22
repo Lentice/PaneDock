@@ -1,5 +1,6 @@
 #include "app_shell/pane.h"
 #include "app_shell/pane_host.h"
+#include "managed_list/rename_text.h"
 #include <algorithm>
 #include <utility>
 
@@ -47,7 +48,9 @@ bool Pane::begin_list_rename() noexcept try {
         SendMessageW(list_window_, WM_GETFONT, 0, 0), FALSE);
     SendMessageW(list_rename_edit_, EM_SETLIMITTEXT, managed_list::kMaxPath, 0);
     SetFocus(list_rename_edit_);
-    SendMessageW(list_rename_edit_, EM_SETSEL, 0, -1);
+    // Like Explorer, preselect the name without its extension.
+    SendMessageW(list_rename_edit_, EM_SETSEL, 0,
+        static_cast<LPARAM>(managed_list::rename_selection_length(text, list_.rows[index].directory)));
     return true;
 } catch (...) { cancel_list_rename(); return false; }
 

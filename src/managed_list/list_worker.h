@@ -110,6 +110,18 @@ inline Row basic_row(const WIN32_FIND_DATAW& data, std::wstring name) {
         (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ? data.dwReserved0 : 0};
     return row;
 }
+// Explorer's "Show hidden files" and "Hide protected operating system files"
+// options (PD-253). Protected files are hidden files that also carry the system bit.
+struct HiddenFilePolicy {
+    bool show_hidden{true};
+    bool show_protected{true};
+    bool hides(DWORD attributes) const noexcept {
+        if (!(attributes & FILE_ATTRIBUTE_HIDDEN)) return false;
+        if ((attributes & FILE_ATTRIBUTE_SYSTEM) && !show_protected) return true;
+        return !show_hidden;
+    }
+};
+HiddenFilePolicy read_hidden_file_policy() noexcept;
 inline std::size_t owned_row_bytes(const Row& row) noexcept {
     auto bytes = owned_string_bytes(row.name) + owned_string_bytes(row.identity.key);
     if (row.child_location) bytes += owned_location_bytes(*row.child_location);

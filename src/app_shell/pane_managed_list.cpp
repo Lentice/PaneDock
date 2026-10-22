@@ -2,6 +2,7 @@
 #include "app_shell/pane_host.h"
 #include "managed_list/size_text.h"
 #include <windowsx.h>
+#include <shlwapi.h>
 #include <algorithm>
 #include <cstdint>
 
@@ -35,6 +36,12 @@ int ordinal_compare(std::wstring_view left, std::wstring_view right,
         if (left[i] > right[i]) return 1;
     }
     return left.size() < right.size() ? -1 : (left.size() > right.size() ? 1 : 0);
+}
+
+// Explorer orders names with StrCmpLogicalW, so "file2" comes before "file10".
+int natural_compare(const std::wstring& left, const std::wstring& right) noexcept {
+    const int result = StrCmpLogicalW(left.c_str(), right.c_str());
+    return result < 0 ? -1 : (result > 0 ? 1 : 0);
 }
 
 int compare_names(std::wstring_view left, std::wstring_view right) noexcept {
@@ -389,14 +396,16 @@ void Pane::sort_managed_list_rows() noexcept {
 
     const auto less = [property, ascending](const managed_list::Row& left,
                                             const managed_list::Row& right) noexcept {
-        if (left.directory != right.directory) return left.directory;
+        // Explorer keeps folders and files apart and reverses that grouping with the
+        // direction, so a descending sort lists folders last (PD-253).
+        if (left.directory != right.directory) return ascending ? left.directory : right.directory;
 
         int primary = 0;
         bool left_empty = false;
         bool right_empty = false;
         switch (property) {
             case panedock::shell_core::SortProperty::name:
-                primary = ordinal_compare(left.name, right.name, true);
+                primary = natural_compare(left.name, right.name);
                 break;
             case panedock::shell_core::SortProperty::size:
                 left_empty = left.directory;
@@ -428,7 +437,8 @@ void Pane::sort_managed_list_rows() noexcept {
 bool Pane::property_row_less(std::size_t left_index, std::size_t right_index) const noexcept {
     const auto& left = list_.rows[left_index];
     const auto& right = list_.rows[right_index];
-    if (left.directory != right.directory) return left.directory;
+    const bool ascending = active_tab()->sort_ascending;
+    if (left.directory != right.directory) return ascending ? left.directory : right.directory;
     const int slot = expensive_sort_slot();
     const auto& a = left.properties[slot];
     const auto& b = right.properties[slot];
@@ -441,7 +451,7 @@ bool Pane::property_row_less(std::size_t left_index, std::size_t right_index) co
         else if (a.numeric) primary = a.number < b.number ? -1 : a.number > b.number ? 1 : 0;
         else primary = ordinal_compare(a.text, b.text, true);
     }
-    if (primary != 0) return active_tab()->sort_ascending ? primary < 0 : primary > 0;
+    if (primary != 0) return ascending ? primary < 0 : primary > 0;
     const int name_order = compare_names(left.name, right.name);
     if (name_order != 0) return name_order < 0;
     if (left.bytes != right.bytes) return left.bytes < right.bytes;
@@ -1029,7 +1039,7 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
             std::wstring text;
             if (info->item.iSubItem == 0) text = row.name;
             else if (info->item.iSubItem == 1)
-                text = row.directory ? L"Folder" : managed_list::file_size_text(row.bytes);
+                text = row.directory ? L"" : managed_list::file_size_text(row.bytes); // Explorer leaves folder sizes blank
             else if (info->item.iSubItem == 2)
                 text = format_modified_time(row.date_modified);
             else if (info->item.iSubItem == 5) text = row.cloud.text();

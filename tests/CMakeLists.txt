@@ -45,6 +45,8 @@ set(PANEDOCK_TESTS
     "managed_list_capacity|unit/managed_list_capacity_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_capacity_text|unit/managed_list_capacity_text_test.cpp|panedock_core"
     "managed_list_size_text|unit/managed_list_size_text_test.cpp|panedock_core"
+    "managed_list_rename_text|unit/managed_list_rename_text_test.cpp|panedock_core"
+    "managed_list_hidden_policy|unit/managed_list_hidden_policy_test.cpp|panedock_core"
     "pane|unit/pane_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "pane_tab_strip|unit/pane_tab_strip_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "pane_control_id|unit/pane_control_id_test.cpp|"

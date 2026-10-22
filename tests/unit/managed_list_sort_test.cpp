@@ -160,18 +160,18 @@ void basic_keys_group_directories_and_keep_deterministic_ties() {
         EXPECT(ascending[7].name == L"beta.txt");
     }
 
-    f.click_column(1); // Descending keeps folders first and name tie-break ascending.
+    f.click_column(1); // Descending reverses the folder grouping (Explorer); name ties stay ascending.
     const auto& descending = f.pane.list_snapshot().rows;
     EXPECT(descending.size() == 8);
     if (descending.size() == 8) {
-        EXPECT(descending[0].name == L"alpha-folder");
-        EXPECT(descending[1].name == L"zeta-folder");
-        EXPECT(descending[2].name == L"Alpha.txt");
-        EXPECT(descending[3].name == L"alpha.txt");
-        EXPECT(descending[4].name == L"beta.txt");
-        EXPECT(descending[5].name == L"dated.txt");
-        EXPECT(descending[6].name == L"missing-date.txt");
-        EXPECT(descending[7].name == L"zero.txt");
+        EXPECT(descending[0].name == L"Alpha.txt");
+        EXPECT(descending[1].name == L"alpha.txt");
+        EXPECT(descending[2].name == L"beta.txt");
+        EXPECT(descending[3].name == L"dated.txt");
+        EXPECT(descending[4].name == L"missing-date.txt");
+        EXPECT(descending[5].name == L"zero.txt");
+        EXPECT(descending[6].name == L"alpha-folder");
+        EXPECT(descending[7].name == L"zeta-folder");
     }
 
     f.click_column(2); // Date Modified ascending; missing timestamps sort last.
@@ -202,9 +202,9 @@ void unicode_name_order_and_unknown_sort_fallback_are_stable() {
     if (rows.size() == 5) {
         EXPECT(rows[0].name == L"A.txt");
         EXPECT(rows[1].name == L"a.txt");
-        EXPECT(rows[2].name == L"z.txt");
-        EXPECT(rows[3].name == L"ä.txt");
-        EXPECT(rows[4].name == L"å.txt");
+        EXPECT(rows[2].name == L"ä.txt");
+        EXPECT(rows[3].name == L"å.txt");
+        EXPECT(rows[4].name == L"z.txt");
     }
 
     f.state.tabs.front().sort_column = "future.property.key";
@@ -215,13 +215,41 @@ void unicode_name_order_and_unknown_sort_fallback_are_stable() {
     const auto& fallback = f.pane.list_snapshot().rows;
     EXPECT(fallback.size() == 5);
     if (fallback.size() == 5) {
-        EXPECT(fallback[0].name == L"å.txt");
-        EXPECT(fallback[1].name == L"ä.txt");
-        EXPECT(fallback[2].name == L"z.txt");
+        EXPECT(fallback[0].name == L"z.txt");
+        EXPECT(fallback[1].name == L"å.txt");
+        EXPECT(fallback[2].name == L"ä.txt");
         EXPECT(fallback[3].name == L"A.txt");
         EXPECT(fallback[4].name == L"a.txt");
     }
     EXPECT(f.state.tabs.front().sort_column == "future.property.key");
+}
+
+void names_sort_naturally_and_descending_puts_folders_last() {
+    Fixture f;
+    f.state.tabs.front().sort_column = "System.ItemNameDisplay";
+    f.state.tabs.front().sort_ascending = true;
+    f.deliver(managed_list::Phase::complete, {
+        {L"file10.txt", 1, false, 1}, {L"file2.txt", 1, false, 1}, {L"file1.txt", 1, false, 1},
+        {L"dir10", 0, true, 1}, {L"dir2", 0, true, 1}});
+    const auto& rows = f.pane.list_snapshot().rows;
+    EXPECT(rows.size() == 5);
+    if (rows.size() == 5) { // Explorer: folders first, digits compare as numbers
+        EXPECT(rows[0].name == L"dir2");
+        EXPECT(rows[1].name == L"dir10");
+        EXPECT(rows[2].name == L"file1.txt");
+        EXPECT(rows[3].name == L"file2.txt");
+        EXPECT(rows[4].name == L"file10.txt");
+    }
+    f.click_column(0); // same column again: descending reverses everything, folders last
+    const auto& reversed = f.pane.list_snapshot().rows;
+    EXPECT(reversed.size() == 5);
+    if (reversed.size() == 5) {
+        EXPECT(reversed[0].name == L"file10.txt");
+        EXPECT(reversed[1].name == L"file2.txt");
+        EXPECT(reversed[2].name == L"file1.txt");
+        EXPECT(reversed[3].name == L"dir10");
+        EXPECT(reversed[4].name == L"dir2");
+    }
 }
 
 void out_of_order_batches_and_sort_changes_preserve_item_and_viewport_identity() {
@@ -741,6 +769,7 @@ int main() {
     basic_keys_group_directories_and_keep_deterministic_ties();
     quick_repeat_on_a_column_title_still_flips_the_sort();
     unicode_name_order_and_unknown_sort_fallback_are_stable();
+    names_sort_naturally_and_descending_puts_folders_last();
     out_of_order_batches_and_sort_changes_preserve_item_and_viewport_identity();
     expensive_sort_commits_once_and_preserves_interaction();
     property_demand_is_bounded_and_stale_results_are_rejected();
