@@ -131,7 +131,7 @@
 | PD-091 | 每次資料夾導覽完成都同步寫入 session(多次 JSON 解析＋兩次強制 flush) | 7 | `done` | PD-078 | [PD-091](tickets/PD-091-session-save-synchronous-on-every-navigation.md) |
 | PD-092 | `apply_layout` 單一 pane 初始化失敗時整段退出,遺留未完成排版與不一致狀態 | 7 | `done` | 無 | [PD-092](tickets/PD-092-apply-layout-aborts-mid-loop-on-pane-init-failure.md) |
 | PD-093 | 啟動時同步 realize 所有可見 pane,違反 spec §9.3 延後 realize 規則 | 7 | `done` | 無 | [PD-093](tickets/PD-093-startup-eagerly-realizes-all-panes-violates-deferred-realize-spec.md) |
-| PD-094 | ~~啟動時讀完 session 立刻做一次完全冗餘的同步寫回~~(前提有誤,已撤回,見 ticket 文件與計畫決策紀錄) | 7 | `deferred` | 無 | [PD-094](tickets/PD-094-redundant-session-save-before-main-window-created.md) |
+| PD-094 | ~~啟動時讀完 session 立刻做一次完全冗餘的同步寫回~~(前提有誤,已撤回,見 ticket 文件與計畫決策紀錄) | 7 | `superseded` | 無 | [PD-094](tickets/PD-094-redundant-session-save-before-main-window-created.md) |
 | PD-095 | 拖曳分隔線/縮放視窗時,每個 mousemove 都跑完整 `apply_layout`,含最多 1000 項 Shell property 重掃 | 7 | `done` | 無 | [PD-095](tickets/PD-095-splitter-drag-full-relayout-and-item-count-rescan-per-mousemove.md) |
 | PD-096 | `draw_brand_bar` 每次 `WM_ERASEBKGND` 都重新載入圖示、建立/刪除字型 | 7 | `done` | 無 | [PD-096](tickets/PD-096-brand-bar-recreates-icon-and-font-every-erasebkgnd.md) |
 | PD-097 | 拖曳分隔線時,幾何重排本身仍在每個 `WM_MOUSEMOVE` 都執行,需節流 | 7 | `done` | PD-095 | [PD-097](tickets/PD-097-splitter-drag-geometry-throttling.md) |
@@ -234,7 +234,7 @@
 | PD-194 | pane 的 tab 生命週期命令收進 `Pane` | 7 | `done` | PD-191, PD-192, PD-193 | [PD-194](tickets/PD-194-pane-owns-its-tab-commands.md) |
 | PD-195 | 位址列與釘選位置收進 `Pane` | 7 | `done` | PD-191, PD-192 | [PD-195](tickets/PD-195-pane-owns-address-bar-and-pinned-locations.md) |
 | PD-196 | tab strip 收進 `Pane`（`PaneTabStrip`） | 7 | `done` | PD-191, PD-194 | [PD-196](tickets/PD-196-pane-owns-its-tab-strip.md) |
-| PD-197 | pane 命令、chrome 與導覽完成的收尾 | 7 | `in_progress` | PD-192, PD-193, PD-194, PD-195, PD-196 | [PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md) |
+| PD-197 | pane 命令、chrome 與導覽完成的收尾 | 7 | `done` | PD-192, PD-193, PD-194, PD-195, PD-196 | [PD-197](tickets/PD-197-pane-command-and-chrome-consolidation.md) |
 | PD-198 | 剩餘 pane 局部訊息與 popup 行為歸位 | 7 | `done` | PD-197 | [PD-198](tickets/PD-198-pane-local-message-and-popup-ownership.md) |
 | PD-199 | 導覽請求身分與分頁身分的正確性修正 | 7 | `done` | PD-170, PD-183, PD-196 | [PD-199](tickets/PD-199-navigation-request-identity-and-tab-identity-fixes.md) |
 | PD-200 | group list 重排手勢收進 `sidebar::Sidebar` | 7 | `done` | PD-057, PD-196 | [PD-200](tickets/PD-200-sidebar-owns-the-group-reorder-gesture.md) |
