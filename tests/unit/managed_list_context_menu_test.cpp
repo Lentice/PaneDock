@@ -78,7 +78,7 @@ struct Fixture final {
         presenter = menu.get(); presenter->fixture = this;
         pane.use_context_menu_presenter(std::move(menu));
         EXPECT(SUCCEEDED(pane.realize({0, 0, 640, 420}, {L"C:\\A", {}, {}})));
-        list = FindWindowExW(pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr);
+        list = FindWindowExW(pane.explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr);
         EXPECT(list != nullptr);
     }
     ~Fixture() {

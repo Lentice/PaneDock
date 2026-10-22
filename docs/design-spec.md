@@ -19,7 +19,7 @@
 
 使用者明確授權跳過真實驗證並繼續後續 tickets，詳見 [PD-242 Overrides](tickets/PD-242-managed-list-remove-shell-view.md#overrides)。PD-241 rollout measurement gate 僅就工作排序予以豁免，並未通過；本文件各處「gate 通過才切預設／移除 legacy」的排序限制由本註記覆寫，允許 PD-242 推進 managed-list-only code。這是使用者授權的實作選擇，不是相容性或效能證據，也不表示本次文件 checkpoint 已改變執行路徑。
 
-所有未驗證條件與既有證據保留於 [PD-241](tickets/PD-241-managed-list-rollout-gate.md) 及 `docs/performance-baseline.md`：真實功能矩陣、10 分鐘 idle CPU／disk／memory 與資源 budgets、UNC／OneDrive、Shell extensions／verbs、焦點／accessibility、launch／session／shutdown（含 provider 有界安全退出）仍未驗證；`panedock_managed_list` 既有失敗仍未修復。這些風險不因排序豁免而消失，既有功能、安全退出、資源與證據標準不變，不得宣稱 PASS。
+所有未驗證條件與既有證據保留於 [PD-241](tickets/PD-241-managed-list-rollout-gate.md) 及 `docs/performance-baseline.md`：真實功能矩陣、10 分鐘 idle CPU／disk／memory 與資源 budgets、UNC／OneDrive、Shell extensions／verbs、焦點、launch／session／shutdown（含 provider 有界安全退出）仍未驗證；`panedock_managed_list` 既有失敗仍未修復。這些風險不因排序豁免而消失，既有功能、安全退出、資源與證據標準不變，不得宣稱 PASS。
 
 ## 2 產品定義
 
@@ -117,7 +117,7 @@ pane 之間的分隔線可拖曳,比例記錄於該 Group。
 
 ### 4.8 原生行為
 
-在 managed-list path，PaneDock 負責列繪製、選取／多選、焦點、排序後的選取與可見 anchor、鍵盤導覽。列表不提供 accessibility provider（[PD-247](tickets/PD-247-managed-list-no-accessibility-provider.md) 覆寫）。Shell 負責 Shell location/item identity、原生檔案操作與原生 context menu。右鍵選單的目標解析與相容性接線限於維持現有 Windows 選單及 shell-extension 行為；本規格不授權 custom menu、重排、過濾、timeout 或隔離策略。managed list 仍須支援既有拖放、剪貼簿與 rename/delete/copy/move 行為，透過既有 Shell `IDataObject`／`IFileOperation` 邊界完成。
+在 managed-list path，PaneDock 負責列繪製、選取／多選、焦點、排序後的選取與可見 anchor、鍵盤導覽。PaneDock 不提供任何無障礙（accessibility）支援，也不是產品目標；列表視窗使用不被 MSAA／UIA 辨識的自訂類別（[PD-247](tickets/PD-247-managed-list-no-accessibility-provider.md)、[PD-250](tickets/PD-250-managed-list-opaque-window-class.md)）。Shell 負責 Shell location/item identity、原生檔案操作與原生 context menu。右鍵選單的目標解析與相容性接線限於維持現有 Windows 選單及 shell-extension 行為；本規格不授權 custom menu、重排、過濾、timeout 或隔離策略。managed list 仍須支援既有拖放、剪貼簿與 rename/delete/copy/move 行為，透過既有 Shell `IDataObject`／`IFileOperation` 邊界完成。
 
 在 managed-list 尚未成為預設時，現行 `IExplorerBrowser` 仍負責所有 pane 內互動。兩條路徑都必須保留本節下方的 folder background context menu affordance；其中既有選單內容與外觀不在本次遷移中重新設計。
 
@@ -171,7 +171,7 @@ pane 分隔線可拖曳,比例以 0.0–1.0 的相對值儲存於該 Group,視�
 
 ### FR-006 原生 Shell 檔案檢視
 
-PaneDock-managed list 顯示 Shell namespace item，漸進更新可操作的列，並提供目前可用的排序、selection 及鍵盤行為（不提供 accessibility provider，見 PD-247）；Shell identity 不使用顯示名稱或持久化 PIDL。原生圖示／縮圖、標準 Shell context menu 與已安裝 shell extension、剪貼簿、拖放及 file operation 必須保持可用。慢 location 或 metadata enrichment 不得阻塞 list input。直到 PD-241 gate 通過前，這仍是目標契約，`IExplorerBrowser` 是現行預設實作。
+PaneDock-managed list 顯示 Shell namespace item，漸進更新可操作的列，並提供目前可用的排序、selection 及鍵盤行為（不提供無障礙支援，見 PD-250）；Shell identity 不使用顯示名稱或持久化 PIDL。原生圖示／縮圖、標準 Shell context menu 與已安裝 shell extension、剪貼簿、拖放及 file operation 必須保持可用。慢 location 或 metadata enrichment 不得阻塞 list input。直到 PD-241 gate 通過前，這仍是目標契約，`IExplorerBrowser` 是現行預設實作。
 
 ### FR-007 檔案操作
 
@@ -330,7 +330,7 @@ notification，不 disable 主視窗與 pane。deferred realize 可在 notificat
 
 ## 12 測試策略
 
-`core` 是主要自動測試 seam，且必須保持不含 HWND、COM 與 `windows.h`。managed-list 項目狀態、generation 過濾、排序／selection anchor 與有界容量應透過 Pane 可觀察的公開操作或純值結果邊界測試；不假造 `IExplorerBrowser`。Shell namespace、圖示、縮圖、原生選單／extension、file operations、OneDrive 與真正焦點／accessibility 行為須在真實桌面驗證。不能由 legacy host 測試推論 managed-list PASS，也不能由未執行的實機步驟推論 PASS。完整的功能矩陣與 gate 流程見 `docs/testing.md`。
+`core` 是主要自動測試 seam，且必須保持不含 HWND、COM 與 `windows.h`。managed-list 項目狀態、generation 過濾、排序／selection anchor 與有界容量應透過 Pane 可觀察的公開操作或純值結果邊界測試；不假造 `IExplorerBrowser`。Shell namespace、圖示、縮圖、原生選單／extension、file operations、OneDrive 與真正焦點行為須在真實桌面驗證。不能由 legacy host 測試推論 managed-list PASS，也不能由未執行的實機步驟推論 PASS。完整的功能矩陣與 gate 流程見 `docs/testing.md`。
 
 ## 13 驗收標準
 

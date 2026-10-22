@@ -77,7 +77,7 @@ struct Fixture final {
         source = controlled.get();
         pane.use_managed_list(std::move(controlled));
         EXPECT(SUCCEEDED(pane.realize({0, 0, 640, 420}, {L"C:\\A", {}, {}})));
-        list = FindWindowExW(pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr);
+        list = FindWindowExW(pane.explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr);
         EXPECT(list != nullptr);
         pane.use_list_icons(nullptr);
     }

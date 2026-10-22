@@ -38,6 +38,8 @@
 
 namespace panedock::app_shell {
 
+// Superclass of SysListView32 (see PD-250): unknown class name to MSAA/UIA proxies.
+inline constexpr wchar_t kManagedListClassName[] = L"PaneDockManagedList";
 inline constexpr UINT kRestoreListFocusMessage = WM_APP + 230;
 inline constexpr UINT_PTR kListFocusRestoreTimerId = 0x5044;
 

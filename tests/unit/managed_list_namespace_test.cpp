@@ -70,7 +70,7 @@ struct Fixture final {
         pane.use_managed_list(std::move(input));
         pane.use_list_icons(nullptr); // owned-value test only, no provider demand
         EXPECT(SUCCEEDED(pane.realize({0, 0, 640, 420}, pane.active_tab()->location)));
-        list = FindWindowExW(pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr);
+        list = FindWindowExW(pane.explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr);
         EXPECT(list != nullptr);
     }
     ~Fixture() { pane.destroy(); DestroyWindow(parent); }
@@ -151,7 +151,7 @@ void virtual_navigation_and_history() {
     EXPECT(f.pane.active_tab()->history.empty());
     f.pane.switch_active_tab("tab-a"); f.complete(child, desktop);
     EXPECT(*f.pane.active_tab() == first_tab); // each tab keeps its own history
-    EXPECT(f.pane.window() != nullptr && f.list == FindWindowExW(f.pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr));
+    EXPECT(f.pane.window() != nullptr && f.list == FindWindowExW(f.pane.explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr));
 }
 void namespace_child_keeps_enumerating_parent() {
     Fixture f;

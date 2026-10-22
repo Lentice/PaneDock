@@ -62,7 +62,7 @@ void pane_refresh_and_identity() {
     if (pane.list_snapshot().phase != ml::Phase::loading) {
         pane.destroy(); DestroyWindow(parent); return;
     }
-    const HWND list = FindWindowExW(pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr);
+    const HWND list = FindWindowExW(pane.explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr);
     EXPECT(list != nullptr);
     auto availability = [&] {
         wchar_t text[80]{};

@@ -244,7 +244,7 @@ void real_local_directory() {
     pane.bind(&state);
     pane.use_managed_list(std::move(sources[0]));
     EXPECT(SUCCEEDED(pane.realize({0, 0, 600, 400}, {root.wstring(), {}, {}})));
-    const HWND list = FindWindowExW(pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr);
+    const HWND list = FindWindowExW(pane.explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr);
     EXPECT(list != nullptr);
     EXPECT((GetWindowLongPtrW(list, GWL_STYLE) & LVS_OWNERDATA) != 0);
     EXPECT(WaitForSingleObject(pane.content_event(), 10000) == WAIT_OBJECT_0);

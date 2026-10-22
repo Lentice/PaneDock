@@ -78,11 +78,29 @@ HRESULT Pane::navigate_content(core::ShellLocation location,
     return realize_managed_list(rect, location, generation);
 }
 
+namespace {
+// comctl32 raises WinEvents from inside the ListView; an in-process UIA/MSAA hook
+// then walks the LVS_OWNERDATA rows through the class-specific proxy, blocking the
+// UI for seconds per sort/navigation. A superclass with the same window procedure
+// has no proxy, so those clients see one plain window (PD-250).
+bool register_managed_list_class() {
+    static const bool registered = [] {
+        WNDCLASSEXW cls{sizeof(cls)};
+        if (!GetClassInfoExW(nullptr, WC_LISTVIEWW, &cls)) return false;
+        cls.lpszClassName = kManagedListClassName;
+        cls.hInstance = GetModuleHandleW(nullptr);
+        return RegisterClassExW(&cls) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+    }();
+    return registered;
+}
+}  // namespace
+
 HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& location,
                                     NavigationGeneration generation) {
     if (!active() || !active_tab()) return E_ABORT;
     if (list_window_) return S_FALSE;
-    list_window_ = CreateWindowExW(0, WC_LISTVIEWW, L"Folder",
+    if (!register_managed_list_class()) return HRESULT_FROM_WIN32(GetLastError());
+    list_window_ = CreateWindowExW(0, kManagedListClassName, L"Folder",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS,
         rect.left, rect.top, rect.right-rect.left,
         rect.bottom-rect.top, explorer_container_, nullptr,

@@ -101,7 +101,7 @@ struct HiddenControls final {
     void complete(int i, std::wstring name = L"current") {
         deliver(i, panes[i].list_snapshot().request, std::move(name));
     }
-    HWND list(int i) { return FindWindowExW(panes[i].explorer_container(), nullptr, WC_LISTVIEWW, nullptr); }
+    HWND list(int i) { return FindWindowExW(panes[i].explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr); }
 };
 void four_panes_tabs_groups_and_move() {
     HiddenControls f;

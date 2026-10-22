@@ -40,7 +40,7 @@ struct Fixture final {
         pane.use_managed_list(std::move(input));
         pane.limit_list_index_bytes(index_limit);
         EXPECT(SUCCEEDED(pane.realize({0, 0, 640, 420}, state.tabs[0].location)));
-        list = FindWindowExW(pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr);
+        list = FindWindowExW(pane.explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr);
         EXPECT(list != nullptr);
     }
     ~Fixture() { pane.destroy(); DestroyWindow(parent); }

@@ -50,7 +50,7 @@ void test_parent_batches_dpi_font_and_anchor() {
     auto images = std::make_unique<Images>(); auto* demand = images.get();
     pane.use_list_icons(std::move(images));
     EXPECT(SUCCEEDED(pane.realize({0, 0, 640, 420}, state.tabs[0].location)));
-    HWND list = FindWindowExW(pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr);
+    HWND list = FindWindowExW(pane.explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr);
     EXPECT(list != nullptr);
     std::vector<managed_list::Row> items;
     for (int i = 0; i < 300; ++i) {

@@ -41,7 +41,7 @@ struct Fixture final {
     void realize(const core::ShellLocation& location) {
         state.tabs[0].location = location;
         EXPECT(SUCCEEDED(pane.realize({0, 0, 640, 420}, location)));
-        list = FindWindowExW(pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr);
+        list = FindWindowExW(pane.explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr);
         EXPECT(list != nullptr);
     }
     ~Fixture() { pane.destroy(); if (parent) DestroyWindow(parent); }

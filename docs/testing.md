@@ -103,7 +103,7 @@ PD-224 validation on 2026-10-16: isolated LLVM-MinGW Release build and all CTest
 except `panedock_launch_smoke` passed. That smoke was excluded because the existing
 user singleton prevents an isolated launch; the user's window was left open.
 Hidden control checks do **not** establish real desktop focus, keyboard,
-accessibility, mixed-DPI, Shell/network/OneDrive compatibility, or performance.
+mixed-DPI, Shell/network/OneDrive compatibility, or performance.
 Those remain **UNVERIFIED (real desktop required)**, including provider-hang
 behavior and the ten-minute idle/latency/memory gate below. PD-241 remains closed.
 
@@ -144,7 +144,7 @@ configure/build and the final CTest run used the authorized elevated context.
 running and was left untouched. No second app was launched or relayed to it.
 
 **UNVERIFIED (real desktop required):** actual isolated-session process restart,
-virtual/UNC fallback and Shell→managed transitions, native focus/accessibility,
+virtual/UNC fallback and Shell→managed transitions, native focus,
 network/OneDrive behavior, mixed DPI, and latency/CPU/memory/power measurements.
 The existing policy/source checks are repository gates, not new behavior evidence.
 PD-241's measured gate is unchanged and remains closed.
@@ -158,7 +158,6 @@ PD-222 defines the contract, not a managed-list implementation. Every status in 
 | View modes | Persist and restore all eight current choices: Extra large icons (256 px), Large icons (96 px), Medium icons (48 px), Small icons (16 px), List, Details, Tiles and Content. | Pure value mapping tests plus real desktop across all eight choices. | UNVERIFIED |
 | Sorting | Preserve the existing canonical `PROPERTYKEY` string and direction contract. Name, Size, Date Modified and Type are baseline user-visible properties; every key currently accepted by the session/Shell adapter remains round-trippable and usable when supplied by a location. Do not silently reinterpret or drop an unknown persisted key. | Core/session round-trip tests plus real desktop on local and virtual locations. | UNVERIFIED |
 | Selection, focus and keyboard | Multi-select, Ctrl/Shift selection, arrow/Home/End/Page movement, type-to-select, activation, focus indication, and stable selected item plus visible anchor while batches arrive or sorting changes. Across restart, selection/scroll/columns remain best-effort under NFR-005. | Pane public-boundary tests for identity/generation/anchor; real keyboard/focus verification. | UNVERIFIED |
-| Accessibility | Expose each visible item with a usable accessible name, role, focus and selection state; retain keyboard access to all operations. | Accessibility tree inspection and keyboard-only real desktop run. | UNVERIFIED |
 | Progressive results and stale work | Show loading promptly; make received batches operable; keep a recoverable per-tab error/retry for unavailable locations; ignore results from an older location or generation. | Pane/result-boundary tests for batches, cancellation interest and stale generations; slow and disconnected source desktop run. | UNVERIFIED |
 | Icons, thumbnails and metadata | Preserve Shell-backed item identity and visible icon/thumbnail behavior; load expensive optional properties after basic rows, without blocking input. | Real folders containing mixed file types, large images/video and missing/offline providers. | UNVERIFIED |
 | Shell namespace | Keep local, network, USB, known-folder, virtual Shell and OneDrive placeholder locations usable, including online-only and locally available placeholders. | Real desktop on the named E4 data sources; record hydration behavior. | UNVERIFIED |

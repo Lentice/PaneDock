@@ -309,7 +309,7 @@ void thumbnails_modes_stale_failure_and_budget() {
 void hidden_control_mode_layout_and_restore() {
     Fixture f(true);
     f.deliver({{L"picture.png", 10, false}, {L"folder", 0, true}});
-    const HWND list = FindWindowExW(f.pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr);
+    const HWND list = FindWindowExW(f.pane.explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr);
     EXPECT(list != nullptr);
     const std::array<DWORD, 8> views{LV_VIEW_ICON, LV_VIEW_ICON, LV_VIEW_ICON, LV_VIEW_SMALLICON,
         LV_VIEW_LIST, LV_VIEW_DETAILS, LV_VIEW_ICON, LV_VIEW_DETAILS};
@@ -350,7 +350,7 @@ void hidden_control_mode_layout_and_restore() {
 void visible_idle_viewport_stops_after_one_refresh() {
     Fixture f(true);
     f.deliver({{L"file.txt", 10, false}, {L"folder", 0, true}});
-    const HWND list = FindWindowExW(f.pane.explorer_container(), nullptr, WC_LISTVIEWW, nullptr);
+    const HWND list = FindWindowExW(f.pane.explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr);
     EXPECT(list != nullptr);
     ShowWindow(f.parent, SW_SHOWNOACTIVATE);
     UpdateWindow(f.parent);
