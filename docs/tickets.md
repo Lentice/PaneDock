@@ -288,6 +288,7 @@
 | PD-249 | 有實體路徑的 Shell namespace 自動更新（桌面） | 8 | `in_progress` | PD-247 | [PD-249](tickets/PD-249-managed-list-namespace-auto-refresh.md) |
 | PD-250 | 移除無障礙支援：列表使用不被 MSAA／UIA 辨識的視窗類別 | 8 | `in_progress` | PD-247 | [PD-250](tickets/PD-250-managed-list-opaque-window-class.md) |
 | PD-251 | 快速連點欄標題時排序要連續切換 | 8 | `in_progress` | PD-247 | [PD-251](tickets/PD-251-managed-list-column-title-double-click.md) |
+| PD-252 | 捲動後的列要載入 Type／圖示；Size 用千分位 KB | 8 | `in_progress` | PD-247 | [PD-252](tickets/PD-252-managed-list-viewport-rows-and-size-text.md) |
 | PD-246 | PD-234 切片：Pane 虛擬導覽、預設位置與 session 還原 | 8 | `done` | PD-225, PD-244, PD-245 | [PD-246](tickets/PD-246-managed-list-virtual-navigation.md) |
 
 

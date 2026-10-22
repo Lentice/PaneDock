@@ -1,5 +1,6 @@
 #include "app_shell/pane.h"
 #include "managed_list/capacity_text.h"
+#include "managed_list/size_text.h"
 #include <algorithm>
 
 namespace panedock::app_shell {
@@ -325,12 +326,21 @@ void Pane::refresh_list_icon_viewport() noexcept try {
     if (!list_window_ || !IsWindowVisible(list_window_)) { cancel_list_icons(); return; }
     // Visible-only traversal handles horizontal List and icon grids as well
     // as report rows. Never enumerate the whole folder to discover a viewport.
+    // LVNI_VISIBLEONLY on an owner-data list ignores the scroll position and keeps
+    // returning the first rows, so rows past kIconInterest never got metadata (PD-252).
+    // Start at the top index and stop at the first item beyond the client area; rows
+    // flow downwards in report/icon views and rightwards in list view.
     std::vector<std::size_t> rows;
-    int item = -1;
-    while (rows.size() < managed_list::kIconInterest) {
-        item = ListView_GetNextItem(list_window_, item, LVNI_VISIBLEONLY);
-        if (item < 0) break;
-        rows.push_back(static_cast<std::size_t>(item));
+    RECT client{};
+    GetClientRect(list_window_, &client);
+    const int count = ListView_GetItemCount(list_window_);
+    for (int item = std::max(0, ListView_GetTopIndex(list_window_));
+         item < count && rows.size() < managed_list::kIconInterest; ++item) {
+        RECT bounds{};
+        if (!ListView_GetItemRect(list_window_, item, &bounds, LVIR_BOUNDS)) break;
+        if (bounds.top >= client.bottom || bounds.left >= client.right) break;
+        if (bounds.bottom > client.top && bounds.right > client.left)
+            rows.push_back(static_cast<std::size_t>(item));
     }
     request_list_images(std::move(rows), paint_dpi_);
 } catch (...) { cancel_list_icons(); }
@@ -474,7 +484,7 @@ std::optional<LRESULT> Pane::draw_list_card(NMHDR* notification) noexcept try {
     DrawTextW(dc, row.name.c_str(), -1, &title, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     TEXTMETRICW metrics{}; GetTextMetricsW(dc, &metrics);
     rect.top += metrics.tmHeight + pad;
-    std::wstring detail = row.directory ? std::wstring(L"Folder") : std::to_wstring(row.bytes) + L" bytes";
+    std::wstring detail = row.directory ? std::wstring(L"Folder") : managed_list::file_size_text(row.bytes);
     if (this_pc_cards()) {
         detail.clear();
         if (row.capacity_bytes != 0) {

@@ -1,5 +1,6 @@
 #include "app_shell/pane.h"
 #include "app_shell/pane_host.h"
+#include "managed_list/size_text.h"
 #include <windowsx.h>
 #include <algorithm>
 #include <cstdint>
@@ -126,7 +127,7 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
     ListView_SetExtendedListViewStyle(list_window_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     SetWindowSubclass(ListView_GetHeader(list_window_), header_double_click_proc, 230, 0);
     LVCOLUMNW column{};
-    column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+    column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
     const std::array<std::pair<const wchar_t*, int>, 6> columns{{
         {L"Name", 320}, {L"Size", 160}, {L"Date Modified", 180},
         {L"Type", 160}, {L"Duration", 120}, {L"Availability", 200}}};
@@ -134,6 +135,7 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
         column.pszText = const_cast<wchar_t*>(columns[index].first);
         column.cx = columns[index].second;
         column.iSubItem = index;
+        column.fmt = index == 1 ? LVCFMT_RIGHT : LVCFMT_LEFT; // Size aligns on its unit
         ListView_InsertColumn(list_window_, index, &column);
     }
     SendMessageW(list_window_, WM_SETFONT, reinterpret_cast<WPARAM>(pane_host()->chrome_font()), FALSE);
@@ -1027,7 +1029,7 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
             std::wstring text;
             if (info->item.iSubItem == 0) text = row.name;
             else if (info->item.iSubItem == 1)
-                text = row.directory ? L"Folder" : std::to_wstring(row.bytes) + L" bytes";
+                text = row.directory ? L"Folder" : managed_list::file_size_text(row.bytes);
             else if (info->item.iSubItem == 2)
                 text = format_modified_time(row.date_modified);
             else if (info->item.iSubItem == 5) text = row.cloud.text();
