@@ -262,6 +262,21 @@ void test_unknown_fields_survive_write_back() {
     }
 }
 
+void test_tab_columns_round_trip_and_are_optional() {
+    auto application = sample();
+    application.groups.front().panes.front().tabs.front().columns = "name:300,type:90,size:200";
+    const std::string json = serialize_session({application, {}, true});
+    EXPECT(json.find("\"columns\":\"name:300,type:90,size:200\"") != std::string::npos);
+    const auto restored = deserialize_session(json);
+    EXPECT(restored.has_value());
+    EXPECT(restored->application == application);
+    // Default (empty) columns are not written, and an older session without the field loads.
+    const std::string plain = serialize_session({sample(), {}, true});
+    EXPECT(plain.find("\"columns\"") == std::string::npos);
+    const auto legacy = deserialize_session(plain);
+    EXPECT(legacy.has_value() && legacy->application.groups.front().panes.front().tabs.front().columns.empty());
+}
+
 void test_clean_shutdown_type_mismatch_defaults_true() {
     std::string json = serialize_session({sample(), {}, false});
     const auto clean_field = json.find("\"clean_shutdown\":false");
@@ -504,6 +519,7 @@ int main() {
     test_new_three_pane_layout_round_trips();
     test_corrupt_and_invalid_documents();
     test_unknown_fields_survive_write_back();
+    test_tab_columns_round_trip_and_are_optional();
     test_moved_tab_keeps_unknown_fields();
     test_clean_shutdown_type_mismatch_defaults_true();
     test_read_fallbacks();

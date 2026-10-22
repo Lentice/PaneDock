@@ -52,7 +52,8 @@ void Pane::append_property_requests(std::vector<managed_list::IconRequest>& requ
         RECT client{}; GetClientRect(list_window_, &client);
         for (int slot = 0; slot < 2; ++slot) {
             RECT column{};
-            if (!header || !Header_GetItemRect(header, slot + 3, &column)) continue;
+            const int position = list_column_index(slot == 0 ? "type" : "duration");
+            if (!header || position < 0 || !Header_GetItemRect(header, position, &column)) continue;
             MapWindowPoints(header, list_window_, reinterpret_cast<POINT*>(&column), 2);
             if (column.right <= client.left || column.left >= client.right || column.right <= column.left) continue;
             for (auto index : visible)

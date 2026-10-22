@@ -38,6 +38,7 @@ set(PANEDOCK_TESTS
     "managed_list_resize|unit/managed_list_resize_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_icons|unit/managed_list_icons_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_cloud|unit/managed_list_cloud_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
+    "columns|unit/columns_test.cpp|panedock_core"
     "managed_list_type_text|unit/managed_list_type_text_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_sort|unit/managed_list_sort_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_changes|unit/managed_list_changes_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"

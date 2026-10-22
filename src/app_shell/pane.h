@@ -41,6 +41,8 @@ namespace panedock::app_shell {
 // Superclass of SysListView32 (see PD-250): unknown class name to MSAA/UIA proxies.
 inline constexpr wchar_t kManagedListClassName[] = L"PaneDockManagedList";
 inline constexpr UINT kRestoreListFocusMessage = WM_APP + 230;
+// Posted by the list when the user resized or dragged a column: save the new layout.
+inline constexpr UINT kColumnsChangedMessage = WM_APP + 231;
 inline constexpr UINT_PTR kListFocusRestoreTimerId = 0x5044;
 
 class PaneHost;
@@ -211,6 +213,15 @@ class Pane final {
     void process_content_results() noexcept;
     bool open_list_row(std::size_t row);
     std::optional<LRESULT> list_notification(NMHDR* notification) noexcept;
+    // Details columns (PD-257): shown set, order and widths live in the tab.
+    void apply_list_columns() noexcept;
+    void capture_list_columns() noexcept;
+    void toggle_list_column(std::string_view id) noexcept;
+    void show_list_column_menu(POINT screen) noexcept;
+    const std::vector<std::string>& list_column_ids() const noexcept { return column_ids_; }
+    // Header position <-> stable subitem (core::kKnownColumns index); -1 when unknown.
+    int list_column_subitem(int header_index) const noexcept;
+    int list_column_index(std::string_view id) const noexcept;
 
     // Content operations stay behind Pane; callers never borrow the concrete
     // Shell host or its location across a message-pumping call.
@@ -461,6 +472,8 @@ class Pane final {
     bool list_focus_restore_timer_used_{};
     bool list_focus_restore_activation_seen_{};
     HWND list_rename_edit_{};
+    std::vector<std::string> column_ids_;  // header position -> column id
+    std::string applied_columns_;          // TabState::columns the header currently shows
     bool list_rename_busy_{};
     HRESULT list_rename_result_{S_FALSE};
     void commit_list_rename(std::wstring name) noexcept;

@@ -131,20 +131,11 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
     if (!SetWindowSubclass(list_window_, list_icon_subclass, 229, reinterpret_cast<DWORD_PTR>(this))) {
         derealize(); return E_FAIL;
     }
-    ListView_SetExtendedListViewStyle(list_window_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+    ListView_SetExtendedListViewStyle(list_window_,
+        LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_HEADERDRAGDROP);
     SetWindowSubclass(ListView_GetHeader(list_window_), header_double_click_proc, 230, 0);
-    LVCOLUMNW column{};
-    column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
-    const std::array<std::pair<const wchar_t*, int>, 6> columns{{
-        {L"Name", 320}, {L"Size", 160}, {L"Date Modified", 180},
-        {L"Type", 160}, {L"Duration", 120}, {L"Availability", 200}}};
-    for (int index = 0; index < static_cast<int>(columns.size()); ++index) {
-        column.pszText = const_cast<wchar_t*>(columns[index].first);
-        column.cx = columns[index].second;
-        column.iSubItem = index;
-        column.fmt = index == 1 ? LVCFMT_RIGHT : LVCFMT_LEFT; // Size aligns on its unit
-        ListView_InsertColumn(list_window_, index, &column);
-    }
+    column_ids_.clear(); applied_columns_.clear();
+    apply_list_columns();
     SendMessageW(list_window_, WM_SETFONT, reinterpret_cast<WPARAM>(pane_host()->chrome_font()), FALSE);
     // STATIC containers do not route list notifications by themselves.
     if (!SetWindowSubclass(explorer_container_,
@@ -471,13 +462,14 @@ void Pane::update_managed_list_sort_indicator() noexcept {
     const int actual_column = slot == 0 ? 3 : slot == 1 ? 4 : slot == 2 ? -1 : sorted_column;
     const HWND header = ListView_GetHeader(list_window_);
     if (!header) return;
-    for (int index = 0; index < 5; ++index) {
+    const int columns = Header_GetItemCount(header);
+    for (int index = 0; index < columns; ++index) {
         HDITEMW item{};
         item.mask = HDI_FORMAT;
         if (!SendMessageW(header, HDM_GETITEMW, static_cast<WPARAM>(index),
                           reinterpret_cast<LPARAM>(&item))) continue;
         item.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
-        if (index == actual_column)
+        if (list_column_subitem(index) == actual_column)
             item.fmt |= tab->sort_ascending ? HDF_SORTUP : HDF_SORTDOWN;
         SendMessageW(header, HDM_SETITEMW, static_cast<WPARAM>(index),
                      reinterpret_cast<LPARAM>(&item));
@@ -1036,20 +1028,22 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
         if ((info->item.mask & LVIF_TEXT) && info->item.iItem >= 0 &&
             static_cast<std::size_t>(info->item.iItem) < list_.rows.size()) {
             const auto& row = list_.rows[info->item.iItem];
+            // comctl32 reports the header position; hidden or moved columns change it.
+            const int sub = list_column_subitem(info->item.iSubItem);
             std::wstring text;
-            if (info->item.iSubItem == 0) text = row.name;
-            else if (info->item.iSubItem == 1)
+            if (sub == 0) text = row.name;
+            else if (sub == 1)
                 text = row.directory ? L"" : managed_list::file_size_text(row.bytes); // Explorer leaves folder sizes blank
-            else if (info->item.iSubItem == 2)
+            else if (sub == 2)
                 text = format_modified_time(row.date_modified);
-            else if (info->item.iSubItem == 5) text = row.cloud.text();
-            else if (info->item.iSubItem == 3 || info->item.iSubItem == 4) {
-                const auto& value = row.properties[info->item.iSubItem - 3];
+            else if (sub == 5) text = row.cloud.text();
+            else if (sub == 3 || sub == 4) {
+                const auto& value = row.properties[sub - 3];
                 if (value.state == managed_list::PropertyState::unresolved)
                     text = property_capacity_failed_ ? L"Unavailable" : L"Loading...";
                 else if (value.state == managed_list::PropertyState::failed) text = L"Unavailable";
                 else if (value.state == managed_list::PropertyState::value) {
-                    if (info->item.iSubItem == 4 && value.numeric) {
+                    if (sub == 4 && value.numeric) {
                         const auto seconds = static_cast<std::uint64_t>(value.number / 10000000);
                         text = std::to_wstring(seconds / 60) + L":" +
                             (seconds % 60 < 10 ? L"0" : L"") + std::to_wstring(seconds % 60);
@@ -1063,14 +1057,16 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
     }
     if (notification->code == LVN_COLUMNCLICK) {
         const auto* click = reinterpret_cast<const NMLISTVIEW*>(notification);
-        switch (click->iSubItem) {
+        // The notification carries the header position; columns can be hidden or moved.
+        const int clicked = list_column_subitem(click->iSubItem);
+        switch (clicked) {
             case 0: set_managed_list_sort(panedock::shell_core::SortProperty::name); break;
             case 1: set_managed_list_sort(panedock::shell_core::SortProperty::size); break;
             case 2: set_managed_list_sort(panedock::shell_core::SortProperty::date_modified); break;
             case 3: case 4: {
                 auto* tab = active_tab();
                 if (!tab) break;
-                const std::string key = click->iSubItem == 3 ? "System.ItemTypeText" : "System.Media.Duration";
+                const std::string key = clicked == 3 ? "System.ItemTypeText" : "System.Media.Duration";
                 tab->sort_ascending = tab->sort_column == key ? !tab->sort_ascending : true;
                 tab->sort_column = key;
                 apply_managed_list_sort();

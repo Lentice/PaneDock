@@ -479,6 +479,8 @@ Json encode(const ApplicationState& application, Json root,
                 encoded_tab["view_mode"] = Json{tab.view_mode};
                 encoded_tab["sort_column"] = Json{tab.sort_column};
                 encoded_tab["sort_ascending"] = Json{tab.sort_ascending};
+                if (tab.columns.empty()) encoded_tab.erase("columns");
+                else encoded_tab["columns"] = Json{tab.columns};
                 tabs.push_back(Json{std::move(encoded_tab)});
             }
             encoded_pane["tabs"] = Json{std::move(tabs)};
@@ -625,6 +627,9 @@ std::optional<ApplicationState> decode(const Json& root) {
                 if (!decoded_location) return std::nullopt;
                 pane.tabs.push_back({*tab_id, *decoded_location,
                                      *view_mode, *sort_column, *ascending});
+                // Optional and additive: absent in older sessions.
+                if (const auto* columns = as<std::string>(*tab_object, "columns"))
+                    pane.tabs.back().columns = *columns;
             }
             group.panes.push_back(std::move(pane));
         }

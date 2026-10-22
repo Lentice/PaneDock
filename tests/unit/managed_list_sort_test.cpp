@@ -1,4 +1,5 @@
 #include "unit/test_pane_host.h"
+#include "core/columns.h"
 #include "unit/test_util.h"
 #include "managed_list/icon_source_test.h"
 
@@ -250,6 +251,47 @@ void names_sort_naturally_and_descending_puts_folders_last() {
         EXPECT(reversed[3].name == L"dir10");
         EXPECT(reversed[4].name == L"dir2");
     }
+}
+
+void columns_can_be_hidden_and_keep_clicks_and_cell_text_correct() {
+    Fixture f;
+    f.deliver(managed_list::Phase::complete, {{L"a.txt", 5, false, 10}, {L"b.txt", 9, false, 20}});
+    const HWND header = ListView_GetHeader(f.list);
+    EXPECT(Header_GetItemCount(header) == 6 && f.pane.list_column_ids().size() == 6);
+    const auto text = [&](int column) {
+        wchar_t buffer[64]{};
+        LVITEMW item{};
+        item.iSubItem = column;
+        item.pszText = buffer;
+        item.cchTextMax = 64;
+        SendMessageW(f.list, LVM_GETITEMTEXTW, 0, reinterpret_cast<LPARAM>(&item));
+        return std::wstring(buffer);
+    };
+    EXPECT(text(0) == L"a.txt" && text(1) == L"1 KB");
+    f.pane.toggle_list_column("size");
+    EXPECT(Header_GetItemCount(header) == 5 && !core::column_visible(core::parse_columns(f.state.tabs.front().columns), "size"));
+    // Cell data follows the header position: position 1 is Date Modified now, not Size.
+    EXPECT(text(1) != L"1 KB" && !text(1).empty());
+    // Header position 3 is now Duration: a click there must sort by Duration, not Type.
+    f.click_column(3);
+    EXPECT(f.state.tabs.front().sort_column == "System.Media.Duration");
+    f.click_column(2); // Type sits at position 2 now
+    EXPECT(f.state.tabs.front().sort_column == "System.ItemTypeText");
+    // Dragging a header reorders; the layout is stored in display order, Name stays first.
+    std::array<int, 5> order{0, 2, 1, 3, 4}; // Type before Date Modified
+    ListView_SetColumnOrderArray(f.list, 5, order.data());
+    f.pane.capture_list_columns();
+    auto layout = core::parse_columns(f.state.tabs.front().columns);
+    EXPECT(layout.size() == 5 && layout[0].id == "name" && layout[1].id == "type" && layout[2].id == "date");
+    order = {1, 0, 2, 3, 4}; // attempt to move Name away from the first position
+    ListView_SetColumnOrderArray(f.list, 5, order.data());
+    f.pane.capture_list_columns();
+    layout = core::parse_columns(f.state.tabs.front().columns);
+    EXPECT(layout[0].id == "name");
+    // Showing a column again appends it with its default width.
+    f.pane.toggle_list_column("size");
+    layout = core::parse_columns(f.state.tabs.front().columns);
+    EXPECT(layout.size() == 6 && layout.back().id == "size" && Header_GetItemCount(header) == 6);
 }
 
 void out_of_order_batches_and_sort_changes_preserve_item_and_viewport_identity() {
@@ -770,6 +812,7 @@ int main() {
     quick_repeat_on_a_column_title_still_flips_the_sort();
     unicode_name_order_and_unknown_sort_fallback_are_stable();
     names_sort_naturally_and_descending_puts_folders_last();
+    columns_can_be_hidden_and_keep_clicks_and_cell_text_correct();
     out_of_order_batches_and_sort_changes_preserve_item_and_viewport_identity();
     expensive_sort_commits_once_and_preserves_interaction();
     property_demand_is_bounded_and_stale_results_are_rejected();

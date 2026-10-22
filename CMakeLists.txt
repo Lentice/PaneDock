@@ -112,6 +112,7 @@ add_library(panedock_pane STATIC
     src/app_shell/pane_context_menu.cpp
     src/app_shell/pane_list_drag_drop.cpp
     src/app_shell/pane_list_rename.cpp
+    src/app_shell/pane_list_columns.cpp
     src/app_shell/pane_managed_list.cpp
     src/app_shell/pane_list_icons.cpp
     src/app_shell/pane_list_properties.cpp

@@ -1,6 +1,7 @@
 #include "app_shell/pane.h"
 #include "managed_list/capacity_text.h"
 #include "managed_list/size_text.h"
+#include <windowsx.h>
 #include <algorithm>
 
 namespace panedock::app_shell {
@@ -397,8 +398,17 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
     auto* pane = reinterpret_cast<Pane*>(data);
     // The common control can consume context requests before DefWindowProc
     // forwards them. Route explicitly through the Pane's host re-entry gate.
-    if (message == WM_CONTEXTMENU)
+    if (message == WM_CONTEXTMENU) {
+        // A right click on the header chooses the columns, as in Explorer.
+        if (reinterpret_cast<HWND>(wp) == ListView_GetHeader(window) && IsWindow(window)) {
+            POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            if (lp == -1) { RECT rect{}; GetWindowRect(window, &rect); point = {rect.left, rect.top}; }
+            pane->show_list_column_menu(point);
+            return 0;
+        }
         return SendMessageW(pane->window(), message, wp, lp);
+    }
+    if (message == kColumnsChangedMessage) { pane->capture_list_columns(); return 0; }
     if ((message == WM_KEYUP && wp == VK_APPS) ||
         (message == WM_KEYDOWN && wp == VK_F10)) {
         const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -444,8 +454,13 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
     if (pane->list_window_ != window || !IsWindow(window)) return result;
     switch (message) {
     case WM_NOTIFY:
-        if (lp && reinterpret_cast<NMHDR*>(lp)->hwndFrom == ListView_GetHeader(window))
+        if (lp && reinterpret_cast<NMHDR*>(lp)->hwndFrom == ListView_GetHeader(window)) {
             pane->queue_list_icon_viewport();
+            const UINT code = reinterpret_cast<NMHDR*>(lp)->code;
+            // Resize, drag or auto-size finished: read the layout once the header settled.
+            if (code == HDN_ENDTRACKW || code == HDN_ENDDRAG || code == HDN_DIVIDERDBLCLICKW)
+                PostMessageW(window, kColumnsChangedMessage, 0, 0);
+        }
         break;
     case WM_VSCROLL: case WM_HSCROLL: case WM_MOUSEWHEEL: case WM_KEYDOWN:
     case WM_SIZE: case WM_SHOWWINDOW: case LVM_SCROLL: case LVM_ENSUREVISIBLE:
@@ -469,6 +484,7 @@ void Pane::apply_managed_list_view_mode() noexcept {
     ListGeometryScope geometry(*this);
     const auto* tab = active_tab();
     if (!tab) return;
+    apply_list_columns(); // another tab may have its own column layout
     const auto mode = effective_list_view_selection(tab);
     if (mode != list_view_selection_) {
         cancel_list_icons();
