@@ -647,6 +647,15 @@ void Pane::refresh_navigation_chrome() {
         // List navigation already owns the canonical namespace identity.
         // Address repaint must not synchronously query a Shell provider.
         text = parsing_name;
+        if (parsing_name.starts_with(L"::")) {
+            // Show the real path when the namespace item has one, else its
+            // (memoized) display name; a bare ::{GUID} is not meant for people.
+            const auto& shown = list_.phase != managed_list::Phase::idle
+                ? list_.request.location : active_tab()->location;
+            std::wstring friendly = shown.fallback_path;
+            if (friendly.empty()) friendly = pane_host()->tab_display_text(parsing_name);
+            if (!friendly.empty()) text = std::move(friendly);
+        }
         auto* current = pane_state();
         if (!active() || current != bound || active_tab() == nullptr ||
             (list_.phase != managed_list::Phase::idle

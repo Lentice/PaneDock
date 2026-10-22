@@ -298,6 +298,18 @@ void enumerate_shell_namespace(const std::shared_ptr<State>& state, std::uint64_
         result = provider_call(state, serial, [&] { return folder->GetAttributesOf(1, &relative, &attributes); });
         if (FAILED(result)) { finish(Phase::error, provider_error(result)); return; }
         row.directory = (attributes & SFGAO_FOLDER) != 0;
+        // A filesystem child's PIDL already carries its size and write time, so
+        // this reads no provider; virtual items without find data stay at 0.
+        WIN32_FIND_DATAW find{};
+        if (SUCCEEDED(provider_call(state, serial, [&] {
+                return SHGetDataFromIDListW(folder.Get(), relative, SHGDFIL_FINDDATA,
+                                            &find, sizeof(find));
+            }))) {
+            const auto found = basic_row(find, {});
+            row.bytes = found.bytes;
+            row.date_modified = found.date_modified;
+            row.cloud = found.cloud;
+        }
         row.identity = {child_location.parsing_name, true};
         child_location.navigation_parent = parent_identity(*metadata.resolved_location);
         row.child_location = std::move(child_location);

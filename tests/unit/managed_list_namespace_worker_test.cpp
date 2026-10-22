@@ -1,6 +1,8 @@
 #include "managed_list/list_worker_test.h"
 #include "unit/test_util.h"
 #include <array>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 
 using namespace panedock;
@@ -179,6 +181,35 @@ void cancellation_and_capacity() {
     EXPECT(take(*source).phase == ml::Phase::complete);
     source.reset(); EXPECT(ml::testing::wait_for_workers(10000));
 }
+// A namespace enumeration of a real folder must carry size and write time from
+// the child PIDL's find data instead of leaving every file at zero.
+void real_namespace_size() {
+    const auto dir = std::filesystem::temp_directory_path() / L"panedock_pd_ns_size";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    { std::ofstream(dir / L"five.txt", std::ios::binary) << "12345"; }
+    auto source = ml::make_local_source();
+    EXPECT(source != nullptr);
+    auto namespace_request = request();
+    namespace_request.location = core::ShellLocation{dir.wstring(), {}, dir.wstring()};
+    namespace_request.location.namespace_location = true;
+    EXPECT(source->submit(namespace_request));
+    const ml::Row* found = nullptr;
+    std::vector<ml::Row> rows;
+    for (;;) {
+        auto batch = take(*source);
+        for (auto& row : batch.rows) rows.push_back(std::move(row));
+        if (batch.phase != ml::Phase::loading) break;
+    }
+    for (const auto& row : rows) if (row.name.starts_with(L"five")) found = &row;
+    EXPECT(found != nullptr);
+    if (found) {
+        EXPECT(found->bytes == 5);
+        EXPECT(found->date_modified != 0);
+    }
+    source.reset(); EXPECT(ml::testing::wait_for_workers(10000));
+    std::filesystem::remove_all(dir);
+}
 }
 int main() {
     EXPECT(ml::uses_shell_namespace(core::ShellLocation{L"shell:Desktop", {}, {}}));
@@ -188,7 +219,7 @@ int main() {
     EXPECT(!ml::uses_shell_namespace(physical_desktop));
     physical_desktop.namespace_location = true;
     EXPECT(ml::uses_shell_namespace(physical_desktop));
-    owned_metadata(); bounds(); cancellation_and_capacity();
+    owned_metadata(); bounds(); cancellation_and_capacity(); real_namespace_size();
     EXPECT(ml::testing::counts().workers == 0);
     std::cout << "owned values only; four shared slots; two queued batches; "
               << "2 MiB per batch; controlled teardown only; real Shell UNVERIFIED\n";
