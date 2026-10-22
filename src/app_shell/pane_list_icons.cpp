@@ -184,8 +184,7 @@ void Pane::request_list_images(std::vector<std::size_t> rows, UINT dpi) noexcept
         !content_request_is_current(list_.request.binding)) { cancel_list_icons(); return; }
     ListGeometryScope geometry(*this);
     const auto* tab = active_tab();
-    const auto mode = shell_core::parse_view_mode(tab ? tab->view_mode : "")
-        .value_or(shell_core::ViewModeSelection{FVM_DETAILS, -1});
+    const auto mode = effective_list_view_selection(tab);
     const int logical = mode.mode == FVM_ICON ? mode.image_size :
         (mode.mode == FVM_TILE ? 48 : mode.mode == FVM_CONTENT ? 64 : 16);
     const int size = std::clamp(MulDiv(std::clamp(logical, 16, 512), static_cast<int>(dpi), 96),
@@ -402,14 +401,17 @@ bool Pane::this_pc_cards() const noexcept {
     return list_.phase != managed_list::Phase::idle &&
         managed_list::is_this_pc_location(list_.resolved_location.value_or(list_.request.location));
 }
+shell_core::ViewModeSelection Pane::effective_list_view_selection(const core::TabState* tab) const noexcept {
+    if (this_pc_cards()) return {FVM_TILE, -1};
+    return shell_core::parse_view_mode(tab ? tab->view_mode : "")
+        .value_or(shell_core::ViewModeSelection{FVM_DETAILS, -1});
+}
 void Pane::apply_managed_list_view_mode() noexcept {
     if (!active()) return;
     ListGeometryScope geometry(*this);
     const auto* tab = active_tab();
     if (!tab) return;
-    const auto mode = this_pc_cards() ? shell_core::ViewModeSelection{FVM_TILE, -1} :
-        shell_core::parse_view_mode(tab->view_mode)
-            .value_or(shell_core::ViewModeSelection{FVM_DETAILS, -1});
+    const auto mode = effective_list_view_selection(tab);
     if (mode != list_view_selection_) {
         cancel_list_icons();
         if (list_window_) {
