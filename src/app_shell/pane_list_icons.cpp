@@ -349,6 +349,11 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
             return SendMessageW(pane->window(), WM_CONTEXTMENU,
                                 reinterpret_cast<WPARAM>(window), MAKELPARAM(-1, -1));
     }
+    // The list is LVS_OWNERDATA: a UI Automation/MSAA client that walks it makes
+    // the UI thread fetch every row through LVN_GETDISPINFO (about 4 s of
+    // blocked UI per sort or selection change at 1443 rows). The list exposes no
+    // accessibility provider by product decision; see PD-247.
+    if (message == WM_GETOBJECT) return 0;
     if (message == kRestoreListFocusMessage) {
         pane->restore_posted_list_focus();
         return 0;

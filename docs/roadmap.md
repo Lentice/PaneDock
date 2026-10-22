@@ -80,7 +80,7 @@ The existing application still hosts Shell views; planning these tickets does no
 
 - Align product rules and terminology, then expand Pane content entry points while retaining the current default.
 - Deliver a local batch-loaded list, tab/Group restore, bounded slow-location work, selection, sorting, icons, thumbnails and notifications.
-- Preserve virtual Shell locations, OneDrive, Shell file operations, inline rename, OLE drag/drop, accessibility and mixed-DPI behavior.
+- Preserve virtual Shell locations, OneDrive, Shell file operations, inline rename, OLE drag/drop and mixed-DPI behavior. The list exposes no accessibility provider (PD-247 override).
 - Keep native context menu behavior; only reconnect current item/background identities as required by replacing the view. Menu redesign, acceleration and process isolation are excluded.
 - Switch the default only after compatibility and measured resource/responsiveness gates pass, then remove the unused IExplorerBrowser path.
 

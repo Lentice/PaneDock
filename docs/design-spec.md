@@ -117,7 +117,7 @@ pane 之間的分隔線可拖曳,比例記錄於該 Group。
 
 ### 4.8 原生行為
 
-在 managed-list path，PaneDock 負責列繪製、選取／多選、焦點、排序後的選取與可見 anchor、鍵盤導覽及 accessibility exposure。Shell 負責 Shell location/item identity、原生檔案操作與原生 context menu。右鍵選單的目標解析與相容性接線限於維持現有 Windows 選單及 shell-extension 行為；本規格不授權 custom menu、重排、過濾、timeout 或隔離策略。managed list 仍須支援既有拖放、剪貼簿與 rename/delete/copy/move 行為，透過既有 Shell `IDataObject`／`IFileOperation` 邊界完成。
+在 managed-list path，PaneDock 負責列繪製、選取／多選、焦點、排序後的選取與可見 anchor、鍵盤導覽。列表不提供 accessibility provider（[PD-247](tickets/PD-247-managed-list-no-accessibility-provider.md) 覆寫）。Shell 負責 Shell location/item identity、原生檔案操作與原生 context menu。右鍵選單的目標解析與相容性接線限於維持現有 Windows 選單及 shell-extension 行為；本規格不授權 custom menu、重排、過濾、timeout 或隔離策略。managed list 仍須支援既有拖放、剪貼簿與 rename/delete/copy/move 行為，透過既有 Shell `IDataObject`／`IFileOperation` 邊界完成。
 
 在 managed-list 尚未成為預設時，現行 `IExplorerBrowser` 仍負責所有 pane 內互動。兩條路徑都必須保留本節下方的 folder background context menu affordance；其中既有選單內容與外觀不在本次遷移中重新設計。
 
@@ -171,7 +171,7 @@ pane 分隔線可拖曳,比例以 0.0–1.0 的相對值儲存於該 Group,視�
 
 ### FR-006 原生 Shell 檔案檢視
 
-PaneDock-managed list 顯示 Shell namespace item，漸進更新可操作的列，並提供目前可用的排序、selection、鍵盤及 accessibility 行為；Shell identity 不使用顯示名稱或持久化 PIDL。原生圖示／縮圖、標準 Shell context menu 與已安裝 shell extension、剪貼簿、拖放及 file operation 必須保持可用。慢 location 或 metadata enrichment 不得阻塞 list input。直到 PD-241 gate 通過前，這仍是目標契約，`IExplorerBrowser` 是現行預設實作。
+PaneDock-managed list 顯示 Shell namespace item，漸進更新可操作的列，並提供目前可用的排序、selection 及鍵盤行為（不提供 accessibility provider，見 PD-247）；Shell identity 不使用顯示名稱或持久化 PIDL。原生圖示／縮圖、標準 Shell context menu 與已安裝 shell extension、剪貼簿、拖放及 file operation 必須保持可用。慢 location 或 metadata enrichment 不得阻塞 list input。直到 PD-241 gate 通過前，這仍是目標契約，`IExplorerBrowser` 是現行預設實作。
 
 ### FR-007 檔案操作
 
