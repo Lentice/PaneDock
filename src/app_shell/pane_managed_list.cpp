@@ -108,7 +108,8 @@ LRESULT CALLBACK header_double_click_proc(HWND header, UINT message, WPARAM wp, 
 // has no proxy, so those clients see one plain window (PD-250).
 bool register_managed_list_class() {
     static const bool registered = [] {
-        WNDCLASSEXW cls{sizeof(cls)};
+        WNDCLASSEXW cls{};
+        cls.cbSize = sizeof(cls);
         if (!GetClassInfoExW(nullptr, WC_LISTVIEWW, &cls)) return false;
         cls.lpszClassName = kManagedListClassName;
         cls.hInstance = GetModuleHandleW(nullptr);

@@ -52,10 +52,10 @@ struct TabState final {
     std::string view_mode;
     std::string sort_column;
     bool sort_ascending{true};
-    std::vector<ShellLocation> history;
+    std::vector<ShellLocation> history{};
     std::size_t history_index{0};
     // Details columns as "id:width,..." in display order; empty = defaults (core/columns.h).
-    std::string columns;
+    std::string columns{};
 
     bool operator==(const TabState&) const = default;
 };

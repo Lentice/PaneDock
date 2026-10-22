@@ -64,7 +64,7 @@ std::optional<std::uint32_t> completed_effect(const PasteResult& result) noexcep
 struct RenameResult final {
     HRESULT result{E_UNEXPECTED};
     bool aborted{};
-    std::wstring parsing_name, leaf_name, display_name;
+    std::wstring parsing_name{}, leaf_name{}, display_name{};
 };
 RenameResult rename_item(HWND owner, std::wstring_view item,
                          std::wstring_view name, const Callbacks& callbacks) noexcept;
