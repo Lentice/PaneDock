@@ -312,6 +312,23 @@
 
 依同日 sequencing-only waiver 實作 managed-list-only，移除 legacy host 及 view-only targets，保留 Pane HWND／list realization 與 Shell 原生 menu／namespace／operations／OLE／drag-drop。Release build 在 ticket 變更及測試 fixture 更新後通過；相關 27 項 CTest 均通過（26 項於一次聚焦執行通過，`panedock_managed_list` 補上 Pane parent HWND 後重跑通過）。該測試在目前身分無法改寫臨時目錄 DACL 時，明確跳過真實 ACL-denial 分支；受控 source 的錯誤 seam 有測試。完整 CTest 與實機驗收未執行，resource lifetime／binary gate 仍未完成。詳見 [PD-242 交接區](tickets/PD-242-managed-list-remove-shell-view.md#交接區)；總覽維持 `in_progress`。
 
+### PD-242／PD-226 複驗與狀態核對（2026-10-21）
+
+PD-242 再完成 source／binary inventory、19 項相關 CTest，及 Claude 的隔離 desktop check（四 pane 滑鼠切換、有限 session restore、本機檔案 Properties）；第一項 acceptance 勾選，但完整 build／CTest、operations、resource lifetime 與 provider 驗收仍缺，總覽維持 `in_progress`。PD-226 對使用者授權 UNC 路徑 `\\vianextfs06\Tmp\Lentice\test` 的單次 read-only 導覽在首個 7ms 輪詢已完成，未觀察到 pending；不滿足慢網路 UX acceptance，總覽維持 `in_progress`。完整證據分別見 [PD-242](tickets/PD-242-managed-list-remove-shell-view.md#pd-242-隔離桌面流程複驗2026-10-21) 與 [PD-226](tickets/PD-226-managed-list-slow-location-capacity.md#pd-226-授權-unc-路徑單次實測2026-10-21)。
+
+### PD-237／PD-238 桌面複驗與狀態核對（2026-10-21）
+
+PD-237 對三個新建本機檔案各實際 rename 一次，並驗證 Escape／地址列 focus loss 取消；焦點與導覽收斂通過此單一 session 情境，conflict／provider／shortcut precedence 等驗收仍缺，總覽維持 `in_progress`。PD-238 後續以 token 證據確認正常模式下 Explorer 與 PaneDock 同為 Medium integrity，Explorer 對空白 pane list 的 Ctrl-copy 與無修飾鍵預設 move 均成功；先前未記錄 PaneDock integrity 的失敗可能與 UIPI 不同權限有關，但不能判定為已證實原因，且其他 drag/drop 矩陣未完成，總覽維持 `in_progress`。證據見 [PD-237](tickets/PD-237-managed-list-inline-rename.md#f2-rename-repeatability-checkpoint2026-10-21) 與 [PD-238](tickets/PD-238-managed-list-drag-drop.md#same-integrity-explorer-drop-validation2026-10-21)。
+
+### PD-239 原生選單互動狀態（2026-10-21）
+
+新增的 Shift+F10 本機 Properties 及空白處背景選單觀測成功，檔案未變；選單期間首次 pane-tab click 只 dismiss menu，第二次才切 pane。Footer、canonical verb 與 modal-pump stale-target 邊界仍缺，故 PD-239 總覽狀態維持 `in_progress`。詳細證據見 [PD-239](tickets/PD-239-managed-list-native-menu-compatibility.md#隔離原生選單互動複驗2026-10-21部分驗證)。
+Shift+F10／Menu key、footer、row／background native menu 與 Properties target 已有本機實測；選單期間受控 selection／Group 變更維持原始 Properties target，關閉流程正常。新增同一 marker 的 Explorer classic menu 對照及 first/repeat 延遲樣本，看到 PaneDock 與 Explorer 共用多個 Shell extension entries，也記錄 IObit／Rename 與 Explorer-only background commands 的差異。其他 provider/extension、modern menu 完整性與實際輸入下 stale-target 邊界仍待確認，PD-239 總覽維持 `in_progress`。證據見 [PD-239](tickets/PD-239-managed-list-native-menu-compatibility.md#same-file-shell-menu-comparison-and-latency-sample2026-10-21)。
+
+### PD-237 完成交付（2026-10-21）
+
+受控 `panedock_managed_list_rename` 驗證拒絕存取／衝突／missing、shortcut routing 及 identity/state behavior；Claude 以真實 disposable files 驗證四次成功 rename（其中同一輪三次）、焦點與方向鍵收斂、Escape／focus-loss cancel、Shell conflict 不覆寫、edit 中 external delete 不改到其他項目。三項 acceptance 已勾選，總覽狀態改為 `done`；實機 ACL denial 與非必要 provider 矩陣不是本票驗收條件。詳細證據見 [PD-237](tickets/PD-237-managed-list-inline-rename.md#conflict-與-edit-中-external-removal-複驗2026-10-21)。
+
 ### PD-197 範圍複驗 checkpoint（2026-10-21）
 
 指定的四支 Pane 成員、完整 `Pane::navigation_complete` 與兩個過渡 hook 的清除均已存在；本次沒有剩餘可在原 scope 內完成的程式搬移。完整逐項對照、六處 `pane_index` 命中與驗證命令見 [PD-197 本次複驗](tickets/PD-197-pane-command-and-chrome-consolidation.md#範圍複驗2026-10-21)。2026-09-05 全檔盤點與模組契約更新現存於 [ticket history](ticket-history.md#2026-09-05--pd-197-全檔複驗指定整併完成剩餘局部行為開-pd-198)，tab-strip 候選的刪除線仍在本頁。

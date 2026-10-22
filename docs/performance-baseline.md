@@ -325,3 +325,76 @@ Live resize latency/visual continuity, real mixed-DPI transitions, accessibility
 bounds and sustained GDI/handle/private-byte behavior remain **Not measured**.
 Real-machine/UI verification was explicitly deferred; no GUI was launched and no
 PD-241 performance or compatibility PASS is inferred.
+
+## PD-242 short idle-loop diagnostic repeat (2026-10-21; not the release gate)
+
+On Windows 11 Pro 10.0.26300, a fresh isolated Release build with four visible
+This PC panes and no input used 89% of one logical core over a 12-second sample.
+Temporary message counting showed about 4,600 `WM_APP+229` viewport refreshes per
+second on the UI thread; enumeration and icon workers were waiting. The loop came
+from viewport restoration sending a zero-distance list scroll, which the list
+subclass treated as a new viewport change. After skipping unchanged viewport
+restores and zero-distance scrolls, a second 12-second visible-idle sample used
+0.39% of one core and the process remained responsive. Both runs used isolated
+`LOCALAPPDATA` and ended through normal `WM_CLOSE`.
+
+This short diagnostic confirms the identified feedback loop is removed in the
+tested build. A later 601-second CPU/I/O revalidation is recorded below. The
+managed-list release target remains **Not measured**: memory trend, wakeups/power,
+provider-stall shutdown and the other compatibility checks were not collected;
+see [PD-242](tickets/PD-242-managed-list-remove-shell-view.md#pd-242-idle-viewport-feedback-follow-up2026-10-21).
+
+## PD-242 10-minute idle revalidation (2026-10-21; not the release gate)
+
+Claude measured the fixed isolated Release binary
+`build\manual-test\pd242trace\final2\PaneDock-fixed.exe` for 601 seconds in a
+visible four-pane window with no input and a fresh isolated `LOCALAPPDATA`.
+There were 60 samples at 10-second intervals. Process CPU time increased by
+0.0625 seconds: 0.0005% averaged across 20 logical processors, with a maximum
+10-second sample of 0.008%. Process I/O increased by 3 reads / 1,318 bytes and
+1 write / 1,470 bytes; all activity occurred between 50 and 60 seconds, with no
+further increments during the rest of the sample. The verified main window was
+closed using `CloseMainWindow()`; process exit code was 0 and no PaneDock process
+remained. Raw `samples.csv` and `summary.txt` are in the ignored directory
+`build\manual-test\pd242idle-20261021-104341`.
+
+This is one post-fix sample, with no same-condition pre-fix control. It does not
+measure memory trend, wakeups/power or shutdown against a stuck provider, and is
+not evidence that PD-241's managed-list release gate passed. The release target
+remains **Not measured**.
+
+## PD-209 unreachable UNC pending-switch sample (2026-10-21)
+
+An isolated Release `PaneDock.exe` run used a two-Group, four-pane session:
+Group A had four local fixture folders; Group B had three local folders and one
+`\\192.0.2.1\PD226` pane. On Windows 11 Pro 10.0.26300 x64 (Intel Core
+i7-12700K, 63.7 GB RAM), one generated mouse click switched A→B in 15.8231 ms,
+including 6.1204 ms for navigation submission. At the first observation 177 ms
+after the click, the UNC pane showed `0 items - Loading...`; it remained pending
+for the 3.4-second observation window. `SendMessageTimeout(WM_NULL)` reported
+0 ms and `hung=False` at each observed transition. Switching back to A took
+14.4854 ms / 6.057 ms and remained responsive. The app closed normally in 145 ms,
+with no PaneDock process left; stderr was empty and the formal session metadata
+was unchanged.
+
+This confirms one responsive group transition while a network enumeration was
+pending. It does not measure when the provider eventually errors or completes,
+prove that this TEST-NET-1 target is unreachable at every layer, or exercise
+capacity exhaustion. Raw output and screenshots are in ignored
+`build\manual-test\pd209u\run.out.txt` and `run-261021153356`; the binary SHA-256
+is `E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586`.
+
+## PD-239 native context-menu latency comparison (2026-10-21; exploratory)
+
+One normal-mode Release build (`E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586`), one isolated local 33-byte `.txt`, and equal Medium-integrity PaneDock / File Explorer processes. A high-resolution stopwatch measured input release or F10 key-up to first visible classic `#32768` menu. Order was PaneDock → Explorer → PaneDock → Explorer; each menu closed with Escape. These are one first-per-process and one repeated sample per app, not a controlled cold-cache benchmark:
+
+| App / sample | Latency | Menu items | Input |
+|---|---:|---:|---|
+| PaneDock, first | 1,659.0 ms | 25 | Selected-row real right-click |
+| Explorer, first | 1,811.5 ms | 32 | Selected-row Shift+F10 classic Shell menu |
+| PaneDock, repeated | 544.8 ms | 26 | Selected-row real right-click |
+| Explorer, repeated | 353.9 ms | 33 | Selected-row Shift+F10 classic Shell menu |
+
+Both first samples were in the same approximate 1.7–1.8 s range and both repeated samples were below 0.6 s. The same installed extensions (including 7-Zip, TortoiseGit, Notepad++ and klogg) appeared in both menus. This is consistent with shared Shell/extension enumeration cost, but four single-environment samples cannot establish attribution or a general performance comparison. PaneDock's warm row menu omitted Explorer's `IObit Unlocker` and `Rename` entries; Explorer's background classic menu also included view/sort/group/refresh and folder-view commands absent from PaneDock's managed-list menu. These differences remain compatibility observations, not an authorization for a custom menu.
+
+Raw timing/menu output and screenshots: ignored `build\manual-test\pd239-latency\run-261021165715`; background menu comparison: `build\manual-test\pd239-compare\run-261021164904`. PaneDock was launched without `--diagnostic`; its isolated session and test file were unchanged, stderr was empty, and the app exited normally with no remaining process. The release gate has no context-menu latency threshold; no managed-list or Windows Shell performance PASS is inferred.

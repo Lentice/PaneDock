@@ -155,3 +155,13 @@ Claude 使用 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49
 只關閉本次新開的 Explorer 視窗；PaneDock 主視窗經 `WM_CLOSE` 正常結束，結束後沒有 PaneDock process。正式 session 未用，未編輯 source／ticket docs。原始輸出、腳本與截圖保留於 ignored `build\manual-test\pd238-external-out\`，有效樣本為 `run-261021162712`；前一輪在拖放前發現 harness 選錯 Explorer 子視窗，已安全停止且沒有檔案操作，不作產品行為結論。
 
 此樣本只驗證同 volume、單檔、PaneDock source 到 Explorer 空白資料夾的 Ctrl-copy；Ctrl 在 drag 開始後才按。沒有驗證 Explorer 到 PaneDock、跨 volume、其他 app、拖到資料夾項目、取消、Group／tab hover、快速重入或 shutdown 交錯。
+
+## Same-integrity Explorer drop validation（2026-10-21）
+
+為排除先前由 High-integrity Claude terminal 操作、但未記錄 PaneDock token 的環境差異，改由一般權限 Explorer 開啟隔離 wrapper；啟動後直接查 token mandatory label，三次測試的 PaneDock 與新 Explorer 視窗均確認為 Medium（S-1-16-8192）。使用 Release build\PaneDock.exe，SHA-256 E630EAC2325DFBE6896BC05B49D41B72887D2E95E3F8C4605398320694E23586，單一 PaneDock process、絕對隔離 LOCALAPPDATA；測試資料與原始輸出位於 ignored build\manual-test\pd238-medium-in\run-261021163912、run-default-261021164130 與 run-normal-261021164432。
+
+兩次均以 Explorer UIA 確認唯一 marker 已選取、selection count 為 1；pane 0 顯示新建空資料夾，放置點的 WindowFromPoint 為該 pane 的 SysListView32。拖曳按下後 capture 從 Explorer DirectUIHWND 轉到 CLIPBRDWNDCLASS，release 前游標位於正確 pane list，且 Explorer source 與 PaneDock token 相同。
+
+第一次在 OLE drag 開始後按住 Ctrl：source 保留、destination 出現唯一檔案，兩邊 SHA-256 相同，PaneDock row 即時出現；由檔案狀態推論為 copy。第二次在 Diagnostic Mode 全程不按 Ctrl／Shift／Alt：source 變空、destination 出現唯一檔案，其 SHA-256 等於原始 source，PaneDock row 即時出現；由檔案狀態推論為同 volume 預設 move。第三次使用一般啟動模式（命令列無 diagnostic 參數、標題為 PaneDock），全程無修飾鍵拖放亦成功：source 變空、destination 檔案 SHA-256 等於原始 source，PaneDock row 即時出現。三次 PaneDock 都以 WM_CLOSE 正常退出，結束後 process count 為 0，stderr 為空；正式 LOCALAPPDATA、clipboard 與 tracked source 均未觸碰。
+
+因此，正常啟動且同等一般權限下，Explorer 對 PaneDock 空白列表區的同 volume 單檔 Ctrl-copy 與預設 move 均有成功樣本。這與 UIPI integrity mismatch 解釋先前失敗相符，但原失敗時沒有 PaneDock token 記錄，故原因未被直接證明，也不能判定使用者實際環境；未驗證其他來源程式、跨 volume、拖到資料夾 item、修飾鍵組合、取消／hover／重入及 provider／shutdown 交錯。PD-238 驗收與總覽仍為 in_progress，沒有因此宣告完成或修改產品程式。

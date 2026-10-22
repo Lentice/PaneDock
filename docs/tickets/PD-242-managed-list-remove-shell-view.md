@@ -46,7 +46,7 @@ PD-241 所有未勾選驗收條件、未驗證風險、失敗與既有自動化�
 
 ## Acceptance criteria
 
-- [ ] repo／binary 不再需要 IExplorerBrowser view lifetime 舊路徑，無 dangling direct host access。
+- [x] repo／binary 不再需要 IExplorerBrowser view lifetime 舊路徑，無 dangling direct host access。
 - [ ] 正常啟動、恢復、四 pane 切換、native menu／operations 與關閉通過；core 仍無 COM／HWND。
 - [ ] build／完整 CTest 與資源 lifetime 檢查通過，無未使用 target／runtime dependency；未作 destructive cleanup 或 session migration。
 
@@ -108,4 +108,44 @@ AGENTS.md 要求 idle 時 0% CPU；本次量測的視窗可見時 idle CPU 遠�
 
 `restore_viewport` 現在於錨點位置未變時直接返回，並略過零距離的水平／垂直 scroll。新增可見 ListView 測試 `visible_idle_viewport_stops_after_one_refresh`，完成圖示結果後派送 viewport 訊息並確認訊息佇列收斂。`managed_list_icons` focused test 通過；修正版隔離 Release binary 的 12 秒 CPU 樣本見 performance baseline。
 
-上述短樣本只確認已定位的 idle loop 不再出現，不代替 10 分鐘的 PD-241 idle CPU／disk／memory／power 門檻。完整 CTest、Claude 一般使用流程複驗、Shell／OneDrive／network 相容性、長期資源趨勢與 stuck-provider bounded shutdown 仍未驗證；acceptance 與 tracker 狀態維持原值。
+上述短樣本只確認已定位的 idle loop 不再出現，不代替完整的 PD-241 idle CPU／disk／memory／power 門檻。Claude 隨後以修正版隔離 Release binary 完成 601 秒可見閒置複驗，數字記於 [performance baseline](../performance-baseline.md#pd-242-10-minute-idle-revalidation-2026-10-21-not-the-release-gate)。完整 CTest、一般使用流程複驗、Shell／OneDrive／network 相容性、長期記憶體趨勢與 stuck-provider bounded shutdown 仍未驗證；acceptance 與 tracker 狀態維持原值。
+
+### PD-242 10-minute idle revalidation（2026-10-21；不是 release gate）
+
+Claude 使用 `build\manual-test\pd242trace\final2\PaneDock-fixed.exe`，新建隔離 `LOCALAPPDATA`，只啟動一個可見實例且全程無輸入。取樣共 601 秒、每 10 秒一次（60 個區間）；程序 CPU 累計增加 0.0625 秒，20 核心整機平均 0.0005%，單一區間最高 0.008%。讀 3 次／1,318 bytes、寫 1 次／1,470 bytes，全部集中在第 50–60 秒，其後沒有增加。PID 39536 的主視窗 HWND 8983858 經 `CloseMainWindow()` 正常關閉、結束碼 0，結束後 PaneDock 程序數為 0。原始 `samples.csv` 與 `summary.txt` 位於 ignored `build\manual-test\pd242idle-20261021-104341`。
+
+這次沒有修正前的同條件基準，也沒有量記憶體長期趨勢、喚醒／power 或 provider 卡住時的 bounded shutdown，因此只支持此修正版樣本閒置安靜；不證明前後改善幅度，亦不通過 PD-241 或本票整體 acceptance。Ticket 狀態維持 `in_progress`。
+
+### PD-242 程式碼盤點與聚焦測試（2026-10-21）
+
+`src`、`tests` 與 `CMakeLists.txt` 搜尋未發現 `IExplorerBrowser`／`IShellView` 型別或舊 view 初始化、事件、Destroy、retry 實作；`explorer_host` 名稱目前只用於保留的原生 Shell context-menu presenter。Release `build/PaneDock.exe` 的 `llvm-objdump -p` 匯入表沒有 ExplorerBrowser view API，仍有 `SHELL32.dll` 等必要 Shell 能力。第一項 acceptance 已由此 repo／binary 盤點滿足。
+
+以下 PD-242 直接相關測試通過（19/19，13.31 秒）：managed-list、cache、restore、file commands、context menu、namespace、namespace worker、capacity、Pane、deferred messages、Shell re-entry guard、Shell view-mode settings、file-operation effect、shutdown state、Shell re-entry gate、single-threaded、Shell core boundary、隔離 launch smoke、無 compiler runtime DLL。命令：
+
+```powershell
+ctest --test-dir build --output-on-failure -R "^panedock_(managed_list|managed_list_cache|managed_list_restore|managed_list_file_commands|managed_list_context_menu|managed_list_namespace|managed_list_namespace_worker|managed_list_capacity|pane|deferred_messages|shell_reentry_guard|shell_core_view_mode|file_operation_effect|shutdown_state|shell_reentry_gate|single_threaded|shell_core_boundary|launch_smoke|no_compiler_runtime_dlls)$"
+```
+
+`git diff --check` 通過。完整 `cmake --build build` 嘗試在 Ninja 啟動階段無輸出且沒有啟動 compiler child process，手動中止；因此本 checkpoint 不記錄 build 通過。沒有執行完整 CTest。一般 session 恢復、四 pane 切換、真實 native menu／operations、resource lifetime、Shell／network／OneDrive 與 provider 卡住時 bounded shutdown 尚未驗證；第 2、3 項 acceptance 未完成，ticket 與 tracker 維持 `in_progress`。
+
+### PD-242 隔離桌面流程複驗（2026-10-21）
+
+Claude 使用 Release `build\PaneDock.exe`（timestamp `2026-10-21 11:58:36 +08:00`，SHA-256 `9C585990E8DB931A84122C810F6D24FD35A02914EF88454A70F1933EDEC039AD`）以 PowerShell／Win32 自行操作，未使用 computer-use。每次 launch 前都確認 PaneDock process count 為 0；兩次啟動／還原流程依序完成，PID 7860、19100，各自正常關閉後 175ms／132ms 退出，process count 歸 0。使用獨立 `LOCALAPPDATA`：
+
+`build\manual-test\pd242w\run-20261021-142614\la`
+
+主視窗標題為 `PaneDock — Diagnostic Mode`，觀察到 Four 2x2 layout 的 4 個 Pane windows。Win32 命中各 pane tab pill 後，以 active-pill 顏色及 foreground/focus window 狀態確認 6 次切換皆到預期 pane。Pane 3 導覽到隔離 marker 資料夾後正常關閉；同一隔離 `LOCALAPPDATA` 第二次啟動後仍有 4 panes、active pane 2、pane 3 marker address 相同，session restore 此範圍通過。證據與截圖在 ignored `build\manual-test\pd242w\run2.out.txt`、`run-20261021-142614\`；較早的第一次腳本錯誤輸出留在 `run.out.txt`，重跑結果才作為通過證據。
+
+另外以第三個獨立 `LOCALAPPDATA` 開啟唯一新建的本機 `.txt` 測試檔。原生 Shell 選單顯示同 PID `#32768` 視窗、19 個項目；只叫用「內容(&R)」，新 `#32770` Properties 視窗的檔名與位置欄位吻合測試檔。SHA-256 `587386AE33A5FAD5E01511764CEC96A79F0C835425FA26C3056B0F64928DB572` 前後相同；只關閉新 Properties dialog 與 PaneDock，約 145ms 正常退出且無殘留 process。僅手動刪除該次新建的 `props-20261021-142637\data`；其他 log、截圖及隔離 session data 保留。詳細證據在 ignored `build\manual-test\pd242w\props.out.txt` 與 `props-20261021-142637\`。
+
+此複驗支持一般隔離啟動／關閉、4-pane 滑鼠切換、有限 session restore 與單一本機檔案 Properties menu；未測 keyboard／Group 切換、其他 layout／多 Group／tab、完整 session 欄位、一般檔案操作、Shell namespace／OneDrive／network、效能與 resource lifetime 或 provider 卡住時 shutdown。active pane 證據取自 screenshot 顏色，不是 app 內部狀態；Properties 在獨立第三次 launch 執行，並非 restore session 中。Acceptance 第 2 項因一般 operations 與上述流程仍缺而未勾選；第 3 項仍缺成功 build、完整 CTest 與 resource lifetime。PD-242 及 tracker 狀態維持 `in_progress`。
+
+### 可見 idle CPU、session 恢復與完整 CTest（2026-10-21）
+
+Windows 11 Pro 10.0.26300；`build\PaneDock.exe`（Release，17:36 建置，含 `918bcb8` viewport 回授修正）；每次啟動前 PaneDock 行程數為 0，單一實例，絕對路徑隔離 `LOCALAPPDATA`，未移動視窗、無滑鼠／鍵盤輸入，皆以 `CloseMainWindow` 正常退出。
+
+- 完整 CTest **52/52 通過**。先前 3 項失敗為過期測試或檢查字串：`src/core/model.h` 註解含 PIDL 觸發 boundary 檢查；cloud 測試的 request 缺 location 被 `valid_shell_location` 擋下；High 權限下 deny-ACL 目錄仍可列舉，真實拒絕分支不可觀測（測試改為跳過）。產品邏輯未改。
+- 可見 4-pane idle（8 秒後起算 3×20 秒）：CPU 0.08%／0.00%／0.00%，working set 約 43 MB，threads 21→15、handles 859→842。先前約 87% 單核的異常在修正後未重現。證據：`build\manual-test\idle-20261021-174350\idle.log`。
+- Session 恢復：種子 session 的四 pane 指向四個不同資料夾且 `clean_shutdown=false`；啟動後四個 list 各 1 項，tab 名稱、位址列與 marker 檔名吻合各 pane，並顯示 unclean 警告；正常關閉。證據：`build\manual-test\restore-20261021-174550\restore4.log`／`restore4.png`。
+
+仍未驗證：10 分鐘 idle 與記憶體長期趨勢、四 pane 互動切換、native menu／一般檔案操作、Shell namespace／OneDrive／network、stuck provider 的 bounded shutdown。Acceptance 第 2、3 項維持未勾選，狀態維持 `in_progress`。

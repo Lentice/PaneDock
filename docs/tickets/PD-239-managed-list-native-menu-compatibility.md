@@ -173,3 +173,13 @@ Claude 使用 Release `build\PaneDock.exe`（SHA-256 `E630EAC2325DFBE6896BC05B49
 僅關閉本次 Properties 視窗，再對隔離 PaneDock 主視窗送 `WM_CLOSE`；程序正常退出且沒有殘留 PaneDock process。A、B marker 的 SHA-256 都經前後比對保持不變；stderr 為空，未使用 clipboard、未修改正式 session，未執行其他 verb。診斷輸出記錄 `group_switch_navigate_ms=7.7457`、`group_switch_ms=20.5412`。原始腳本、輸出與截圖保留於 ignored `build\manual-test\pd239-group-target\`，有效樣本為 `run-261021161627`。
 
 此樣本的 Group 選取透過 `LB_SETCURSEL`／`WM_COMMAND` 注入，並非使用者在 modal menu 中的實體滑鼠／鍵盤切換；也未觀察 menu 關閉後 pane 是否已顯示 B。它只覆蓋單一本機檔案的 Properties target，不涵蓋 tab／pane 關閉後的 command、其他 verbs、namespace／OneDrive／network providers，或與 File Explorer 的逐項 menu 對照。
+
+## Same-file Shell menu comparison and latency sample（2026-10-21）
+
+在一般啟動模式的 Release build\PaneDock.exe 上，以 Medium-integrity PaneDock 與 File Explorer、同一個隔離資料夾中的 33-byte .txt marker，比較選取列與背景 classic Shell menus。修正前一輪腳本僅等待 1.2 秒的限制後，真實右鍵選取列成功：滑鼠 move/down/up 各 SendInput=1，游標點 WindowFromPoint 命中該 PaneDock SysListView32，同 PID #32768 menu 出現；上一輪選取列右鍵後 1.2 秒未見 menu 是觀察窗過短，不能當作未開啟或產品失敗。
+
+同一 marker 的 menu captions 由原生 HMENU 讀取，沒有點選 command：PaneDock selected-row menu 有 25/26 個 HMENU entries（含 separators），File Explorer classic selected-row menu 有 32/33 個；兩邊都包含 Open、Edit、Copy、Delete、Properties 及多個相同 Shell extensions。PaneDock 該樣本未出現 Explorer menu 中的 IObit Unlocker 與 Rename。背景 menu 對照中，PaneDock 有 20 entries／16 captions，Explorer classic 有 31 entries／25 captions；共同的第三方 extension entries、New 與 Properties 均存在，Explorer 另有 View／Sort／Group／Refresh、folder customization、Paste／Undo 等 Explorer view commands。這些是單機內容差異觀察，不推論為普遍缺陷；PaneDock 的 list 已自行承接 view／sort／refresh 等互動。
+
+高精度計時由右鍵 release 或 Shift+F10 key-up 到首個可見 #32768，PaneDock first/repeat 為 1,659.0／544.8 ms，Explorer classic 為 1,811.5／353.9 ms。只有每個 app 各一個 first 和 repeat 樣本；無法歸因到特定 Shell extension 或宣稱一般相對效能。完整數字已記在 [performance baseline](../performance-baseline.md#pd-239-native-context-menu-latency-comparison-2026-10-21-exploratory)。
+
+原始輸出與 screenshots 在 ignored build\manual-test\pd239-latency\run-261021165715，背景 menu 對照在 build\manual-test\pd239-compare\run-261021164904。兩輪均使用隔離 LOCALAPPDATA，唯一 marker 前後存在且 hash／大小不變，沒有執行任何 verb，stderr 為空；PaneDock 正常關閉且沒有殘留 process。Windows 11 modern menu 的 UIA 無法列出 captions；本比較使用 classic menu，因此不宣稱 modern/legacy menu 完全相同。
