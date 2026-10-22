@@ -169,12 +169,12 @@ void bounded_rows() {
             rows.push_back({L"row"+std::to_wstring(i*managed_list::kBatchRows+j), 0, false});
         f.deliver(managed_list::Phase::loading, std::move(rows));
     }
-    // PD-231's inline property slots also consume the original 24 MiB cap.
-    // HEAD already reaches that cap before 100,000 rows on LLVM-MinGW.
+    // Owned identity/property strings share the 24 MiB row cap; use the
+    // production accounting so this boundary check follows the current row shape.
     const auto& retained = f.pane.list_snapshot().rows;
     EXPECT(!retained.empty() && retained.size() <= managed_list::kMaxRows);
     auto bytes = retained.capacity() * sizeof(managed_list::Row);
-    for (const auto& row : retained) bytes += (row.name.capacity() + 1) * sizeof(wchar_t);
+    for (const auto& row : retained) bytes += managed_list::owned_row_bytes(row);
     EXPECT(bytes <= managed_list::kMaxRowBytes);
     EXPECT(retained.size() == managed_list::kMaxRows ||
         bytes + managed_list::kBatchRows * sizeof(managed_list::Row) > managed_list::kMaxRowBytes);
