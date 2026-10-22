@@ -43,12 +43,12 @@ Phase 8 · managed-list responsiveness
 
 ## 驗收標準
 
-- [ ] 受控 A→B→A 測試在回到 A 時、尚未收到新列舉 batch 前即可觀察到 A 的 snapshot，且狀態為 Updating；目前 generation 完成後呈現新資料並移除已不存在的項目。
-- [ ] A 的 rows 不會出現在 B；相同 tab ID／location 但不同 Group ID 也不會命中；location 改變、tab 關閉或 Group 刪除不會把舊資料當成目前內容。
-- [ ] selection、focus 與 viewport anchor 只依穩定 item identity 還原；測試 stale generation 結果仍被忽略。
-- [ ] 已離開 Group 的 source／watch 工作取消，無 polling；返回後最多只為目前可見 tab 啟動更新。idle cache 不觸發磁碟 I/O。
-- [ ] cache bytes 持續受既有 32 MiB global LRU 限制，超額仍淘汰；Pane teardown／shutdown 後不留 owner entry。
-- [ ] 更新 `binding_and_location_invalidation()` 的 Group-rebind 預期並保留 location invalidation、cross-Group isolation、LRU 與 budget 測試；不宣稱未執行的真實桌面 cold/warm 或 idle gate 已通過。
+- [x] 受控 A→B→A 測試在回到 A 時、尚未收到新列舉 batch 前即可觀察到 A 的 snapshot，且狀態為 Updating；目前 generation 完成後呈現新資料並移除已不存在的項目。
+- [x] A 的 rows 不會出現在 B；相同 tab ID／location 但不同 Group ID 也不會命中；location 改變、tab 關閉或 Group 刪除不會把舊資料當成目前內容。
+- [x] selection、focus 與 viewport anchor 只依穩定 item identity 還原；測試 stale generation 結果仍被忽略。
+- [x] 已離開 Group 的 source／watch 工作取消，無 polling；返回後最多只為目前可見 tab 啟動更新。idle cache 不觸發磁碟 I/O。
+- [x] cache bytes 持續受既有 32 MiB global LRU 限制，超額仍淘汰；Pane teardown／shutdown 後不留 owner entry。
+- [x] 更新 `binding_and_location_invalidation()` 的 Group-rebind 預期並保留 location invalidation、cross-Group isolation、LRU 與 budget 測試；不宣稱未執行的真實桌面 cold/warm 或 idle gate 已通過。
 
 ## Non-goals
 

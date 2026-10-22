@@ -98,7 +98,10 @@ class Pane final {
     // address is stable for the group's lifetime). Null when this slot is not
     // showing anything (no active Group, or a layout with fewer panes).
     void bind(panedock::core::PaneState *state) noexcept {
-        if (bound_state_ != state) cancel_managed_list();
+        if (bound_state_ != state) {
+            save_list_cache(true);
+            cancel_managed_list(false);
+        }
         bound_state_ = state;
     }
     void unbind() noexcept { cancel_managed_list(); bound_state_ = nullptr; }
@@ -393,9 +396,9 @@ class Pane final {
     };
     static ListCache& list_cache() noexcept;
     void prune_list_cache(bool all = false) noexcept;
-    void save_list_cache() noexcept;
+    void save_list_cache(bool leaving_group = false) noexcept;
     std::optional<CachedList> take_list_cache(const managed_list::Request& request);
-    void cancel_managed_list() noexcept;
+    void cancel_managed_list(bool discard_cache = true) noexcept;
     void clear_managed_list_interaction() noexcept;
     ManagedListInteraction capture_managed_list_interaction() const;
     void restore_managed_list_interaction(

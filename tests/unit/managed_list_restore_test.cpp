@@ -166,7 +166,15 @@ void four_panes_tabs_groups_and_move() {
     f.activate(0);
     f.deliver(0, group_b, L"late group B");
     for (int i = 0; i < 4; ++i) {
-        EXPECT(f.panes[i].list_snapshot().rows.empty());
+        // PD-261: the still-realized pane restores A immediately; hidden panes
+        // underwent real teardown and have no retained owner snapshots.
+        if (i == 0) {
+            EXPECT(f.panes[i].list_snapshot().updating);
+            EXPECT(f.panes[i].list_snapshot().rows.size() == 1);
+            EXPECT(f.panes[i].list_snapshot().rows[0].name == L"current");
+        } else {
+            EXPECT(f.panes[i].list_snapshot().rows.empty());
+        }
         f.complete(i);
         EXPECT(f.panes[i].window() == windows[i]);
     }

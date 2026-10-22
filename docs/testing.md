@@ -509,6 +509,41 @@ context after the restricted build stalled. Only these targets were built:
 verification was run. Real Shell namespace, native desktop focus/accessibility
 and the PD-241 performance/compatibility gate remain unverified.
 
+## PD-261 Group snapshot reuse
+
+`panedock_managed_list_cache` now exercises A→B→A through Pane binding and
+controlled owned-value sources. Before any new batch arrives it checks Updating,
+selection/focus/selection-mark and viewport identity/offset. Current-generation
+reconciliation removes absent rows; late generations cannot replace the snapshot.
+Coverage includes identical tab/location in different Groups, known-folder and
+fallback identity changes, partial-scan rejection, completed empty admission,
+source/watch and shared icon/property-interest cancellation, tab closure,
+Group-deletion unbind with ID reuse, shutdown owner cleanup, and the existing
+global LRU/byte accounting including Group snapshots. The restore integration
+test expects immediate reuse only for the still-realized pane; hidden panes
+undergoing teardown discard their owner entries.
+
+2026-10-22 LLVM-MinGW Release validation used ignored `build-pd-261/`:
+
+```powershell
+$env:PATH = 'E:\Dev\LLVM-MinGW\bin;E:\Dev\Ninja;' + $env:PATH
+cmake -S . -B build-pd-261 -G Ninja -D"CMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake" -DCMAKE_BUILD_TYPE=Release
+cmake --build build-pd-261 --parallel 4
+ctest --test-dir build-pd-261 --output-on-failure -R '^panedock_managed_list_cache$'
+ctest --test-dir build-pd-261 --output-on-failure -R '^panedock_managed_list_(cache|restore)$'
+ctest --test-dir build-pd-261 --output-on-failure -E '^panedock_launch_smoke$'
+git diff --check
+```
+
+Configure/build passed in the elevated execution context after restricted
+compiler detection stalled. Cache passed 1/1; cache+restore passed 2/2 after
+updating the old empty-on-return restore expectation; the final non-GUI suite
+passed 57/57 (25.05 seconds). `git diff --check` passed. Build warnings include
+existing missing aggregate-field initializers. No PaneDock launch, existing
+process closure or GUI verification was performed. Desktop cold/warm QPC p95,
+actual paint/input continuity, Shell/network/OneDrive provider cancellation,
+process memory/handles and ten-minute idle CPU/I/O remain UNVERIFIED for PD-241.
+
 ## PD-244 enrichment identity routing
 
 The injected IconSource seam verifies two rows with equal display text produce

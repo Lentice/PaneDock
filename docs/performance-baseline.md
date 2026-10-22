@@ -87,6 +87,11 @@ includes these same row strings, binding/location strings, selected-key vector
 capacity and every copied focus/selection/viewport anchor key. Transient interaction
 copies contain only keys from the bounded active snapshot plus three anchors;
 no extra child-location copies, COM pointers or PIDLs are retained there.
+PD-261 also admits completed/empty active-tab snapshots on Group rebind into
+this same LRU. Returning to the exact Group/tab/full location shows Updating
+immediately and refreshes with a new generation; inactive Groups retain no
+source/watch or icon/property interest. Unbind, hidden-pane teardown and shutdown
+discard that Pane's owner entries. These are memory-only values, never persisted.
 The local worker/queue limits are unchanged; no namespace producer is enabled.
 Capacity failures stop interest and remain explicitly retryable. These are value
 and admission checks, not evidence of process memory or the PD-241 release gate.

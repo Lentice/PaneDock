@@ -9,13 +9,26 @@ class Delivery final : public ml::Source {
   public:
     std::deque<ml::Batch> batches;
     std::size_t submissions{};
-    bool submit(ml::Request) noexcept override { ++submissions; return true; }
+    std::size_t cancellations{};
+    bool interested{};
+    bool submit(ml::Request) noexcept override { ++submissions; interested = true; return true; }
     std::optional<ml::Batch> take() noexcept override {
         if (batches.empty()) return {};
         auto result = std::move(batches.front()); batches.pop_front(); return result;
     }
     HANDLE event() const noexcept override { return nullptr; }
-    void cancel() noexcept override {} // late results deliberately survive
+    void cancel() noexcept override { ++cancellations; interested = false; } // late results deliberately survive
+};
+class Enrichment final : public ml::IconSource {
+  public:
+    std::vector<ml::IconRequest> interest;
+    std::size_t cancellations{};
+    bool replace(std::vector<ml::IconRequest> requests) noexcept override {
+        interest = std::move(requests); return true;
+    }
+    std::optional<ml::IconResult> take() noexcept override { return {}; }
+    HANDLE event() const noexcept override { return nullptr; }
+    void cancel() noexcept override { ++cancellations; interest.clear(); }
 };
 struct Fixture final {
     test::TestPaneHost host;
@@ -155,11 +168,119 @@ void binding_and_location_invalidation() {
     f.deliver({{L"group-a", 1, false}}); f.pane.switch_active_tab("2");
     auto other = f.state;
     f.host.group_id = "other-group"; f.pane.bind(&other);
-    EXPECT(app_shell::Pane::list_cache_stats().entries == 0);
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 1);
     EXPECT(SUCCEEDED(f.pane.navigate_to(f.pane.active_tab()->location)));
     EXPECT(f.pane.list_snapshot().rows.empty());
     f.pane.unbind();
     EXPECT(app_shell::Pane::list_cache_stats().entries == 0);
+}
+void group_round_trip_refresh_and_teardown() {
+    Fixture f;
+    auto enrichment = std::make_unique<Enrichment>();
+    auto* icons = enrichment.get();
+    f.pane.use_list_icons(std::move(enrichment));
+    std::vector<ml::Row> rows;
+    for (int i = 0; i < 100; ++i)
+        rows.push_back({L"item-" + std::to_wstring(100 + i), 1, false});
+    f.deliver(std::move(rows)); f.select(40);
+    ListView_EnsureVisible(f.list, 65, FALSE);
+    const auto before = f.pane.list_interaction_snapshot();
+    const auto top = std::wstring(before.viewport_anchor->name);
+    const auto old = f.pane.list_snapshot().request;
+    const auto cancelled = f.source->cancellations;
+    const auto icon_cancelled = icons->cancellations;
+    f.deliver({}, ml::Phase::complete, ml::Change::watching);
+    EXPECT(f.pane.list_snapshot().watch == ml::WatchState::watching);
+    auto other = f.state; // deliberately identical tab and full location identity
+    f.host.group_id = "group-b"; f.pane.bind(&other);
+    EXPECT(!f.source->interested && f.source->cancellations > cancelled);
+    EXPECT(icons->cancellations > icon_cancelled && icons->interest.empty());
+    EXPECT(f.pane.list_snapshot().rows.empty());
+    EXPECT(ListView_GetItemCount(f.list) == 0);
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 1);
+    EXPECT(SUCCEEDED(f.pane.navigate_to(other.tabs[0].location)));
+    EXPECT(f.pane.list_snapshot().rows.empty()); // Group identity isolates A
+    f.deliver({{L"only-b", 2, false}});
+    f.host.group_id = "group-a"; f.pane.bind(&f.state);
+    EXPECT(!f.source->interested);
+    EXPECT(f.pane.list_snapshot().rows.empty());
+    const auto submissions = f.source->submissions;
+    EXPECT(SUCCEEDED(f.pane.navigate_to(f.state.tabs[0].location)));
+    EXPECT(f.source->submissions == submissions + 1);
+    EXPECT(f.pane.list_snapshot().rows.size() == 100);
+    EXPECT(f.pane.list_snapshot().updating);
+    EXPECT(f.pane.list_snapshot().request.binding.generation != old.binding.generation);
+    EXPECT(f.pane.list_snapshot().watch != ml::WatchState::watching);
+    wchar_t status[256]{}; GetWindowTextW(f.pane.status_bar(), status, 256);
+    EXPECT(std::wstring(status).find(L"Updating") != std::wstring::npos);
+    const auto restored = f.pane.list_interaction_snapshot();
+    EXPECT(restored.selected.size() == 1 && restored.selected[0].name == L"item-140");
+    EXPECT(restored.focused && restored.focused->name == L"item-140");
+    EXPECT(restored.anchor && restored.anchor->name == L"item-140");
+    EXPECT(restored.viewport_anchor && restored.viewport_anchor->name == top);
+    EXPECT(restored.viewport_offset == before.viewport_offset);
+    f.source->batches.push_back({old, {{L"stale-a", 0, false}}, ml::Phase::complete, 0});
+    f.pane.process_content_results();
+    EXPECT(f.pane.list_snapshot().rows.size() == 100);
+    f.deliver({{L"item-140", 20, false}, {L"new-a", 3, false}});
+    EXPECT(!f.pane.list_snapshot().updating);
+    EXPECT(f.pane.list_snapshot().rows.size() == 2);
+    EXPECT(f.pane.list_interaction_snapshot().selected[0].name == L"item-140");
+    // Group deletion unbinds every Pane before erasing the model. Numeric Group
+    // IDs can then be reused; no snapshot may survive that unbind.
+    f.pane.unbind();
+    EXPECT(app_shell::Pane::list_cache_stats().bytes == 0);
+    EXPECT(!f.source->interested);
+    f.host.group_id = "group-b"; f.pane.bind(&other);
+    EXPECT(SUCCEEDED(f.pane.navigate_to(other.tabs[0].location)));
+    EXPECT(f.pane.list_snapshot().rows.empty());
+    f.deliver({}, ml::Phase::empty);
+    f.host.group_id = "group-a"; f.pane.bind(&f.state);
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 1); // completed empty is admitted
+    f.host.shutting_down = true;
+    f.pane.destroy();
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 0);
+    EXPECT(app_shell::Pane::list_cache_stats().bytes == 0);
+}
+void group_snapshots_share_global_lru() {
+    Fixture f;
+    auto other = f.state;
+    f.deliver({{L"a", 1, false}});
+    f.host.group_id = "group-b"; f.pane.bind(&other);
+    const auto one = app_shell::Pane::list_cache_stats().bytes;
+    EXPECT(one > 0);
+    app_shell::Pane::limit_list_cache_bytes(one);
+    const auto evictions = app_shell::Pane::list_cache_stats().evictions;
+    EXPECT(SUCCEEDED(f.pane.navigate_to(other.tabs[0].location)));
+    f.deliver({{L"b", 1, false}});
+    f.host.group_id = "group-a"; f.pane.bind(&f.state);
+    const auto stats = app_shell::Pane::list_cache_stats();
+    EXPECT(stats.bytes <= one && stats.entries == 1);
+    EXPECT(stats.evictions == evictions + 1);
+    EXPECT(SUCCEEDED(f.pane.navigate_to(f.state.tabs[0].location)));
+    EXPECT(f.pane.list_snapshot().rows.empty()); // A was least recently used
+    app_shell::Pane::limit_list_cache_bytes(32 * 1024 * 1024);
+}
+void group_partial_and_full_location_identity() {
+    Fixture f;
+    f.deliver({{L"partial", 1, false}}, ml::Phase::loading);
+    auto other = f.state;
+    f.host.group_id = "group-b"; f.pane.bind(&other);
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 0);
+    EXPECT(SUCCEEDED(f.pane.navigate_to(other.tabs[0].location)));
+    f.deliver({{L"complete-b", 1, false}});
+    f.host.group_id = "group-a"; f.pane.bind(&f.state);
+    EXPECT(SUCCEEDED(f.pane.navigate_to(f.state.tabs[0].location)));
+    EXPECT(f.pane.list_snapshot().rows.empty());
+    f.deliver({{L"complete-a", 1, false}});
+    f.host.group_id = "group-b"; f.pane.bind(&other);
+    other.tabs[0].location.known_folder_identity = L"changed-known-folder";
+    EXPECT(SUCCEEDED(f.pane.navigate_to(other.tabs[0].location)));
+    EXPECT(f.pane.list_snapshot().rows.empty());
+    f.host.group_id = "group-a"; f.pane.bind(&f.state);
+    f.state.tabs[0].location.fallback_path = L"C:\\changed-fallback";
+    EXPECT(SUCCEEDED(f.pane.navigate_to(f.state.tabs[0].location)));
+    EXPECT(f.pane.list_snapshot().rows.empty());
 }
 void unwatched_cache_refresh_does_not_claim_subscription() {
     Fixture f(3, L"\\\\server\\share\\cache");
@@ -386,6 +507,8 @@ int main() {
     identity_capacities_obey_active_and_cache_budgets();
     warm_refresh_and_notifications(); missing_identity_and_failed_scan();
     global_budget_and_lru(); binding_and_location_invalidation();
+    group_round_trip_refresh_and_teardown(); group_partial_and_full_location_identity();
+    group_snapshots_share_global_lru();
     unwatched_cache_refresh_does_not_claim_subscription();
     viewport_and_refresh_failure();
     retained_capacity_includes_property_metadata();

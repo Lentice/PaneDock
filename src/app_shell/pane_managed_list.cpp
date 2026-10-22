@@ -181,6 +181,10 @@ void Pane::prune_list_cache(bool all) noexcept {
     auto& cache = list_cache();
     std::erase_if(cache.entries, [&](const auto& entry) {
         if (entry.owner != this) return false;
+        // PD-261: inactive Groups keep owned snapshots within the same global
+        // LRU. Only the currently bound Group's tabs can invalidate its entries.
+        if (!all && entry.snapshot.request.binding.group_id != pane_host()->active_group_id())
+            return false;
         const bool valid = !all && pane_state() && std::any_of(
             pane_state()->tabs.begin(), pane_state()->tabs.end(), [&](const auto& tab) {
                 return tab.id == entry.snapshot.request.binding.tab_id &&
@@ -191,14 +195,18 @@ void Pane::prune_list_cache(bool all) noexcept {
         return true;
     });
 }
-void Pane::save_list_cache() noexcept try {
-    prune_list_cache();
+void Pane::save_list_cache(bool leaving_group) noexcept try {
+    // Group activation changes the host ID before bind(); the old PaneState is
+    // still alive here, and the snapshot's binding remains the outgoing ID.
+    if (!leaving_group) prune_list_cache();
     if (!pane_state() || list_.updating ||
         (list_.phase != managed_list::Phase::complete && list_.phase != managed_list::Phase::empty) ||
-        list_.request.binding.group_id != pane_host()->active_group_id()) return;
-    // Only a still-existing inactive tab at this exact location may retain rows.
+        (!leaving_group && list_.request.binding.group_id != pane_host()->active_group_id())) return;
+    // A Group departure also admits its completed active tab, never a partial
+    // enumeration or a closed tab. Full location identity remains mandatory.
     const auto found = std::find_if(pane_state()->tabs.begin(), pane_state()->tabs.end(), [&](const auto& tab) {
-        return tab.id == list_.request.binding.tab_id && tab.id != pane_state()->active_tab_id &&
+        return tab.id == list_.request.binding.tab_id &&
+            (leaving_group || tab.id != pane_state()->active_tab_id) &&
             tab.location == list_.resolved_location.value_or(list_.request.location);
     });
     if (found == pane_state()->tabs.end()) return;
@@ -247,9 +255,9 @@ std::optional<Pane::CachedList> Pane::take_list_cache(const managed_list::Reques
     cache.entries.erase(found); ++cache.stats.hits;
     return entry;
 }
-void Pane::cancel_managed_list() noexcept {
+void Pane::cancel_managed_list(bool discard_cache) noexcept {
     cancel_list_rename();
-    prune_list_cache(true);
+    if (discard_cache) prune_list_cache(true);
     if (list_source_) list_source_->cancel();
     cancel_list_icons();
     clear_list_index();
