@@ -65,6 +65,9 @@ struct IconRequest final {
     std::string property{}; // empty = image; otherwise worker-owned property query
     int property_slot{};
     std::size_t row_index{};
+    // Stage-one icon: the icon registered for the key's file type (identity "~.ext",
+    // "~" for no extension), looked up without opening the file (PD-255).
+    bool by_type{};
     bool operator==(const IconRequest&) const = default;
 };
 inline std::size_t owned_icon_request_bytes(const IconRequest& request) noexcept {

@@ -22,12 +22,16 @@ class Rows final : public ml::Source {
 class Icons final : public ml::IconSource {
     HANDLE ready_{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
   public:
-    std::vector<ml::IconRequest> interest;
+    std::vector<ml::IconRequest> interest;      // per-file requests (stage two)
+    std::vector<ml::IconRequest> type_interest; // by-type requests (stage one, PD-255)
+    std::vector<ml::IconRequest> submitted;     // last replace() in submission order
     std::deque<ml::IconResult> results;
     std::size_t replacements{};
     ~Icons() override { CloseHandle(ready_); }
     bool replace(std::vector<ml::IconRequest> r) noexcept override {
-        interest = std::move(r); ++replacements; return true;
+        interest.clear(); type_interest.clear(); submitted = r;
+        for (auto& request : r) (request.by_type ? type_interest : interest).push_back(std::move(request));
+        ++replacements; return true;
     }
     std::optional<ml::IconResult> take() noexcept override {
         if (results.empty()) { ResetEvent(ready_); return {}; }
@@ -36,7 +40,7 @@ class Icons final : public ml::IconSource {
         return r;
     }
     HANDLE event() const noexcept override { return ready_; }
-    void cancel() noexcept override { interest.clear(); }
+    void cancel() noexcept override { interest.clear(); type_interest.clear(); }
     void deliver(ml::IconRequest request, bool success = true) {
         shell_core::IconImage image;
         if (success) {
@@ -83,6 +87,11 @@ struct Fixture {
     void viewport(std::size_t first, std::size_t count) { pane.set_list_icon_viewport(first, count); }
     void finish() {
         auto requests = icons->interest;
+        for (auto& r : requests) icons->deliver(r);
+        while (!icons->results.empty()) pane.process_icon_results();
+    }
+    void finish_types() {
+        auto requests = icons->type_interest;
         for (auto& r : requests) icons->deliver(r);
         while (!icons->results.empty()) pane.process_icon_results();
     }
@@ -199,7 +208,7 @@ void stale_identity_failure_and_reuse() {
     EXPECT(f.icons->replacements == attempts); // no failed-icon busy retry
     EXPECT(WaitForSingleObject(f.pane.icon_event(), 0) == WAIT_TIMEOUT);
     f.pane.set_shell_visible(false); EXPECT(f.icons->interest.empty());
-    f.viewport(f.row(L"a-file"), 1); f.finish();
+    f.viewport(f.row(L"a-file"), 1); f.finish(); f.finish_types();
     EXPECT(f.pane.list_item_image(f.row(L"a-file")) >= 2);
     f.viewport(0, 0);
     const auto cached = f.icons->replacements;
@@ -225,6 +234,43 @@ void stale_identity_failure_and_reuse() {
     f.pane.unbind();
     EXPECT(f.icons->interest.empty());
 }
+void type_icons_come_first_and_cover_rows_before_their_own_icon() {
+    Fixture f;
+    ml::Row folder{L"folder", 0, true, 1};
+    f.deliver({{L"a.txt", 1, false, 1}, {L"B.TXT", 1, false, 1}, {L"c.png", 1, false, 1},
+               {L"noext", 1, false, 1}, folder});
+    f.viewport(0, 5);
+    // One request per distinct type, ahead of every per-file request.
+    EXPECT(f.icons->type_interest.size() == 4);
+    EXPECT(f.icons->interest.size() == 5);
+    bool seen_file_request = false, type_after_file = false;
+    for (const auto& request : f.icons->submitted) {
+        if (!request.by_type) seen_file_request = true;
+        else if (seen_file_request) type_after_file = true;
+    }
+    EXPECT(!type_after_file);
+    const auto a = f.row(L"a.txt"), b = f.row(L"B.TXT"), c = f.row(L"c.png"), dir = f.row(L"folder");
+    EXPECT(f.pane.list_item_image(a) == 0 && f.pane.list_item_image(dir) == 1); // placeholders
+    f.finish_types();
+    EXPECT(f.pane.list_item_image(a) >= 2 && f.pane.list_item_image(c) >= 2 && f.pane.list_item_image(dir) >= 2);
+    EXPECT(f.pane.list_item_image(a) == f.pane.list_item_image(b)); // extensions fold case
+    EXPECT(f.pane.list_item_image(a) != f.pane.list_item_image(c));
+    // The row's own icon replaces the shared type icon once it arrives.
+    const auto shared = f.pane.list_item_image(a);
+    f.finish();
+    EXPECT(f.pane.list_item_image(a) >= 2 && f.pane.list_item_image(a) != shared);
+}
+void failed_type_icon_is_not_retried_in_a_loop() {
+    Fixture f;
+    f.deliver({{L"a.txt", 1, false, 1}});
+    f.viewport(0, 1);
+    EXPECT(f.icons->type_interest.size() == 1);
+    f.icons->deliver(f.icons->type_interest.front(), false); f.pane.process_icon_results();
+    const auto attempts = f.icons->replacements;
+    f.viewport(0, 1);
+    EXPECT(f.icons->replacements == attempts);
+    EXPECT(f.pane.list_item_image(0) == 0);
+}
 void bounded_cache_eviction_and_resource_cleanup() {
     const DWORD before = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
     for (int repeat = 0; repeat < 4; ++repeat) {
@@ -238,7 +284,8 @@ void bounded_cache_eviction_and_resource_cleanup() {
                 last == rows.size() ? ml::Phase::complete : ml::Phase::loading);
         }
         f.viewport(0, 400);
-        EXPECT(f.icons->interest.size() == ml::kIconInterest); // no offscreen prefetch
+        // no offscreen prefetch; the single stage-one type request shares the same cap
+        EXPECT(f.icons->interest.size() + f.icons->type_interest.size() == ml::kIconInterest);
         for (std::size_t first = 0; first < 400; first += 32) {
             f.viewport(first, 32); f.finish();
         }
@@ -462,6 +509,8 @@ int main() {
     absolute_identity_interest_completion_and_cache();
     long_identity_interest_and_cache_are_byte_bounded();
     stale_identity_failure_and_reuse();
+    type_icons_come_first_and_cover_rows_before_their_own_icon();
+    failed_type_icon_is_not_retried_in_a_loop();
     bounded_cache_eviction_and_resource_cleanup();
     thumbnails_modes_stale_failure_and_budget();
     hidden_control_mode_layout_and_restore();

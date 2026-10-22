@@ -1118,6 +1118,22 @@ PropertyValue read_property(const IconRequest& request) {
             return result;
         }
     }
+    // Duration only exists for audio and video. Ruling every other type out by its
+    // registered perceived type avoids opening each file just to learn it has none.
+    if (request.property == "System.Media.Duration" && !request.key.directory &&
+        !request.key.child_location && !request.key.identity.shell_item) {
+        const auto& name = request.key.identity.key;
+        const auto dot = name.rfind(L'.');
+        PERCEIVED type{};
+        PERCEIVEDFLAG flags{};
+        if (dot != std::wstring::npos &&
+            SUCCEEDED(AssocGetPerceivedType(name.c_str() + dot, &type, &flags, nullptr)) &&
+            type != PERCEIVED_TYPE_AUDIO && type != PERCEIVED_TYPE_VIDEO &&
+            type != PERCEIVED_TYPE_UNSPECIFIED) {
+            result.state = PropertyState::missing;
+            return result;
+        }
+    }
     PROPERTYKEY key{};
     std::wstring property(request.property.begin(), request.property.end());
     if (FAILED(PSGetPropertyKeyFromName(property.c_str(), &key)) &&
@@ -1185,6 +1201,10 @@ void run_icons(std::shared_ptr<IconState> state) noexcept {
                 // handler has a documented non-hydrating contract here. Keep
                 // local placeholders and unavailable optional properties.
                 result.property.state = PropertyState::missing;
+            } else if (SUCCEEDED(apartment) && result.request.by_type) {
+                result.image = shell_core::load_extension_icon(
+                    std::wstring_view(result.request.key.identity.key).substr(1),
+                    result.request.key.directory, result.request.key.size);
             } else if (SUCCEEDED(apartment) && !result.request.property.empty())
                 result.property = read_property(result.request);
             else if (SUCCEEDED(apartment)) {

@@ -100,11 +100,48 @@ managed_list::IconKey Pane::list_icon_key(std::size_t row) const {
     return {list_.request.location, item.identity, item.bytes, item.date_modified,
         item.directory, icon_size_, icon_dpi_, icon_thumbnail_ && !item.directory, item.child_location, item.cloud};
 }
+// Stage-one key: every row of a file type shares the icon registered for it, so one
+// worker request serves all visible rows of that type (PD-255). Virtual items skip it.
+std::optional<managed_list::IconKey> Pane::list_type_icon_key(std::size_t row) const {
+    const auto& item = list_.rows[row];
+    if (item.identity.shell_item) return std::nullopt;
+    std::wstring marker = L"~";
+    if (!item.directory) {
+        const auto dot = item.name.rfind(L'.');
+        if (dot != std::wstring::npos) {
+            marker.append(item.name, dot, std::wstring::npos);
+            CharLowerBuffW(marker.data() + 1, static_cast<DWORD>(marker.size() - 1));
+        }
+    }
+    managed_list::IconKey key;
+    key.location = list_.request.location;
+    key.identity = {std::move(marker), false};
+    key.directory = item.directory;
+    key.size = icon_size_;
+    key.dpi = icon_dpi_;
+    return key;
+}
+void Pane::append_type_icon_requests(std::vector<managed_list::IconRequest>& requests,
+                                     const std::vector<std::size_t>& visible) {
+    for (const auto index : visible) {
+        if (index >= list_.rows.size()) continue;
+        auto key = list_type_icon_key(index);
+        if (!key) continue;
+        const auto cached = std::find_if(icon_cache_.begin(), icon_cache_.end(),
+            [&](const auto& entry) { return entry.key == *key; });
+        if (cached != icon_cache_.end()) { cached->used = ++icon_clock_; continue; }
+        if (std::find(type_attempted_.begin(), type_attempted_.end(), *key) != type_attempted_.end()) continue;
+        if (!managed_list::append_icon_request(requests,
+                {list_.request, icon_viewport_, *key, {}, 0, 0, true})) break;
+        type_attempted_.push_back(std::move(*key));
+    }
+}
 void Pane::cancel_list_icons() noexcept {
     ++icon_viewport_;
     icon_interest_.clear();
     enrichment_interest_.clear();
     image_attempted_.fill(false);
+    type_attempted_.clear();
     property_sort_cursor_ = 0;
     property_order_.clear();
     if (icon_source_) icon_source_->cancel();
@@ -171,7 +208,13 @@ int Pane::list_item_image(std::size_t row) const noexcept {
             return key.location == list_.request.location && key.matches(item) && key.size == icon_size_ &&
                 key.dpi == icon_dpi_ && key.thumbnail == (icon_thumbnail_ && !item.directory);
         });
-    return found == icon_cache_.end() ? (item.directory ? 1 : 0) : found->slot;
+    if (found != icon_cache_.end()) return found->slot;
+    if (const auto type_key = list_type_icon_key(row)) {
+        const auto typed = std::find_if(icon_cache_.begin(), icon_cache_.end(),
+            [&](const auto& entry) { return entry.key == *type_key; });
+        if (typed != icon_cache_.end()) return typed->slot;
+    }
+    return item.directory ? 1 : 0;
 }
 void Pane::set_list_icon_viewport(std::size_t first, std::size_t count) noexcept try {
     first = std::min(first, list_.rows.size());
@@ -223,6 +266,7 @@ void Pane::request_list_images(std::vector<std::size_t> rows, UINT dpi) noexcept
         ++icon_viewport_;
         enrichment_interest_.clear();
         image_attempted_.fill(false);
+        type_attempted_.clear();
         // Requests discarded by replace remain unresolved and are retried only
         // in the next bounded demand window. No per-completion whole-list scan.
         property_sort_cursor_ = 0;
@@ -230,6 +274,9 @@ void Pane::request_list_images(std::vector<std::size_t> rows, UINT dpi) noexcept
     }
     icon_interest_ = std::move(interest);
     std::vector<managed_list::IconRequest> requests;
+    // Type icons go first: they make every visible row look right within milliseconds,
+    // before the slower per-file icons and property reads.
+    if (!property_sort_pending_) append_type_icon_requests(requests, rows);
     append_property_requests(requests, rows);
     if (property_sort_pending_ && requests.empty() &&
         list_.phase != managed_list::Phase::loading && property_sort_cursor_ >= list_.rows.size()) {
@@ -282,7 +329,8 @@ void Pane::process_icon_results() noexcept try {
             accept_property_result(*result);
             continue;
         }
-        if (std::find(icon_interest_.begin(), icon_interest_.end(), request.key) == icon_interest_.end()) continue;
+        if (!request.by_type &&
+            std::find(icon_interest_.begin(), icon_interest_.end(), request.key) == icon_interest_.end()) continue;
         struct OwnedIcon { HICON value; ~OwnedIcon() { if (value) DestroyIcon(value); } };
         const OwnedIcon icon{raster_icon(result->image, icon_size_)};
         if (!icon.value) continue; // retry on renewed interest/Refresh, never an idle loop

@@ -52,6 +52,16 @@ int main() {
         const auto missing = type_text(*source, dir.wstring(), L"not-there.txt", false);
         EXPECT(missing.state == ml::PropertyState::value);
         EXPECT(missing.text == file.text);
+        // Duration only exists for audio/video: other types are ruled out by type, so
+        // the (missing) file is never opened and the row shows an empty cell.
+        ml::IconRequest duration;
+        duration.key.location = duration.request.location = {dir.wstring(), {}, dir.wstring()};
+        duration.key.identity = {L"not-there.txt", false};
+        duration.property = "System.Media.Duration";
+        EXPECT(source->replace({duration}));
+        EXPECT(WaitForSingleObject(source->event(), 5000) == WAIT_OBJECT_0);
+        const auto result = source->take();
+        EXPECT(result.has_value() && result->property.state == ml::PropertyState::missing);
         source->cancel();
     }
     source.reset();

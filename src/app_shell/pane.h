@@ -505,6 +505,7 @@ class Pane final {
     bool icon_viewport_posted_{};
     bool icon_seam_{};
     std::array<bool, managed_list::kIconInterest> image_attempted_{};
+    std::vector<managed_list::IconKey> type_attempted_; // stage-one requests tried this viewport
     std::vector<managed_list::IconRequest> enrichment_interest_;
     std::size_t property_sort_cursor_{};
     bool property_sort_pending_{};
@@ -518,6 +519,9 @@ class Pane final {
     void accept_property_result(managed_list::IconResult& result);
     void finish_property_batch() noexcept;
     managed_list::IconKey list_icon_key(std::size_t row) const;
+    std::optional<managed_list::IconKey> list_type_icon_key(std::size_t row) const;
+    void append_type_icon_requests(std::vector<managed_list::IconRequest>& requests,
+                                   const std::vector<std::size_t>& visible);
     void refresh_list_icon_viewport() noexcept;
     void queue_list_icon_viewport() noexcept;
     void cancel_list_icons() noexcept;
