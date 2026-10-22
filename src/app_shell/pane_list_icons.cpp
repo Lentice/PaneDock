@@ -50,18 +50,26 @@ bool restore_viewport(HWND window, const ViewportAnchor& anchor) noexcept {
     if (!ListView_GetItemRect(window, anchor.index, &rect, LVIR_BOUNDS)) return true;
     return rect.left != anchor.position.x || rect.top != anchor.position.y;
 }
-HICON raster_icon(const shell_core::IconImage& image, int size) noexcept {
+// The icon is centred vertically in a cell_height-tall bitmap: the list sizes its rows
+// from the image list, so a taller cell gives Explorer-like row spacing (PD-259).
+HICON raster_icon(const shell_core::IconImage& image, int size, int cell_height) noexcept {
     const int stride = ((size + 15) / 16) * 2;
     if (image.pixels.size() != static_cast<std::size_t>(size * size) ||
         image.mask.size() != static_cast<std::size_t>(stride * size)) return nullptr;
+    const int height = std::max(size, cell_height);
+    const int top = (height - size) / 2;
     BITMAPINFO info{};
-    info.bmiHeader = {sizeof(BITMAPINFOHEADER), size, -size, 1, 32, BI_RGB, 0, 0, 0, 0, 0};
+    info.bmiHeader = {sizeof(BITMAPINFOHEADER), size, -height, 1, 32, BI_RGB, 0, 0, 0, 0, 0};
     void* bits{};
     const HBITMAP color = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
-    const HBITMAP mask = CreateBitmap(size, size, 1, 1, image.mask.data());
+    std::vector<unsigned char> padded_mask(static_cast<std::size_t>(stride * height), 0xff); // 1 = transparent
+    std::copy(image.mask.begin(), image.mask.end(), padded_mask.begin() + static_cast<std::ptrdiff_t>(top) * stride);
+    const HBITMAP mask = CreateBitmap(size, height, 1, 1, padded_mask.data());
     HICON icon{};
     if (color && mask && bits) {
-        std::copy(image.pixels.begin(), image.pixels.end(), static_cast<std::uint32_t*>(bits));
+        auto* pixels = static_cast<std::uint32_t*>(bits);
+        std::fill_n(pixels, static_cast<std::size_t>(size) * height, 0u);
+        std::copy(image.pixels.begin(), image.pixels.end(), pixels + static_cast<std::size_t>(top) * size);
         ICONINFO definition{TRUE, 0, 0, mask, color};
         icon = CreateIconIndirect(&definition);
     }
@@ -187,7 +195,10 @@ bool Pane::ensure_list_icon_images(int size) noexcept try {
     icon_images_ = nullptr;
     icon_cache_.clear();
     icon_size_ = size;
-    icon_images_ = ImageList_Create(size, size, ILC_COLOR32 | ILC_MASK,
+    // Details/List rows (16 logical px icons) get Explorer's roomier spacing.
+    constexpr int kDetailsRowDip = 26;
+    icon_cell_height_ = icon_thumbnail_ ? size : std::max(size, MulDiv(kDetailsRowDip, static_cast<int>(icon_dpi_), 96));
+    icon_images_ = ImageList_Create(size, icon_cell_height_, ILC_COLOR32 | ILC_MASK,
         static_cast<int>(managed_list::image_capacity(size) + 2), 1);
     if (!icon_images_) return false;
     // Cheap local placeholders: no Shell/property call on paint or selection.
@@ -201,7 +212,7 @@ bool Pane::ensure_list_icon_images(int size) noexcept try {
                 image.pixels[y * size + x] = folder ? 0xffffcf60 : 0xffb8c7d8;
                 image.mask[y * stride + x / 8] &= static_cast<unsigned char>(~(0x80 >> (x % 8)));
             }
-        const HICON icon = raster_icon(image, size);
+        const HICON icon = raster_icon(image, size, icon_cell_height_);
         const int index = icon ? ImageList_AddIcon(icon_images_, icon) : -1;
         if (icon) DestroyIcon(icon);
         if (index != folder) {
@@ -351,7 +362,7 @@ void Pane::process_icon_results() noexcept try {
         if (!request.by_type &&
             std::find(icon_interest_.begin(), icon_interest_.end(), request.key) == icon_interest_.end()) continue;
         struct OwnedIcon { HICON value; ~OwnedIcon() { if (value) DestroyIcon(value); } };
-        const OwnedIcon icon{raster_icon(result->image, icon_size_)};
+        const OwnedIcon icon{raster_icon(result->image, icon_size_, icon_cell_height_)};
         if (!icon.value) continue; // retry on renewed interest/Refresh, never an idle loop
         auto found = std::find_if(icon_cache_.begin(), icon_cache_.end(),
             [&](const auto& entry) { return entry.key == request.key; });

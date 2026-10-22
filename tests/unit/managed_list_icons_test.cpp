@@ -395,7 +395,8 @@ void hidden_control_mode_layout_and_restore() {
         int width{}, height{};
         EXPECT(ImageList_GetIconSize(images, &width, &height));
         EXPECT(width == (n == 0 ? 256 : n == 1 ? 96 : n == 2 || n == 6 ? 48 : n == 7 ? 64 : 16));
-        EXPECT(width == height);
+        // Large and tile views are square; 16 px modes use a taller cell for roomier rows.
+        EXPECT(width == height || (width == 16 && height > width));
         // Hidden-control paint exercises the card fallback without Shell or a
         // desktop window. Native focus/accessibility remains a desktop check.
         const HDC dc = CreateCompatibleDC(nullptr);

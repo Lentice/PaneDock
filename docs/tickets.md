@@ -295,6 +295,7 @@
 | PD-256 | 列舉時預先填入 Type／Duration，拖動捲軸不再出現 Loading | 8 | `in_progress` | PD-247 | [PD-256](tickets/PD-256-managed-list-precomputed-type-cells.md) |
 | PD-257 | Details 欄位可選、可拖曳排序、可調寬並記住 | 8 | `in_progress` | PD-247 | [PD-257](tickets/PD-257-managed-list-configurable-columns.md) |
 | PD-258 | 預先載入整個資料夾的類型圖示 | 8 | `in_progress` | PD-255 | [PD-258](tickets/PD-258-managed-list-prewarm-type-icons.md) |
+| PD-259 | Details 列高比照檔案總管，不再過密 | 8 | `in_progress` | PD-255 | [PD-259](tickets/PD-259-managed-list-details-row-height.md) |
 | PD-246 | PD-234 切片：Pane 虛擬導覽、預設位置與 session 還原 | 8 | `done` | PD-225, PD-244, PD-245 | [PD-246](tickets/PD-246-managed-list-virtual-navigation.md) |
 
 

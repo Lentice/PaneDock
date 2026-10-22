@@ -489,6 +489,7 @@ class Pane final {
     std::vector<managed_list::IconKey> icon_interest_;
     HIMAGELIST icon_images_{};
     int icon_size_{16};
+    int icon_cell_height_{16}; // image-list cell height; sets the Details row height
     UINT icon_dpi_{96};
     bool icon_thumbnail_{};
     FOLDERVIEWMODE list_mode_{FVM_DETAILS};

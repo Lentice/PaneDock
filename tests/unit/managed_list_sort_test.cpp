@@ -315,7 +315,12 @@ void out_of_order_batches_and_sort_changes_preserve_item_and_viewport_identity()
                               LVIS_SELECTED | LVIS_FOCUSED);
         ListView_SetSelectionMark(f.list, selected);
     }
-    const int viewport = f.row(L"item-32.txt");
+    // Scroll so the top row is near the start whatever the row height is: sorting then
+    // moves it to the far end, where the viewport cannot keep it at the top (clamped).
+    wchar_t viewport_name[32]{};
+    swprintf_s(viewport_name, ARRAYSIZE(viewport_name), L"item-%02d.txt",
+               std::min(46, std::max(1, ListView_GetCountPerPage(f.list)) + 8));
+    const int viewport = f.row(viewport_name);
     if (viewport >= 0) ListView_EnsureVisible(f.list, viewport, FALSE);
     const auto before = own(f.pane.list_interaction_snapshot());
     EXPECT(before.selected.size() == 2);
