@@ -9,6 +9,7 @@
 #include <thread>
 #include <objbase.h>
 #include <shlobj.h>
+#include <shellapi.h>
 #include <shobjidl.h>
 #include <wrl/client.h>
 #include "shell_core/shell_core.h"
@@ -1077,6 +1078,7 @@ bool wait_for_workers(DWORD timeout) noexcept {
 #include "managed_list/icon_source.h"
 #include "managed_list/icon_source_test.h"
 #include <objbase.h>
+#include <shellapi.h>
 #include <shobjidl.h>
 #include <propsys.h>
 #include <propvarutil.h>
@@ -1101,6 +1103,21 @@ std::array<std::weak_ptr<IconState>, kIconWorkers> icon_slots;
 PropertyValue read_property(const IconRequest& request) {
     PropertyValue result;
     result.state = PropertyState::failed;
+    // The type of a local file is a registry lookup by extension. Opening a property
+    // store per file cost about 5 ms (7 s for 1400 files) against 0.06 ms here, and a
+    // scroll or sort used to cancel the slow requests before they finished (PD-254).
+    if (request.property == "System.ItemTypeText" && !request.key.child_location &&
+        !request.key.identity.shell_item) {
+        SHFILEINFOW info{};
+        const auto path = request.key.parsing_name();
+        if (SHGetFileInfoW(path.c_str(),
+                request.key.directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,
+                &info, sizeof(info), SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES) && info.szTypeName[0]) {
+            result.text = info.szTypeName;
+            result.state = PropertyState::value;
+            return result;
+        }
+    }
     PROPERTYKEY key{};
     std::wstring property(request.property.begin(), request.property.end());
     if (FAILED(PSGetPropertyKeyFromName(property.c_str(), &key)) &&

@@ -290,6 +290,7 @@
 | PD-251 | 快速連點欄標題時排序要連續切換 | 8 | `in_progress` | PD-247 | [PD-251](tickets/PD-251-managed-list-column-title-double-click.md) |
 | PD-252 | 捲動後的列要載入 Type／圖示；Size 用千分位 KB | 8 | `done` | PD-247 | [PD-252](tickets/PD-252-managed-list-viewport-rows-and-size-text.md) |
 | PD-253 | 清單行為對齊檔案總管：排序分組、自然排序、隱藏檔、rename 選取範圍 | 8 | `in_progress` | PD-247 | [PD-253](tickets/PD-253-managed-list-explorer-parity.md) |
+| PD-254 | Type 欄改用副檔名查詢，捲動時不再停在 Loading | 8 | `in_progress` | PD-247 | [PD-254](tickets/PD-254-managed-list-fast-type-text.md) |
 | PD-246 | PD-234 切片：Pane 虛擬導覽、預設位置與 session 還原 | 8 | `done` | PD-225, PD-244, PD-245 | [PD-246](tickets/PD-246-managed-list-virtual-navigation.md) |
 
 
