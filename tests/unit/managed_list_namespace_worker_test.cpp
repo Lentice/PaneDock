@@ -211,6 +211,40 @@ void real_namespace_size() {
     std::filesystem::remove_all(dir);
 }
 }
+// A namespace folder backed by a local directory reports changes by itself: a
+// new file must arrive through a rescan with no manual Refresh.
+void real_namespace_watch() {
+    const auto dir = std::filesystem::temp_directory_path() / L"panedock_pd_ns_watch";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    { std::ofstream(dir / L"first.txt", std::ios::binary) << "1"; }
+    auto source = ml::make_local_source();
+    EXPECT(source != nullptr);
+    auto namespace_request = request();
+    namespace_request.location = core::ShellLocation{dir.wstring(), {}, dir.wstring()};
+    namespace_request.location.namespace_location = true;
+    EXPECT(source->submit(namespace_request));
+    bool watching = false;
+    for (int n = 0; n < 6 && !watching; ++n) {
+        auto batch = take(*source);
+        if (batch.change == ml::Change::watching) { watching = true; continue; }
+        EXPECT(batch.notification == ml::NotificationCapability::filesystem_watch);
+        EXPECT(batch.change == ml::Change::none);
+    }
+    EXPECT(watching);
+    { std::ofstream(dir / L"second.txt", std::ios::binary) << "22"; }
+    bool began = false, saw_second = false, committed = false;
+    for (int n = 0; n < 6 && !committed; ++n) {
+        auto batch = take(*source);
+        if (batch.change == ml::Change::rescan_begin) began = true;
+        if (batch.change != ml::Change::rescan) continue;
+        for (const auto& row : batch.rows) if (row.name.starts_with(L"second")) saw_second = true;
+        committed = batch.phase != ml::Phase::loading;
+    }
+    EXPECT(began && saw_second);
+    source.reset(); EXPECT(ml::testing::wait_for_workers(10000));
+    std::filesystem::remove_all(dir);
+}
 int main() {
     EXPECT(ml::uses_shell_namespace(core::ShellLocation{L"shell:Desktop", {}, {}}));
     auto physical_desktop = core::ShellLocation{
@@ -219,7 +253,7 @@ int main() {
     EXPECT(!ml::uses_shell_namespace(physical_desktop));
     physical_desktop.namespace_location = true;
     EXPECT(ml::uses_shell_namespace(physical_desktop));
-    owned_metadata(); bounds(); cancellation_and_capacity(); real_namespace_size();
+    owned_metadata(); bounds(); cancellation_and_capacity(); real_namespace_size(); real_namespace_watch();
     EXPECT(ml::testing::counts().workers == 0);
     std::cout << "owned values only; four shared slots; two queued batches; "
               << "2 MiB per batch; controlled teardown only; real Shell UNVERIFIED\n";

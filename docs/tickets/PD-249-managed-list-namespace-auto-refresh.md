@@ -62,4 +62,6 @@ git diff --check
 
 ## 交接區
 
-（完成時只填未解風險與不可重推的結論。）
+- 未驗證：真實桌面（user 與 public desktop 同時存在）的建立／刪除／重新命名，以及閒置 10 分鐘 CPU／磁碟 I/O；自動測試只覆蓋暫存資料夾（`namespace_location`＋本機路徑）。
+- 結論：namespace 的監看不解碼變更，任何事件都整批重掃（`Change::rescan`），因此沒有沿用檔案系統監看的「連續兩次無細節復原就停止」限制；重掃只讀不寫，不會自我觸發。
+- 結論：桌面以 `FOLDERID_Desktop`＋`FOLDERID_PublicDesktop` 兩個路徑監看；命名空間根（`ILIsEmpty`）視為桌面。以前「namespace_location＋實體路徑」會走檔案系統 delta 監看，現在統一走 namespace 重掃。

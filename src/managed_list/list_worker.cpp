@@ -154,10 +154,101 @@ HRESULT shell_location(const std::shared_ptr<State>& state, std::uint64_t serial
     }
     return interested(state, serial) ? S_OK : E_ABORT;
 }
+// Directory I/O, its OVERLAPPED and buffers live ONLY on this bounded worker.
+// UI cancellation never waits; even a broken driver's cancellation retains its
+// existing slot until completion, rather than freeing storage still used by I/O.
+struct DirectoryWatch final {
+    HANDLE directory{INVALID_HANDLE_VALUE};
+    OVERLAPPED io{};
+    alignas(DWORD) std::array<std::byte, 64 * 1024> buffer{};
+    bool pending{};
+    DirectoryWatch() { io.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr); }
+    ~DirectoryWatch() {
+        if (pending) {
+            CancelIoEx(directory, &io);
+            DWORD bytes{};
+            (void)GetOverlappedResult(directory, &io, &bytes, TRUE);
+        }
+        if (directory != INVALID_HANDLE_VALUE) CloseHandle(directory);
+        if (io.hEvent) CloseHandle(io.hEvent);
+    }
+    DWORD arm() {
+        ResetEvent(io.hEvent);
+        if (!ReadDirectoryChangesW(directory, buffer.data(), static_cast<DWORD>(buffer.size()),
+            FALSE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+            FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE |
+            FILE_NOTIFY_CHANGE_ATTRIBUTES, nullptr, &io, nullptr)) return GetLastError();
+        pending = true;
+        return ERROR_SUCCESS;
+    }
+};
+// Watches for a namespace location that is backed by local folders. An error
+// is reported after the initial read, like the filesystem watch.
+struct NamespaceWatches final {
+    std::vector<std::unique_ptr<DirectoryWatch>> watches;
+    DWORD error{};
+};
+bool local_drive_path(const std::wstring& path) {
+    if (path.size() < 3 || path[1] != L':' || path[2] != L'\\' ||
+        path.find_first_of(L"*?") != std::wstring::npos) return false;
+    const auto type = GetDriveTypeW(path.substr(0, 3).c_str());
+    return type == DRIVE_FIXED || type == DRIVE_REMOVABLE || type == DRIVE_RAMDISK ||
+        type == DRIVE_CDROM;
+}
+// The Desktop is the merged user + public folders; any other namespace folder
+// that has a filesystem path is watched through that path. Virtual locations
+// (This PC, Recycle Bin) have none and stay manual-refresh.
+std::vector<std::wstring> namespace_watch_directories(const core::ShellLocation& resolved,
+                                                      bool namespace_root) {
+    std::vector<std::wstring> directories;
+    const auto add_known = [&](const KNOWNFOLDERID& id) {
+        PWSTR path = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(id, KF_FLAG_DONT_VERIFY, nullptr, &path)) && path)
+            directories.emplace_back(path);
+        CoTaskMemFree(path);
+    };
+    wchar_t desktop_id[39]{};
+    StringFromGUID2(FOLDERID_Desktop, desktop_id, ARRAYSIZE(desktop_id));
+    if (namespace_root || _wcsicmp(resolved.known_folder_identity.c_str(), desktop_id) == 0) {
+        add_known(FOLDERID_Desktop);
+        add_known(FOLDERID_PublicDesktop);
+    } else if (!resolved.fallback_path.empty()) {
+        directories.push_back(resolved.fallback_path);
+    }
+    std::vector<std::wstring> local;
+    for (auto& path : directories)
+        if (local_drive_path(path) && std::find(local.begin(), local.end(), path) == local.end())
+            local.push_back(std::move(path));
+    return local;
+}
+void arm_namespace_watches(const std::shared_ptr<State>& state, std::uint64_t serial,
+                           const std::vector<std::wstring>& directories, NamespaceWatches& out) {
+    for (const auto& path : directories) {
+        if (!interested(state, serial)) return;
+        auto watch = std::make_unique<DirectoryWatch>();
+        if (!watch->io.hEvent) { out.error = ERROR_NOT_ENOUGH_MEMORY; return; }
+        watch->directory = CreateFileW(path.c_str(), FILE_LIST_DIRECTORY,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
+        if (watch->directory == INVALID_HANDLE_VALUE) { out.error = GetLastError(); return; }
+        // A local path can traverse a junction to a server; never subscribe to it.
+        std::wstring resolved(kMaxPath + 1, L'\0');
+        const DWORD length = GetFinalPathNameByHandleW(watch->directory, resolved.data(),
+            static_cast<DWORD>(resolved.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        if (!length || length >= resolved.size()) {
+            out.error = length ? ERROR_BUFFER_OVERFLOW : GetLastError(); return;
+        }
+        if (resolved.starts_with(L"\\\\?\\UNC\\")) { out.error = ERROR_NOT_SUPPORTED; return; }
+        if (const DWORD armed = watch->arm()) { out.error = armed; return; }
+        out.watches.push_back(std::move(watch));
+    }
+}
 void enumerate_shell_namespace(const std::shared_ptr<State>& state, std::uint64_t serial,
-                               const Request& request) {
+                               const Request& request, bool recovery = false,
+                               NamespaceWatches* watch_out = nullptr) {
     Batch metadata{request, {}, Phase::loading, 0};
     metadata.notification = NotificationCapability::manual_refresh;
+    if (recovery) metadata.change = Change::rescan;
     const auto fail = [&](HRESULT result) {
         metadata.phase = Phase::error;
         metadata.error = provider_error(result);
@@ -228,6 +319,15 @@ void enumerate_shell_namespace(const std::shared_ptr<State>& state, std::uint64_
     // parent value through navigation and restart; never persist the PIDL.
     resolved.navigation_parent = request.location.navigation_parent;
     resolved.namespace_location = request.location.namespace_location || ILIsEmpty(absolute.value);
+    if (watch_out) {
+        // Arm BEFORE the read so a change during enumeration is not lost.
+        const auto directories = namespace_watch_directories(resolved, ILIsEmpty(absolute.value));
+        if (!directories.empty()) {
+            metadata.notification = NotificationCapability::filesystem_watch;
+            arm_namespace_watches(state, serial, directories, *watch_out);
+            if (!interested(state, serial)) return;
+        }
+    }
     metadata.resolved_location = std::move(resolved);
     if (request.location.navigation_parent) {
         metadata.parent_location = location_from_parent(*request.location.navigation_parent);
@@ -246,6 +346,12 @@ void enumerate_shell_namespace(const std::shared_ptr<State>& state, std::uint64_
         if (FAILED(result)) { fail(result); return; }
         metadata.parent_location = std::move(parent_value);
         metadata.parent_outcome = ParentOutcome::value;
+    }
+    if (recovery) {
+        // A rescan only reconciles rows; the location metadata was already accepted.
+        metadata.resolved_location.reset();
+        metadata.parent_location.reset();
+        metadata.parent_outcome = ParentOutcome::unresolved;
     }
     Microsoft::WRL::ComPtr<IShellFolder> folder;
     result = provider_call(state, serial, [&] {
@@ -339,7 +445,7 @@ void enumerate(const std::shared_ptr<State>& state, std::uint64_t serial,
     if (recovery) batch.change = Change::rescan;
     const auto& path = request.location.parsing_name;
     if (uses_shell_namespace(request.location)) {
-        enumerate_shell_namespace(state, serial, request);
+        enumerate_shell_namespace(state, serial, request, recovery);
         return;
     }
     // All provider/drive calls stay here, including disconnected mappings.
@@ -418,34 +524,6 @@ void enumerate(const std::shared_ptr<State>& state, std::uint64_t serial,
     }
     publish(state, serial, std::move(batch));
 }
-// Directory I/O, its OVERLAPPED and buffers live ONLY on this bounded worker.
-// UI cancellation never waits; even a broken driver's cancellation retains its
-// existing slot until completion, rather than freeing storage still used by I/O.
-struct DirectoryWatch final {
-    HANDLE directory{INVALID_HANDLE_VALUE};
-    OVERLAPPED io{};
-    alignas(DWORD) std::array<std::byte, 64 * 1024> buffer{};
-    bool pending{};
-    DirectoryWatch() { io.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr); }
-    ~DirectoryWatch() {
-        if (pending) {
-            CancelIoEx(directory, &io);
-            DWORD bytes{};
-            (void)GetOverlappedResult(directory, &io, &bytes, TRUE);
-        }
-        if (directory != INVALID_HANDLE_VALUE) CloseHandle(directory);
-        if (io.hEvent) CloseHandle(io.hEvent);
-    }
-    DWORD arm() {
-        ResetEvent(io.hEvent);
-        if (!ReadDirectoryChangesW(directory, buffer.data(), static_cast<DWORD>(buffer.size()),
-            FALSE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
-            FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE |
-            FILE_NOTIFY_CHANGE_ATTRIBUTES, nullptr, &io, nullptr)) return GetLastError();
-        pending = true;
-        return ERROR_SUCCESS;
-    }
-};
 bool leaf_name(std::wstring_view name) {
     return !name.empty() && name.size() <= kMaxName && name != L"." && name != L".." &&
         name.find_first_of(L"\\/:*?\"") == std::wstring::npos;
@@ -503,12 +581,77 @@ bool decode_changes(const std::shared_ptr<State>& state, std::uint64_t serial,
     }
     return true;
 }
+// A namespace folder backed by local directories (the Desktop) is watched, but
+// its changes are not decoded: any event coalesces into one full rescan.
+void watch_shell_namespace(const std::shared_ptr<State>& state, std::uint64_t serial,
+                           const Request& request) {
+    NamespaceWatches set;
+    enumerate_shell_namespace(state, serial, request, false, &set);
+    { std::lock_guard lock(state->mutex); state->initial_complete = true; }
+    // Virtual locations explicitly require manual Refresh.
+    if (set.watches.empty() && !set.error) return;
+    if (!interested(state, serial)) return;
+    if (set.error) {
+        publish(state, serial, {request, {}, Phase::complete, set.error, Change::watch_error}); return;
+    }
+    { std::lock_guard lock(state->mutex); state->watch_open = true; }
+    if (!publish(state, serial, {request, {}, Phase::complete, 0, Change::watching})) return;
+    std::vector<HANDLE> handles{state->control};
+    for (const auto& watch : set.watches) handles.push_back(watch->io.hEvent);
+    for (;;) {
+        {
+            std::lock_guard lock(state->mutex);
+            state->running = false; // control event releases this idle wait
+        }
+        const DWORD wake = WaitForMultipleObjects(static_cast<DWORD>(handles.size()),
+                                                  handles.data(), FALSE, INFINITE);
+        bool rescan = false;
+        DWORD error = 0;
+        {
+            std::lock_guard lock(state->mutex);
+            if (state->stop || state->serial != serial) return;
+            state->running = true;
+            rescan = state->recovery;
+            error = state->injected_error;
+            state->injected_error = 0;
+            state->recovery = false;
+            ResetEvent(state->control);
+        }
+        if (error) {
+            publish(state, serial, {request, {}, Phase::complete, error, Change::watch_error}); return;
+        }
+        if (wake == WAIT_FAILED) {
+            publish(state, serial, {request, {}, Phase::complete, GetLastError(), Change::watch_error}); return;
+        }
+        for (auto& watch : set.watches) {
+            if (WaitForSingleObject(watch->io.hEvent, 0) != WAIT_OBJECT_0) continue;
+            DWORD bytes{};
+            const BOOL success = GetOverlappedResult(watch->directory, &watch->io, &bytes, FALSE);
+            error = success ? ERROR_SUCCESS : GetLastError();
+            watch->pending = false;
+            if (error && error != ERROR_NOTIFY_ENUM_DIR) {
+                publish(state, serial, {request, {}, Phase::complete, error, Change::watch_error}); return;
+            }
+            rescan = true;
+            if (!interested(state, serial)) return;
+            // Kernel retains changes between reads; rearm before scanning.
+            error = watch->arm();
+            if (error) {
+                publish(state, serial, {request, {}, Phase::complete, error, Change::watch_error}); return;
+            }
+        }
+        if (!rescan || !interested(state, serial)) continue;
+        { std::lock_guard lock(state->mutex); state->recovering = true; }
+        if (!publish(state, serial, {request, {}, Phase::loading, 0, Change::rescan_begin})) return;
+        enumerate_shell_namespace(state, serial, request, true);
+        { std::lock_guard lock(state->mutex); state->recovering = false; }
+    }
+}
 void enumerate_and_watch(const std::shared_ptr<State>& state, std::uint64_t serial,
                          const Request& request) {
-    if (!is_filesystem_location(request.location.parsing_name)) {
-        enumerate(state, serial, request);
-        { std::lock_guard lock(state->mutex); state->initial_complete = true; }
-        return; // Virtual locations explicitly require manual Refresh.
+    if (uses_shell_namespace(request.location)) {
+        watch_shell_namespace(state, serial, request);
+        return;
     }
     DirectoryWatch watch;
     const auto& path = request.location.parsing_name;
