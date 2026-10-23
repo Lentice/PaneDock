@@ -337,6 +337,8 @@ class Pane final {
     void finish_failed_address() noexcept;
     void pin_current_folder();
     void show_pinned_locations_menu(POINT screen);
+    // One pinned-menu slot (kPinnedMenu*Offset): navigate, add or manage.
+    void run_pinned_menu_slot(int slot);
     void switch_active_tab(const std::string &tab_id);
     void cycle_active_tab(bool reverse);
     void add_tab(panedock::core::ShellLocation initial_location);

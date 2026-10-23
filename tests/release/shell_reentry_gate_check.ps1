@@ -189,20 +189,21 @@ if ($chromeBody -match 'shell_core::display_text_for_parsing_name' -or
 }
 # Managed-list selection is local; native menu/operation binding behavior is
 # exercised through the controlled Pane seams, alongside the guard unit test.
-# PD-198: popup selection still returns through main WM_COMMAND; only the
-# selected pane's option execution moves behind PaneHost's existing gate.
-$commandStart = $paneSource.IndexOf('bool Pane::handle_command(')
-$commandEnd = $paneSource.IndexOf('bool Pane::draw_control(', [Math]::Max(0, $commandStart))
-if ($commandStart -lt 0 -or $commandEnd -lt $commandStart) {
-    throw 'Shell re-entry invariant failed: Pane command body missing'
+# The pinned popup is the pane's own: it re-checks itself after the menu
+# pumps, navigates inside a Shell call scope, and asks its host for the
+# application-wide manager rather than opening it.
+$menuStart = $paneSource.IndexOf('void Pane::show_pinned_locations_menu(')
+$menuEnd = $paneSource.IndexOf('void Pane::handle_tab_context_menu(', [Math]::Max(0, $menuStart))
+if ($menuStart -lt 0 -or $menuEnd -lt $menuStart) {
+    throw 'Shell re-entry invariant failed: Pane pinned menu body missing'
 }
-$commandBody = $paneSource.Substring($commandStart, $commandEnd - $commandStart)
-if ([regex]::Matches($commandBody, 'ShellCallScope shell_call\(reentry_guard\(\)\);\s*\(void\)navigate_to\(').Count -ne 2 -or
-    $commandBody -notmatch '!active\(\)' -or
-    $commandBody -match 'show_pinned_locations_manager') {
+$menuBody = $paneSource.Substring($menuStart, $menuEnd - $menuStart)
+if ($menuBody -notmatch 'track_popup_menu\([\s\S]*?!active\(\)' -or
+    [regex]::Matches($menuBody, 'ShellCallScope shell_call\(reentry_guard\(\)\);\s*\(void\)navigate_to\(').Count -ne 1 -or
+    $menuBody -notmatch 'pane_host\(\)->manage_pinned_locations\(\)' -or
+    $menuBody -match 'show_pinned_locations_manager') {
     throw 'Shell re-entry invariant failed: Pane pinned options lost their gate or own the app dialog'
 }
-Assert-Source 'state\.panes\[command\.pane\]\.handle_command\(id\)' 'popup commands dispatch to the decoded pane'
 # The tab strip menu is the pane's own feature: the pane hit-tests, shows it
 # and closes the tabs itself. The coordinator only supplies the re-entry gate,
 # so WM_CONTEXTMENU must be on the deferral list and reach the pane through it.
@@ -211,7 +212,7 @@ Assert-Source 'message != WM_LBUTTONUP && message != WM_CONTEXTMENU' `
 if ($paneSource -notmatch 'case WM_CONTEXTMENU: \{[\s\S]*?pane->tab_strip\(\)[\s\S]*?handle_pane_control_message\([\s\S]*?pane->handle_tab_context_menu\(screen\);') {
     throw 'Shell re-entry invariant failed: the pane must run its own tab popup behind the host gate'
 }
-if ($paneSource -notmatch 'void Pane::handle_tab_context_menu\(POINT screen\)[\s\S]*?tab_at_screen\(screen\)[\s\S]*?TrackPopupMenu\([\s\S]*?close_tab\(tab_id\);[\s\S]*?close_tabs\(tab_id, command\);') {
+if ($paneSource -notmatch 'void Pane::handle_tab_context_menu\(POINT screen\)[\s\S]*?tab_at_screen\(screen\)[\s\S]*?track_popup_menu\([\s\S]*?close_tab\(tab_id\);[\s\S]*?close_tabs\(tab_id, command\);') {
     throw 'Shell re-entry invariant failed: Pane must own tab popup hit-test, display and close'
 }
 
@@ -291,34 +292,32 @@ if ($applyStart -lt 0 -or
 # PD-211: TrackPopupMenu pumps our message loop, so every one of our own popup
 # menus must raise the Shell call depth -- that depth is the whole basis of the
 # window proc's deferral, and apply_layout's "add_group/delete_group can be
-# reached solely through WM_COMMAND" invariant rests on it. This is a static
-# gate because a modal menu cannot be driven from a test, and because the
-# failure mode of forgetting it on menu number five is silent.
-$menuSources = @(
-    (Join-Path $PSScriptRoot '..\..\src\app_shell\main.cpp'),
-    (Join-Path $PSScriptRoot '..\..\src\app_shell\pane.cpp')
-)
-$menuCallSites = 0
-foreach ($menuSource in $menuSources) {
-    $text = Get-Content -LiteralPath $menuSource -Raw
-    $matches = [regex]::Matches($text, 'TrackPopupMenu(Ex)?\(')
-    foreach ($match in $matches) {
-        $menuCallSites++
-        # The scope must be opened close above the call, not anywhere in the file.
-        $from = [Math]::Max(0, $match.Index - 400)
-        $preamble = $text.Substring($from, $match.Index - $from)
-        if ($preamble -notmatch 'ShellCallScope\s+shell_call\(') {
-            throw ("Shell re-entry invariant failed: TrackPopupMenu at " +
-                   "$menuSource offset $($match.Index) is not inside a Shell " +
-                   'call scope. A menu pumps the message loop, so it must ' +
-                   'enter the Shell re-entry guard or the deferral list stops working.')
-        }
-    }
+# reached solely through WM_COMMAND" invariant rests on it. A modal menu cannot
+# be driven from a test, so this stays a static gate: every popup goes through
+# app_shell::track_popup_menu, which holds the scope, and nothing else in the
+# app calls TrackPopupMenu directly. (Shell context menus in explorer_host are
+# tracked by their own Shell-call path.)
+$guardHeader = Get-Content -LiteralPath (
+    Join-Path $PSScriptRoot '..\..\src\app_shell\shell_reentry_guard.h') -Raw
+if ($guardHeader -notmatch 'inline int track_popup_menu\([\s\S]*?ShellCallScope shell_call\(guard\);\s*return TrackPopupMenuEx\(') {
+    throw 'Shell re-entry invariant failed: track_popup_menu must hold a Shell call scope around TrackPopupMenuEx'
 }
-if ($menuCallSites -lt 4) {
-    throw ("Shell re-entry invariant failed: expected at least 4 of our own " +
+$appShellSources = Get-ChildItem -LiteralPath (
+    Join-Path $PSScriptRoot '..\..\src\app_shell') -Filter '*.cpp'
+$menuCallSites = 0
+foreach ($menuSource in $appShellSources) {
+    $text = Get-Content -LiteralPath $menuSource.FullName -Raw
+    if ($text -match 'TrackPopupMenu(Ex)?\(') {
+        throw ("Shell re-entry invariant failed: $($menuSource.Name) calls " +
+               'TrackPopupMenu directly; use app_shell::track_popup_menu so ' +
+               'the menu holds the Shell call depth.')
+    }
+    $menuCallSites += [regex]::Matches($text, 'track_popup_menu\(').Count
+}
+if ($menuCallSites -lt 5) {
+    throw ("Shell re-entry invariant failed: expected at least 5 of our own " +
            "popup menus, found $menuCallSites. If a menu was removed, update " +
-           'this count; if the call moved, the gate above stopped covering it.')
+           'this count.')
 }
 
 Write-Output 'PASSED: shell_reentry_gate_check'

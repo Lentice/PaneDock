@@ -119,4 +119,16 @@ class ShellCallScope final {
     ShellReentryGuard &guard_;
 };
 
+// Shows one of our own popup menus and returns the chosen command, 0 for
+// none. TrackPopupMenu pumps our message loop, so the menu holds the Shell
+// call depth exactly as a Shell call does: that depth is what makes the window
+// procs defer interactions, and without it a deferred command could replay
+// *inside* the menu (PD-211). The returned command runs after, normally.
+inline int track_popup_menu(ShellReentryGuard &guard, HMENU menu, POINT screen,
+                            HWND owner) noexcept {
+    ShellCallScope shell_call(guard);
+    return TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x,
+                            screen.y, owner, nullptr);
+}
+
 }  // namespace panedock::app_shell

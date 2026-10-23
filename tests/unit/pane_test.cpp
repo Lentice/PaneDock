@@ -479,6 +479,20 @@ void test_navigation_completion_rejects_stale_results_and_refreshes_chrome() {
     EXPECT(!pane.handle_command(-1));
 }
 
+// The pinned popup's slots act locally: Manage asks the host for the one
+// application-wide dialog, and a slot without a location does nothing.
+void test_pinned_menu_slots_act_locally() {
+    TestPaneHost host;
+    panedock::app_shell::Pane pane;
+    pane.set_host(&host);
+    pane.set_reentry_guard(&host.guard);
+    pane.run_pinned_menu_slot(panedock::app_shell::kPinnedMenuManageOffset);
+    EXPECT(host.manage_requests == 1);
+    pane.run_pinned_menu_slot(panedock::app_shell::kPinnedMenuDesktopOffset);
+    pane.run_pinned_menu_slot(panedock::app_shell::kPinnedMenuLocationOffset);
+    EXPECT(host.manage_requests == 1 && !host.guard.in_shell_call());
+}
+
 void test_tab_commands_schedule_only_successful_changes() {
     TestPaneHost host;
     panedock::core::PaneState state{
@@ -648,6 +662,7 @@ int main() {
     test_local_content_queries_do_not_pump_deferred_commands();
     test_content_operations_without_a_live_view_preserve_model_and_windows();
     test_button_erase_preserves_pixels_until_owner_draw();
+    test_pinned_menu_slots_act_locally();
     test_tab_commands_schedule_only_successful_changes();
     test_replacement_navigation_does_not_inherit_history_suppression();
     test_pane_without_host_is_constructible();

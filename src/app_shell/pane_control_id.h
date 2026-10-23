@@ -83,21 +83,16 @@ inline constexpr int kDeleteGroupId = kGroupActionIdBase + 3;
 inline constexpr int kMoveUpId = kGroupActionIdBase + 4;
 inline constexpr int kMoveDownId = kGroupActionIdBase + 5;
 
-// View-mode popup commands: eight ids per pane, 360-391, kept separate from
-// the navigation buttons and layout commands.
-inline constexpr int kViewModeMenuIdBase = 360;
+// The view-mode popup's options. The pane runs that menu itself, so its
+// command ids are local to the menu (1-8), not a global block.
 inline constexpr std::size_t kViewModeOptionCount = 8;
-inline constexpr int kViewModeMenuIdCount =
-    static_cast<int>(kCommandPaneCount * kViewModeOptionCount);
 
 // Layout template buttons: one per fixed arrangement.
 inline constexpr int kLayoutButtonIdBase = 400;
 inline constexpr std::size_t kLayoutButtonCount = 8;
 
-// Pinned popup commands: one block per pane, each with 64 custom locations,
-// two fixed locations and two actions. The 500-771 range is separate from all
-// controls.
-inline constexpr int kPinnedMenuIdBase = 500;
+// The pinned popup's slots: two fixed locations, up to 64 custom ones and two
+// actions. The pane runs that menu itself; a slot's command id is slot + 1.
 inline constexpr int kPinnedMenuMaxLocationCount = 64;
 inline constexpr int kPinnedMenuDesktopOffset = 0;
 inline constexpr int kPinnedMenuThisPcOffset = 1;
@@ -105,10 +100,7 @@ inline constexpr int kPinnedMenuLocationOffset = 2;
 inline constexpr int kPinnedMenuAddOffset =
     kPinnedMenuLocationOffset + kPinnedMenuMaxLocationCount;
 inline constexpr int kPinnedMenuManageOffset = kPinnedMenuAddOffset + 1;
-inline constexpr int kPinnedMenuSlotsPerPane = kPinnedMenuManageOffset + 1;
 inline constexpr std::size_t kPinnedMenuFixedLocationCount = 2;
-inline constexpr int kPinnedMenuIdCount =
-    static_cast<int>(kCommandPaneCount) * kPinnedMenuSlotsPerPane;
 
 // PD-113: fixed commands for the tab context menu, after all existing control
 // and popup command ranges.
@@ -122,9 +114,6 @@ enum class CommandKind {
     group_list,       // a selection in the sidebar's Group list
     group_action,     // `action`
     layout_template,  // `index` selects the arrangement
-    view_mode,        // `pane`, `index` selects the option
-    pinned_location,  // `pane`, `index` is the slot within that pane's block
-    pinned_manage,    // `pane`
     tab_close,        // the four tab context-menu commands, `index` 0-3
     pane_control,     // `control`
 };
@@ -154,28 +143,10 @@ inline Command decode_command(int id) noexcept {
         command.control = *control;
         return command;
     }
-    if (id >= kViewModeMenuIdBase &&
-        id < kViewModeMenuIdBase + kViewModeMenuIdCount) {
-        const int offset = id - kViewModeMenuIdBase;
-        Command command{CommandKind::view_mode};
-        command.pane = static_cast<std::size_t>(offset) / kViewModeOptionCount;
-        command.index = static_cast<std::size_t>(offset) % kViewModeOptionCount;
-        return command;
-    }
     if (id >= kLayoutButtonIdBase &&
         id < kLayoutButtonIdBase + static_cast<int>(kLayoutButtonCount)) {
         Command command{CommandKind::layout_template};
         command.index = static_cast<std::size_t>(id - kLayoutButtonIdBase);
-        return command;
-    }
-    if (id >= kPinnedMenuIdBase && id < kPinnedMenuIdBase + kPinnedMenuIdCount) {
-        const int offset = id - kPinnedMenuIdBase;
-        const int slot = offset % kPinnedMenuSlotsPerPane;
-        Command command{slot == kPinnedMenuManageOffset
-                            ? CommandKind::pinned_manage
-                            : CommandKind::pinned_location};
-        command.pane = static_cast<std::size_t>(offset / kPinnedMenuSlotsPerPane);
-        command.index = static_cast<std::size_t>(slot);
         return command;
     }
     if (id >= kCloseTabId && id <= kCloseTabsToRightId) {

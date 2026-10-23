@@ -162,10 +162,7 @@ using panedock::app_shell::kLayoutButtonIdBase;
 using panedock::app_shell::kMoveDownId;
 using panedock::app_shell::kMoveUpId;
 using panedock::app_shell::kNewGroupId;
-using panedock::app_shell::kPinnedMenuIdBase;
-using panedock::app_shell::kPinnedMenuManageOffset;
 using panedock::app_shell::kPinnedMenuMaxLocationCount;
-using panedock::app_shell::kPinnedMenuSlotsPerPane;
 using panedock::app_shell::kRenameGroupId;
 using panedock::app_shell::kViewModeOptionCount;
 static_assert(panedock::app_shell::kCommandPaneCount ==
@@ -471,6 +468,7 @@ struct AppState : public panedock::app_shell::PaneHost {
     std::span<const panedock::app_shell::PinnedLocation>
     pinned_locations() const noexcept override;
     void pin_location(panedock::core::ShellLocation location) override;
+    void manage_pinned_locations() override;
     bool diagnostic_timing_enabled() const noexcept override;
     std::wstring tab_display_text(std::wstring_view parsing_name) override;
     HFONT chrome_font() const noexcept override;
@@ -2032,6 +2030,13 @@ AppState::pinned_locations() const noexcept {
     return pinned_location_menu_items;
 }
 
+void AppState::manage_pinned_locations() {
+    if (pinned_location_menu_items.size() <
+        panedock::app_shell::kPinnedMenuFixedLocationCount)
+        return;
+    show_pinned_locations_manager(main_window, *this);
+}
+
 void AppState::pin_location(panedock::core::ShellLocation location) {
     if (application.pinned_locations.size() >=
         static_cast<std::size_t>(kPinnedMenuMaxLocationCount))
@@ -3176,23 +3181,6 @@ bool handle_global_command(HWND window, AppState& state, int id,
             state.main_window, anchor);
         return true;
     }
-    if (command.kind == CommandKind::view_mode ||
-        command.kind == CommandKind::pinned_location) {
-        if (command.pane < state.panes.size())
-            state.panes[command.pane].handle_command(id);
-        return true;
-    }
-    if (command.kind == CommandKind::pinned_manage) {
-        if (command.pane >= state.panes.size()) return true;
-        if (state.panes[command.pane].pane_state() == nullptr) return true;
-        const auto *pane_host = state.panes[command.pane].pane_host();
-        if (pane_host == nullptr) return true;
-        const auto locations = pane_host->pinned_locations();
-        if (locations.size() < panedock::app_shell::kPinnedMenuFixedLocationCount)
-            return true;
-        show_pinned_locations_manager(window, state);
-        return true;
-    }
     if (command.kind == CommandKind::layout_template) {
         set_layout(window, state, kLayoutTemplates[command.index]);
         return true;
@@ -3293,18 +3281,10 @@ bool handle_context_menu(HWND target, AppState& state, POINT screen) {
         SetMenuItemInfoW(menu, id, FALSE, &item);
     }
     SetForegroundWindow(window);
-    // TrackPopupMenu pumps our message loop, so it has to raise the Shell call
-    // depth exactly as a Shell call does -- that depth is what makes this very
-    // window proc defer WM_COMMAND. Without it a deferred sidebar click can
-    // replay inside this menu and move the selection, and the command below
-    // resolves the selection *again* -- so Delete would hit another Group
-    // (PD-211). The scope covers the menu only.
-    int command = 0;
-    {
-        ShellCallScope shell_call(state.reentry_guard);
-        command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                                 point.x, point.y, 0, window, nullptr);
-    }
+    // Without the menu's Shell depth a deferred sidebar click could replay
+    // inside it and move the selection, and Delete would hit another Group.
+    const int command =
+        panedock::app_shell::track_popup_menu(state.reentry_guard, menu, point, window);
     DestroyMenu(menu);
     for (const auto bitmap : bitmaps) {
         if (bitmap != nullptr) DeleteObject(bitmap);
@@ -3312,7 +3292,9 @@ bool handle_context_menu(HWND target, AppState& state, POINT screen) {
     if (state.is_shutting_down()) return true;
     if (command != 0) {
         // The menu pumped; the Group may be gone. Each handler re-resolves
-        // the id and ignores a Group that no longer exists.
+        // the id and ignores a Group that no longer exists. Sent rather than
+        // run here: this menu can open during an outer Shell call, and the
+        // window proc defers WM_COMMAND until that call returns.
         state.group_menu_target = target_id;
         SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
     }

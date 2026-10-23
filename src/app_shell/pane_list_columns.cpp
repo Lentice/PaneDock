@@ -103,12 +103,7 @@ void Pane::show_list_column_menu(POINT screen) noexcept try {
         AppendMenuW(menu, flags, static_cast<UINT_PTR>(index + 1), info->label);
     }
     const HWND list = list_window_;
-    int chosen = 0;
-    {
-        ShellCallScope shell_call(reentry_guard());
-        chosen = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y,
-                                 list, nullptr);
-    }
+    const int chosen = track_popup_menu(reentry_guard(), menu, screen, list);
     DestroyMenu(menu);
     // The menu pumps messages: re-verify before touching anything.
     if (chosen <= 0 || static_cast<std::size_t>(chosen) > core::kKnownColumns.size() ||

@@ -52,6 +52,8 @@ class PaneHost {
     virtual std::span<const PinnedLocation> pinned_locations() const noexcept = 0;
     // Pinning updates application persistence, not one pane.
     virtual void pin_location(panedock::core::ShellLocation location) = 0;
+    // "Manage Pinned Locations...": one application-wide dialog.
+    virtual void manage_pinned_locations() = 0;
     // --diagnostic only; gates the switching-latency timing (PD-209).
     virtual bool diagnostic_timing_enabled() const noexcept = 0;
     // Shell name resolution uses the coordinator's re-entry gate.

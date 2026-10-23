@@ -73,41 +73,6 @@ void test_every_block_decodes_to_its_own_kind() {
     }
 }
 
-void test_view_mode_ids_split_into_per_pane_blocks() {
-    for (std::size_t pane = 0; pane < kCommandPaneCount; ++pane) {
-        for (std::size_t option = 0; option < kViewModeOptionCount; ++option) {
-            const int id =
-                kViewModeMenuIdBase +
-                static_cast<int>(pane * kViewModeOptionCount + option);
-            const auto command = decode_command(id);
-            EXPECT(command.kind == CommandKind::view_mode);
-            EXPECT(command.pane == pane);
-            EXPECT(command.index == option);
-        }
-    }
-}
-
-// The manage slot is the one that must not be handed to Pane::handle_command.
-void test_pinned_manage_is_the_only_action_slot() {
-    for (std::size_t pane = 0; pane < kCommandPaneCount; ++pane) {
-        const int base =
-            kPinnedMenuIdBase + static_cast<int>(pane) * kPinnedMenuSlotsPerPane;
-        for (int slot = 0; slot < kPinnedMenuSlotsPerPane; ++slot) {
-            const auto command = decode_command(base + slot);
-            EXPECT(command.pane == pane);
-            EXPECT(command.index == static_cast<std::size_t>(slot));
-            EXPECT(command.kind == (slot == kPinnedMenuManageOffset
-                                        ? CommandKind::pinned_manage
-                                        : CommandKind::pinned_location));
-        }
-    }
-    // The last pane's manage slot is the last id in the block; one past it is
-    // outside every range.
-    const int past = kPinnedMenuIdBase + kPinnedMenuIdCount;
-    EXPECT(decode_command(past - 1).kind == CommandKind::pinned_manage);
-    EXPECT(decode_command(past).kind == CommandKind::unknown);
-}
-
 // A block that started one id early or late would show up as an overlap.
 void test_the_blocks_do_not_overlap() {
     std::set<int> seen;
@@ -116,7 +81,7 @@ void test_the_blocks_do_not_overlap() {
         EXPECT(seen.insert(id).second);
     }
     // Spot-check the gaps between blocks stay unclaimed.
-    for (const int id : {0, 99, 107, 359, 392 + 1, 408, 499, 779, 784, 791})
+    for (const int id : {0, 99, 107, 360, 391, 408, 500, 771, 779, 784, 791})
         if (!decode_pane_control(id).has_value())
             EXPECT(decode_command(id).kind == CommandKind::unknown);
 }
@@ -128,8 +93,6 @@ int main() {
     test_ids_are_distinct();
     test_non_pane_ids_are_rejected();
     test_every_block_decodes_to_its_own_kind();
-    test_view_mode_ids_split_into_per_pane_blocks();
-    test_pinned_manage_is_the_only_action_slot();
     test_the_blocks_do_not_overlap();
     return panedock::test::summary("pane_control_id");
 }

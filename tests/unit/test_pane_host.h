@@ -56,6 +56,8 @@ class TestPaneHost : public panedock::app_shell::PaneHost {
         return {};
     }
     void pin_location(panedock::core::ShellLocation) override {}
+    int manage_requests{};
+    void manage_pinned_locations() override { ++manage_requests; }
     // No test here pumps pane control messages, so this answers "none of the
     // pane's business".
     std::optional<LRESULT> handle_pane_control_message(

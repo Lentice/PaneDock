@@ -530,46 +530,6 @@ void Pane::release_navigation_icon_font() noexcept {
 }
 
 bool Pane::handle_command(int id) {
-    const int view_mode_base = kViewModeMenuIdBase + static_cast<int>(
-        index_ * panedock::shell_core::kViewModeOptions.size());
-    if (id >= view_mode_base && id < view_mode_base +
-            static_cast<int>(panedock::shell_core::kViewModeOptions.size())) {
-        set_view_mode(panedock::shell_core::kViewModeOptions[
-            static_cast<std::size_t>(id - view_mode_base)]);
-        return true;
-    }
-    const int pinned_base =
-        kPinnedMenuIdBase + static_cast<int>(index_ * kPinnedMenuSlotsPerPane);
-    if (id >= pinned_base && id < pinned_base + kPinnedMenuManageOffset) {
-        if (!active() ||
-            pane_state() == nullptr) return true;
-        const int item = id - pinned_base;
-        const auto locations = pane_host()->pinned_locations();
-        if (locations.size() < kPinnedMenuFixedLocationCount) return true;
-        if (item == kPinnedMenuDesktopOffset ||
-            item == kPinnedMenuThisPcOffset) {
-            ShellCallScope shell_call(reentry_guard());
-            (void)navigate_to(
-                locations[static_cast<std::size_t>(item)].location);
-            return true;
-        }
-        if (item >= kPinnedMenuLocationOffset && item < kPinnedMenuAddOffset) {
-            const std::size_t location_index =
-                static_cast<std::size_t>(item - kPinnedMenuLocationOffset);
-            const std::size_t record_index =
-                kPinnedMenuFixedLocationCount + location_index;
-            if (record_index < locations.size()) {
-                ShellCallScope shell_call(reentry_guard());
-                (void)navigate_to(locations[record_index].location);
-            }
-            return true;
-        }
-        if (item == kPinnedMenuAddOffset) {
-            pin_current_folder();
-            return true;
-        }
-    }
-
     switch (decode_pane_control(id).value_or(PaneControl::tab_strip)) {
         case PaneControl::back:
             navigate_history(true);
@@ -1064,9 +1024,8 @@ void Pane::show_view_mode_menu(POINT screen) {
         panedock::shell_core::parse_view_mode(tab->view_mode);
     HMENU menu = CreatePopupMenu();
     if (menu == nullptr) return;
-    const int menu_id_base =
-        kViewModeMenuIdBase +
-        static_cast<int>(index_ * panedock::shell_core::kViewModeOptions.size());
+    // Local ids: option index + 1.
+    const int menu_id_base = 1;
     int checked_id = 0;
     for (std::size_t index = 0;
          index < panedock::shell_core::kViewModeOptions.size(); ++index) {
@@ -1087,22 +1046,15 @@ void Pane::show_view_mode_menu(POINT screen) {
                 1,
             checked_id, MF_BYCOMMAND);
     SetForegroundWindow(window_);
-    // TrackPopupMenu pumps our message loop, so it has to raise the Shell call
-    // depth exactly as a Shell call does -- that depth is what makes the window
-    // proc defer interactions, and without it a deferred command can replay
-    // *inside* this menu (PD-211). The scope covers the menu only: the command
-    // below must run normally.
-    int command = 0;
-    {
-        ShellCallScope shell_call(reentry_guard());
-        command = TrackPopupMenu(
-            menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0,
-            window_, nullptr);
-    }
+    const int command = track_popup_menu(reentry_guard(), menu, screen, window_);
     DestroyMenu(menu);
-    if (!active() || command == 0) return;
-    if (const HWND owner = GetParent(window_); owner != nullptr)
-        SendMessageW(owner, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+    // The menu opens only from a deferred-safe click, so no outer Shell call
+    // is pumping here; the menu itself may have switched Group or tab.
+    if (!active() || command < menu_id_base ||
+        command >= menu_id_base + static_cast<int>(panedock::shell_core::kViewModeOptions.size()))
+        return;
+    set_view_mode(panedock::shell_core::kViewModeOptions[
+        static_cast<std::size_t>(command - menu_id_base)]);
 }
 
 void Pane::submit_address() {
@@ -1232,8 +1184,8 @@ void Pane::show_pinned_locations_menu(POINT screen) {
     if (locations.size() < kPinnedMenuFixedLocationCount) return;
     HMENU menu = CreatePopupMenu();
     if (menu == nullptr) return;
-    const int menu_id_base =
-        kPinnedMenuIdBase + static_cast<int>(index_ * kPinnedMenuSlotsPerPane);
+    // Local ids: slot + 1.
+    const int menu_id_base = 1;
     for (std::size_t index = 0; index < kPinnedMenuFixedLocationCount;
          ++index) {
         AppendMenuW(menu, MF_STRING,
@@ -1261,18 +1213,33 @@ void Pane::show_pinned_locations_menu(POINT screen) {
         static_cast<UINT_PTR>(menu_id_base + kPinnedMenuManageOffset),
         L"Manage Pinned Locations...");
     SetForegroundWindow(window_);
-    // See the view-mode menu above: the menu pumps, so it holds the depth.
-    int command = 0;
-    {
-        ShellCallScope shell_call(reentry_guard());
-        command = TrackPopupMenu(
-            menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0,
-            window_, nullptr);
-    }
+    const int command = track_popup_menu(reentry_guard(), menu, screen, window_);
     DestroyMenu(menu);
-    if (!active() || command == 0) return;
-    if (const HWND owner = GetParent(window_); owner != nullptr)
-        SendMessageW(owner, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+    // The menu pumped: re-read everything it may have changed.
+    if (!active() || pane_state() == nullptr || command < menu_id_base) return;
+    run_pinned_menu_slot(command - menu_id_base);
+}
+
+void Pane::run_pinned_menu_slot(int slot) {
+    if (slot == kPinnedMenuManageOffset) {
+        pane_host()->manage_pinned_locations();
+        return;
+    }
+    if (slot == kPinnedMenuAddOffset) {
+        pin_current_folder();
+        return;
+    }
+    const auto locations = pane_host()->pinned_locations();
+    std::size_t record_index = locations.size();
+    if (slot == kPinnedMenuDesktopOffset || slot == kPinnedMenuThisPcOffset)
+        record_index = static_cast<std::size_t>(slot);
+    else if (slot >= kPinnedMenuLocationOffset && slot < kPinnedMenuAddOffset)
+        record_index = kPinnedMenuFixedLocationCount +
+                       static_cast<std::size_t>(slot - kPinnedMenuLocationOffset);
+    if (locations.size() < kPinnedMenuFixedLocationCount ||
+        record_index >= locations.size()) return;
+    ShellCallScope shell_call(reentry_guard());
+    (void)navigate_to(locations[record_index].location);
 }
 
 void Pane::handle_tab_context_menu(POINT screen) {
@@ -1298,13 +1265,7 @@ void Pane::handle_tab_context_menu(POINT screen) {
                 static_cast<UINT_PTR>(kCloseTabsToRightId),
                 L"Close Tabs to the Right");
     SetForegroundWindow(window);
-    // See the view-mode menu above: the menu pumps, so it holds the depth.
-    int command = 0;
-    {
-        ShellCallScope shell_call(reentry_guard());
-        command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                                 screen.x, screen.y, 0, window, nullptr);
-    }
+    const int command = track_popup_menu(reentry_guard(), menu, screen, window);
     DestroyMenu(menu);
     // The menu may have pumped a WM_CLOSE or a Group switch; `tabs` and
     // `target_tab` above are dead from here on, and tab_id is a value copy.
