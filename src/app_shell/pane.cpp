@@ -1171,9 +1171,7 @@ void Pane::submit_address() {
 int Pane::show_message(const wchar_t* text, UINT type) noexcept {
     // MessageBoxW pumps: hold the Shell call depth so input is deferred.
     ShellCallScope shell_call(reentry_guard());
-    return context_menu_presenter_
-        ? context_menu_presenter_->message_box(window_, text, type)
-        : MessageBoxW(window_, text, L"PaneDock", type);
+    return menu_presenter().message_box(window_, text, type);
 }
 
 void Pane::finish_failed_address() noexcept try {
@@ -1210,9 +1208,7 @@ void Pane::finish_failed_address() noexcept try {
             request.screen = {rect.left, rect.bottom};
         ShellCallScope shell_call(reentry_guard());
         const auto current = [this] { return active(); };
-        (void)(context_menu_presenter_
-            ? context_menu_presenter_->invoke_default(window_, request, current)
-            : explorer_host::invoke_default_shell_verb(window_, request, current));
+        (void)menu_presenter().invoke_default(window_, request, current);
         return;
     }
     std::wstring text;

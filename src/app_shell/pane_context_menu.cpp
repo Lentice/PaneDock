@@ -101,8 +101,7 @@ bool Pane::present_context_menu(HWND owner, ContextMenuSnapshot snapshot) noexce
         const auto current = [&] { return file_command_is_current(snapshot.target); };
         focus_content();
         if (!current()) return false;
-        shown = context_menu_presenter_ ? context_menu_presenter_->show(owner, snapshot.request, current) :
-            explorer_host::show_native_context_menu(owner, snapshot.request, current);
+        shown = menu_presenter().show(owner, snapshot.request, current);
     }
     if (deferred == Deferred::none || !file_command_is_current(snapshot.target)) return shown;
     if (deferred == Deferred::rename) {
@@ -139,9 +138,7 @@ bool Pane::invoke_default_list_rows_verb(std::span<const std::size_t> rows) noex
     struct Reset { bool& busy; ~Reset() { busy = false; } } reset{context_menu_busy_};
     const auto current = [&] { return file_command_is_current(target); };
     if (!current()) return false;
-    return context_menu_presenter_
-        ? context_menu_presenter_->invoke_default(window_, request, current)
-        : explorer_host::invoke_default_shell_verb(window_, request, current);
+    return menu_presenter().invoke_default(window_, request, current);
 } catch (...) { return false; }
 
 bool Pane::invoke_default_list_row_verb(std::size_t row) noexcept try {
@@ -164,15 +161,11 @@ bool Pane::invoke_default_list_row_verb(std::size_t row) noexcept try {
         if (!current()) return false;
         // The row's own parsing identity, resolved by the Shell: a shortcut's
         // folder target or a Shell-folder file (.zip) stays in this pane.
-        folder = context_menu_presenter_
-            ? context_menu_presenter_->resolve_folder_target(window_, request, current)
-            : explorer_host::resolve_folder_target(window_, request, current);
+        folder = menu_presenter().resolve_folder_target(window_, request, current);
         if (!current()) return false;
         if (!folder) {
             // The owned request, never the row index: the pump may have re-sorted.
-            return context_menu_presenter_
-                ? context_menu_presenter_->invoke_default(window_, request, current)
-                : explorer_host::invoke_default_shell_verb(window_, request, current);
+            return menu_presenter().invoke_default(window_, request, current);
         }
     }
     if (!file_command_is_current(target)) return false;

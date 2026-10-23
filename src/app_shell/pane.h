@@ -440,6 +440,11 @@ class Pane final {
     std::optional<TypedAddress> typed_address_;
     std::optional<TypedAddress> failed_address_;
     std::unique_ptr<explorer_host::ContextMenuPresenter> context_menu_presenter_;
+    // The injected presenter, else the Shell's own.
+    explorer_host::ContextMenuPresenter& menu_presenter() const noexcept {
+        return context_menu_presenter_ ? *context_menu_presenter_
+                                       : explorer_host::native_context_menu_presenter();
+    }
     bool context_menu_busy_{};
     friend class PaneListDropTarget;
     HRESULT register_list_drop_target() noexcept;

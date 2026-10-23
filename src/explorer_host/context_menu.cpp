@@ -251,4 +251,26 @@ std::optional<FolderTarget> resolve_folder_target(HWND owner,
     return FolderTarget{parsing, (attributes & SFGAO_STREAM) != 0 ||
                                      (attributes & SFGAO_FILESYSTEM) == 0};
 } catch (...) { return std::nullopt; }
+
+ContextMenuPresenter& native_context_menu_presenter() noexcept {
+    class Native final : public ContextMenuPresenter {
+    public:
+        bool show(HWND owner, const ContextMenuRequest& request,
+                  const MenuTargetCurrent& current) noexcept override {
+            return show_native_context_menu(owner, request, current);
+        }
+        bool invoke_default(HWND owner, const ContextMenuRequest& request,
+                            const MenuTargetCurrent& current) noexcept override {
+            return invoke_default_shell_verb(owner, request, current);
+        }
+        std::optional<FolderTarget> resolve_folder_target(HWND owner,
+            const ContextMenuRequest& request,
+            const MenuTargetCurrent& current) noexcept override {
+            return explorer_host::resolve_folder_target(owner, request, current);
+        }
+    };
+    static Native native;
+    return native;
+}
+
 } // namespace panedock::explorer_host

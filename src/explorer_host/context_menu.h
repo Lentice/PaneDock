@@ -56,6 +56,9 @@ public:
         return MessageBoxW(owner, text, L"PaneDock", type);
     }
 };
+// The production adapter: the Shell's own menu, default verb and folder
+// resolution through the functions below. Stateless, so one serves every Pane.
+ContextMenuPresenter& native_context_menu_presenter() noexcept;
 bool show_native_context_menu(HWND owner, const ContextMenuRequest& request,
                               const MenuTargetCurrent& current) noexcept;
 // The items' default verb, as Explorer's double-click/Enter. A type with no
