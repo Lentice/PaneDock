@@ -31,7 +31,9 @@ HRESULT folder_drop_target(HWND owner, std::wstring_view folder,
     const Callbacks& callbacks, Microsoft::WRL::ComPtr<IDropTarget>& target) noexcept;
 HRESULT drag_continue(bool escape, DWORD keys, bool cancelled) noexcept;
 
-enum class Command { copy, cut, paste, delete_items };
+// delete_permanently is Explorer's Shift+Delete: no Recycle Bin, the Shell
+// still shows its own permanent-delete confirmation.
+enum class Command { copy, cut, paste, delete_items, delete_permanently };
 
 enum class OperationKind { copy, move, unsupported };
 
@@ -68,13 +70,20 @@ struct RenameResult final {
 };
 RenameResult rename_item(HWND owner, std::wstring_view item,
                          std::wstring_view name, const Callbacks& callbacks) noexcept;
+// Creates "New folder" (renamed on collision) in a folder; reports the created item.
+RenameResult new_folder(HWND owner, std::wstring_view folder,
+                        const Callbacks& callbacks) noexcept;
 
 // Absolute parsing identities may have different parents (e.g. search results).
 HRESULT selection_to_clipboard(std::span<const std::wstring> items, bool cut,
                                const Callbacks& callbacks) noexcept;
 PasteResult delete_selection(HWND owner, std::span<const std::wstring> items,
-                             const Callbacks& callbacks) noexcept;
+                             const Callbacks& callbacks, bool recycle = true) noexcept;
 
+// Shell items (CF_HDROP / Shell ID list) paste through IFileOperation; any other
+// clipboard content is offered to the destination folder's IDropTarget.
+bool offers_shell_items(IDataObject& data) noexcept;
+DWORD paste_drop_effects(std::optional<std::uint32_t> preferred) noexcept;
 PasteResult paste_from_clipboard(HWND owner,
                                  std::wstring_view destination_parsing_name,
                                  const Callbacks& callbacks) noexcept;

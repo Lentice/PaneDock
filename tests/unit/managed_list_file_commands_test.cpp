@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <iterator>
 #include <optional>
 #include <string>
@@ -32,6 +33,26 @@ class Controlled final : public managed_list::Source {
   private:
     std::vector<managed_list::Batch> batches;
 };
+class ActivationPresenter final : public explorer_host::ContextMenuPresenter {
+  public:
+    std::vector<explorer_host::ContextMenuRequest> requests;
+    bool current_before{};
+    bool current_after{};
+    std::function<void()> before_invoke;
+    bool show(HWND, const explorer_host::ContextMenuRequest&,
+              const explorer_host::MenuTargetCurrent&) noexcept override {
+        return false;
+    }
+    bool invoke_default(HWND, const explorer_host::ContextMenuRequest& request,
+                        const explorer_host::MenuTargetCurrent& current) noexcept override {
+        current_before = current();
+        if (before_invoke) before_invoke();
+        current_after = current();
+        if (!current_after) return false;
+        requests.push_back(request);
+        return current_after;
+    }
+};
 
 struct Fixture final {
     test::TestPaneHost host;
@@ -42,6 +63,7 @@ struct Fixture final {
     Controlled* source{};
     HWND parent{};
     HWND list{};
+    ActivationPresenter* activation{};
 
     explicit Fixture(int index = 0) {
         const auto instance = GetModuleHandleW(nullptr);
@@ -58,6 +80,9 @@ struct Fixture final {
         auto controlled = std::make_unique<Controlled>();
         source = controlled.get();
         pane.use_managed_list(std::move(controlled));
+        auto presenter = std::make_unique<ActivationPresenter>();
+        activation = presenter.get();
+        pane.use_context_menu_presenter(std::move(presenter));
         EXPECT(SUCCEEDED(pane.realize({0, 0, 640, 420}, {L"C:\\A", {}, {}})));
         list = FindWindowExW(pane.explorer_container(), nullptr, panedock::app_shell::kManagedListClassName, nullptr);
         EXPECT(list != nullptr);
@@ -140,6 +165,119 @@ void local_leaf_and_paste_folder() {
     EXPECT(!f.pane.file_command_is_current(snapshot));
 }
 
+void file_row_activation_is_not_ignored() {
+    Fixture f;
+    managed_list::Row document{L"document.docx", 0, false};
+    document.identity = {L"stable-document-leaf", false};
+    managed_list::Row folder{L"child", 0, true};
+    folder.identity = {L"child", false};
+    f.deliver(L"C:\\A", managed_list::Phase::complete, {document, folder});
+    const auto snapshot = f.pane.list_snapshot();
+    const auto& rows = snapshot.rows;
+    const auto file = std::find_if(rows.begin(), rows.end(), [](const auto& row) {
+        return row.name == L"document.docx";
+    });
+    const auto directory = std::find_if(rows.begin(), rows.end(), [](const auto& row) {
+        return row.name == L"child";
+    });
+    EXPECT(file != rows.end() && !file->directory);
+    EXPECT(directory != rows.end() && directory->directory);
+    const auto file_index = static_cast<std::size_t>(file - rows.begin());
+    const auto directory_index = static_cast<std::size_t>(directory - rows.begin());
+    NMITEMACTIVATE file_click{};
+    file_click.hdr.hwndFrom = f.list;
+    file_click.hdr.code = NM_DBLCLK;
+    file_click.iItem = static_cast<int>(file_index);
+    EXPECT(f.pane.list_notification(&file_click.hdr).has_value());
+    EXPECT(f.activation->requests.size() == 1);
+    if (!f.activation->requests.empty()) {
+        EXPECT(f.activation->requests[0].folder == L"C:\\A");
+        EXPECT(f.activation->requests[0].items ==
+               std::vector<std::wstring>{L"stable-document-leaf"});
+    }
+    EXPECT(f.activation->current_before && f.activation->current_after);
+
+    // Enter shares the same activation path and keeps the row's stable identity.
+    ListView_SetItemState(f.list, -1, 0, LVIS_FOCUSED);
+    ListView_SetItemState(f.list, static_cast<int>(file_index), LVIS_FOCUSED, LVIS_FOCUSED);
+    MSG enter{};
+    enter.hwnd = f.list;
+    enter.message = WM_KEYDOWN;
+    enter.wParam = VK_RETURN;
+    EXPECT(f.pane.translate_content_accelerator(&enter) == S_OK);
+    EXPECT(f.activation->requests.size() == 2);
+    if (f.activation->requests.size() == 2) {
+        EXPECT(f.activation->requests[1].folder == L"C:\\A");
+        EXPECT(f.activation->requests[1].items ==
+               std::vector<std::wstring>{L"stable-document-leaf"});
+    }
+
+    // Verify that native double-click notifications reach the same Pane
+    // activation path used by the file regression.
+    NMITEMACTIVATE click{};
+    click.hdr.hwndFrom = f.list;
+    click.hdr.code = NM_DBLCLK;
+    click.iItem = static_cast<int>(directory_index);
+    EXPECT(f.pane.list_notification(&click.hdr).has_value());
+    EXPECT(f.pane.list_snapshot().request.location.parsing_name == L"C:\\A\\child");
+
+    Fixture enter_fixture;
+    managed_list::Row enter_document{L"document.docx", 0, false};
+    enter_document.identity = {L"document.docx", false};
+    managed_list::Row enter_folder{L"child", 0, true};
+    enter_folder.identity = {L"child", false};
+    enter_fixture.deliver(L"C:\\A", managed_list::Phase::complete,
+                          {enter_document, enter_folder});
+    const int enter_folder_index = enter_fixture.row(L"child");
+    EXPECT(enter_folder_index >= 0);
+    if (enter_folder_index >= 0) {
+        ListView_SetItemState(enter_fixture.list, enter_folder_index,
+                              LVIS_FOCUSED, LVIS_FOCUSED);
+        MSG enter_folder_key{};
+        enter_folder_key.hwnd = enter_fixture.list;
+        enter_folder_key.message = WM_KEYDOWN;
+        enter_folder_key.wParam = VK_RETURN;
+        EXPECT(enter_fixture.pane.translate_content_accelerator(&enter_folder_key) == S_OK);
+        EXPECT(enter_fixture.pane.list_snapshot().request.location.parsing_name ==
+               L"C:\\A\\child");
+    }
+}
+
+void namespace_file_activation_preserves_identity_and_rejects_stale_target() {
+    Fixture f;
+    const core::ShellLocation location{L"::{provider}\\folder", L"known-folder", L"C:\\fallback"};
+    EXPECT(SUCCEEDED(f.pane.navigate_to(location)));
+    managed_list::Row row{L"Shown document", 0, false};
+    row.identity = {L"::{provider}\\folder\\document", true};
+    auto request = f.pane.list_snapshot().request;
+    f.source->deliver({request, {row}, managed_list::Phase::complete, 0});
+    f.pane.process_content_results();
+    const int index = f.row(L"Shown document");
+    EXPECT(index >= 0);
+    if (index < 0) return;
+
+    NMITEMACTIVATE click{};
+    click.hdr.hwndFrom = f.list;
+    click.hdr.code = NM_DBLCLK;
+    click.iItem = index;
+    EXPECT(f.pane.list_notification(&click.hdr).has_value());
+    EXPECT(f.activation->requests.size() == 1);
+    if (!f.activation->requests.empty()) {
+        EXPECT(f.activation->requests[0].folder == location.parsing_name);
+        EXPECT(f.activation->requests[0].items == std::vector<std::wstring>{row.identity.key});
+    }
+
+    // A provider callback may re-enter Pane and change location before the
+    // presenter commits an invocation. The old binding must then be rejected.
+    f.activation->before_invoke = [&] {
+        EXPECT(SUCCEEDED(f.pane.navigate_to({L"::{provider}\\replacement", {}, {}})));
+    };
+    click.iItem = 0;
+    EXPECT(f.pane.list_notification(&click.hdr).has_value());
+    EXPECT(!f.activation->current_after);
+    EXPECT(f.activation->requests.size() == 1);
+}
+
 bool stale_request(void* context) noexcept {
     const auto& value = *static_cast<std::pair<app_shell::Pane*, Snapshot>*>(context);
     return !value.first->file_command_is_current(value.second);
@@ -195,7 +333,10 @@ void keyboard_routing_stays_in_content() {
     message.wParam = VK_DELETE;
     EXPECT(f.pane.file_command_for_key(message, false, false, false) == Command::delete_items);
     EXPECT(!f.pane.file_command_for_key(message, true, false, false));
-    EXPECT(!f.pane.file_command_for_key(message, false, false, true));
+    // Explorer's Shift+Delete deletes permanently (the Shell still confirms).
+    EXPECT(f.pane.file_command_for_key(message, false, false, true) ==
+           Command::delete_permanently);
+    EXPECT(!f.pane.file_command_for_key(message, true, false, true));
     message.message = WM_KEYUP;
     EXPECT(!f.pane.file_command_for_key(message, false, false, false));
 }
@@ -206,6 +347,8 @@ int main() {
     EXPECT(InitCommonControlsEx(&controls));
     absolute_selection_and_owned_snapshot();
     local_leaf_and_paste_folder();
+    file_row_activation_is_not_ignored();
+    namespace_file_activation_preserves_identity_and_rejects_stale_target();
     keyboard_routing_stays_in_content();
     stale_execution_is_rejected_and_right_pane_keeps_its_target();
     return test::summary("managed_list_file_commands");

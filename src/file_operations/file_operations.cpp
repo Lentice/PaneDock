@@ -80,6 +80,14 @@ public:
                        (DWORD, IShellItem*, LPCWSTR))
     HRESULT STDMETHODCALLTYPE PostRenameItem(DWORD, IShellItem*, LPCWSTR,
                                                HRESULT hr, IShellItem* item) override {
+        return record_item(hr, item);
+    }
+    // A created item reports its final name (FOF_RENAMEONCOLLISION may change it).
+    HRESULT STDMETHODCALLTYPE PostNewItem(DWORD, IShellItem*, LPCWSTR, LPCWSTR,
+                                            DWORD, HRESULT hr, IShellItem* item) override {
+        return record_item(hr, item);
+    }
+    HRESULT record_item(HRESULT hr, IShellItem* item) noexcept {
         if (!rename_) return S_OK;
         rename_->result = hr;
         if (FAILED(hr) || !item) return S_OK;
@@ -113,9 +121,6 @@ public:
                         (DWORD, IShellItem*, HRESULT, IShellItem*))
     PANEDOCK_PRE_METHOD(PreNewItem,
                        (DWORD, IShellItem*, LPCWSTR))
-    PANEDOCK_POST_METHOD(PostNewItem,
-                        (DWORD, IShellItem*, LPCWSTR, LPCWSTR, DWORD, HRESULT,
-                         IShellItem*))
 #undef PANEDOCK_PRE_METHOD
 #undef PANEDOCK_POST_METHOD
 
@@ -294,10 +299,11 @@ HRESULT drag_selection(IDataObject* data, const Callbacks& callbacks, DWORD& eff
 
 OperationKind select_operation(
     std::optional<std::uint32_t> preferred_effect) noexcept {
-    if (!preferred_effect.has_value() ||
-        *preferred_effect == DROPEFFECT_COPY)
-        return OperationKind::copy;
-    if (*preferred_effect == DROPEFFECT_MOVE) return OperationKind::move;
+    // Explorer's Ctrl+C offers COPY|LINK (and some sources COPY|MOVE|LINK);
+    // like Explorer's paste, any MOVE bit means a cut, else COPY means copy.
+    if (!preferred_effect.has_value()) return OperationKind::copy;
+    if (*preferred_effect & DROPEFFECT_MOVE) return OperationKind::move;
+    if (*preferred_effect & DROPEFFECT_COPY) return OperationKind::copy;
     return OperationKind::unsupported;
 }
 
@@ -314,7 +320,7 @@ std::optional<std::uint32_t> completed_effect(const PasteResult& result) noexcep
 static PasteResult perform_operation(
     HWND owner, std::wstring_view destination_parsing_name,
     const Callbacks& callbacks, Microsoft::WRL::ComPtr<IDataObject> data,
-    bool deleting) noexcept {
+    bool deleting, bool recycle = true) noexcept {
     PasteResult result;
     if (setup_aborted(callbacks)) { result.result = E_ABORT; return result; }
     bool malformed = false;
@@ -369,7 +375,10 @@ static PasteResult perform_operation(
     if (FAILED(result.result)) return result;
 
     if (deleting) {
-        result.result = operation->SetOperationFlags(FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE);
+        // IFileOperation defaults to FOF_ALLOWUNDO, which recycles; a permanent
+        // delete must replace it. No FOF_NOCONFIRMATION: the Shell confirms.
+        result.result = operation->SetOperationFlags(recycle
+            ? FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE : FOF_NOCONFIRMMKDIR);
         if (setup_aborted(callbacks)) { result.result = E_ABORT; return result; }
         if (FAILED(result.result)) return result;
     }
@@ -465,6 +474,44 @@ RenameResult rename_item(HWND owner, std::wstring_view target,
     return result;
 } catch (...) { RenameResult result; result.result = E_OUTOFMEMORY; return result; }
 
+RenameResult new_folder(HWND owner, std::wstring_view folder,
+                        const Callbacks& callbacks) noexcept try {
+    RenameResult result;
+    if (setup_aborted(callbacks)) { result.result = E_ABORT; return result; }
+    if (folder.empty()) { result.result = E_INVALIDARG; return result; }
+    const std::wstring destination_name(folder);
+    Microsoft::WRL::ComPtr<IShellItem> destination;
+    Microsoft::WRL::ComPtr<IFileOperation> operation;
+    Microsoft::WRL::ComPtr<ProgressSink> sink;
+    sink.Attach(new (std::nothrow) ProgressSink(callbacks, &result));
+    if (!sink) { result.result = E_OUTOFMEMORY; return result; }
+    HRESULT hr = SHCreateItemFromParsingName(destination_name.c_str(), nullptr,
+                                             IID_PPV_ARGS(&destination));
+    const auto stop = [&] {
+        if (setup_aborted(callbacks)) hr = E_ABORT;
+        if (FAILED(hr)) result.result = hr;
+        return FAILED(hr);
+    };
+    if (stop()) return result;
+    hr = CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_INPROC_SERVER,
+                          IID_PPV_ARGS(&operation));
+    if (stop()) return result;
+    hr = operation->SetOwnerWindow(owner);
+    if (stop()) return result;
+    // Explorer's Ctrl+Shift+N: "New folder", then "New folder (2)", ...
+    hr = operation->SetOperationFlags(FOF_ALLOWUNDO | FOF_RENAMEONCOLLISION | FOF_NOCONFIRMMKDIR);
+    if (stop()) return result;
+    hr = operation->NewItem(destination.Get(), FILE_ATTRIBUTE_DIRECTORY, L"New folder",
+                            nullptr, sink.Get());
+    if (stop()) return result;
+    hr = operation->PerformOperations();
+    if (FAILED(hr)) result.result = hr;
+    BOOL aborted{};
+    hr = operation->GetAnyOperationsAborted(&aborted);
+    result.aborted = FAILED(hr) || aborted != FALSE;
+    return result;
+} catch (...) { RenameResult result; result.result = E_OUTOFMEMORY; return result; }
+
 HRESULT selection_to_clipboard(std::span<const std::wstring> items, bool cut,
                                const Callbacks& callbacks) noexcept {
     Microsoft::WRL::ComPtr<IDataObject> data;
@@ -482,11 +529,62 @@ HRESULT selection_to_clipboard(std::span<const std::wstring> items, bool cut,
 }
 
 PasteResult delete_selection(HWND owner, std::span<const std::wstring> items,
-                             const Callbacks& callbacks) noexcept {
+                             const Callbacks& callbacks, bool recycle) noexcept {
     Microsoft::WRL::ComPtr<IDataObject> data;
     const HRESULT hr = selection_data(items, callbacks, data);
     if (FAILED(hr)) { PasteResult result; result.result = hr; return result; }
-    return perform_operation(owner, {}, callbacks, std::move(data), true);
+    return perform_operation(owner, {}, callbacks, std::move(data), true, recycle);
+}
+
+bool offers_shell_items(IDataObject& data) noexcept {
+    FORMATETC drop{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    if (data.QueryGetData(&drop) == S_OK) return true;
+    const CLIPFORMAT ids = static_cast<CLIPFORMAT>(
+        RegisterClipboardFormatW(CFSTR_SHELLIDLIST));
+    FORMATETC list{ids, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    return ids != 0 && data.QueryGetData(&list) == S_OK;
+}
+
+DWORD paste_drop_effects(std::optional<std::uint32_t> preferred) noexcept {
+    if (!preferred) return DROPEFFECT_COPY;
+    return *preferred & (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK);
+}
+
+// Explorer pastes content that is not Shell items (Outlook attachments, browser
+// CFSTR_FILEDESCRIPTOR/FILECONTENTS) by simulating a drop on the folder's own
+// IDropTarget; IFileOperation::CopyItems cannot enumerate such a data object.
+static PasteResult drop_paste(HWND owner, std::wstring_view destination,
+                              const Callbacks& callbacks,
+                              Microsoft::WRL::ComPtr<IDataObject> data) noexcept {
+    PasteResult result;
+    bool malformed = false;
+    const auto preferred = preferred_effect(*data.Get(), malformed);
+    if (setup_aborted(callbacks)) { result.result = E_ABORT; return result; }
+    DWORD effect = malformed ? DROPEFFECT_NONE : paste_drop_effects(preferred);
+    if (effect == DROPEFFECT_NONE || destination.empty()) {
+        result.result = destination.empty() ? E_INVALIDARG : DV_E_FORMATETC;
+        return result;
+    }
+    Microsoft::WRL::ComPtr<IDropTarget> target;
+    result.result = folder_drop_target(owner, destination, callbacks, target);
+    if (FAILED(result.result)) return result;
+    POINTL point{};
+    result.result = target->DragEnter(data.Get(), MK_LBUTTON, point, &effect);
+    if (setup_aborted(callbacks)) {
+        (void)target->DragLeave();
+        result.result = E_ABORT;
+        return result;
+    }
+    if (FAILED(result.result) || effect == DROPEFFECT_NONE) {
+        (void)target->DragLeave();
+        if (SUCCEEDED(result.result)) result.result = DV_E_FORMATETC;
+        return result;
+    }
+    result.handled = true;
+    result.operation = (effect & DROPEFFECT_MOVE) ? OperationKind::move : OperationKind::copy;
+    result.result = target->Drop(data.Get(), MK_LBUTTON, point, &effect);
+    log_hresult(L"IDropTarget::Drop", result.result);
+    return result;
 }
 
 PasteResult paste_from_clipboard(HWND owner, std::wstring_view destination,
@@ -495,6 +593,8 @@ PasteResult paste_from_clipboard(HWND owner, std::wstring_view destination,
     const HRESULT hr = OleGetClipboard(&data);
     if (setup_aborted(callbacks)) { PasteResult result; result.result = E_ABORT; return result; }
     if (FAILED(hr) || !data) { PasteResult result; result.result = hr; return result; }
+    if (!offers_shell_items(*data.Get()))
+        return drop_paste(owner, destination, callbacks, std::move(data));
     return perform_operation(owner, destination, callbacks, std::move(data), false);
 }
 
