@@ -262,6 +262,37 @@ void test_unknown_fields_survive_write_back() {
     }
 }
 
+// A pinned location's navigation_parent follows the same rule as a tab's:
+// it round-trips, and an unknown field inside it survives a write-back even
+// after the parent itself is cleared.
+void test_pinned_navigation_parent_round_trips_and_keeps_unknown_fields() {
+    ApplicationState application = sample();
+    application.pinned_locations[0].navigation_parent =
+        ShellLocationParent{L"::{desktop}", L"", L"", true};
+    std::string json = serialize_session({application, {}, true});
+    const auto restored = deserialize_session(json);
+    EXPECT(restored.has_value() &&
+           restored->application.pinned_locations == application.pinned_locations);
+
+    const std::string marker = "\"navigation_parent\":{";
+    const auto parent = json.find(marker);
+    EXPECT(parent != std::string::npos);
+    if (parent == std::string::npos) return;
+    json.insert(parent + marker.size(), "\"future_parent\":7,");
+    auto document = deserialize_session(json);
+    EXPECT(document.has_value());
+    if (!document.has_value()) return;
+    EXPECT(serialize_session(*document).find("\"future_parent\":7") !=
+           std::string::npos);
+    document->application.pinned_locations[0].navigation_parent.reset();
+    const std::string cleared = serialize_session(*document);
+    EXPECT(cleared.find("\"future_parent\":7") != std::string::npos);
+    EXPECT(cleared.find("::{desktop}") == std::string::npos);
+    const auto reread = deserialize_session(cleared);
+    EXPECT(reread.has_value() &&
+           !reread->application.pinned_locations[0].navigation_parent);
+}
+
 void test_tab_columns_round_trip_and_are_optional() {
     auto application = sample();
     application.groups.front().panes.front().tabs.front().columns = "name:300,type:90,size:200";
@@ -519,6 +550,7 @@ int main() {
     test_new_three_pane_layout_round_trips();
     test_corrupt_and_invalid_documents();
     test_unknown_fields_survive_write_back();
+    test_pinned_navigation_parent_round_trips_and_keeps_unknown_fields();
     test_tab_columns_round_trip_and_are_optional();
     test_moved_tab_keeps_unknown_fields();
     test_clean_shutdown_type_mismatch_defaults_true();

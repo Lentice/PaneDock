@@ -322,6 +322,36 @@ Json::Object preserved_location_object(const Json::Array* values,
     return {};
 }
 
+// One ShellLocation's identity fields written over `encoded`, which holds the
+// previous write's object so unknown fields survive. Without a parent, only
+// the parent's known fields are dropped; its unknown fields stay.
+template <typename Location>
+void encode_location_identity(Json::Object& encoded, const Location& location) {
+    encoded["parsing_name"] = Json{utf8(location.parsing_name)};
+    encoded["known_folder_identity"] = Json{utf8(location.known_folder_identity)};
+    encoded["fallback_path"] = Json{utf8(location.fallback_path)};
+    encoded["namespace_location"] = Json{location.namespace_location};
+}
+
+void encode_shell_location(Json::Object& encoded, const ShellLocation& location) {
+    encode_location_identity(encoded, location);
+    const Json* old_parent = field(encoded, "navigation_parent");
+    const bool old_object = old_parent && object(*old_parent);
+    if (!location.navigation_parent && !old_object) return;
+    Json::Object parent;
+    if (old_object) parent = *object(*old_parent);
+    if (location.navigation_parent) {
+        encode_location_identity(parent, *location.navigation_parent);
+    } else {
+        parent.erase("parsing_name");
+        parent.erase("known_folder_identity");
+        parent.erase("fallback_path");
+        parent.erase("namespace_location");
+    }
+    if (parent.empty()) encoded.erase("navigation_parent");
+    else encoded["navigation_parent"] = Json{std::move(parent)};
+}
+
 Json::Object preserved_tab_object(const Json::Array* panes, std::string_view id) {
     if (!panes) return {};
     for (const auto& pane : *panes) {
@@ -449,32 +479,7 @@ Json encode(const ApplicationState& application, Json root,
                 encoded_tab["id"] = Json{tab.id};
                 Json::Object location;
                 if (const Json* old = field(encoded_tab, "shell_location"); old && object(*old)) location = *object(*old);
-                location["parsing_name"] = Json{utf8(tab.location.parsing_name)};
-                location["known_folder_identity"] = Json{utf8(tab.location.known_folder_identity)};
-                location["fallback_path"] = Json{utf8(tab.location.fallback_path)};
-                location["namespace_location"] = Json{tab.location.namespace_location};
-                if (tab.location.navigation_parent) {
-                    Json::Object parent;
-                    if (const Json* old_parent = field(location, "navigation_parent");
-                        old_parent && object(*old_parent)) parent = *object(*old_parent);
-                    parent["parsing_name"] = Json{utf8(tab.location.navigation_parent->parsing_name)};
-                    parent["known_folder_identity"] = Json{utf8(tab.location.navigation_parent->known_folder_identity)};
-                    parent["fallback_path"] = Json{utf8(tab.location.navigation_parent->fallback_path)};
-                    parent["namespace_location"] =
-                        Json{tab.location.navigation_parent->namespace_location};
-                    location["navigation_parent"] = Json{std::move(parent)};
-                } else {
-                    if (const Json* old_parent = field(location, "navigation_parent");
-                        old_parent && object(*old_parent)) {
-                        Json::Object parent = *object(*old_parent);
-                        parent.erase("parsing_name");
-                        parent.erase("known_folder_identity");
-                        parent.erase("fallback_path");
-                        parent.erase("namespace_location");
-                        if (parent.empty()) location.erase("navigation_parent");
-                        else location["navigation_parent"] = Json{std::move(parent)};
-                    }
-                }
+                encode_shell_location(location, tab.location);
                 encoded_tab["shell_location"] = Json{std::move(location)};
                 encoded_tab["view_mode"] = Json{tab.view_mode};
                 encoded_tab["sort_column"] = Json{tab.sort_column};
@@ -499,33 +504,7 @@ Json encode(const ApplicationState& application, Json root,
         const std::string parsing_name = utf8(pinned.parsing_name);
         Json::Object encoded = preserved_location_object(
             old_pinned_locations, parsing_name);
-        encoded["parsing_name"] = Json{parsing_name};
-        encoded["known_folder_identity"] =
-            Json{utf8(pinned.known_folder_identity)};
-        encoded["fallback_path"] = Json{utf8(pinned.fallback_path)};
-        encoded["namespace_location"] = Json{pinned.namespace_location};
-        if (pinned.navigation_parent) {
-            Json::Object parent;
-            if (const Json* old_parent = field(encoded, "navigation_parent");
-                old_parent && object(*old_parent)) parent = *object(*old_parent);
-            parent["parsing_name"] = Json{utf8(pinned.navigation_parent->parsing_name)};
-            parent["known_folder_identity"] = Json{utf8(pinned.navigation_parent->known_folder_identity)};
-            parent["fallback_path"] = Json{utf8(pinned.navigation_parent->fallback_path)};
-            parent["namespace_location"] =
-                Json{pinned.navigation_parent->namespace_location};
-            encoded["navigation_parent"] = Json{std::move(parent)};
-        } else {
-            if (const Json* old_parent = field(encoded, "navigation_parent");
-                old_parent && object(*old_parent)) {
-                Json::Object parent = *object(*old_parent);
-                parent.erase("parsing_name");
-                parent.erase("known_folder_identity");
-                parent.erase("fallback_path");
-                parent.erase("namespace_location");
-                if (parent.empty()) encoded.erase("navigation_parent");
-                else encoded["navigation_parent"] = Json{std::move(parent)};
-            }
-        }
+        encode_shell_location(encoded, pinned);
         pinned_locations.push_back(Json{std::move(encoded)});
     }
     result["pinned_locations"] = Json{std::move(pinned_locations)};
