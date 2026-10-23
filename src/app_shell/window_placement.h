@@ -20,4 +20,15 @@ constexpr bool placement_is_offscreen(int x, int y, int width, int height,
     return left >= right || top >= bottom;
 }
 
+// Whether the saved placement must reopen maximized. A window closed while
+// minimized remembers its pre-minimize state through
+// WPF_RESTORETOMAXIMIZED; dropping that would reopen a maximized window
+// restored. The caller passes the decoded WINDOWPLACEMENT bits so this stays
+// free of windows.h.
+constexpr bool placement_reopens_maximized(bool shown_maximized,
+                                           bool shown_minimized,
+                                           bool restore_to_maximized) noexcept {
+    return shown_maximized || (shown_minimized && restore_to_maximized);
+}
+
 }  // namespace panedock::app_shell

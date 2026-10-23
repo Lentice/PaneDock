@@ -109,9 +109,11 @@ pane 之間的分隔線可拖曳,比例記錄於該 Group。
 
 ### 4.6 tab
 
-每個 pane 有一個以上的 tab,可新增、關閉、切換。tab 條在 pane 上緣；在 tab 條未被 tab、`+` 或捲動按鈕占用的空白區雙擊會新增 tab。
+每個 pane 有一個以上的 tab,可新增、關閉、切換。tab 條在 pane 上緣；在 tab 條未被 tab、`+` 或捲動按鈕占用的空白區雙擊會新增 tab。如同 Explorer,作用中 tab 與滑鼠停留的 tab 在右側顯示關閉（×）按鈕,在按鈕上按下並放開即關閉該 tab。
 
 ### 4.7 導覽
+
+tab 依名稱內容決定偏好寬度，範圍為 96–280 DIP；空間不足時維持既有壓縮與捲動行為。計算寬度包含 tab 間距、文字 padding 與關閉按鈕。名稱被省略號截斷或因捲動而部分隱藏時，滑鼠停留顯示完整 tab name 的 tooltip。
 
 每個 tab 有自己的網址欄與獨立的導覽歷史。提供上一頁、下一頁、上層。
 
@@ -143,7 +145,7 @@ managed-list path 只解析目前 Shell location 並接上 Windows 原生背景�
 
 Group 右鍵選單的每個操作皆搭配簡潔的單色線條圖示：重新命名用鉛筆、複製用重疊文件、刪除用垃圾桶、排序用向上／向下箭頭。保留英文文字標籤，圖示隨 DPI 縮放，停用項目以灰色呈現。
 
-當鍵盤焦點在 sidebar 的 Group row 時，按 `F2` 開始該 Group 的 inline rename；鍵盤焦點在 Shell view 時，`F2` 維持 Windows 原生檔案 rename 行為。
+當鍵盤焦點在 sidebar 的 Group row 時，按 `F2` 開始該 Group 的 inline rename；鍵盤焦點在 Shell view 時，`F2` 維持 Windows 原生檔案 rename 行為。Group rename 以 Enter 或失去焦點提交、Esc 取消；名稱前後空白會去除，空白名稱被拒絕並保留原名。Group row 右鍵選單的命令作用於被右鍵的 Group，而非作用中 Group。
 
 以拖曳重新排序時採 **remove source，再 insert at target index** 的語意。拖曳中的 placeholder 必須顯示被拖曳 Group 的淡化內容；來源 Group 不再留在原列，插入位置起的其他 Group 依最終順序位移，不得以 placeholder 覆蓋或隱藏原本位於目標位置的 Group。此預覽順序必須與放開後的實際順序一致，包含單一 Group、原位放開、第一個移到最後一個、最後一個移到第一個，以及任何中間位置的雙向拖曳。
 
@@ -171,7 +173,7 @@ pane 分隔線可拖曳,比例以 0.0–1.0 的相對值儲存於該 Group,視�
 
 ### FR-006 原生 Shell 檔案檢視
 
-PaneDock-managed list 顯示 Shell namespace item，漸進更新可操作的列，並提供目前可用的排序、selection 及鍵盤行為（不提供無障礙支援，見 PD-250）；Shell identity 不使用顯示名稱或持久化 PIDL。原生圖示／縮圖、標準 Shell context menu 與已安裝 shell extension、剪貼簿、拖放及 file operation 必須保持可用。慢 location 或 metadata enrichment 不得阻塞 list input。直到 PD-241 gate 通過前，這仍是目標契約，`IExplorerBrowser` 是現行預設實作。
+PaneDock-managed list 顯示 Shell namespace item，漸進更新可操作的列，並提供目前可用的排序、selection 及鍵盤行為（不提供無障礙支援，見 PD-250）；Shell identity 不使用顯示名稱或持久化 PIDL。雙擊資料夾列沿用其 Shell location 導覽；雙擊檔案列使用目前父 Shell location 與 item identity 呼叫 Windows Shell 預設 `open` verb，`.exe` 等可執行項目依 Shell 行為啟動。不得從顯示名稱拼路徑或直接呼叫 filesystem API。原生圖示／縮圖、標準 Shell context menu 與已安裝 shell extension、剪貼簿、拖放及 file operation 必須保持可用。慢 location 或 metadata enrichment 不得阻塞 list input。直到 PD-241 gate 通過前，這仍是目標契約，`IExplorerBrowser` 是現行預設實作。
 
 ### FR-007 檔案操作
 

@@ -35,5 +35,15 @@ int main() {
     // cascade slot, not off-screen.
     static_assert(!placement_is_offscreen(-1, -1, 1000, 700, 0, 0, 1920, 1040));
 
+    using panedock::app_shell::placement_reopens_maximized;
+    static_assert(placement_reopens_maximized(true, false, false));
+    static_assert(!placement_reopens_maximized(false, false, false));
+    // Minimized from maximized: reopen maximized.
+    static_assert(placement_reopens_maximized(false, true, true));
+    // Minimized from restored: reopen restored.
+    static_assert(!placement_reopens_maximized(false, true, false));
+    // The flag alone (window currently restored) does not maximize.
+    static_assert(!placement_reopens_maximized(false, false, true));
+
     return 0;
 }

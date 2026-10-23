@@ -158,5 +158,45 @@ int main() {
     EXPECT(panedock::app_shell::tab_strip_hit_test(
                 foreign_layout, foreign_layout.placeholder_rect->left + 1, 10) ==
            std::optional<std::size_t>{1});
+
+    // Per-tab close button: 16 px square, 7 px in from the tab's right edge,
+    // vertically centred, and hit-testable separately from the tab.
+    static_assert(panedock::app_shell::tab_close_button_rect(
+                      {0, 0, 100, 31}, 16, 7).left == 77);
+    static_assert(panedock::app_shell::tab_close_button_rect(
+                      {0, 0, 100, 31}, 16, 7).right == 93);
+    static_assert(panedock::app_shell::tab_close_button_rect(
+                      {0, 0, 100, 31}, 16, 7).top == 7);
+    // Hidden (dragged) or too-narrow tabs get no button.
+    static_assert(panedock::app_shell::tab_close_button_rect(
+                      {}, 16, 7).width() == 0);
+    static_assert(panedock::app_shell::tab_close_button_rect(
+                      {0, 0, 30, 31}, 16, 7).width() == 0);
+
+    panedock::app_shell::TabStripLayoutInput close_input{
+        std::span<const int>(preferred_widths), 300, 31, 72, 200, 36, 5, 3,
+        20, 18, 20, 6, 1, 0, std::nullopt, std::nullopt};
+    close_input.close_button_size = 16;
+    close_input.close_button_right_inset = 7;
+    const auto close_layout =
+        panedock::app_shell::layout_tab_strip(close_input);
+    EXPECT(close_layout.close_rects.size() == 2);
+    EXPECT(close_layout.close_rects[1].right == 213);
+    EXPECT(panedock::app_shell::tab_close_hit_test(close_layout, 205, 15) ==
+           std::optional<std::size_t>{1});
+    EXPECT(panedock::app_shell::tab_strip_hit_test(close_layout, 205, 15) ==
+           std::optional<std::size_t>{1});
+    EXPECT(panedock::app_shell::tab_close_hit_test(close_layout, 150, 15) ==
+           std::nullopt);
+    // Without a size there are no close buttons at all.
+    EXPECT(panedock::app_shell::tab_close_hit_test(fits_layout, 205, 15) ==
+           std::nullopt);
+
+    // A dragged tab has no close button to hit.
+    close_input.drag = panedock::app_shell::TabStripDragLayout{
+        0, std::optional<std::size_t>{1}, false, 0};
+    const auto close_drag_layout =
+        panedock::app_shell::layout_tab_strip(close_input);
+    EXPECT(close_drag_layout.close_rects[0].width() == 0);
     return 0;
 }

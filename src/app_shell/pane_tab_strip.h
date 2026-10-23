@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "app_shell/tab_overflow.h"
@@ -112,6 +113,27 @@ class PaneTabStrip final {
     void set_tab_hover(std::optional<std::size_t> index) noexcept {
         tab_hover_index_ = index;
     }
+    // Explorer-style per-tab close button. Shown on the active and the
+    // hovered tab; a click closes on release over the same button.
+    std::optional<std::size_t> close_button_at(POINT client) const noexcept {
+        return tab_close_hit_test(tab_strip_geometry_, client.x, client.y);
+    }
+    std::optional<std::size_t> close_hover_index() const noexcept {
+        return close_hover_index_;
+    }
+    // The tab id whose close button is pressed, kept by id so a tab list
+    // change while the button is held cannot close a different tab.
+    void press_close(std::size_t index, std::string tab_id) noexcept {
+        pressed_close_index_ = index;
+        pressed_close_tab_id_ = std::move(tab_id);
+    }
+    std::optional<std::size_t> pressed_close_index() const noexcept {
+        return pressed_close_index_;
+    }
+    std::string take_pressed_close() noexcept {
+        pressed_close_index_.reset();
+        return std::exchange(pressed_close_tab_id_, {});
+    }
     std::optional<std::size_t> scroll_hover_index() const noexcept {
         return tab_scroll_hover_index_;
     }
@@ -133,14 +155,20 @@ class PaneTabStrip final {
     }
 
   private:
+    void clear_label_tooltips() noexcept;
     void paint_contents(HDC dc, const TabStripPaintState &state) noexcept;
     Pane *owner_;
     HWND tab_strip_{nullptr};
     bool tab_tooltips_registered_{};
+    HWND label_tooltip_window_{};
+    std::size_t label_tooltip_count_{};
     std::vector<StripLabel> tab_visuals_;
     TabStripGeometry tab_strip_geometry_;
     std::optional<std::size_t> tab_hover_index_;
     std::optional<std::size_t> tab_scroll_hover_index_;
+    std::optional<std::size_t> close_hover_index_;
+    std::optional<std::size_t> pressed_close_index_;
+    std::string pressed_close_tab_id_;
     Microsoft::WRL::ComPtr<IDropTarget> tab_drag_target_;
     DragHoverTimer *tab_drag_timer_{nullptr};
 };

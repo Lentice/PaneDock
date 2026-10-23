@@ -1,5 +1,7 @@
 #include "unit/test_pane_host.h"
 #include "unit/test_util.h"
+#include "app_shell/window_helpers.h"
+#include <filesystem>
 
 namespace {
 
@@ -132,10 +134,79 @@ void test_scroll_offset_clamps_at_both_ends() {
     DestroyWindow(parent);
 }
 
+void test_wider_tabs_and_full_name_tooltips() {
+    // Match the shipped executable: v5 rejects sizeof(TOOLINFOW).
+    const auto manifest = (std::filesystem::path(__FILE__).parent_path() / "../../resources/panedock.manifest").wstring();
+    ACTCTXW context{};
+    context.cbSize = sizeof(context);
+    context.lpSource = manifest.c_str();
+    const HANDLE activation = CreateActCtxW(&context);
+    ULONG_PTR cookie{};
+    EXPECT(activation != INVALID_HANDLE_VALUE && ActivateActCtx(activation, &cookie));
+    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_WIN95_CLASSES};
+    EXPECT(InitCommonControlsEx(&controls));
+    const auto instance = GetModuleHandleW(nullptr);
+    EXPECT(panedock::app_shell::Pane::register_window_class(instance));
+    const HWND parent = CreateWindowExW(0, L"STATIC", nullptr, 0, 0, 0, 1200, 200,
+                                       nullptr, nullptr, instance, nullptr);
+    struct TooltipHost final : TestPaneHost {
+        HWND tooltip_window{};
+        HWND tooltip() const noexcept override { return tooltip_window; }
+    } host;
+    host.tooltip_window = CreateWindowExW(0, TOOLTIPS_CLASSW, nullptr,
+        WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, 0, 0, 0, 0, parent, nullptr, instance, nullptr);
+    EXPECT(host.tooltip_window != nullptr);
+    panedock::app_shell::Pane pane;
+    pane.set_host(&host);
+    pane.set_reentry_guard(&host.guard);
+    EXPECT(pane.create(parent, 0));
+    auto state = tab_state(3);
+    state.tabs[0].location.parsing_name = L"addons";
+    state.tabs[1].location.parsing_name = std::wstring(25, L'W');
+    const std::wstring full_name = L"Timesheet & " + std::wstring(100, L'W');
+    state.tabs[2].location.parsing_name = full_name;
+    pane.bind(&state);
+    auto& strip = pane.tab_strip_ui();
+    SetWindowPos(strip.window(), nullptr, 0, 0, 1200, 31, SWP_NOZORDER | SWP_NOACTIVATE);
+    strip.refresh();
+    const auto& geometry = strip.tab_geometry();
+    EXPECT(geometry.tab_rects[0].width() >= panedock::app_shell::scaled_value(strip.window(), 96));
+    EXPECT(geometry.tab_rects[1].width() > panedock::app_shell::scaled_value(strip.window(), 200));
+    const auto tooltip_at = [&](std::size_t index, std::wstring_view expected) {
+        const auto rect = strip.tab_geometry().tab_rects[index];
+        TTHITTESTINFOW hit{};
+        hit.hwnd = strip.window();
+        hit.pt = {(rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2};
+        hit.ti.cbSize = sizeof(hit.ti);
+        const bool found = SendMessageW(host.tooltip_window, TTM_HITTESTW, 0,
+                                       reinterpret_cast<LPARAM>(&hit)) != 0;
+        EXPECT(found == !expected.empty());
+        if (found) {
+            wchar_t text[1024]{};
+            hit.ti.lpszText = text;
+            SendMessageW(host.tooltip_window, TTM_GETTEXTW, 1024,
+                         reinterpret_cast<LPARAM>(&hit.ti));
+            EXPECT(std::wstring_view(text) == expected);
+        }
+    };
+    tooltip_at(0, {}); // fully visible names need no tooltip
+    tooltip_at(2, full_name);
+    state.tabs[2].location.parsing_name = L"short";
+    strip.refresh();
+    tooltip_at(2, {}); // relabeling removes the old long name
+    pane.destroy();
+    EXPECT(SendMessageW(host.tooltip_window, TTM_GETTOOLCOUNT, 0, 0) == 3);
+    DestroyWindow(host.tooltip_window);
+    DestroyWindow(parent);
+    DeactivateActCtx(0, cookie);
+    ReleaseActCtx(activation);
+}
+
 } // namespace
 
 int main() {
     test_refresh_bails_when_tab_list_changes_mid_scan();
     test_scroll_offset_clamps_at_both_ends();
+    test_wider_tabs_and_full_name_tooltips();
     return panedock::test::summary("pane_tab_strip");
 }

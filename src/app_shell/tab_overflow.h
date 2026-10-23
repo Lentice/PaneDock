@@ -79,10 +79,17 @@ struct TabStripLayoutInput final {
     int requested_scroll_offset{};
     std::optional<TabStripDragLayout> drag;
     std::optional<std::size_t> active_index;
+    // Explorer-style per-tab close button: a square of this side, its right
+    // edge this far inside the tab's right edge, vertically centred. Zero
+    // size means no close buttons.
+    int close_button_size{};
+    int close_button_right_inset{};
 };
 
 struct TabStripGeometry final {
     std::vector<TabStripRect> tab_rects;
+    // Parallel to tab_rects; empty for a tab that is not drawn (dragged).
+    std::vector<TabStripRect> close_rects;
     std::optional<TabStripRect> placeholder_rect;
     std::optional<std::size_t> placeholder_index;
     TabStripRect add_rect{};
@@ -160,6 +167,19 @@ constexpr TabScrollButtonGlyph tab_scroll_button_glyph(
     return {center_x - direction * half, center_y - half,
             center_x + direction * half, center_y,
             center_x - direction * half, center_y + half};
+}
+
+// The close button of one laid-out tab. Empty when the tab is not drawn or
+// is too narrow to hold the button beside some label text.
+constexpr TabStripRect tab_close_button_rect(const TabStripRect& tab,
+                                             int size,
+                                             int right_inset) noexcept {
+    if (size <= 0 || tab.width() <= 0 || tab.height() <= 0) return {};
+    const int right = tab.right - std::max(0, right_inset);
+    const int left = right - size;
+    if (left <= tab.left + size) return {};
+    const int top = tab.top + (tab.height() - size) / 2;
+    return {left, top, right, top + size};
 }
 
 namespace detail {
@@ -319,6 +339,14 @@ inline TabStripGeometry layout_tab_strip(
         }
         x += width;
     }
+
+    geometry.close_rects.resize(geometry.tab_rects.size());
+    const int close_size = std::max(0, input.close_button_size);
+    for (std::size_t index = 0; index < geometry.tab_rects.size(); ++index) {
+        geometry.close_rects[index] = tab_close_button_rect(
+            geometry.tab_rects[index], close_size,
+            input.close_button_right_inset);
+    }
     return geometry;
 }
 
@@ -330,6 +358,18 @@ inline std::optional<std::size_t> tab_strip_hit_test(
         return geometry.placeholder_index;
     for (std::size_t index = 0; index < geometry.tab_rects.size(); ++index) {
         if (geometry.tab_rects[index].contains(x, y)) return index;
+    }
+    return std::nullopt;
+}
+
+// Which tab's close button is under (x, y). Clipped to the viewport like the
+// tabs themselves, so a button scrolled under the scroll buttons is inert.
+inline std::optional<std::size_t> tab_close_hit_test(
+    const TabStripGeometry& geometry, int x, int y) noexcept {
+    if (!geometry.viewport.contains(x, y)) return std::nullopt;
+    for (std::size_t index = 0; index < geometry.close_rects.size(); ++index) {
+        const TabStripRect& rect = geometry.close_rects[index];
+        if (rect.width() > 0 && rect.contains(x, y)) return index;
     }
     return std::nullopt;
 }

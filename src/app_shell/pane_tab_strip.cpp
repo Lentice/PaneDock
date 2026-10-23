@@ -12,8 +12,8 @@ namespace panedock::app_shell {
 namespace {
 
 // PD-049: content-sized tabs with a fixed add button at the right edge.
-constexpr int kTabMinWidth = 72;
-constexpr int kTabMaxWidth = 200;
+constexpr int kTabMinWidth = 96;
+constexpr int kTabMaxWidth = 280;
 constexpr int kTabAddButtonWidth = 36;
 constexpr int kTabAddButtonHorizontalInset = 5;
 constexpr int kTabAddButtonVerticalInset = 3;
@@ -34,8 +34,12 @@ constexpr int kTabHorizontalGap = 6;
 constexpr int kTabTextHorizontalPadding = 6;
 constexpr int kTabVerticalPadding = 3;
 constexpr int kTabCornerRadius = 6;
-// Kept as layout reserve only; closing remains middle-click (PD-062 scope).
+// Width reserved beside the label for the per-tab close button, and the
+// button itself: a square drawn inside the tab's right text padding.
 constexpr int kTabCloseButtonSpace = 16;
+constexpr int kTabCloseButtonSize = 16;
+constexpr int kTabCloseButtonRightPadding = 4;
+constexpr int kTabCloseGlyphHalf = 3;
 // PD-081: use a bold UI-font glyph so the add button keeps PD-062's larger,
 // heavier visual weight without relying on two independently capped strokes.
 constexpr int kTabPlusFontSize = 18;
@@ -43,6 +47,7 @@ constexpr int kTabPlusFontSize = 18;
 // which marks the active pane by fill and text color only.
 constexpr UINT_PTR kTabAddTooltipIdBase = 1000;
 constexpr UINT_PTR kTabScrollTooltipIdBase = 1010;
+constexpr UINT_PTR kTabLabelTooltipIdBase = 2000;
 
 void draw_tab_scroll_button(HWND window, HDC dc, const RECT& rect,
                             bool forward, bool disabled,
@@ -103,6 +108,7 @@ bool PaneTabStrip::create(HWND parent) noexcept {
 
 void PaneTabStrip::destroy() noexcept {
     revoke_drag_hover_target();
+    clear_label_tooltips();
     if (tab_strip_ != nullptr) {
         DestroyWindow(tab_strip_);
         tab_strip_ = nullptr;
@@ -112,6 +118,9 @@ void PaneTabStrip::destroy() noexcept {
     tab_strip_geometry_ = TabStripGeometry{};
     tab_hover_index_.reset();
     tab_scroll_hover_index_.reset();
+    close_hover_index_.reset();
+    pressed_close_index_.reset();
+    pressed_close_tab_id_.clear();
 }
 
 void PaneTabStrip::apply_item_size(bool reveal_active) {
@@ -124,8 +133,10 @@ void PaneTabStrip::apply_item_size(bool reveal_active) {
     const int max_width = scaled_value(strip, kTabMaxWidth);
     const int add_width = scaled_value(strip, kTabAddButtonWidth);
     const auto& visuals = tab_visuals();
-    const int text_reserve = scaled_value(
-        strip, 2 * kTabTextHorizontalPadding + kTabCloseButtonSpace);
+    // Match the separately rounded paint metrics at fractional DPI scales.
+    const int text_reserve = scaled_value(strip, kTabHorizontalGap) +
+        2 * scaled_value(strip, kTabTextHorizontalPadding) +
+        scaled_value(strip, kTabCloseButtonSpace);
     std::vector<int> preferred_widths;
     preferred_widths.reserve(visuals.size());
     HDC dc = GetDC(strip);
@@ -174,7 +185,11 @@ void PaneTabStrip::apply_item_size(bool reveal_active) {
         scaled_value(strip, kTabScrollButtonVisualOffsetY),
         tab_geometry().scroll_offset,
         drag_layout,
-        active_index};
+        active_index,
+        scaled_value(strip, kTabCloseButtonSize),
+        scaled_value(strip, kTabHorizontalGap) -
+            scaled_value(strip, kTabHorizontalGap) / 2 +
+            scaled_value(strip, kTabCloseButtonRightPadding)};
     set_geometry(panedock::app_shell::layout_tab_strip(layout_input));
     InvalidateRect(strip, nullptr, FALSE);
     update_tab_strip_tooltips(pane.pane_host()->tooltip());
@@ -185,6 +200,7 @@ void PaneTabStrip::refresh() {
     auto &pane = *owner_;
     set_tab_hover(std::nullopt);
     set_scroll_hover(std::nullopt);
+    close_hover_index_.reset();
     if (pane.pane_state() == nullptr) {
         set_tabs({});
         apply_item_size();
@@ -239,7 +255,23 @@ void PaneTabStrip::scroll(bool forward) {
     apply_item_size();
 }
 
+void PaneTabStrip::clear_label_tooltips() noexcept {
+    if (IsWindow(label_tooltip_window_)) {
+        TOOLINFOW info{};
+        info.cbSize = sizeof(info);
+        info.hwnd = tab_strip_;
+        for (std::size_t index = 0; index < label_tooltip_count_; ++index) {
+            info.uId = kTabLabelTooltipIdBase + index;
+            SendMessageW(label_tooltip_window_, TTM_DELTOOLW, 0,
+                         reinterpret_cast<LPARAM>(&info));
+        }
+    }
+    label_tooltip_count_ = 0;
+    label_tooltip_window_ = nullptr;
+}
+
 void PaneTabStrip::update_tab_strip_tooltips(HWND tooltip) noexcept {
+    clear_label_tooltips();
     if (tooltip == nullptr || tab_strip_ == nullptr) return;
 
     const std::array<RECT, 3> rects{
@@ -265,9 +297,44 @@ void PaneTabStrip::update_tab_strip_tooltips(HWND tooltip) noexcept {
         SendMessageW(tooltip, message, 0, reinterpret_cast<LPARAM>(&info));
     }
     tab_tooltips_registered_ = true;
+
+    // Register only visible, truncated labels. The tooltip control copies the
+    // full text; relayout/refresh removes old tools before registering new ones.
+    label_tooltip_window_ = tooltip;
+    HDC dc = GetDC(tab_strip_);
+    if (!dc) return;
+    const HFONT font = owner_->pane_host()->chrome_font();
+    const HGDIOBJ old_font = font ? SelectObject(dc, font) : nullptr;
+    const int reserve = scaled_value(tab_strip_, kTabHorizontalGap) +
+        2 * scaled_value(tab_strip_, kTabTextHorizontalPadding) +
+        scaled_value(tab_strip_, kTabCloseButtonSpace);
+    const RECT viewport = viewport_rect();
+    const auto count = std::min(tab_visuals_.size(), tab_strip_geometry_.tab_rects.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        const RECT tab = to_win32_rect(tab_strip_geometry_.tab_rects[index]);
+        RECT visible{};
+        if (!IntersectRect(&visible, &tab, &viewport)) continue;
+        SIZE size{};
+        if (!GetTextExtentPoint32W(dc, tab_visuals_[index].text.c_str(),
+                                  static_cast<int>(tab_visuals_[index].text.size()), &size)) continue;
+        if (size.cx <= std::max<LONG>(0, tab.right - tab.left - reserve) &&
+            visible.left == tab.left && visible.right == tab.right) continue;
+        TOOLINFOW info{};
+        info.cbSize = sizeof(info);
+        info.uFlags = TTF_SUBCLASS;
+        info.hwnd = tab_strip_;
+        info.uId = kTabLabelTooltipIdBase + label_tooltip_count_;
+        info.rect = visible;
+        info.lpszText = tab_visuals_[index].text.data();
+        if (SendMessageW(tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&info)))
+            ++label_tooltip_count_;
+    }
+    if (old_font) SelectObject(dc, old_font);
+    ReleaseDC(tab_strip_, dc);
 }
 
 void PaneTabStrip::set_tabs(std::span<const std::wstring> labels) noexcept {
+    clear_label_tooltips();
     tab_visuals_.clear();
     tab_visuals_.reserve(labels.size());
     for (const auto &label : labels)
@@ -321,6 +388,7 @@ void PaneTabStrip::paint_contents(HDC dc, const TabStripPaintState &state) noexc
     const int vertical_padding = scaled_value(window, kTabVerticalPadding);
     const int radius = scaled_value(window, kTabCornerRadius);
     const int border_width = scaled_value(window, 1);
+    const int close_space = scaled_value(window, kTabCloseButtonSpace);
     const HFONT font = owner_->pane_host() == nullptr
                            ? nullptr : owner_->pane_host()->chrome_font();
     const HGDIOBJ old_font = font != nullptr
@@ -364,10 +432,52 @@ void PaneTabStrip::paint_contents(HDC dc, const TabStripPaintState &state) noexc
         text_rect.left = std::min(text_rect.right,
                                   text_rect.left + text_padding);
         text_rect.right = std::max(text_rect.left,
-                                   text_rect.right - text_padding);
+                                   text_rect.right - text_padding -
+                                       close_space);
         SetTextColor(dc, colors.text);
         DrawTextW(dc, visuals[index].text.c_str(), -1, &text_rect,
                   DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+        const bool show_close = active || tab_hover_index() == index;
+        if (show_close && index < tab_geometry().close_rects.size()) {
+            const RECT close =
+                to_win32_rect(tab_geometry().close_rects[index]);
+            if (close.right > close.left && close.bottom > close.top) {
+                if (close_hover_index() == index) {
+                    const auto hover =
+                        pane_add_button_hover_colors(state.active_pane);
+                    HBRUSH close_fill = CreateSolidBrush(hover.fill);
+                    if (close_fill != nullptr) {
+                        const HGDIOBJ old_brush =
+                            SelectObject(dc, close_fill);
+                        const HGDIOBJ old_pen =
+                            SelectObject(dc, GetStockObject(NULL_PEN));
+                        const int close_radius = radius / 2;
+                        RoundRect(dc, close.left, close.top, close.right + 1,
+                                  close.bottom + 1, close_radius,
+                                  close_radius);
+                        SelectObject(dc, old_pen);
+                        SelectObject(dc, old_brush);
+                        DeleteObject(close_fill);
+                    }
+                }
+                const int half = std::max(
+                    2, std::min(scaled_value(window, kTabCloseGlyphHalf),
+                                static_cast<int>(close.right - close.left) / 2 -
+                                    1));
+                const int center_x = (close.left + close.right) / 2;
+                const int center_y = (close.top + close.bottom) / 2;
+                HPEN glyph = CreatePen(PS_SOLID, border_width, colors.text);
+                if (glyph != nullptr) {
+                    const HGDIOBJ old_pen = SelectObject(dc, glyph);
+                    MoveToEx(dc, center_x - half, center_y - half, nullptr);
+                    LineTo(dc, center_x + half + 1, center_y + half + 1);
+                    MoveToEx(dc, center_x + half, center_y - half, nullptr);
+                    LineTo(dc, center_x - half - 1, center_y + half + 1);
+                    SelectObject(dc, old_pen);
+                    DeleteObject(glyph);
+                }
+            }
+        }
     }
     const auto& geometry = tab_geometry();
     if (geometry.placeholder_rect.has_value()) {
@@ -473,18 +583,25 @@ void PaneTabStrip::mouse_move(POINT point) noexcept {
     }
     const bool tab_hover_changed = tab_hover_index() != hover;
     if (tab_hover_changed) set_tab_hover(hover);
+    const auto close_hover = owner_->pane_state() == nullptr
+                                 ? std::nullopt
+                                 : close_button_at(point);
+    const bool close_hover_changed = close_hover_index_ != close_hover;
+    if (close_hover_changed) close_hover_index_ = close_hover;
     const auto scroll_hover = scroll_button_at(point);
     const bool scroll_hover_changed = scroll_hover_index() != scroll_hover;
     if (scroll_hover_changed) set_scroll_hover(scroll_hover);
-    if (tab_hover_changed || scroll_hover_changed)
+    if (tab_hover_changed || scroll_hover_changed || close_hover_changed)
         InvalidateRect(tab_strip_, nullptr, FALSE);
 }
 
 void PaneTabStrip::mouse_leave() noexcept {
     const bool hover_changed = tab_hover_index().has_value() ||
-                               scroll_hover_index().has_value();
+                               scroll_hover_index().has_value() ||
+                               close_hover_index_.has_value();
     set_tab_hover(std::nullopt);
     set_scroll_hover(std::nullopt);
+    close_hover_index_.reset();
     if (hover_changed) InvalidateRect(tab_strip_, nullptr, FALSE);
 }
 
