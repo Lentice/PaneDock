@@ -72,7 +72,7 @@ folder list for that process (PD-225 extends the original single-pane entry). St
 a second launch relays to the existing window and cannot change its mode.
 Enter an absolute local drive path in a visible pane's
 address bar; double-click a folder or press Enter to enter it, and use Up or
-Backspace to leave. Names and size/folder information arrive in batches. Loading,
+Alt+Up to leave (Backspace is Back, as in Windows 10/11 Explorer). Names and size/folder information arrive in batches. Loading,
 empty, read failure, worker unavailable and row/memory exhaustion appear in the
 status bar; Refresh retries the displayed destination. PD-226 extends this path
 to ordinary UNC shares and mapped drives without UI-thread drive/provider probes.
@@ -142,6 +142,22 @@ and CTest excluding launch smoke passed. Sandbox compiler/build probes stalled;
 configure/build and the final CTest run used the authorized elevated context.
 `panedock_launch_smoke` is **UNVERIFIED**: an existing root-build singleton was
 running and was left untouched. No second app was launched or relayed to it.
+
+## PD-262 managed-list file activation
+
+`panedock_managed_list_file_commands` drives synthetic `NM_DBLCLK` and Enter
+activation through Pane with a controlled Shell presenter. It verifies a local
+`.docx` identity, a namespace parsing identity, folder navigation, and rejection
+after a presenter re-enters Pane and changes location. It does not invoke a real
+Shell verb or launch a document/application. The existing context-menu test
+continues to cover the right-click route.
+
+Validation on 2026-10-22: isolated LLVM-MinGW Release build of
+`panedock_managed_list_file_commands_test` and
+`panedock_managed_list_context_menu_test` passed; both focused CTests passed.
+The restricted build produced no output and was stopped; the build completed in
+the elevated context. Actual `.docx` opening and Shell-provider compatibility
+remain unverified by this controlled test.
 
 **UNVERIFIED (real desktop required):** actual isolated-session process restart,
 virtual/UNC fallback and Shell→managed transitions, native focus,
@@ -220,6 +236,50 @@ Two rejected alternatives, recorded here so they are not reopened without new ev
 
 - **Wrapping `IExplorerBrowser` in an abstraction to enable faking.** Rejected: it adds an interface with exactly one real implementation and a permanent maintenance burden, buying coverage that does not correspond to real risk.
 - **End-to-end UI automation (WinAppDriver / UIAutomation).** Rejected: against live Shell views it is severely flaky. The maintenance cost exceeds the signal. Reopening requires a demonstration of a stable run across at least 20 consecutive executions on two machines.
+
+## User flows smoke (opt-in)
+
+`tests/release/user_flows_smoke.ps1` drives everyday operations in the real
+Release `PaneDock.exe` against a throwaway fixture tree and an isolated
+`LOCALAPPDATA`. It is not UI Automation: it sends targeted window messages to
+PaneDock's own HWNDs (control ids from `pane_control_id.h`, `LVM_*`/`HDM_*` on
+the managed list, unmodified keys posted to the list or an edit). It never
+calls `SendInput` or moves the cursor, and it launches with `SW_SHOWNOACTIVATE`
+so the window does not take the foreground. It opens a visible window for a
+few minutes, so it is outside the default run and does not count toward the
+rejected-UIA reopening bar above.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/release/user_flows_smoke.ps1 -AppPath build\PaneDock.exe
+# or, registered with ctest:
+cmake -S . -B build -DPANEDOCK_USER_FLOWS_SMOKE=ON
+ctest --test-dir build -L user_flows --output-on-failure
+```
+
+It prints `PASS`/`FAIL`/`SKIP` per step and exits 0 (all passed), 1 (a step
+failed) or 77 (skipped because a `PaneDock.exe` is already running; it never
+touches the user's instance or the single-instance relay). Covered: address-bar
+navigation and item count, Enter into a subfolder, Back, Up, auto-refresh on
+external create/delete, Refresh, sorting by Name/Size/Date Modified via header
+clicks, F2 inline rename (verified on disk), new/switch/close tab, create/rename/
+switch Groups, deleting a non-active Group while the visible pane keeps listing,
+layout change, normal close (exit 0, `live_list_count` 0), the saved session,
+and relaunch restoring Groups, tabs and locations. The app is always closed via
+`WM_CLOSE`; if it does not exit, the script reports it and leaves it running and
+keeps the fixture rather than force-killing it.
+
+### Manual checklist: flows that need real input
+
+The smoke cannot honestly fake these; run them by hand on a Release build.
+
+1. **Ctrl shortcuts.** In a pane, press `Ctrl+T`, `Ctrl+Tab`, `Ctrl+W`, `Alt+Left`, `Alt+Right`. Expected: new tab, next tab, tab closed, history back/forward.
+2. **Clipboard copy/paste.** Select a file in pane 1, `Ctrl+C`; click pane 2 showing another folder, `Ctrl+V`. Expected: the copy appears in pane 2's folder with native progress; the source is intact. Repeat with `Ctrl+X` (move).
+3. **Delete.** Select a disposable file, press `Delete`, then `Shift+Delete` on another. Expected: native confirmation; Recycle Bin and permanent delete respectively; the list updates without Refresh.
+4. **Drag and drop.** Drag a file from one pane to another on the same volume (move), and across volumes (copy); drag to and from Windows File Explorer. Expected: Explorer-equivalent default effect and result.
+5. **Native context menus.** Right-click a file, a folder and empty list space; use Open, Copy, Paste, Rename and a third-party entry. Expected: the standard Windows menus with installed extensions, acting on the clicked item or folder.
+6. **Opening documents.** Double-click a `.docx` and a `.txt`. Expected: Word (or the associated app) and the text editor open the file; PaneDock stays responsive.
+7. **Mouse tab and Group gestures.** Middle-click a tab, drag a tab within and between panes, drag a Group row to reorder, double-click empty tab strip space. Expected: close, reorder/move, reorder, new tab.
+8. **Splitter and sidebar resize.** Drag both splitters in Four Panes and the sidebar edge. Expected: live resize without blank frames.
 
 ## Prototype acceptance protocol (Phase 0)
 
