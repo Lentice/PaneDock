@@ -2884,6 +2884,31 @@ bool file_command_cancel_requested(void* context) noexcept {
     return file_operation_cancel_requested(&static_cast<FileCommandContext*>(context)->state);
 }
 
+// The one bracket around every Pane file operation: the shutdown sequence
+// sees the call start and finish, the Shell call pumps inside a
+// ShellCallScope, and a close deferred meanwhile completes right after.
+// The caller has already gated on file_operation_call_active and shutdown.
+template <class Operation>
+auto run_file_operation(AppState& state, FileCommandContext& context,
+                        Operation operation) {
+    state.shutdown_coordinator.sequence().step(
+        panedock::core::ShutdownEvent::file_operation_call_started);
+    decltype(operation(std::declval<const panedock::file_operations::Callbacks&>())) result;
+    {
+        ShellCallScope shell_call(state.reentry_guard);
+        const panedock::file_operations::Callbacks callbacks{
+            &context, file_command_started, file_command_finished,
+            file_command_cancel_requested, file_command_setup_aborted};
+        result = operation(callbacks);
+    }
+    state.shutdown_coordinator.sequence().step(
+        panedock::core::ShutdownEvent::file_operation_finished);
+    state.shutdown_coordinator.sequence().step(
+        panedock::core::ShutdownEvent::file_operation_call_finished);
+    state.shutdown_coordinator.complete_deferred_close();
+    return result;
+}
+
 // Shared gate for the Pane-driven single-item Shell operations (rename, new folder).
 template <class Operation>
 panedock::file_operations::RenameResult run_pane_item_operation(AppState& state,
@@ -2893,18 +2918,7 @@ panedock::file_operations::RenameResult run_pane_item_operation(AppState& state,
     if (state.file_operation_call_active || state.is_shutting_down()) return result;
     FileCommandContext context{state, pane, snapshot, GetForegroundWindow()};
     if (context.foreground != state.main_window || !context.current()) return result;
-    state.shutdown_coordinator.sequence().step(panedock::core::ShutdownEvent::file_operation_call_started);
-    {
-        ShellCallScope shell_call(state.reentry_guard);
-        const panedock::file_operations::Callbacks callbacks{
-            &context, file_command_started, file_command_finished,
-            file_command_cancel_requested, file_command_setup_aborted};
-        result = operation(callbacks);
-    }
-    state.shutdown_coordinator.sequence().step(panedock::core::ShutdownEvent::file_operation_finished);
-    state.shutdown_coordinator.sequence().step(panedock::core::ShutdownEvent::file_operation_call_finished);
-    state.shutdown_coordinator.complete_deferred_close();
-    return result;
+    return run_file_operation(state, context, operation);
 } catch (...) {
     panedock::file_operations::RenameResult result;
     result.result = E_OUTOFMEMORY;
@@ -2970,34 +2984,21 @@ bool perform_file_command(HWND window, AppState& state, Pane& pane,
     const HRESULT captured = pane.file_command_snapshot(command, context.snapshot);
     if (captured != S_OK) return command != panedock::file_operations::Command::paste;
     if (!context.current()) return true;
-    state.shutdown_coordinator.sequence().step(
-        panedock::core::ShutdownEvent::file_operation_call_started);
-    panedock::file_operations::PasteResult result;
-    {
-        ShellCallScope shell_call(state.reentry_guard);
-        const panedock::file_operations::Callbacks callbacks{
-            &context, file_command_started, file_command_finished,
-            file_command_cancel_requested, file_command_setup_aborted};
+    const auto result = run_file_operation(state, context, [&](const auto& callbacks) {
         using panedock::file_operations::Command;
         if (command == Command::paste)
-            result = panedock::file_operations::paste_from_clipboard(
+            return panedock::file_operations::paste_from_clipboard(
                 window, context.snapshot.folder.parsing_name, callbacks);
-        else if (command == Command::delete_items ||
-                 command == Command::delete_permanently)
-            result = panedock::file_operations::delete_selection(
+        if (command == Command::delete_items || command == Command::delete_permanently)
+            return panedock::file_operations::delete_selection(
                 window, context.snapshot.items, callbacks,
                 command == Command::delete_items);
-        else {
-            result.result = panedock::file_operations::selection_to_clipboard(
-                context.snapshot.items, command == Command::cut, callbacks);
-            result.handled = true;
-        }
-    }
-    state.shutdown_coordinator.sequence().step(
-        panedock::core::ShutdownEvent::file_operation_finished);
-    state.shutdown_coordinator.sequence().step(
-        panedock::core::ShutdownEvent::file_operation_call_finished);
-    state.shutdown_coordinator.complete_deferred_close();
+        panedock::file_operations::PasteResult copied;
+        copied.result = panedock::file_operations::selection_to_clipboard(
+            context.snapshot.items, command == Command::cut, callbacks);
+        copied.handled = true;
+        return copied;
+    });
     if (command == panedock::file_operations::Command::cut && SUCCEEDED(result.result) &&
         !state.is_shutting_down())
         pane.note_list_cut(context.snapshot); // Explorer dims cut rows; re-verifies itself
