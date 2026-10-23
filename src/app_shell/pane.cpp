@@ -1821,6 +1821,8 @@ void Pane::set_visible(bool visible) noexcept {
     ShowWindow(address_bar_, command);
     ShowWindow(status_bar_, command);
     ShowWindow(folder_context_button_, command);
+    // A hidden pane's button stays inert; stage_layout enables it again.
+    if (!visible) EnableWindow(folder_context_button_, FALSE);
 }
 
 void Pane::apply_font(HFONT font) noexcept {

@@ -125,7 +125,7 @@ constexpr UINT kDeferredFileOperationRefreshMessage = WM_APP + 64;
 constexpr UINT kDeferredVolumeChangeMessage = WM_APP + 65;
 using panedock::core::kSidebarMaximumWidth;
 using panedock::core::kSidebarMinimumWidth;
-constexpr std::size_t kExplorerCount = 4;
+using panedock::core::kMaxPaneCount;
 constexpr int kLayoutBarHeight = 44;
 constexpr int kLayoutButtonHeight = 30;
 constexpr int kLayoutButtonWidth = 30;
@@ -572,7 +572,7 @@ struct AppState : public panedock::app_shell::PaneHost {
     // (Shell view lifetime) moved into Pane too — Pane now owns both the
     // view and its parent HWND, so PD-183 can make destroy ordering a
     // constructor/destructor invariant instead of a call-site convention.
-    std::array<panedock::app_shell::Pane, kExplorerCount> panes{};
+    std::array<panedock::app_shell::Pane, kMaxPaneCount> panes{};
     panedock::app_shell::PinnedLocationsDialog pinned_locations_dialog;
     std::array<std::wstring, kPinnedFixedParsingNames.size()>
         pinned_fixed_labels{};
@@ -683,7 +683,7 @@ panedock::core::ApplicationState default_application_state() {
     group.divider_ratios = panedock::core::default_divider_ratios(
         group.layout_template);
     panedock::core::reserve_panes(group);
-    for (std::size_t index = 0; index < kExplorerCount; ++index) {
+    for (std::size_t index = 0; index < kMaxPaneCount; ++index) {
         const std::string suffix = std::to_string(index);
         group.panes.push_back({"pane-" + suffix,
                                {{"tab-" + suffix,
@@ -772,9 +772,9 @@ const panedock::core::TabState& active_tab(
 // plan_realization takes a snapshot of which panes currently hold a live
 // view; Pane owns that flag now (PD-183), so callers collect it here rather
 // than plan_realization reaching into Pane itself.
-std::array<bool, kExplorerCount> realized_flags(const AppState& state) noexcept {
-    std::array<bool, kExplorerCount> flags{};
-    for (std::size_t index = 0; index < kExplorerCount; ++index)
+std::array<bool, kMaxPaneCount> realized_flags(const AppState& state) noexcept {
+    std::array<bool, kMaxPaneCount> flags{};
+    for (std::size_t index = 0; index < kMaxPaneCount; ++index)
         flags[index] = state.panes[index].realized();
     return flags;
 }
@@ -1574,12 +1574,13 @@ HRESULT apply_layout(HWND window, AppState& state,
     LayoutPassScope layout_scope(window, state);
     WindowPositionBatch main_positions;
     // DeferWindowPos requires every window in a batch to share one parent:
-    // main-window chrome/pane HWNDs, each pane's children, and each
-    // ExplorerBrowser therefore use separate batches committed in this pass.
-    std::array<std::optional<WindowPositionBatch>, kExplorerCount>
+    // main-window chrome/pane HWNDs, each pane's children, and each pane's
+    // managed list (a child of its list container) therefore use separate
+    // batches committed in this pass.
+    std::array<std::optional<WindowPositionBatch>, kMaxPaneCount>
         pane_positions;
-    std::array<std::optional<WindowPositionBatch>, kExplorerCount>
-        explorer_positions;
+    std::array<std::optional<WindowPositionBatch>, kMaxPaneCount>
+        list_positions;
     layout_sidebar(window, state, &main_positions);
     layout_header(window, state, &main_positions, recompute_content);
     if (!has_active_group(state)) {
@@ -1590,8 +1591,6 @@ HRESULT apply_layout(HWND window, AppState& state,
             }
             if (state.is_shutting_down()) return E_ABORT;
             state.panes[index].set_visible(false);
-            ShowWindow(state.panes[index].folder_context_button(), SW_HIDE);
-            EnableWindow(state.panes[index].folder_context_button(), FALSE);
         }
         ShowWindow(state.empty_message, SW_SHOW);
         for (auto& chrome : state.panes)
@@ -1635,10 +1634,10 @@ HRESULT apply_layout(HWND window, AppState& state,
             state.panes[index].set_chrome_active(index == active);
     }
     std::optional<LayoutFailure> first_failure;
-    std::array<bool, kExplorerCount> changed_panes{};
-    std::array<Pane::LayoutResult, kExplorerCount> pane_layouts{};
-    std::array<std::optional<RECT>, kExplorerCount> pending_shell_rects{};
-    std::array<bool, kExplorerCount> shell_positions_deferred{};
+    std::array<bool, kMaxPaneCount> changed_panes{};
+    std::array<Pane::LayoutResult, kMaxPaneCount> pane_layouts{};
+    std::array<std::optional<RECT>, kMaxPaneCount> pending_shell_rects{};
+    std::array<bool, kMaxPaneCount> shell_positions_deferred{};
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
         auto& chrome = state.panes[index];
         const bool visible =
@@ -1670,11 +1669,11 @@ HRESULT apply_layout(HWND window, AppState& state,
                     return configured;
             } else if (pane_geometry_changed) {
                 pending_shell_rects[index] = local_rect;
-                explorer_positions[index].emplace();
-                if (explorer_positions[index]->active()) {
+                list_positions[index].emplace();
+                if (list_positions[index]->active()) {
                     shell_positions_deferred[index] = true;
                     chrome.set_shell_rect(
-                        local_rect, &*explorer_positions[index]);
+                        local_rect, &*list_positions[index]);
                 } else {
                     chrome.set_shell_rect(local_rect, nullptr);
                 }
@@ -1695,8 +1694,6 @@ HRESULT apply_layout(HWND window, AppState& state,
                 if (state.is_shutting_down()) return E_ABORT;
             }
             chrome.set_visible(false);
-            ShowWindow(chrome.folder_context_button(), SW_HIDE);
-            EnableWindow(chrome.folder_context_button(), FALSE);
         }
         chrome.set_shell_visible(visible);
         if (state.is_shutting_down()) return E_ABORT;
@@ -1718,9 +1715,9 @@ HRESULT apply_layout(HWND window, AppState& state,
             state.panes[index].tab_strip_ui().apply_item_size();
     }
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
-        if (!explorer_positions[index].has_value()) continue;
-        const bool explorer_committed = explorer_positions[index]->commit();
-        if (!explorer_committed && shell_positions_deferred[index]) {
+        if (!list_positions[index].has_value()) continue;
+        const bool list_committed = list_positions[index]->commit();
+        if (!list_committed && shell_positions_deferred[index]) {
             state.panes[index].set_shell_rect(
                 *pending_shell_rects[index], nullptr);
             if (state.is_shutting_down()) return E_ABORT;
@@ -2239,13 +2236,13 @@ std::size_t pane_at_point(HWND window, int stored_sidebar_width,
         const RECT rect = to_win32_rect(rects[index]);
         if (PtInRect(&rect, point)) return index;
     }
-    return kExplorerCount;
+    return kMaxPaneCount;
 }
 
 // The coordinator's guard: no active Group means no pane under any point.
 std::size_t pane_at_point(HWND window, const AppState& state,
                           POINT point) noexcept {
-    if (!has_active_group(state)) return kExplorerCount;
+    if (!has_active_group(state)) return kMaxPaneCount;
     return pane_at_point(window, state.application.sidebar_width,
                          active_group(state), point);
 }
@@ -2288,7 +2285,7 @@ POINT point_from_lparam(LPARAM lparam) noexcept {
 }
 
 bool address_bar_has_focus(
-    const std::array<panedock::app_shell::Pane, kExplorerCount>& panes) noexcept {
+    const std::array<panedock::app_shell::Pane, kMaxPaneCount>& panes) noexcept {
     const HWND focused = GetFocus();
     for (const auto& chrome : panes)
         if (chrome.address_bar() == focused) return true;
@@ -3452,7 +3449,7 @@ std::optional<LRESULT> handle_global_mouse_message(
                     GetCursorPos(&point);
                     ScreenToClient(window, &point);
                     const std::size_t pane = pane_at_point(window, state, point);
-                    if (pane < kExplorerCount)
+                    if (pane < kMaxPaneCount)
                         state.panes[pane].navigate_history(button == XBUTTON1);
                     return message == WM_XBUTTONDOWN ? std::optional<LRESULT>(TRUE)
                                                      : std::optional<LRESULT>(0);
@@ -3477,7 +3474,7 @@ std::optional<LRESULT> handle_global_mouse_message(
                 GetCursorPos(&point);
                 ScreenToClient(window, &point);
                 const std::size_t pane = pane_at_point(window, state, point);
-                if (pane < kExplorerCount) set_active_pane(window, state, pane);
+                if (pane < kMaxPaneCount) set_active_pane(window, state, pane);
             }
             return 0;
         default: break;
@@ -3642,7 +3639,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 return 0;
             }
             if (timer >= kDragHoverTabTimerIdBase &&
-                timer < kDragHoverTabTimerIdBase + kExplorerCount) {
+                timer < kDragHoverTabTimerIdBase + kMaxPaneCount) {
                 const std::size_t pane_index = static_cast<std::size_t>(
                     timer - kDragHoverTabTimerIdBase);
                 if (auto* hover =
@@ -3835,7 +3832,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 return 0;
             }
             if (timer >= kDragHoverTabTimerIdBase &&
-                timer < kDragHoverTabTimerIdBase + kExplorerCount) {
+                timer < kDragHoverTabTimerIdBase + kMaxPaneCount) {
                 const std::size_t pane_index = static_cast<std::size_t>(
                     timer - kDragHoverTabTimerIdBase);
                 if (auto* hover =
@@ -4295,7 +4292,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         // Wait on owned worker events as well as input. Workers never hold an
         // HWND or post to a possibly destroyed/reused window. A queued input
         // message gets a turn between bounded result drains.
-        std::array<HANDLE, kExplorerCount * 2> events{};
+        std::array<HANDLE, kMaxPaneCount * 2> events{};
         DWORD event_count = 0;
         for (const auto& pane : state.panes) {
             if (const HANDLE event = pane.content_event()) events[event_count++] = event;
