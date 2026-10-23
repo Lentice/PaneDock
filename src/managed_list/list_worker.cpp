@@ -14,6 +14,7 @@
 #include <shlwapi.h>
 #include <shobjidl.h>
 #include <wrl/client.h>
+#include "core/address_text.h"
 #include "shell_core/shell_core.h"
 
 namespace panedock::managed_list {
@@ -751,19 +752,6 @@ bool missing_error(DWORD error) {
     return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ||
         error == ERROR_INVALID_DRIVE || error == ERROR_NOT_READY || error == ERROR_DIRECTORY;
 }
-// "C:\a\b" -> "C:\a" -> "C:\" -> ""; "\\srv\share\a" -> "\\srv\share" -> "".
-std::wstring parent_directory(std::wstring path) {
-    while (path.size() > 3 && path.back() == L'\\') path.pop_back();
-    if (path.size() <= 3 && path.size() >= 2 && path[1] == L':') return {};
-    const auto slash = path.rfind(L'\\');
-    if (slash == std::wstring::npos) return {};
-    if (path.starts_with(L"\\\\")) {
-        const auto server = path.find(L'\\', 2);
-        if (server == std::wstring::npos || path.find(L'\\', server + 1) == std::wstring::npos) return {};
-        return path.substr(0, slash);
-    }
-    return slash == 2 && path[1] == L':' ? path.substr(0, 3) : path.substr(0, slash);
-}
 // Where the still-open handle now points ("\\?\C:\x" -> "C:\x").
 std::wstring final_directory_path(HANDLE directory) {
     std::wstring value(kMaxPath + 1, L'\0');
@@ -824,7 +812,7 @@ std::optional<core::ShellLocation> lost_location_target(const std::wstring& path
         if (auto renamed = renamed_path(path, opened_final, final_path);
             !renamed.empty() && directory_exists(renamed, error))
             return core::ShellLocation{std::move(renamed), {}, {}};
-    for (auto parent = parent_directory(path); !parent.empty(); parent = parent_directory(parent))
+    for (auto parent = core::filesystem_parent(path); !parent.empty(); parent = core::filesystem_parent(parent))
         if (directory_exists(parent, error)) return core::ShellLocation{parent, {}, {}};
     if (network) return {};
     return core::ShellLocation{L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", {}, {}}; // This PC
@@ -979,13 +967,11 @@ void enumerate_and_watch(const std::shared_ptr<State>& state, std::uint64_t seri
     const auto opened_final = final_directory_path(watch->directory);
     // Optional: a parent that cannot be watched (no parent, no access) only
     // loses early detection of a Recycle Bin delete of the folder itself.
-    const auto parent_path = parent_directory(path);
+    const auto parent_path = core::filesystem_parent(path);
     DWORD parent_error{};
     auto parent = parent_path.empty() ? nullptr :
         open_directory_watch(parent_path, kParentWatchFilter, parent_error);
-    std::wstring leaf = path;
-    while (leaf.size() > 3 && leaf.back() == L'\\') leaf.pop_back();
-    leaf.erase(0, leaf.rfind(L'\\') + 1);
+    const std::wstring leaf(core::filesystem_leaf(path));
     // A folder that is gone sends the Pane to its replacement; any other
     // failure keeps the rows and reports that automatic refresh stopped.
     const auto lose = [&](DWORD reason) {

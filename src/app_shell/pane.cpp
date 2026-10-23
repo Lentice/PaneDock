@@ -917,24 +917,17 @@ HRESULT Pane::navigate_up_one_level() {
     // The local Source retains its existing syntactic filesystem Up.
     // Never interpret a virtual fallback or display name as a parent.
     if (!managed_list::is_filesystem_location(list_.request.location.parsing_name)) return E_PENDING;
-    auto path = list_.request.location.parsing_name;
-    while (path.size() > 3 && path.back() == L'\\') path.pop_back();
-    if (path.starts_with(L"\\\\")) {
-        // Up from \\server\share lists the server's shares, a Shell namespace
-        // folder (the filesystem reader has no server level).
-        if (auto server = core::unc_server_of_share_root(path); !server.empty()) {
-            core::ShellLocation target{std::move(server), {}, {}};
-            target.namespace_location = true;
-            return navigate_to(target);
-        }
-        const auto server = path.find(L'\\', 2);
-        if (server == std::wstring::npos || path.find(L'\\', server + 1) == std::wstring::npos)
-            return S_FALSE;
+    const auto& path = list_.request.location.parsing_name;
+    // Up from \\server\share lists the server's shares, a Shell namespace
+    // folder (the filesystem reader has no server level).
+    if (auto server = core::unc_server_of_share_root(path); !server.empty()) {
+        core::ShellLocation target{std::move(server), {}, {}};
+        target.namespace_location = true;
+        return navigate_to(target);
     }
-    const auto slash = path.find_last_of(L'\\');
-    if (slash == std::wstring::npos || path.size() <= 3) return S_FALSE;
-    path.resize(std::max<std::size_t>(3, slash));
-    return navigate_to({std::move(path), {}, {}});
+    auto parent = core::filesystem_parent(path);
+    if (parent.empty()) return S_FALSE;
+    return navigate_to({std::move(parent), {}, {}});
 }
 
 bool Pane::navigation_request_is_current(
@@ -1191,14 +1184,11 @@ void Pane::finish_failed_address() noexcept try {
     if (error == ERROR_DIRECTORY &&
         managed_list::is_filesystem_location(failed_location.parsing_name)) {
         // A typed file opens with its default verb, as in Explorer.
-        auto path = failed_location.parsing_name;
-        while (path.size() > 3 && path.back() == L'\\') path.pop_back();
-        const auto slash = path.find_last_of(L'\\');
-        if (slash == std::wstring::npos || slash < 2 || slash + 1 >= path.size()) return;
         explorer_host::ContextMenuRequest request;
-        // "C:\file" keeps the root's backslash; "C:\dir\file" drops it.
-        request.folder = path.substr(0, slash == 2 && path[1] == L':' ? 3 : slash);
-        request.items.push_back(path.substr(slash + 1));
+        request.folder = core::filesystem_parent(failed_location.parsing_name);
+        const auto leaf = core::filesystem_leaf(failed_location.parsing_name);
+        if (request.folder.empty() || leaf.empty()) return;
+        request.items.emplace_back(leaf);
         RECT rect{};
         if (address_bar_ && GetWindowRect(address_bar_, &rect))
             request.screen = {rect.left, rect.bottom};

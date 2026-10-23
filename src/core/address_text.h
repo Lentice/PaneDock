@@ -47,4 +47,37 @@ inline std::wstring unc_server_of_share_root(std::wstring_view path) {
     return std::wstring(path.substr(0, slash));
 }
 
+// A filesystem path without trailing backslashes, except the one a drive
+// root needs: "C:\a\\" -> "C:\a", "C:\\" -> "C:\".
+inline std::wstring_view trim_trailing_backslashes(std::wstring_view path) noexcept {
+    while (path.size() > 3 && path.back() == L'\\') path.remove_suffix(1);
+    return path;
+}
+
+// The containing directory, syntactically: "C:\a\b" -> "C:\a" -> "C:\" -> "";
+// "\\srv\share\a" -> "\\srv\share" -> "". A share root has no filesystem
+// parent; its server is a Shell namespace folder (unc_server_of_share_root).
+inline std::wstring filesystem_parent(std::wstring_view path) {
+    path = trim_trailing_backslashes(path);
+    if (path.size() <= 3 && path.size() >= 2 && path[1] == L':') return {};
+    const auto slash = path.rfind(L'\\');
+    if (slash == std::wstring_view::npos) return {};
+    if (path.starts_with(L"\\\\")) {
+        const auto server = path.find(L'\\', 2);
+        if (server == std::wstring_view::npos ||
+            path.find(L'\\', server + 1) == std::wstring_view::npos)
+            return {};
+        return std::wstring(path.substr(0, slash));
+    }
+    return std::wstring(slash == 2 && path[1] == L':' ? path.substr(0, 3)
+                                                      : path.substr(0, slash));
+}
+
+// The last component: "C:\a\b\" -> "b"; a drive root has none.
+inline std::wstring_view filesystem_leaf(std::wstring_view path) noexcept {
+    path = trim_trailing_backslashes(path);
+    const auto slash = path.rfind(L'\\');
+    return slash == std::wstring_view::npos ? path : path.substr(slash + 1);
+}
+
 }  // namespace panedock::core

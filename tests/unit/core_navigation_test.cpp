@@ -57,10 +57,32 @@ void test_typed_address_text() {
     EXPECT(unc_server_of_share_root(LR"(C:\share)").empty());
     EXPECT(unc_server_of_share_root(LR"(\\?\UNC)").empty());
 }
+
+void test_filesystem_parent_and_leaf() {
+    EXPECT(filesystem_parent(LR"(C:\a\b)") == LR"(C:\a)");
+    EXPECT(filesystem_parent(LR"(C:\a\b\\)") == LR"(C:\a)");
+    EXPECT(filesystem_parent(LR"(C:\a)") == LR"(C:\)");
+    EXPECT(filesystem_parent(LR"(C:\)").empty());
+    EXPECT(filesystem_parent(LR"(C:)").empty());
+    EXPECT(filesystem_parent(LR"(\\srv\share\a\b)") == LR"(\\srv\share\a)");
+    EXPECT(filesystem_parent(LR"(\\srv\share\a)") == LR"(\\srv\share)");
+    // A share root's server is not a filesystem directory.
+    EXPECT(filesystem_parent(LR"(\\srv\share)").empty());
+    EXPECT(filesystem_parent(LR"(\\srv\share\)").empty());
+    EXPECT(filesystem_parent(LR"(\\srv)").empty());
+    EXPECT(filesystem_parent(L"relative").empty());
+
+    EXPECT(filesystem_leaf(LR"(C:\a\b)") == L"b");
+    EXPECT(filesystem_leaf(LR"(C:\a\b\\)") == L"b");
+    EXPECT(filesystem_leaf(LR"(C:\file.txt)") == L"file.txt");
+    EXPECT(filesystem_leaf(LR"(C:\)").empty());
+    EXPECT(filesystem_leaf(LR"(\\srv\share\a)") == L"a");
+}
 } // namespace
 int main() {
     test_navigation_request_identity();
     test_history_steps_from_a_pending_target();
     test_typed_address_text();
+    test_filesystem_parent_and_leaf();
     return panedock::test::summary("core_navigation_test");
 }
