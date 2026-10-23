@@ -569,6 +569,7 @@ class Pane final {
         IndexAllocator<unsigned char>{&index_memory_}};
     void clear_list_index() noexcept;
     bool index_list_row(std::size_t index) noexcept;
+    void fail_list_watch(DWORD error) noexcept;
     struct ListRename final {
         FileCommandSnapshot snapshot;
         managed_list::ItemIdentity identity;

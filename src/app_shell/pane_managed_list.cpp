@@ -894,13 +894,17 @@ bool Pane::index_list_row(std::size_t index) noexcept try {
     recovery_index_.insert(index);
     return true;
 } catch (...) {
-    // The allocator rejects before exceeding its separate 4 MiB ceiling. Keep
-    // the sole row snapshot, stop automatic work and require explicit Refresh.
-    clear_list_index();
-    list_.watch = managed_list::WatchState::failed;
-    list_.watch_error = ERROR_NOT_ENOUGH_MEMORY;
-    if (list_source_) list_source_->cancel();
+    // The allocator rejects before exceeding its separate 4 MiB ceiling.
+    fail_list_watch(ERROR_NOT_ENOUGH_MEMORY);
     return false;
+}
+// Keeps the sole row snapshot, stops automatic work and requires an explicit
+// Refresh: the one way a change notification or recovery gives up.
+void Pane::fail_list_watch(DWORD error) noexcept {
+    list_.watch = managed_list::WatchState::failed;
+    list_.watch_error = error;
+    if (list_source_) list_source_->cancel();
+    clear_list_index();
 }
 void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction& interaction) {
     using managed_list::Change;
@@ -923,10 +927,7 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
             // Fixed mark storage shares the SAME 4 MiB allocator ceiling.
             // No per-row padding is added to the authoritative row snapshot.
             recovery_seen_.assign(managed_list::kMaxRows, 0);
-        } catch (...) {
-            list_.watch = WatchState::failed; list_.watch_error = ERROR_NOT_ENOUGH_MEMORY;
-            list_source_->cancel(); clear_list_index(); return;
-        }
+        } catch (...) { fail_list_watch(ERROR_NOT_ENOUGH_MEMORY); return; }
         for (std::size_t i = 0; i < list_.rows.size(); ++i) {
             if (!index_list_row(i)) return;
             ++recovery_work_.indexed_rows;
@@ -935,8 +936,7 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
     }
     if (batch.rows.size() > managed_list::kBatchRows ||
         batch.removed.size() > managed_list::kBatchRows || batch.renamed.size() > managed_list::kBatchRows) {
-        list_.watch = WatchState::failed; list_.watch_error = ERROR_INVALID_DATA;
-        list_source_->cancel(); clear_list_index(); return;
+        fail_list_watch(ERROR_INVALID_DATA); return;
     }
     const auto row_bytes = managed_list::owned_row_bytes;
     const auto translate = [&](std::optional<managed_list::ItemIdentity>& name, const auto& from, const auto& to) {
@@ -982,10 +982,7 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
     const std::size_t delta_base = list_.rows.size();
     std::vector<std::size_t> delta_updated;
     for (auto& row : batch.rows) {
-        if (!managed_list::prepare_row(row)) {
-            list_.watch = WatchState::failed; list_.watch_error = ERROR_INVALID_DATA;
-            list_source_->cancel(); clear_list_index(); return;
-        }
+        if (!managed_list::prepare_row(row)) { fail_list_watch(ERROR_INVALID_DATA); return; }
         if (batch.change == Change::rescan) ++recovery_work_.lookups;
         const auto match = recovery_index_.find(row.identity);
         if (match != recovery_index_.end()) {
@@ -1001,8 +998,7 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
                 const auto new_bytes = row_bytes(row);
                 if (list_name_bytes_ - old_bytes + new_bytes + list_.rows.capacity() * sizeof(managed_list::Row) >
                     managed_list::kMaxRowBytes) {
-                    list_.watch = WatchState::failed; list_.watch_error = ERROR_NOT_ENOUGH_MEMORY;
-                    list_source_->cancel(); clear_list_index(); return;
+                    fail_list_watch(ERROR_NOT_ENOUGH_MEMORY); return;
                 }
                 list_name_bytes_ = list_name_bytes_ - old_bytes + new_bytes;
                 touched.push_back(row.identity);
@@ -1034,8 +1030,7 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
                 list_name_bytes_ + bytes + std::max(list_.rows.capacity(), list_.rows.size() + 1) *
                     sizeof(managed_list::Row) > managed_list::kMaxRowBytes) {
                 list_.phase = managed_list::Phase::limited;
-                list_.watch = WatchState::failed; list_.watch_error = ERROR_NOT_ENOUGH_MEMORY;
-                list_source_->cancel(); clear_list_index(); return;
+                fail_list_watch(ERROR_NOT_ENOUGH_MEMORY); return;
             }
             if (list_.rows.size() == list_.rows.capacity()) {
                 const auto capacity = std::min(managed_list::kMaxRows, std::max<std::size_t>(
@@ -1068,9 +1063,7 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
             list_.watch = WatchState::watching;
         } else {
             // Never purge unseen rows after an incomplete recovery.
-            list_.watch = WatchState::failed;
-            list_.watch_error = batch.error ? batch.error : ERROR_BUFFER_OVERFLOW;
-            list_source_->cancel();
+            fail_list_watch(batch.error ? batch.error : ERROR_BUFFER_OVERFLOW);
         }
     }
     if (list_.watch != WatchState::recovering) clear_list_index();
