@@ -25,30 +25,6 @@ namespace {
 
 constexpr DWORD kDisplayNameLookupTimeoutMs = 1000;
 
-std::wstring item_name(IShellItem* item, SIGDN kind) {
-    PWSTR text = nullptr;
-    if (item == nullptr || FAILED(item->GetDisplayName(kind, &text)) ||
-        text == nullptr) return {};
-    std::wstring result;
-    try {
-        result.assign(text);
-    } catch (...) {
-        CoTaskMemFree(text);
-        throw;
-    }
-    CoTaskMemFree(text);
-    return result;
-}
-
-Microsoft::WRL::ComPtr<IShellItem> parse(std::wstring_view text) {
-    Microsoft::WRL::ComPtr<IShellItem> item;
-    if (text.empty()) return item;
-    const std::wstring value(text);
-    (void)SHCreateItemFromParsingName(value.c_str(), nullptr,
-                                      IID_PPV_ARGS(&item));
-    return item;
-}
-
 }  // namespace
 
 std::string view_mode_name(FOLDERVIEWMODE mode, int image_size) {
@@ -107,57 +83,6 @@ std::optional<SortProperty> parse_sort_property(std::string_view name) noexcept 
     return std::nullopt;
 }
 
-core::ShellLocation capture_location(std::wstring parsing_name) {
-    core::ShellLocation result{std::move(parsing_name), {}, {}};
-    const auto item = parse(result.parsing_name);
-    if (item == nullptr) return result;
-
-    const std::wstring canonical =
-        item_name(item.Get(), SIGDN_DESKTOPABSOLUTEPARSING);
-    if (!canonical.empty()) result.parsing_name = canonical;
-    result.fallback_path = item_name(item.Get(), SIGDN_FILESYSPATH);
-
-    PIDLIST_ABSOLUTE pidl = nullptr;
-    if (FAILED(SHGetIDListFromObject(item.Get(), &pidl)) || pidl == nullptr)
-        return result;
-    Microsoft::WRL::ComPtr<IKnownFolderManager> manager;
-    Microsoft::WRL::ComPtr<IKnownFolder> folder;
-    if (SUCCEEDED(CoCreateInstance(CLSID_KnownFolderManager, nullptr,
-                                   CLSCTX_INPROC_SERVER,
-                                   IID_PPV_ARGS(&manager))) &&
-        SUCCEEDED(manager->FindFolderFromIDList(pidl, &folder))) {
-        KNOWNFOLDERID id{};
-        wchar_t guid[39]{};
-        if (SUCCEEDED(folder->GetId(&id)) &&
-            StringFromGUID2(id, guid, ARRAYSIZE(guid)) != 0)
-            result.known_folder_identity = guid;
-    }
-    CoTaskMemFree(pidl);
-    return result;
-}
-
-std::wstring resolve_location(const core::ShellLocation& location) {
-    if (!location.known_folder_identity.empty()) {
-        GUID id{};
-        Microsoft::WRL::ComPtr<IKnownFolderManager> manager;
-        Microsoft::WRL::ComPtr<IKnownFolder> folder;
-        Microsoft::WRL::ComPtr<IShellItem> item;
-        if (SUCCEEDED(CLSIDFromString(
-                location.known_folder_identity.c_str(), &id)) &&
-            SUCCEEDED(CoCreateInstance(CLSID_KnownFolderManager, nullptr,
-                                       CLSCTX_INPROC_SERVER,
-                                       IID_PPV_ARGS(&manager))) &&
-            SUCCEEDED(manager->GetFolder(id, &folder)) &&
-            SUCCEEDED(folder->GetShellItem(0, IID_PPV_ARGS(&item)))) {
-            const std::wstring target =
-                item_name(item.Get(), SIGDN_DESKTOPABSOLUTEPARSING);
-            if (!target.empty()) return target;
-        }
-    }
-    // Leave parsing to the navigation call, where one bind deadline can cover
-    // both the primary identity and its fallback without probing twice here.
-    return location.parsing_name;
-}
 
 std::wstring display_text_for_parsing_name(std::wstring_view parsing_name) {
     if (!parsing_name.starts_with(L"::")) return std::wstring(parsing_name);
@@ -232,12 +157,6 @@ std::optional<std::filesystem::path> session_directory() noexcept {
 }  // namespace panedock::shell_core
 
 namespace panedock::shell_core {
-IconImage load_item_icon(std::wstring_view folder, std::wstring_view name, int size) {
-    std::wstring path(folder);
-    if (!path.empty() && path.back() != L'\\') path += L'\\';
-    path += name;
-    return load_item_icon(path, size);
-}
 namespace {
 // Draws the icon into an owned 32-bit colour plus 1-bit mask raster.
 IconImage rasterize_icon(HICON icon_handle, int size) {
@@ -272,7 +191,7 @@ IconImage rasterize_icon(HICON icon_handle, int size) {
 // images are drawn at their own size and resampled, so Medium/Large/Extra large
 // icons are not a stretched 32 px icon.
 constexpr int kShellLargeIconSize = 32;
-constexpr int kExtraLargeIconSize = 48;
+constexpr int kSystemExtraLargeIconSize = 48; // SHIL_EXTRALARGE, not the 256 px view mode
 // Concurrent first lookups of one item's icon fail on every thread except the
 // one that wins: measured on a cold process with four STA threads asking for
 // the C: drive at once (four panes opening This PC), 3 of 4 SHGetFileInfo calls failed,
@@ -310,7 +229,7 @@ bool small_image_in_jumbo_cell(const IconImage& image, int size) {
     for (int y = 0; y < size; ++y)
         for (int x = 0; x < size; ++x) {
             if ((image.pixels[y * size + x] & 0xff000000) == 0) continue;
-            if (x >= kExtraLargeIconSize || y >= kExtraLargeIconSize) return false;
+            if (x >= kSystemExtraLargeIconSize || y >= kSystemExtraLargeIconSize) return false;
             content = true;
         }
     return content;
@@ -337,9 +256,9 @@ IconImage system_image(int index, int overlay, int size) {
     };
     int native = 0;
     IconImage image;
-    if (size > kExtraLargeIconSize) {
+    if (size > kSystemExtraLargeIconSize) {
         image = draw(SHIL_JUMBO, native);
-        if (!image.pixels.empty() && native > kExtraLargeIconSize &&
+        if (!image.pixels.empty() && native > kSystemExtraLargeIconSize &&
             small_image_in_jumbo_cell(image, native)) image = {};
     }
     if (image.pixels.empty()) image = draw(SHIL_EXTRALARGE, native);
@@ -473,12 +392,6 @@ IconImage load_extension_icon(std::wstring_view extension, bool directory, int s
 } // namespace panedock::shell_core
 
 namespace panedock::shell_core {
-IconImage load_item_thumbnail(std::wstring_view folder, std::wstring_view name, int size) {
-    std::wstring path(folder);
-    if (!path.empty() && path.back() != L'\\') path += L'\\';
-    path += name;
-    return load_item_thumbnail(path, size);
-}
 IconImage load_item_thumbnail(std::wstring_view parsing_name, int size) {
     if (size < 16 || size > 512 || parsing_name.empty()) return {};
     const std::wstring path(parsing_name);

@@ -55,10 +55,6 @@ std::optional<ViewModeSelection> parse_view_mode(std::string_view name);
 std::string_view sort_property_name(SortProperty property) noexcept;
 std::optional<SortProperty> parse_sort_property(std::string_view name) noexcept;
 
-core::ShellLocation capture_location(std::wstring parsing_name);
-
-std::wstring resolve_location(const core::ShellLocation& location);
-
 std::wstring display_text_for_parsing_name(std::wstring_view parsing_name);
 
 std::optional<std::filesystem::path> session_directory() noexcept;

@@ -21,7 +21,4 @@ IconImage load_extension_icon(std::wstring_view extension, bool directory, int s
 std::vector<std::uint32_t> resample_square(const std::vector<std::uint32_t>& source,
                                            int source_size, int size);
 std::vector<unsigned char> alpha_mask(const std::vector<std::uint32_t>& pixels, int size);
-// Local parent+leaf compatibility entries; never pass display text as name.
-IconImage load_item_icon(std::wstring_view folder, std::wstring_view name, int size);
-IconImage load_item_thumbnail(std::wstring_view folder, std::wstring_view name, int size);
 } // namespace panedock::shell_core
