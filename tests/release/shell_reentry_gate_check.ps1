@@ -96,8 +96,8 @@ if ($navigationHelperBody -notmatch 'LocationCaptureSuppression suppression\(sta
 # PD-206: the panes are bound to the incoming Group from rebind_panes onwards,
 # so the suppression has to be held by perform_group_transition itself. Holding
 # it only inside navigate_realized_panes leaves refresh_tab_strips -- which
-# pumps the loop for virtual-folder display names -- able to reach shutdown's
-# capture_locations with the panes already rebound.
+# pumps the loop for virtual-folder display names -- able to reach a save
+# with the panes already rebound.
 $writerHeader = Get-Content -LiteralPath (
     Join-Path $PSScriptRoot '..\..\src\app_shell\session_writer.h') -Raw
 if ($writerHeader -notmatch '--writer_\.gate_\.depth_ != 0') {

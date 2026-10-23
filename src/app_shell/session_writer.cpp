@@ -60,7 +60,6 @@ bool SessionWriter::save_now(bool clean_shutdown,
     }
     if (application_ == nullptr) return false;
     mark_dirty();
-    capture_live_locations();
     return write(*application_, clean_shutdown, timer_owner_);
 }
 

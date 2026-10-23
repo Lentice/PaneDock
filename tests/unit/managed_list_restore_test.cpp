@@ -224,9 +224,9 @@ void isolated_session_restore() {
         for (int i = 0; i < 4; ++i) f.complete(i);
         f.panes[0].switch_active_tab("tab-0"); f.complete(0);
         f.activate(1); f.complete(0); f.activate(0);
-        for (int i = 0; i < 4; ++i) { f.complete(i); f.panes[i].capture_location(); }
+        for (int i = 0; i < 4; ++i) f.complete(i);
         EXPECT(SUCCEEDED(f.panes[2].navigate_to({L"C:\\unconfirmed", {}, {}})));
-        f.panes[2].capture_location(); // persistence never reads a pending list as success
+        // Persistence never records a pending list as success.
         app_shell::SessionWriter writer; writer.set_directory(root); writer.adopt(*document);
         EXPECT(writer.write(f.app, true, nullptr));
         app = f.app;

@@ -151,7 +151,7 @@ $checkpoint = Get-FunctionSource `
     'write_end_session_checkpoint'
 $checkpointCode = [regex]::Replace($checkpoint, '//[^
 ]*', '')
-foreach ($escape in @('destroy', 'capture_locations', 'save_now',
+foreach ($escape in @('destroy', 'save_now',
                       'finalize_process')) {
     if ($checkpointCode -match ('(?<![A-Za-z_])' + [regex]::Escape($escape) + '(?![A-Za-z_])')) {
         throw ("shutdown state invariant failed: '$escape' is reached by " +

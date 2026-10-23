@@ -339,7 +339,6 @@ void session_identity_and_unknown_fields() {
     EXPECT(!std::filesystem::exists(root));
     app_shell::SessionWriter writer; writer.set_directory(root); writer.adopt(*document);
     const auto verify = [&](core::ShellLocation expected) {
-        f.pane.capture_location();
         EXPECT(writer.write(f.app, true, nullptr));
         const auto restored = core::read_session(root);
         EXPECT(restored.source == core::SessionSource::primary);

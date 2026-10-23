@@ -148,24 +148,16 @@ void adopted_document_keeps_unrecognized_fields() {
     EXPECT(json.find("future_field") != std::string::npos);
 }
 
-class CountingCapture final : public panedock::app_shell::LiveLocationCapture {
-public:
-    int captures{};
-    void capture_live_locations() noexcept override { ++captures; }
-};
-
 using CaptureSuppression = SessionWriter::CaptureSuppression;
 
-void save_now_captures_then_writes_the_bound_model() {
+void save_now_writes_the_bound_model() {
     TemporaryDirectory temporary;
     SessionWriter writer;
     writer.set_directory(temporary.path);
     const ApplicationState application = sample("group-bound");
-    CountingCapture capture;
-    writer.bind(application, capture);
+    writer.bind(application);
 
     EXPECT(writer.save_now());
-    EXPECT(capture.captures == 1);
     EXPECT(!writer.dirty());
     EXPECT(read_session(temporary.path).document.application.active_group_id ==
            "group-bound");
@@ -176,14 +168,11 @@ void suppressed_save_is_refused_and_stays_owed() {
     SessionWriter writer;
     writer.set_directory(temporary.path);
     const ApplicationState application = sample("group-a");
-    CountingCapture capture;
-    writer.bind(application, capture);
+    writer.bind(application);
     {
         CaptureSuppression suppression(writer);
         EXPECT(writer.capture_gate().suppressed());
-        writer.capture_live_locations();
         EXPECT(!writer.save_now());
-        EXPECT(capture.captures == 0);
         EXPECT(writer.dirty());
         EXPECT(!std::filesystem::exists(temporary.path / kSessionFileName));
     }
@@ -191,19 +180,16 @@ void suppressed_save_is_refused_and_stays_owed() {
     // No timer owner: the release reschedules, which can only mark it owed.
     EXPECT(writer.dirty());
     EXPECT(writer.save_now());
-    EXPECT(capture.captures == 1);
 }
 
-void forced_save_writes_without_reading_a_live_view() {
+void forced_save_writes_during_a_transition() {
     TemporaryDirectory temporary;
     SessionWriter writer;
     writer.set_directory(temporary.path);
     const ApplicationState application = sample("group-forced");
-    CountingCapture capture;
-    writer.bind(application, capture);
+    writer.bind(application);
     CaptureSuppression suppression(writer);
     EXPECT(writer.save_now(false, true));
-    EXPECT(capture.captures == 0);
     EXPECT(!writer.dirty());
 }
 
@@ -229,8 +215,7 @@ void a_refused_save_is_rescheduled_when_suppression_ends() {
     SessionWriter writer;
     writer.set_directory(temporary.path);
     const ApplicationState application = sample("group-a");
-    CountingCapture capture;
-    writer.bind(application, capture);
+    writer.bind(application);
     writer.set_timer_owner(owner);
     {
         CaptureSuppression suppression(writer);
@@ -259,9 +244,9 @@ void a_save_that_was_not_refused_does_not_reschedule() {
 }  // namespace
 
 int main() {
-    save_now_captures_then_writes_the_bound_model();
+    save_now_writes_the_bound_model();
     suppressed_save_is_refused_and_stays_owed();
-    forced_save_writes_without_reading_a_live_view();
+    forced_save_writes_during_a_transition();
     nested_suppression_lifts_only_at_the_outermost_release();
     a_refused_save_is_rescheduled_when_suppression_ends();
     a_save_that_was_not_refused_does_not_reschedule();

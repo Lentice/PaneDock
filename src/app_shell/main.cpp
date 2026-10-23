@@ -419,14 +419,6 @@ struct LayoutFailure final {
 struct AppState;
 
 // Reads every realized pane's live location into the model for SessionWriter.
-struct AppLiveLocationCapture final : panedock::app_shell::LiveLocationCapture {
-    explicit AppLiveLocationCapture(AppState& state) noexcept : state_(state) {}
-    void capture_live_locations() noexcept override;
-
-private:
-    AppState& state_;
-};
-
 // The Win32 adapter for ShellReentryGuard's effects.
 struct AppReentryEffects final : panedock::app_shell::ShellReentryEffects {
     explicit AppReentryEffects(AppState& state) noexcept : state_(state) {}
@@ -530,7 +522,6 @@ struct AppState : public panedock::app_shell::PaneHost {
     UINT_PTR startup_realize_generation{};
     panedock::core::ApplicationState application;
     panedock::app_shell::SessionWriter session;
-    AppLiveLocationCapture live_location_capture{*this};
     HWND main_window{nullptr};
     bool diagnostic_mode{};
 
@@ -616,13 +607,11 @@ void AppReentryEffects::begin_shutdown_now() noexcept {
 }
 
 // PD-206: activate_group writes active_group_id, then rebind_panes points the
-// panes at the incoming Group's PaneState -- but the live lists
-// still show the outgoing Group until navigate_realized_panes runs. Anything
-// that captures a live view's location in between would write the outgoing
-// Group's folders into the incoming Group's tabs. refresh_tab_strips sits in
-// that window and pumps the loop (virtual folders need a Shell display-name
-// lookup), so a WM_CLOSE arriving there used to reach shutdown's
-// capture_locations with the panes already rebound.
+// panes at the incoming Group's PaneState -- but the live lists still show
+// the outgoing Group until navigate_realized_panes runs, and
+// refresh_tab_strips in that window pumps the loop. A transition holds this
+// for its whole run so no scheduled save is written in between; the name
+// dates from the legacy host, whose live locations were also read here.
 using LocationCaptureSuppression =
     panedock::app_shell::SessionWriter::CaptureSuppression;
 
@@ -1120,20 +1109,6 @@ std::wstring tab_display_text(AppState& state,
 
 void refresh_tab_strips(AppState& state) {
     for (auto& pane : state.panes) pane.tab_strip_ui().refresh();
-}
-
-void AppLiveLocationCapture::capture_live_locations() noexcept {
-    if (!has_active_group(state_)) return;
-    for (std::size_t index = 0; index < active_group(state_).panes.size();
-         ++index) {
-        state_.panes[index].capture_location();
-    }
-}
-
-// Every capture goes through SessionWriter, which refuses while a Group
-// transition suppresses it (PD-206).
-void capture_locations(AppState& state) {
-    state.session.capture_live_locations();
 }
 
 void refresh_sidebar(AppState& state) {
@@ -1923,7 +1898,6 @@ void activate_group(HWND window, AppState& state, std::size_t index) {
         return;
     }
 
-    capture_locations(state);
     const std::string previous = state.application.active_group_id;
     state.application.active_group_id = target_id;
     perform_group_transition(window, state,
@@ -2016,7 +1990,6 @@ void delete_group(HWND window, AppState& state, const std::string& target) {
                      [&](const auto& group) { return group.id == id; }))
         return;
 
-    capture_locations(state);
     const std::string previous = state.application.active_group_id;
     // core::delete_group destroys only the deleted Group's PaneStates; PD-184
     // keeps every surviving PaneState address across the vector erase. The
@@ -2209,7 +2182,6 @@ void set_layout(HWND window, AppState& state,
     // Clicking the layout that is already selected changes nothing: no
     // splitter reset, no relayout, no session write.
     if (group.layout_template == target) return;
-    capture_locations(state);
 
     std::vector<std::string> pane_ids;
     std::vector<std::string> tab_ids;
@@ -2391,8 +2363,6 @@ void finish_tab_drag(AppState& state, HWND strip) {
         return;
     }
 
-    state.panes[drop.source_pane].capture_location();
-    state.panes[drop.target_pane].capture_location();
     auto& source = group.panes[drop.source_pane];
     auto& target = group.panes[drop.target_pane];
     const bool source_active = source.active_tab_id == drag.tab_id;
@@ -2791,12 +2761,12 @@ void run_end_session_shutdown(AppState& state) noexcept {
     if (state.main_window_destroyed) finalize_process(state);
 }
 
-// The durable checkpoint, deliberately without capture_locations. Traced on a
+// The durable checkpoint, deliberately reaching no pane. Traced on a
 // real reboot: the teardown after it reached the second pane and never
 // returned from its IExplorerBrowser::Destroy, and the process was killed
 // there -- while the identical messages driven by SendMessage complete in
 // 59ms. At a genuine session end Explorer is being torn down concurrently, so
-// Destroy and capture_location's per-pane Shell reads are cross-process calls
+// Destroy and the per-pane Shell reads it then made are cross-process calls
 // into a dying server and can outlast the kill timeout. This write reaches no
 // Shell and no COM -- it serializes the model and replaces two local files,
 // and the KillTimer/SetTimer it does on the way out are local to our own
@@ -3102,7 +3072,6 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
         // a plain STATIC used only for clipping and list parenting.
         chrome.set_host(&state);
         chrome.set_reentry_guard(&state.reentry_guard);
-        chrome.set_capture_gate(&state.session.capture_gate());
         if (!chrome.create(window, static_cast<int>(index))) return -1;
         if (!SetWindowSubclass(chrome.tab_strip(), tab_strip_proc, index,
                                reinterpret_cast<DWORD_PTR>(&state)))
@@ -4181,7 +4150,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         return exit_code;
     }
     state.session.set_directory(*directory);
-    state.session.bind(state.application, state.live_location_capture);
+    state.session.bind(state.application);
     auto loaded = panedock::core::read_session(
         state.session.directory(), default_application_state());
 

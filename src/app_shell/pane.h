@@ -94,9 +94,6 @@ class Pane final {
     }
     // Set with set_host: whether a Group transition forbids reading the live
     // view's location into the model right now (PD-206).
-    void set_capture_gate(const LocationCaptureGate *gate) noexcept {
-        capture_gate_ = gate;
-    }
     // The one guard every Shell-touching Pane method needs: a host exists and
     // is not tearing down. Shell calls re-enter our message loop, so methods
     // re-check this after every ShellCallScope, not just on entry.
@@ -334,7 +331,6 @@ class Pane final {
 
     void apply_view_mode();
     void apply_sort();
-    void capture_location();
     void set_view_mode(const panedock::shell_core::ViewModeOption &option);
     void show_view_mode_menu(POINT screen);
     void submit_address();
@@ -688,7 +684,6 @@ class Pane final {
 
     PaneHost *host_{nullptr};
     ShellReentryGuard *reentry_guard_{nullptr};
-    const LocationCaptureGate *capture_gate_{nullptr};
     panedock::core::PaneState *bound_state_{nullptr};
     std::size_t index_{};
     panedock::core::NavigationRequest pending_navigation_{};

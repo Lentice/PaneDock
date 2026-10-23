@@ -1052,10 +1052,6 @@ void Pane::apply_sort() {
     apply_managed_list_sort();
 }
 
-void Pane::capture_location() {
-    // Accepted managed-list navigation commits location to TabState directly.
-}
-
 void Pane::set_view_mode(const panedock::shell_core::ViewModeOption &option) {
 
     if (!active()) return;
@@ -1237,7 +1233,6 @@ void Pane::finish_failed_address() noexcept try {
 void Pane::pin_current_folder() {
     if (!active()) return;
     if (pane_state() == nullptr) return;
-    capture_location();
     if (!active()) return;
     if (const auto *tab = active_tab(); tab != nullptr)
         pane_host()->pin_location(tab->location);
@@ -1372,7 +1367,6 @@ void Pane::switch_active_tab(const std::string &tab_id) {
         tab_strip_ui().refresh();
         return;
     }
-    capture_location();
     pane_state = bound_state_;
     if (!active() || pane_state == nullptr) return;
     if (!panedock::core::set_active_tab(*pane_state, tab_id)) {
@@ -1405,7 +1399,6 @@ void Pane::add_tab(panedock::core::ShellLocation initial_location) {
     if (pane_host()->active_group_id().empty()) return;
     auto *pane_state = bound_state_;
     if (pane_state == nullptr) return;
-    capture_location();
     pane_state = bound_state_;
     if (!active() || pane_state == nullptr) return;
     const std::string id = pane_host()->make_unique_tab_id();
@@ -1437,7 +1430,6 @@ void Pane::close_tab(const std::string &tab_id) {
     if (!active()) return;
     auto *pane_state = bound_state_;
     if (pane_state == nullptr) return;
-    capture_location();
     pane_state = bound_state_;
     if (!active() || pane_state == nullptr) return;
     const bool closed_active = pane_state->active_tab_id == tab_id;

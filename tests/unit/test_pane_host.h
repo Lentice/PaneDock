@@ -39,8 +39,7 @@ class TestPaneHost : public panedock::app_shell::PaneHost {
     RecordingReentryEffects reentry_effects;
     panedock::app_shell::ShellReentryGuard guard{shutdown, reentry_effects,
                                                  WM_APP};
-    // Owns the capture gate a pane asks; hold a CaptureSuppression on it to
-    // stand in for a Group transition.
+    // Hold a CaptureSuppression on it to stand in for a Group transition.
     panedock::app_shell::SessionWriter session;
 
     bool is_shutting_down() const noexcept override { return shutting_down; }
