@@ -1561,10 +1561,16 @@ HRESULT apply_layout(HWND window, AppState& state,
     // main-window chrome/pane HWNDs, each pane's children, and each pane's
     // managed list (a child of its list container) therefore use separate
     // batches committed in this pass.
-    std::array<std::optional<WindowPositionBatch>, kMaxPaneCount>
-        pane_positions;
-    std::array<std::optional<WindowPositionBatch>, kMaxPaneCount>
-        list_positions;
+    struct PanePass final {
+        std::optional<WindowPositionBatch> children; // the pane's own controls
+        std::optional<WindowPositionBatch> list;     // its managed list
+        Pane::LayoutResult layout{};
+        bool changed{};
+        // The list rect to apply directly if the list batch fails to commit.
+        std::optional<RECT> pending_list_rect;
+        bool list_deferred{};
+    };
+    std::array<PanePass, kMaxPaneCount> passes;
     layout_sidebar(window, state, &main_positions);
     layout_header(window, state, &main_positions, recompute_content);
     if (!has_active_group(state)) {
@@ -1618,23 +1624,18 @@ HRESULT apply_layout(HWND window, AppState& state,
             state.panes[index].set_chrome_active(index == active);
     }
     std::optional<LayoutFailure> first_failure;
-    std::array<bool, kMaxPaneCount> changed_panes{};
-    std::array<Pane::LayoutResult, kMaxPaneCount> pane_layouts{};
-    std::array<std::optional<RECT>, kMaxPaneCount> pending_shell_rects{};
-    std::array<bool, kMaxPaneCount> shell_positions_deferred{};
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
         auto& chrome = state.panes[index];
+        auto& pass = passes[index];
         const bool visible =
             index < panedock::core::pane_count(group.layout_template);
         if (visible) {
-            pane_positions[index].emplace();
-            const auto layout = chrome.stage_layout(
+            pass.children.emplace();
+            pass.layout = chrome.stage_layout(
                 to_win32_rect(rects[index]), dpi, main_positions,
-                *pane_positions[index]);
-            pane_layouts[index] = layout;
-            const bool pane_geometry_changed = layout.changed;
-            changed_panes[index] = pane_geometry_changed;
-            const RECT local_rect = layout.shell_rect;
+                *pass.children);
+            pass.changed = pass.layout.changed;
+            const RECT local_rect = pass.layout.shell_rect;
             if (plan_contains(realization_plan.realize, index)) {
                 HRESULT hr = E_UNEXPECTED;
                 {
@@ -1651,13 +1652,12 @@ HRESULT apply_layout(HWND window, AppState& state,
                 if (const HRESULT configured = chrome.configure_realized_view();
                     FAILED(configured))
                     return configured;
-            } else if (pane_geometry_changed) {
-                pending_shell_rects[index] = local_rect;
-                list_positions[index].emplace();
-                if (list_positions[index]->active()) {
-                    shell_positions_deferred[index] = true;
-                    chrome.set_shell_rect(
-                        local_rect, &*list_positions[index]);
+            } else if (pass.changed) {
+                pass.pending_list_rect = local_rect;
+                pass.list.emplace();
+                if (pass.list->active()) {
+                    pass.list_deferred = true;
+                    chrome.set_shell_rect(local_rect, &*pass.list);
                 } else {
                     chrome.set_shell_rect(local_rect, nullptr);
                 }
@@ -1683,8 +1683,8 @@ HRESULT apply_layout(HWND window, AppState& state,
         if (state.is_shutting_down()) return E_ABORT;
     }
     const bool committed = main_positions.commit();
-    for (auto& pane_position : pane_positions) {
-        if (pane_position.has_value()) (void)pane_position->commit();
+    for (auto& pass : passes) {
+        if (pass.children.has_value()) (void)pass.children->commit();
     }
     // The tab strip's custom add/scroll-button geometry depends on its new
     // client width. Recompute only after the app batch has committed; before
@@ -1695,21 +1695,20 @@ HRESULT apply_layout(HWND window, AppState& state,
         // PaneTabStrip::refresh() already applies the item size whenever the
         // tabs themselves changed, so recompute_content would only repeat it
         // (PD-207). Geometry is the one thing refresh() does not know about.
-        if (index < visible_panes && changed_panes[index])
+        if (index < visible_panes && passes[index].changed)
             state.panes[index].tab_strip_ui().apply_item_size();
     }
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
-        if (!list_positions[index].has_value()) continue;
-        const bool list_committed = list_positions[index]->commit();
-        if (!list_committed && shell_positions_deferred[index]) {
-            state.panes[index].set_shell_rect(
-                *pending_shell_rects[index], nullptr);
+        auto& pass = passes[index];
+        if (!pass.list.has_value()) continue;
+        if (!pass.list->commit() && pass.list_deferred) {
+            state.panes[index].set_shell_rect(*pass.pending_list_rect, nullptr);
             if (state.is_shutting_down()) return E_ABORT;
         }
     }
     for (std::size_t index = 0; index < state.panes.size(); ++index) {
-        if (changed_panes[index])
-            state.panes[index].finish_layout(pane_layouts[index], dpi);
+        if (passes[index].changed)
+            state.panes[index].finish_layout(passes[index].layout, dpi);
         if (index >= panedock::core::pane_count(group.layout_template))
             state.panes[index].laid_out_pane_rect().reset();
     }
@@ -1719,8 +1718,8 @@ HRESULT apply_layout(HWND window, AppState& state,
     // !committed means the batch fell back to per-window SetWindowPos, which
     // leaves the frame needing a repaint.
     if (!committed ||
-        std::any_of(changed_panes.begin(), changed_panes.end(),
-                    [](bool changed) noexcept { return changed; }))
+        std::any_of(passes.begin(), passes.end(),
+                    [](const PanePass& pass) noexcept { return pass.changed; }))
         InvalidateRect(window, nullptr, FALSE);
     if (recompute_content) write_live_list_count(state.diagnostic_mode, state.panes);
     // `group` above outlived every Shell call in this pass; a changed group
