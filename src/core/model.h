@@ -206,11 +206,9 @@ bool close_tab(PaneState& pane, const std::string& tab_id,
                const ShellLocation& default_location);
 bool set_active_tab(PaneState& pane, const std::string& tab_id) noexcept;
 bool set_active_pane(GroupState& group, const std::string& pane_id) noexcept;
+// Whether `location` can join `pinned`: it has a parsing name not pinned yet.
+bool can_pin_location(const std::vector<ShellLocation>& pinned,
+                      const ShellLocation& location) noexcept;
 bool add_pinned_location(ApplicationState& application, ShellLocation location);
-bool remove_pinned_location(ApplicationState& application,
-                            std::size_t index) noexcept;
-bool reorder_pinned_location(ApplicationState& application,
-                             std::size_t source_index,
-                             std::size_t target_index) noexcept;
 
 }  // namespace panedock::core

@@ -1481,10 +1481,9 @@ void rebuild_pinned_location_menu(AppState& state);
 
 void apply_pinned_locations_dialog_result(AppState& state) noexcept {
     auto result = state.pinned_locations_dialog.take_result();
-    if (!result.has_value() ||
-        result->pinned_locations == state.application.pinned_locations)
+    if (!result.has_value() || *result == state.application.pinned_locations)
         return;
-    state.application.pinned_locations = std::move(result->pinned_locations);
+    state.application.pinned_locations = std::move(*result);
     rebuild_pinned_location_menu(state);
     schedule_session_save(state);
 }
@@ -1495,7 +1494,7 @@ void show_pinned_locations_manager(HWND owner, AppState& state) {
     for (const auto& pinned : state.application.pinned_locations)
         display_labels.push_back(
             display_text_for_parsing_name(state, pinned.parsing_name));
-    state.pinned_locations_dialog.show(owner, state.application,
+    state.pinned_locations_dialog.show(owner, state.application.pinned_locations,
                                       std::move(display_labels),
                                       state.chrome_font_);
 }

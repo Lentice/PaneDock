@@ -40,7 +40,7 @@ bool PinnedLocationsDialog::register_window_class(HINSTANCE instance) noexcept {
 }
 
 void PinnedLocationsDialog::show(
-    HWND owner, const core::ApplicationState& application,
+    HWND owner, const std::vector<core::ShellLocation>& pinned,
     std::vector<std::wstring> display_labels, HFONT font) {
     if (window_ != nullptr) {
         refresh();
@@ -50,9 +50,14 @@ void PinnedLocationsDialog::show(
         return;
     }
 
-    draft_ = application;
-    applied_ = application;
-    display_labels_ = std::move(display_labels);
+    std::vector<Row> rows;
+    rows.reserve(pinned.size());
+    for (std::size_t index = 0; index < pinned.size(); ++index)
+        rows.push_back({pinned[index], index < display_labels.size()
+                                           ? std::move(display_labels[index])
+                                           : pinned[index].parsing_name});
+    draft_ = std::move(rows);
+    applied_ = pinned;
     result_.reset();
     font_ = font;
     const UINT owner_dpi = owner == nullptr ? 96 : GetDpiForWindow(owner);
@@ -66,7 +71,6 @@ void PinnedLocationsDialog::show(
     if (manager == nullptr) {
         draft_.reset();
         applied_.reset();
-        display_labels_.clear();
         return;
     }
 
@@ -81,7 +85,6 @@ void PinnedLocationsDialog::destroy() noexcept {
     if (window_ != nullptr) DestroyWindow(window_);
     draft_.reset();
     applied_.reset();
-    display_labels_.clear();
 }
 
 void PinnedLocationsDialog::apply_font(HFONT font) noexcept {
@@ -98,32 +101,38 @@ void PinnedLocationsDialog::apply_font(HFONT font) noexcept {
 void PinnedLocationsDialog::add_location(core::ShellLocation location,
                                          std::wstring display_label) {
     if (!draft_.has_value() || !applied_.has_value()) return;
-    const core::ShellLocation copy = location;
-    if (!core::add_pinned_location(*draft_, std::move(location))) return;
-    (void)core::add_pinned_location(*applied_, copy);
-    display_labels_.push_back(std::move(display_label));
+    // Pinned from a pane while the manager is open: already applied.
+    if (!core::can_pin_location(draft_locations(), location)) return;
+    if (core::can_pin_location(*applied_, location)) applied_->push_back(location);
+    draft_->push_back({std::move(location), std::move(display_label)});
     refresh();
 }
 
-std::optional<core::ApplicationState>
+std::optional<std::vector<core::ShellLocation>>
 PinnedLocationsDialog::take_result() noexcept {
     return std::exchange(result_, std::nullopt);
 }
 
+std::vector<core::ShellLocation> PinnedLocationsDialog::draft_locations() const {
+    std::vector<core::ShellLocation> locations;
+    if (!draft_.has_value()) return locations;
+    locations.reserve(draft_->size());
+    for (const auto& row : *draft_) locations.push_back(row.location);
+    return locations;
+}
+
 void PinnedLocationsDialog::refresh_buttons() noexcept {
     if (list_ == nullptr || !draft_.has_value() || !applied_.has_value()) return;
-    const auto& application = *draft_;
+    const auto& rows = *draft_;
     const LRESULT selected = SendMessageW(list_, LB_GETCURSEL, 0, 0);
     const std::size_t index = selected >= 0
                                   ? static_cast<std::size_t>(selected)
-                                  : application.pinned_locations.size();
-    const bool has_selection = index < application.pinned_locations.size();
+                                  : rows.size();
+    const bool has_selection = index < rows.size();
     EnableWindow(buttons[0], has_selection);
     EnableWindow(buttons[1], has_selection && index > 0);
-    EnableWindow(buttons[2], has_selection &&
-                                  index + 1 < application.pinned_locations.size());
-    EnableWindow(buttons[3], draft_->pinned_locations !=
-                                  applied_->pinned_locations);
+    EnableWindow(buttons[2], has_selection && index + 1 < rows.size());
+    EnableWindow(buttons[3], draft_locations() != *applied_);
     EnableWindow(buttons[4], TRUE);
     EnableWindow(buttons[5], TRUE);
 }
@@ -131,7 +140,7 @@ void PinnedLocationsDialog::refresh_buttons() noexcept {
 void PinnedLocationsDialog::refresh(
     std::optional<std::size_t> selected_index) {
     if (list_ == nullptr || !draft_.has_value()) return;
-    const auto& application = *draft_;
+    const auto& rows = *draft_;
     if (!selected_index.has_value()) {
         const LRESULT selected = SendMessageW(list_, LB_GETCURSEL, 0, 0);
         if (selected >= 0)
@@ -139,14 +148,10 @@ void PinnedLocationsDialog::refresh(
     }
 
     SendMessageW(list_, LB_RESETCONTENT, 0, 0);
-    for (std::size_t index = 0; index < application.pinned_locations.size();
-         ++index) {
-        const std::wstring& label = display_labels_[index];
+    for (const auto& row : rows)
         SendMessageW(list_, LB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(label.c_str()));
-    }
-    if (selected_index.has_value() &&
-        *selected_index < application.pinned_locations.size()) {
+                     reinterpret_cast<LPARAM>(row.label.c_str()));
+    if (selected_index.has_value() && *selected_index < rows.size()) {
         SendMessageW(list_, LB_SETCURSEL,
                      static_cast<WPARAM>(*selected_index), 0);
     }
@@ -184,12 +189,12 @@ void PinnedLocationsDialog::layout(HWND window) noexcept {
     }
 }
 
-void PinnedLocationsDialog::choose_application(bool close) {
+void PinnedLocationsDialog::apply_draft(bool close) {
     if (!draft_.has_value() || !applied_.has_value()) return;
-    if (draft_->pinned_locations != applied_->pinned_locations)
-        result_ = *draft_;
+    auto locations = draft_locations();
+    if (locations != *applied_) result_ = locations;
     if (!close) {
-        *applied_ = *draft_;
+        *applied_ = std::move(locations);
         refresh();
         return;
     }
@@ -268,7 +273,7 @@ LRESULT CALLBACK PinnedLocationsDialog::window_proc(HWND window, UINT message,
                 return 0;
             }
             if (LOWORD(wparam) == kApplyId || LOWORD(wparam) == kOkId) {
-                self->choose_application(LOWORD(wparam) == kOkId);
+                self->apply_draft(LOWORD(wparam) == kOkId);
                 return 0;
             }
 
@@ -277,36 +282,23 @@ LRESULT CALLBACK PinnedLocationsDialog::window_proc(HWND window, UINT message,
                     self->list_, LB_GETCURSEL, 0, 0);
                 if (selected == LB_ERR || selected < 0) return 0;
                 const std::size_t index = static_cast<std::size_t>(selected);
-                auto& application = *self->draft_;
+                if (!self->draft_.has_value() || index >= self->draft_->size())
+                    return 0;
+                auto& rows = *self->draft_;
                 bool changed = false;
                 std::optional<std::size_t> next_selection;
                 if (LOWORD(wparam) == kRemoveId) {
-                    changed = core::remove_pinned_location(application, index);
-                    if (changed) {
-                        self->display_labels_.erase(
-                            self->display_labels_.begin() +
-                            static_cast<std::ptrdiff_t>(index));
-                        if (!application.pinned_locations.empty())
-                            next_selection = std::min(
-                                index, application.pinned_locations.size() - 1);
-                    }
+                    rows.erase(rows.begin() + static_cast<std::ptrdiff_t>(index));
+                    changed = true;
+                    if (!rows.empty()) next_selection = std::min(index, rows.size() - 1);
                 } else if (LOWORD(wparam) == kMoveUpId && index > 0) {
-                    changed = core::reorder_pinned_location(application, index,
-                                                             index - 1);
-                    if (changed) {
-                        std::swap(self->display_labels_[index],
-                                  self->display_labels_[index - 1]);
-                        next_selection = index - 1;
-                    }
-                } else if (LOWORD(wparam) == kMoveDownId &&
-                           index + 1 < application.pinned_locations.size()) {
-                    changed = core::reorder_pinned_location(application, index,
-                                                             index + 1);
-                    if (changed) {
-                        std::swap(self->display_labels_[index],
-                                  self->display_labels_[index + 1]);
-                        next_selection = index + 1;
-                    }
+                    std::swap(rows[index], rows[index - 1]);
+                    changed = true;
+                    next_selection = index - 1;
+                } else if (LOWORD(wparam) == kMoveDownId && index + 1 < rows.size()) {
+                    std::swap(rows[index], rows[index + 1]);
+                    changed = true;
+                    next_selection = index + 1;
                 }
                 if (changed) self->refresh(next_selection);
             }
@@ -321,7 +313,6 @@ LRESULT CALLBACK PinnedLocationsDialog::window_proc(HWND window, UINT message,
                 self->buttons.fill(nullptr);
                 self->draft_.reset();
                 self->applied_.reset();
-                self->display_labels_.clear();
                 SetWindowLongPtrW(window, GWLP_USERDATA, 0);
             }
             break;

@@ -508,43 +508,17 @@ bool set_active_pane(GroupState& group, const std::string& pane_id) noexcept {
     return true;
 }
 
+bool can_pin_location(const std::vector<ShellLocation>& pinned,
+                      const ShellLocation& location) noexcept {
+    return !location.parsing_name.empty() &&
+           std::none_of(pinned.begin(), pinned.end(), [&](const ShellLocation& value) {
+               return value.parsing_name == location.parsing_name;
+           });
+}
+
 bool add_pinned_location(ApplicationState& application, ShellLocation location) {
-    if (location.parsing_name.empty() ||
-        std::find_if(application.pinned_locations.begin(),
-                     application.pinned_locations.end(),
-                     [&](const ShellLocation& pinned) {
-                         return pinned.parsing_name == location.parsing_name;
-                     }) != application.pinned_locations.end()) {
-        return false;
-    }
+    if (!can_pin_location(application.pinned_locations, location)) return false;
     application.pinned_locations.push_back(std::move(location));
-    return true;
-}
-
-bool remove_pinned_location(ApplicationState& application,
-                            std::size_t index) noexcept {
-    if (index >= application.pinned_locations.size()) return false;
-    application.pinned_locations.erase(
-        application.pinned_locations.begin() +
-        static_cast<std::ptrdiff_t>(index));
-    return true;
-}
-
-bool reorder_pinned_location(ApplicationState& application,
-                             std::size_t source_index,
-                             std::size_t target_index) noexcept {
-    if (source_index >= application.pinned_locations.size() ||
-        target_index >= application.pinned_locations.size()) {
-        return false;
-    }
-    ShellLocation moved = std::move(application.pinned_locations[source_index]);
-    application.pinned_locations.erase(
-        application.pinned_locations.begin() +
-        static_cast<std::ptrdiff_t>(source_index));
-    application.pinned_locations.insert(
-        application.pinned_locations.begin() +
-            static_cast<std::ptrdiff_t>(target_index),
-        std::move(moved));
     return true;
 }
 
