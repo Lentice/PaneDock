@@ -494,7 +494,27 @@ void test_same_layout_keeps_divider_ratios() {
     EXPECT(value.divider_ratios == std::vector<double>({0.5, 0.5}));
 }
 
+void test_active_lookups_survive_zero_groups() {
+    ApplicationState application{1, {group("group-1", LayoutTemplate::left_right)},
+                                 "group-1", {}, kDefaultSidebarWidth, {}};
+    EXPECT(find_active_group(application) == &application.groups[0]);
+    const auto& constant = application;
+    EXPECT(find_active_group(constant) == &application.groups[0]);
+    const auto active = find_active_pane_index(application.groups[0]);
+    EXPECT(active.has_value() &&
+           application.groups[0].panes[*active].id ==
+               application.groups[0].active_pane_id);
+    application.groups[0].active_pane_id = "missing";
+    EXPECT(!find_active_pane_index(application.groups[0]).has_value());
+    // Deleting the last Group is allowed and leaves no active Group at all.
+    EXPECT(delete_group(application, "group-1"));
+    EXPECT(application.groups.empty() && application.active_group_id.empty());
+    EXPECT(find_active_group(application) == nullptr);
+    EXPECT(find_active_group(constant) == nullptr);
+}
+
 int main() {
+    test_active_lookups_survive_zero_groups();
     test_new_group_name_fills_lowest_gap();
     test_group_name_normalization();
     test_same_layout_keeps_divider_ratios();

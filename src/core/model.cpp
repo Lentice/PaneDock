@@ -301,6 +301,22 @@ bool delete_group(ApplicationState& application, const std::string& group_id) {
     return true;
 }
 
+GroupState* find_active_group(ApplicationState& application) noexcept {
+    const auto group = find_id(application.groups, application.active_group_id);
+    return group == application.groups.end() ? nullptr : &*group;
+}
+
+const GroupState* find_active_group(const ApplicationState& application) noexcept {
+    const auto group = find_id(application.groups, application.active_group_id);
+    return group == application.groups.end() ? nullptr : &*group;
+}
+
+std::optional<std::size_t> find_active_pane_index(const GroupState& group) noexcept {
+    const auto pane = find_id(group.panes, group.active_pane_id);
+    if (pane == group.panes.end()) return std::nullopt;
+    return static_cast<std::size_t>(pane - group.panes.begin());
+}
+
 bool reorder_group(ApplicationState& application, const std::string& group_id,
                    std::size_t new_index) {
     const auto group = find_id(application.groups, group_id);

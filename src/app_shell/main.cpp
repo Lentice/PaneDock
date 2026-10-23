@@ -713,23 +713,17 @@ panedock::core::ApplicationState default_application_state() {
     return application;
 }
 
+// Only behind has_active_group: deleting the last Group leaves none. A
+// handler that can run with no Group uses active_pane() instead.
 panedock::core::GroupState& active_group(AppState& state) {
-    const auto group = std::find_if(
-        state.application.groups.begin(), state.application.groups.end(),
-        [&](const auto& candidate) {
-            return candidate.id == state.application.active_group_id;
-        });
-    assert(group != state.application.groups.end());
+    auto* group = panedock::core::find_active_group(state.application);
+    assert(group != nullptr);
     return *group;
 }
 
 const panedock::core::GroupState& active_group(const AppState& state) {
-    const auto group = std::find_if(
-        state.application.groups.begin(), state.application.groups.end(),
-        [&](const auto& candidate) {
-            return candidate.id == state.application.active_group_id;
-        });
-    assert(group != state.application.groups.end());
+    const auto* group = panedock::core::find_active_group(state.application);
+    assert(group != nullptr);
     return *group;
 }
 
@@ -754,12 +748,17 @@ void rebind_panes(AppState& state) noexcept {
 }
 
 std::size_t active_pane_index(const panedock::core::GroupState& group) {
-    const auto pane = std::find_if(
-        group.panes.begin(), group.panes.end(), [&](const auto& candidate) {
-            return candidate.id == group.active_pane_id;
-        });
-    assert(pane != group.panes.end());
-    return static_cast<std::size_t>(pane - group.panes.begin());
+    const auto index = panedock::core::find_active_pane_index(group);
+    assert(index.has_value());
+    return index.value_or(0);
+}
+
+// The active Group's active Pane, or null when there is no Group.
+Pane* active_pane(AppState& state) noexcept {
+    const auto* group = panedock::core::find_active_group(state.application);
+    if (group == nullptr) return nullptr;
+    const auto index = panedock::core::find_active_pane_index(*group);
+    return index && *index < state.panes.size() ? &state.panes[*index] : nullptr;
 }
 
 panedock::core::TabState& active_tab(panedock::core::PaneState& pane) {
@@ -3524,6 +3523,20 @@ std::optional<LRESULT> handle_global_mouse_message(
     return std::nullopt;
 }
 
+// WM_ACTIVATE / WM_SETFOCUS: give the list its focus back, or remember to
+// once the Shell call pumping the loop returns. No Group, no list.
+void restore_active_list_focus(HWND window, AppState& state) noexcept {
+    Pane* pane = active_pane(state);
+    if (pane == nullptr) return;
+    if (state.reentry_guard.in_shell_call()) {
+        pane->note_list_focus_activation();
+        state.reentry_guard.hold(
+            window, kDeferredListFocusRestoreMessage, 0, 0, true);
+    } else {
+        pane->restore_list_focus_after_activation();
+    }
+}
+
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                              LPARAM lparam) {
     auto* state = reinterpret_cast<AppState*>(
@@ -3593,10 +3606,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 if (state->reentry_guard.in_shell_call()) {
                     state->reentry_guard.hold(
                         window, kDeferredListFocusRestoreMessage, 0, 0, true);
-                } else {
-                    const auto& group = active_group(*state);
-                    const auto active = active_pane_index(group);
-                    state->panes[active].restore_list_focus_after_activation();
+                } else if (Pane* pane = active_pane(*state)) {
+                    pane->restore_list_focus_after_activation();
                 }
             }
             return 0;
@@ -3622,7 +3633,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             // the snapshot and reconciles names and hidden rows by identity.
             // Inactive tabs and cached Group snapshots rescan on activation.
             for (std::size_t index = 0; index < state->panes.size(); ++index) {
-                if (state->is_shutting_down()) return 0;
+                if (state->is_shutting_down() || !has_active_group(*state)) return 0;
                 if (index >= panedock::core::pane_count(
                                  active_group(*state).layout_template))
                     break;
@@ -3798,30 +3809,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             return 0;
         case WM_ACTIVATE:
             if (state != nullptr && LOWORD(wparam) != WA_INACTIVE &&
-                HIWORD(wparam) == 0 && !state->is_shutting_down()) {
-                const auto& group = active_group(*state);
-                const auto active = active_pane_index(group);
-                if (state->reentry_guard.in_shell_call()) {
-                    state->panes[active].note_list_focus_activation();
-                    state->reentry_guard.hold(
-                        window, kDeferredListFocusRestoreMessage, 0, 0, true);
-                } else {
-                    state->panes[active].restore_list_focus_after_activation();
-                }
-            }
+                HIWORD(wparam) == 0 && !state->is_shutting_down())
+                restore_active_list_focus(window, *state);
             break;
         case WM_SETFOCUS:
-            if (state != nullptr && !state->is_shutting_down()) {
-                const auto& group = active_group(*state);
-                const auto active = active_pane_index(group);
-                if (state->reentry_guard.in_shell_call()) {
-                    state->panes[active].note_list_focus_activation();
-                    state->reentry_guard.hold(
-                        window, kDeferredListFocusRestoreMessage, 0, 0, true);
-                } else {
-                    state->panes[active].restore_list_focus_after_activation();
-                }
-            }
+            if (state != nullptr && !state->is_shutting_down())
+                restore_active_list_focus(window, *state);
             break;
         case WM_DPICHANGED: {
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);

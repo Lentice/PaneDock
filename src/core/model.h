@@ -174,6 +174,11 @@ bool duplicate_group(ApplicationState& application,
                      const std::string& source_group_id,
                      std::string new_group_id, std::wstring new_name);
 bool delete_group(ApplicationState& application, const std::string& group_id);
+// The active Group, or null: deleting the last Group leaves none.
+GroupState* find_active_group(ApplicationState& application) noexcept;
+const GroupState* find_active_group(const ApplicationState& application) noexcept;
+// The index of the Group's active pane, or nullopt when its id names none.
+std::optional<std::size_t> find_active_pane_index(const GroupState& group) noexcept;
 bool reorder_group(ApplicationState& application, const std::string& group_id,
                    std::size_t new_index);
 std::optional<std::size_t> reorder_source_index(
