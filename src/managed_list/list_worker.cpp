@@ -28,16 +28,24 @@ namespace {
 // visible row. Scrolling then never shows Loading... for them (PD-256). One lookup per
 // distinct extension; about 0.06 ms each.
 class TypeCells final {
-    struct Cell { std::wstring type; bool no_duration{}; };
+    struct Cell { std::wstring type; bool no_duration{}; bool hide_extension{}; };
     std::unordered_map<std::wstring, Cell> files_;
     std::optional<Cell> folder_;
     static Cell lookup(const std::wstring& extension, bool directory) {
         Cell cell;
         SHFILEINFOW info{};
         const std::wstring name = L"file" + extension;
+        // The same attribute-only call yields the Shell's display name for a probe
+        // leaf, so "file" back means the extension is hidden for this type: Explorer's
+        // "File name extensions" option and per-type NeverShowExt/AlwaysShowExt in
+        // one per-extension lookup, with no file system access.
         if (SHGetFileInfoW(name.c_str(), directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,
-                           &info, sizeof(info), SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES))
+                           &info, sizeof(info),
+                           SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES | (directory ? 0 : SHGFI_DISPLAYNAME))) {
             cell.type = info.szTypeName;
+            cell.hide_extension = !directory && !extension.empty() &&
+                std::wstring_view(info.szDisplayName) == L"file";
+        }
         PERCEIVED perceived{};
         PERCEIVEDFLAG flags{};
         // Only types known not to be audio/video are ruled out; unknown ones keep Loading.
@@ -48,16 +56,20 @@ class TypeCells final {
         return cell;
     }
   public:
+    // Fills a local row whose name is still the real leaf: moves the leaf into
+    // identity.key and sets the Shell display text as name.
     void fill(Row& row) {
+        if (row.identity.key.empty()) row.identity = {row.name, false};
+        const auto& leaf = row.identity.key;
         const Cell* cell = nullptr;
         if (row.directory) {
             if (!folder_) folder_ = lookup({}, true);
             cell = &*folder_;
         } else {
             std::wstring extension;
-            const auto dot = row.name.rfind(L'.');
+            const auto dot = leaf.rfind(L'.');
             if (dot != std::wstring::npos) {
-                extension.assign(row.name, dot, std::wstring::npos);
+                extension.assign(leaf, dot, std::wstring::npos);
                 CharLowerBuffW(extension.data(), static_cast<DWORD>(extension.size()));
             }
             auto found = files_.find(extension);
@@ -69,6 +81,7 @@ class TypeCells final {
             row.properties[0].text = cell->type;
         }
         if (cell->no_duration) row.properties[1].state = PropertyState::missing;
+        if (cell->hide_extension) row.name = display_leaf(leaf, row.directory, true);
     }
 };
 struct State final {
@@ -96,11 +109,17 @@ struct State final {
     std::optional<Request> pending;
     std::deque<Batch> results;
     std::optional<Batch> emergency;
+    // Phase of the last batch accepted into results; lets a recovery rescan
+    // tell whether it completed without re-deriving that from each return.
+    Phase published_phase{Phase::loading};
     ~State() { if (control) CloseHandle(control); if (thread) CloseHandle(thread); if (ready) CloseHandle(ready); }
 };
-// UI creates subscriptions on its STA. A blocked abandoned worker retains its
-// slot, resources and event; reopening cannot create an unbounded thread leak.
-std::array<std::weak_ptr<State>, kMaxSubscriptions> slots;
+// UI creates subscriptions on its STA. The first kMaxSubscriptions entries are
+// live slots; the tail is the retired reserve. A blocked abandoned worker keeps
+// its reserve (or, when the reserve is full, live) entry, resources and event
+// until it exits; reopening cannot create an unbounded thread leak.
+constexpr std::size_t kMaxWorkers = kMaxSubscriptions + kMaxRetiredWorkers;
+std::array<std::weak_ptr<State>, kMaxWorkers> slots;
 
 bool publish(const std::shared_ptr<State>& state, std::uint64_t serial,
              Batch batch) {
@@ -119,7 +138,9 @@ bool publish(const std::shared_ptr<State>& state, std::uint64_t serial,
             state->results.size() < kQueuedBatches;
     });
     if (state->stop || serial != state->serial) return false;
+    const auto phase = batch.phase;
     state->results.push_back(std::move(batch));
+    state->published_phase = phase;
     SetEvent(state->ready);
     return true;
 }
@@ -228,12 +249,14 @@ struct DirectoryWatch final {
         if (directory != INVALID_HANDLE_VALUE) CloseHandle(directory);
         if (io.hEvent) CloseHandle(io.hEvent);
     }
-    DWORD arm() {
+    // 64 KiB is also the largest buffer ReadDirectoryChangesW accepts for a
+    // directory on a network share; do not grow it.
+    DWORD arm(DWORD filter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+            FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE |
+            FILE_NOTIFY_CHANGE_ATTRIBUTES) {
         ResetEvent(io.hEvent);
         if (!ReadDirectoryChangesW(directory, buffer.data(), static_cast<DWORD>(buffer.size()),
-            FALSE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
-            FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE |
-            FILE_NOTIFY_CHANGE_ATTRIBUTES, nullptr, &io, nullptr)) return GetLastError();
+            FALSE, filter, nullptr, &io, nullptr)) return GetLastError();
         pending = true;
         return ERROR_SUCCESS;
     }
@@ -244,13 +267,37 @@ struct NamespaceWatches final {
     std::vector<std::unique_ptr<DirectoryWatch>> watches;
     DWORD error{};
 };
-bool local_drive_path(const std::wstring& path) {
-    if (path.size() < 3 || path[1] != L':' || path[2] != L'\\' ||
-        path.find_first_of(L"*?") != std::wstring::npos) return false;
-    const auto type = GetDriveTypeW(path.substr(0, 3).c_str());
-    return type == DRIVE_FIXED || type == DRIVE_REMOVABLE || type == DRIVE_RAMDISK ||
-        type == DRIVE_CDROM;
+// Every ordinary filesystem path is watched, local or network (UNC shares and
+// mapped drives, like Explorer). A directory that refuses a watch reports
+// watch_error, which the status bar shows as "Automatic refresh unavailable".
+bool watchable_path(const std::wstring& path) {
+    return is_filesystem_location(path) && path.size() <= kMaxPath &&
+        !path.starts_with(L"\\\\.\\") && path.find_first_of(L"*?") == std::wstring::npos &&
+        (!path.starts_with(L"\\\\") || path.find(L'\\', 2) != std::wstring::npos);
 }
+// A burst of changes (extracting or copying thousands of files) overflows the
+// notification detail. Coalesce it into one recovery rescan once the folder
+// has been quiet for kRescanQuietMs; continuous churn still rescans every
+// kRescanMaxDelayMs so a long copy keeps updating. Armed only by a change
+// event; an idle folder waits INFINITE (0% CPU, no I/O). Do not replace this
+// with a retry limit: churn is not failure, and a strike-out left the list
+// frozen mid-copy. A rescan that fails ends the watch instead.
+constexpr DWORD kRescanQuietMs = 250;
+constexpr ULONGLONG kRescanMaxDelayMs = 2000;
+struct RescanSettle final {
+    bool pending{};
+    ULONGLONG since{};
+    void note() noexcept { if (!pending) { pending = true; since = GetTickCount64(); } }
+    DWORD timeout() const noexcept {
+        if (!pending) return INFINITE;
+        const auto elapsed = GetTickCount64() - since;
+        return elapsed >= kRescanMaxDelayMs ? 0 :
+            static_cast<DWORD>(std::min<ULONGLONG>(kRescanQuietMs, kRescanMaxDelayMs - elapsed));
+    }
+    bool due(bool timed_out) const noexcept {
+        return pending && (timed_out || GetTickCount64() - since >= kRescanMaxDelayMs);
+    }
+};
 // The Desktop is the merged user + public folders; any other namespace folder
 // that has a filesystem path is watched through that path. Virtual locations
 // (This PC, Recycle Bin) have none and stay manual-refresh.
@@ -271,11 +318,11 @@ std::vector<std::wstring> namespace_watch_directories(const core::ShellLocation&
     } else if (!resolved.fallback_path.empty()) {
         directories.push_back(resolved.fallback_path);
     }
-    std::vector<std::wstring> local;
+    std::vector<std::wstring> watched;
     for (auto& path : directories)
-        if (local_drive_path(path) && std::find(local.begin(), local.end(), path) == local.end())
-            local.push_back(std::move(path));
-    return local;
+        if (watchable_path(path) && std::find(watched.begin(), watched.end(), path) == watched.end())
+            watched.push_back(std::move(path));
+    return watched;
 }
 void arm_namespace_watches(const std::shared_ptr<State>& state, std::uint64_t serial,
                            const std::vector<std::wstring>& directories, NamespaceWatches& out) {
@@ -287,14 +334,8 @@ void arm_namespace_watches(const std::shared_ptr<State>& state, std::uint64_t se
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
         if (watch->directory == INVALID_HANDLE_VALUE) { out.error = GetLastError(); return; }
-        // A local path can traverse a junction to a server; never subscribe to it.
-        std::wstring resolved(kMaxPath + 1, L'\0');
-        const DWORD length = GetFinalPathNameByHandleW(watch->directory, resolved.data(),
-            static_cast<DWORD>(resolved.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-        if (!length || length >= resolved.size()) {
-            out.error = length ? ERROR_BUFFER_OVERFLOW : GetLastError(); return;
-        }
-        if (resolved.starts_with(L"\\\\?\\UNC\\")) { out.error = ERROR_NOT_SUPPORTED; return; }
+        // Network targets (redirected folders, junctions to a share) are
+        // watched too, like Explorer; a refusing server reports watch_error.
         if (const DWORD armed = watch->arm()) { out.error = armed; return; }
         out.watches.push_back(std::move(watch));
     }
@@ -611,65 +652,182 @@ bool leaf_name(std::wstring_view name) {
     return !name.empty() && name.size() <= kMaxName && name != L"." && name != L".." &&
         name.find_first_of(L"\\/:*?\"") == std::wstring::npos;
 }
+// An 8.3 alias such as "REPORT~1.TXT". The kernel can report one; a deleted
+// item's long name cannot be recovered from it, so its removal needs a rescan.
+bool possible_short_name(std::wstring_view name) {
+    if (name.size() > 12 || name.find(L'~') == std::wstring_view::npos) return false;
+    return std::none_of(name.begin(), name.end(), [](wchar_t c) { return IsCharLowerW(c); });
+}
+enum class Decoded { delta, rescan, lost };
 // Notification detail has a fixed cap. Exceeding it discards detail and requests
 // ONE recovery, just like ERROR_NOTIFY_ENUM_DIR / a zero-byte completion.
-bool decode_changes(const std::shared_ptr<State>& state, std::uint64_t serial,
-                    const DirectoryWatch& watch, DWORD bytes, Batch& batch,
-                    std::wstring& old_name) {
+Decoded decode_changes(const std::shared_ptr<State>& state, std::uint64_t serial,
+                       const DirectoryWatch& watch, DWORD bytes, Batch& batch,
+                       std::wstring& old_name) {
     std::vector<std::wstring> names;
     std::size_t offset = 0;
     constexpr auto header = offsetof(FILE_NOTIFY_INFORMATION, FileName);
     while (offset < bytes) {
-        if (bytes - offset < header) return false;
+        if (bytes - offset < header) return Decoded::rescan;
         const auto* info = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(watch.buffer.data() + offset);
         if (info->FileNameLength % sizeof(wchar_t) || info->FileNameLength > bytes - offset - header)
-            return false;
+            return Decoded::rescan;
         std::wstring name(info->FileName, info->FileNameLength / sizeof(wchar_t));
-        if (!leaf_name(name)) return false;
-        if (info->Action < FILE_ACTION_ADDED || info->Action > FILE_ACTION_RENAMED_NEW_NAME) return false;
+        if (!leaf_name(name)) return Decoded::rescan;
+        if (info->Action < FILE_ACTION_ADDED || info->Action > FILE_ACTION_RENAMED_NEW_NAME) return Decoded::rescan;
         if (info->Action == FILE_ACTION_RENAMED_OLD_NAME) {
             // A split rename pair must not first delete the selected identity.
             // Kernel order pairs old/new; an unpaired old name needs recovery.
-            if (!old_name.empty()) return false;
+            if (!old_name.empty()) return Decoded::rescan;
             old_name = name;
         }
         else if (info->Action == FILE_ACTION_RENAMED_NEW_NAME && !old_name.empty()) {
             batch.renamed.emplace_back(old_name, name);
             if (std::find(names.begin(), names.end(), old_name) == names.end()) names.push_back(old_name);
             old_name.clear();
-            if (batch.renamed.size() > kBatchRows) return false;
-        } else if (!old_name.empty()) return false;
+            if (batch.renamed.size() > kBatchRows) return Decoded::rescan;
+        } else if (!old_name.empty()) return Decoded::rescan;
         if (info->Action != FILE_ACTION_RENAMED_OLD_NAME &&
             std::find(names.begin(), names.end(), name) == names.end()) names.push_back(name);
-        if (names.size() > kBatchRows) return false;
+        if (names.size() > kBatchRows) return Decoded::rescan;
         if (!info->NextEntryOffset) break;
         if (info->NextEntryOffset < header + info->FileNameLength ||
-            info->NextEntryOffset % alignof(DWORD) || info->NextEntryOffset >= bytes - offset) return false;
+            info->NextEntryOffset % alignof(DWORD) || info->NextEntryOffset >= bytes - offset) return Decoded::rescan;
         offset += info->NextEntryOffset;
     }
     const auto hidden_policy = read_hidden_file_policy();
     TypeCells type_cells;
-    for (auto& name : names) {
-        if (!interested(state, serial)) return false;
+    const auto remove = [&](const std::wstring& leaf) {
+        if (std::find(batch.removed.begin(), batch.removed.end(), leaf) == batch.removed.end())
+            batch.removed.push_back(leaf);
+    };
+    for (const auto& name : names) {
+        if (!interested(state, serial)) return Decoded::rescan;
         auto path = batch.request.location.parsing_name;
         if (path.back() != L'\\') path += L'\\';
         path += name;
         WIN32_FIND_DATAW data{};
         FindHandle find{FindFirstFileExW(path.c_str(), FindExInfoBasic, &data,
             FindExSearchNameMatch, nullptr, 0)};
-        if (find.value != INVALID_HANDLE_VALUE && hidden_policy.hides(data.dwFileAttributes))
-            batch.removed.push_back(std::move(name)); // became hidden: leaves the list
-        else if (find.value != INVALID_HANDLE_VALUE) {
-            batch.rows.push_back(basic_row(data, std::move(name)));
+        if (find.value == INVALID_HANDLE_VALUE) {
+            const DWORD error = GetLastError();
+            // The leaf is gone (FILE_NOT_FOUND). PATH_NOT_FOUND means the
+            // displayed folder's own path no longer resolves: it, or a parent,
+            // was renamed or deleted while this handle kept watching it.
+            if (error == ERROR_PATH_NOT_FOUND) return Decoded::lost;
+            if (error != ERROR_FILE_NOT_FOUND || possible_short_name(name)) return Decoded::rescan;
+            remove(name);
+            continue;
+        }
+        // The lookup is case-insensitive and resolves 8.3 aliases, but a local
+        // identity compares exactly. Rows always carry the real long name; a
+        // notified spelling that differs (case-only rename, short name) is
+        // reported removed so no ghost row keeps the old spelling.
+        std::wstring real(data.cFileName);
+        if (!leaf_name(real)) return Decoded::rescan;
+        if (real != name) remove(name);
+        if (hidden_policy.hides(data.dwFileAttributes)) remove(real); // became hidden: leaves the list
+        else if (std::none_of(batch.rows.begin(), batch.rows.end(),
+                     [&](const Row& row) { return row.identity.key == real; })) {
+            batch.rows.push_back(basic_row(data, std::move(real)));
             type_cells.fill(batch.rows.back());
         }
-        else {
-            const DWORD error = GetLastError();
-            if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) return false;
-            batch.removed.push_back(std::move(name));
-        }
+        if (batch.removed.size() > kBatchRows) return Decoded::rescan;
     }
-    return true;
+    return Decoded::delta;
+}
+// The displayed folder's existence, probed only after a change event says it
+// may be gone. Our own watch handle must already be closed: while it is open,
+// a deleted folder stays delete-pending and reads as access denied.
+bool directory_exists(const std::wstring& path, DWORD& error) {
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) { error = GetLastError(); return false; }
+    error = (attributes & FILE_ATTRIBUTE_DIRECTORY) ? ERROR_SUCCESS : ERROR_DIRECTORY;
+    return error == ERROR_SUCCESS;
+}
+// Only these mean "no longer there". Network errors (server or share
+// unreachable) keep the location and report watch_error instead.
+bool missing_error(DWORD error) {
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ||
+        error == ERROR_INVALID_DRIVE || error == ERROR_NOT_READY || error == ERROR_DIRECTORY;
+}
+// "C:\a\b" -> "C:\a" -> "C:\" -> ""; "\\srv\share\a" -> "\\srv\share" -> "".
+std::wstring parent_directory(std::wstring path) {
+    while (path.size() > 3 && path.back() == L'\\') path.pop_back();
+    if (path.size() <= 3 && path.size() >= 2 && path[1] == L':') return {};
+    const auto slash = path.rfind(L'\\');
+    if (slash == std::wstring::npos) return {};
+    if (path.starts_with(L"\\\\")) {
+        const auto server = path.find(L'\\', 2);
+        if (server == std::wstring::npos || path.find(L'\\', server + 1) == std::wstring::npos) return {};
+        return path.substr(0, slash);
+    }
+    return slash == 2 && path[1] == L':' ? path.substr(0, 3) : path.substr(0, slash);
+}
+// Where the still-open handle now points ("\\?\C:\x" -> "C:\x").
+std::wstring final_directory_path(HANDLE directory) {
+    std::wstring value(kMaxPath + 1, L'\0');
+    const DWORD length = GetFinalPathNameByHandleW(directory, value.data(),
+        static_cast<DWORD>(value.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (!length || length >= value.size()) return {};
+    value.resize(length);
+    if (value.starts_with(L"\\\\?\\UNC\\")) return L"\\\\" + value.substr(8);
+    if (value.starts_with(L"\\\\?\\")) value.erase(0, 4);
+    return value;
+}
+std::vector<std::wstring_view> path_components(std::wstring_view path) {
+    std::vector<std::wstring_view> parts;
+    for (std::size_t start = 0; start < path.size();) {
+        auto end = path.find(L'\\', start);
+        if (end == std::wstring_view::npos) end = path.size();
+        if (end > start) parts.push_back(path.substr(start, end - start));
+        start = end + 1;
+    }
+    return parts;
+}
+// Follow a rename only when exactly one component of the handle's normalized
+// path changed between opening the watch and losing the folder (the folder or
+// one parent renamed in place). A move, a Recycle Bin delete or a removed
+// volume never qualifies: those go to the nearest existing parent. Both sides
+// come from GetFinalPathNameByHandleW, so 8.3 and mapped-drive spellings
+// cannot fake a difference. Returns the new path in the caller's spelling.
+std::wstring renamed_path(const std::wstring& path, const std::wstring& opened, const std::wstring& now) {
+    const auto before = path_components(opened), after = path_components(now);
+    if (before.size() != after.size() || before.size() < 2) return {};
+    std::size_t changed = before.size();
+    for (std::size_t i = 0; i < before.size(); ++i) {
+        if (CompareStringOrdinal(before[i].data(), static_cast<int>(before[i].size()),
+                after[i].data(), static_cast<int>(after[i].size()), TRUE) == CSTR_EQUAL) continue;
+        if (changed != before.size()) return {};
+        changed = i;
+    }
+    if (changed == before.size()) return {};
+    const auto from_end = before.size() - 1 - changed;
+    const auto own = path_components(path);
+    const std::size_t root = path.starts_with(L"\\\\") ? 2 : 1; // never rewrite C: or \\server\share
+    if (from_end + root >= own.size()) return {};
+    const auto& part = own[own.size() - 1 - from_end];
+    const auto start = static_cast<std::size_t>(part.data() - path.data());
+    std::wstring result = path.substr(0, start);
+    result.append(after[changed]);
+    result.append(path, start + part.size(), std::wstring::npos);
+    return result.size() <= kMaxPath ? result : std::wstring{};
+}
+// The Explorer-like destination for a displayed folder that no longer exists,
+// or nothing when it still exists or only a network path became unreachable.
+std::optional<core::ShellLocation> lost_location_target(const std::wstring& path,
+                                                        const std::wstring& opened_final,
+                                                        const std::wstring& final_path, bool network) {
+    DWORD error{};
+    if (directory_exists(path, error) || !missing_error(error)) return {};
+    if (!opened_final.empty() && !final_path.empty())
+        if (auto renamed = renamed_path(path, opened_final, final_path);
+            !renamed.empty() && directory_exists(renamed, error))
+            return core::ShellLocation{std::move(renamed), {}, {}};
+    for (auto parent = parent_directory(path); !parent.empty(); parent = parent_directory(parent))
+        if (directory_exists(parent, error)) return core::ShellLocation{parent, {}, {}};
+    if (network) return {};
+    return core::ShellLocation{L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", {}, {}}; // This PC
 }
 // A namespace folder backed by local directories (the Desktop) is watched, but
 // its changes are not decoded: any event coalesces into one full rescan.
@@ -688,20 +846,20 @@ void watch_shell_namespace(const std::shared_ptr<State>& state, std::uint64_t se
     if (!publish(state, serial, {request, {}, Phase::complete, 0, Change::watching})) return;
     std::vector<HANDLE> handles{state->control};
     for (const auto& watch : set.watches) handles.push_back(watch->io.hEvent);
+    RescanSettle settle; // every event coalesces into one rescan after a quiet period
     for (;;) {
         {
             std::lock_guard lock(state->mutex);
             state->running = false; // control event releases this idle wait
         }
         const DWORD wake = WaitForMultipleObjects(static_cast<DWORD>(handles.size()),
-                                                  handles.data(), FALSE, INFINITE);
-        bool rescan = false;
+                                                  handles.data(), FALSE, settle.timeout());
         DWORD error = 0;
         {
             std::lock_guard lock(state->mutex);
             if (state->stop || state->serial != serial) return;
             state->running = true;
-            rescan = state->recovery;
+            if (state->recovery) settle.note();
             error = state->injected_error;
             state->injected_error = 0;
             state->recovery = false;
@@ -722,7 +880,7 @@ void watch_shell_namespace(const std::shared_ptr<State>& state, std::uint64_t se
             if (error && error != ERROR_NOTIFY_ENUM_DIR) {
                 publish(state, serial, {request, {}, Phase::complete, error, Change::watch_error}); return;
             }
-            rescan = true;
+            settle.note();
             if (!interested(state, serial)) return;
             // Kernel retains changes between reads; rearm before scanning.
             error = watch->arm();
@@ -730,12 +888,44 @@ void watch_shell_namespace(const std::shared_ptr<State>& state, std::uint64_t se
                 publish(state, serial, {request, {}, Phase::complete, error, Change::watch_error}); return;
             }
         }
-        if (!rescan || !interested(state, serial)) continue;
+        if (!settle.due(wake == WAIT_TIMEOUT) || !interested(state, serial)) continue;
+        settle = {};
         { std::lock_guard lock(state->mutex); state->recovering = true; }
         if (!publish(state, serial, {request, {}, Phase::loading, 0, Change::rescan_begin})) return;
         enumerate_shell_namespace(state, serial, request, true);
         { std::lock_guard lock(state->mutex); state->recovering = false; }
     }
+}
+// The watch of the displayed folder's parent, for the one event the folder's
+// own handle never reports: the folder itself deleted to the Recycle Bin,
+// moved or renamed (the handle follows the object). Directory names only.
+constexpr DWORD kParentWatchFilter = FILE_NOTIFY_CHANGE_DIR_NAME;
+bool parent_event_names(const DirectoryWatch& watch, DWORD bytes, std::wstring_view leaf) {
+    if (!bytes) return true; // overflow: probe
+    constexpr auto header = offsetof(FILE_NOTIFY_INFORMATION, FileName);
+    for (std::size_t offset = 0; offset < bytes;) {
+        if (bytes - offset < header) return true;
+        const auto* info = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(watch.buffer.data() + offset);
+        if (info->FileNameLength % sizeof(wchar_t) || info->FileNameLength > bytes - offset - header)
+            return true;
+        if ((info->Action == FILE_ACTION_REMOVED || info->Action == FILE_ACTION_RENAMED_OLD_NAME) &&
+            CompareStringOrdinal(info->FileName, static_cast<int>(info->FileNameLength / sizeof(wchar_t)),
+                leaf.data(), static_cast<int>(leaf.size()), TRUE) == CSTR_EQUAL) return true;
+        if (!info->NextEntryOffset) return false;
+        if (info->NextEntryOffset % alignof(DWORD) || info->NextEntryOffset >= bytes - offset) return true;
+        offset += info->NextEntryOffset;
+    }
+    return false;
+}
+std::unique_ptr<DirectoryWatch> open_directory_watch(const std::wstring& path, DWORD filter, DWORD& error) {
+    auto watch = std::make_unique<DirectoryWatch>();
+    if (!watch->io.hEvent) { error = ERROR_NOT_ENOUGH_MEMORY; return {}; }
+    watch->directory = CreateFileW(path.c_str(), FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
+    if (watch->directory == INVALID_HANDLE_VALUE) { error = GetLastError(); return {}; }
+    if ((error = watch->arm(filter))) return {};
+    return watch;
 }
 void enumerate_and_watch(const std::shared_ptr<State>& state, std::uint64_t serial,
                          const Request& request) {
@@ -743,59 +933,82 @@ void enumerate_and_watch(const std::shared_ptr<State>& state, std::uint64_t seri
         watch_shell_namespace(state, serial, request);
         return;
     }
-    DirectoryWatch watch;
     const auto& path = request.location.parsing_name;
+    // The controlled harness share is never opened: it names no real server.
+    const bool watched = watchable_path(path) &&
+        !(state->gate && path.starts_with(L"\\\\pd226-controlled\\share"));
+    // All drive probing stays on this worker, never the STA.
+    bool network = path.starts_with(L"\\\\") &&
+        (!path.starts_with(L"\\\\?\\") || path.starts_with(L"\\\\?\\UNC\\"));
+    UINT drive_type = DRIVE_UNKNOWN;
+    if (!interested(state, serial)) return;
+    if (watched && path.size() >= 3 && path[1] == L':' && path[2] == L'\\') {
+        drive_type = GetDriveTypeW(path.substr(0, 3).c_str());
+        network = drive_type == DRIVE_REMOTE;
+    }
     DWORD error = ERROR_SUCCESS;
-    // No UNC/mapped-network subscriptions. Existing enumeration routing and
-    // location support remain unchanged. All drive probing stays off the STA.
-    const bool drive_path = path.size() >= 3 && path[1] == L':' && path[2] == L'\\' &&
-        path.find_first_of(L"*?") == std::wstring::npos;
-    bool local = false;
-    if (!interested(state, serial)) return;
-    if (drive_path) {
-        const auto root = path.substr(0, 3);
-        const auto type = GetDriveTypeW(root.c_str());
-        local = type == DRIVE_FIXED || type == DRIVE_REMOVABLE || type == DRIVE_RAMDISK || type == DRIVE_CDROM;
-    }
-    if (!interested(state, serial)) return;
-    if (local) {
-        if (!watch.io.hEvent) error = ERROR_NOT_ENOUGH_MEMORY;
-        else {
-            watch.directory = CreateFileW(path.c_str(), FILE_LIST_DIRECTORY,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
-            if (watch.directory == INVALID_HANDLE_VALUE) error = GetLastError();
-            else {
-                // A local drive path can traverse a junction to a server.
-                // Resolve only on this worker; never subscribe to its UNC target.
-                std::wstring resolved(kMaxPath + 1, L'\0');
-                const DWORD length = GetFinalPathNameByHandleW(watch.directory, resolved.data(),
-                    static_cast<DWORD>(resolved.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-                if (!length || length >= resolved.size()) error = length ? ERROR_BUFFER_OVERFLOW : GetLastError();
-                else if (resolved.starts_with(L"\\\\?\\UNC\\")) error = ERROR_NOT_SUPPORTED;
-                else if (!interested(state, serial)) return;
-                else error = watch.arm();
-            }
-        }
-    }
+    std::unique_ptr<DirectoryWatch> watch;
     // Arm BEFORE the initial read to close the enumerate/subscribe loss window.
+    if (watched) watch = open_directory_watch(path, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+            FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_ATTRIBUTES, error);
+    if (!interested(state, serial)) return;
     enumerate(state, serial, request);
-    { std::lock_guard lock(state->mutex); state->initial_complete = true; }
-    if (!local || !interested(state, serial)) return;
-    if (error) {
+    Phase listed;
+    {
+        std::lock_guard lock(state->mutex);
+        state->initial_complete = true;
+        listed = state->published_phase;
+    }
+    // An unreadable location shows its read error only; Refresh retries both.
+    if (!watched || listed == Phase::error || !interested(state, serial)) return;
+    if (!watch) {
         publish(state, serial, {request, {}, Phase::complete, error, Change::watch_error}); return;
     }
     { std::lock_guard lock(state->mutex); state->watch_open = true; }
-    if (!publish(state, serial, {request, {}, Phase::complete, 0, Change::watching})) return;
+    Batch watching{request, {}, Phase::complete, 0, Change::watching};
+    if (drive_type == DRIVE_REMOVABLE || drive_type == DRIVE_FIXED || drive_type == DRIVE_CDROM) {
+        // Zero access: no media read, no lock. Only for the UI's eject registration.
+        const wchar_t volume[]{L'\\', L'\\', L'.', L'\\', path[0], L':', L'\0'};
+        const HANDLE device = CreateFileW(volume, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, 0, nullptr);
+        if (device != INVALID_HANDLE_VALUE)
+            watching.device_handle = std::shared_ptr<void>(device, [](void* value) { CloseHandle(value); });
+    }
+    if (!publish(state, serial, std::move(watching))) return;
+    // Normalized once, to tell an in-place rename from a move when the folder is lost.
+    const auto opened_final = final_directory_path(watch->directory);
+    // Optional: a parent that cannot be watched (no parent, no access) only
+    // loses early detection of a Recycle Bin delete of the folder itself.
+    const auto parent_path = parent_directory(path);
+    DWORD parent_error{};
+    auto parent = parent_path.empty() ? nullptr :
+        open_directory_watch(parent_path, kParentWatchFilter, parent_error);
+    std::wstring leaf = path;
+    while (leaf.size() > 3 && leaf.back() == L'\\') leaf.pop_back();
+    leaf.erase(0, leaf.rfind(L'\\') + 1);
+    // A folder that is gone sends the Pane to its replacement; any other
+    // failure keeps the rows and reports that automatic refresh stopped.
+    const auto lose = [&](DWORD reason) {
+        const auto final_path = final_directory_path(watch->directory);
+        watch.reset(); parent.reset(); // close first: a deleted folder is delete-pending until then
+        if (auto target = lost_location_target(path, opened_final, final_path, network)) {
+            Batch lost{request, {}, Phase::complete, 0, Change::location_lost};
+            lost.parent_location = std::move(*target);
+            lost.parent_outcome = ParentOutcome::value;
+            publish(state, serial, std::move(lost));
+        } else {
+            publish(state, serial, {request, {}, Phase::complete, reason, Change::watch_error});
+        }
+    };
     std::wstring old_name;
-    unsigned recovery_scans = 0;
+    RescanSettle settle;
     for (;;) {
         {
             std::lock_guard lock(state->mutex);
             state->running = false; // control event releases this idle wait
         }
-        const HANDLE handles[]{state->control, watch.io.hEvent};
-        const DWORD wake = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+        const HANDLE handles[]{state->control, watch->io.hEvent, parent ? parent->io.hEvent : nullptr};
+        const DWORD wake = WaitForMultipleObjects(parent ? 3 : 2, handles, FALSE, settle.timeout());
         bool recovery = false;
         {
             std::lock_guard lock(state->mutex);
@@ -813,39 +1026,64 @@ void enumerate_and_watch(const std::shared_ptr<State>& state, std::uint64_t seri
         if (wake == WAIT_FAILED) {
             publish(state, serial, {request, {}, Phase::complete, GetLastError(), Change::watch_error}); return;
         }
+        bool probe = false;
         Batch batch{request, {}, Phase::complete, 0, Change::delta};
-        if (WaitForSingleObject(watch.io.hEvent, 0) == WAIT_OBJECT_0) {
+        if (WaitForSingleObject(watch->io.hEvent, 0) == WAIT_OBJECT_0) {
             DWORD bytes{};
-            const BOOL success = GetOverlappedResult(watch.directory, &watch.io, &bytes, FALSE);
+            const BOOL success = GetOverlappedResult(watch->directory, &watch->io, &bytes, FALSE);
             error = success ? ERROR_SUCCESS : GetLastError();
-            watch.pending = false;
-            if (error && error != ERROR_NOTIFY_ENUM_DIR) {
-                publish(state, serial, {request, {}, Phase::complete, error, Change::watch_error}); return;
+            watch->pending = false;
+            // A deleted folder fails its read (delete pending); a removed
+            // volume or dropped share fails it too. lose() tells them apart.
+            if (error && error != ERROR_NOTIFY_ENUM_DIR) { lose(error); return; }
+            // While a rescan is pending its detail is moot: drain and re-arm.
+            recovery = recovery || settle.pending || error == ERROR_NOTIFY_ENUM_DIR || !bytes;
+            if (!recovery) switch (decode_changes(state, serial, *watch, bytes, batch, old_name)) {
+                case Decoded::delta: break;
+                case Decoded::rescan: recovery = true; break;
+                case Decoded::lost: probe = true; break;
             }
-            recovery = recovery || error == ERROR_NOTIFY_ENUM_DIR || !bytes;
-            if (!recovery) recovery = !decode_changes(state, serial, watch, bytes, batch, old_name);
             if (!interested(state, serial)) return;
             // Kernel retains changes between reads. Rearm before publishing or
             // scanning so UI backpressure cannot open a notification gap.
-            error = watch.arm();
-            if (error) {
-                publish(state, serial, {request, {}, Phase::complete, error, Change::watch_error}); return;
-            }
+            if ((error = watch->arm())) { lose(error); return; }
+        }
+        if (parent && WaitForSingleObject(parent->io.hEvent, 0) == WAIT_OBJECT_0) {
+            DWORD bytes{};
+            const BOOL success = GetOverlappedResult(parent->directory, &parent->io, &bytes, FALSE);
+            parent->pending = false;
+            probe = probe || !success || parent_event_names(*parent, bytes, leaf);
+            if (!success || parent->arm(kParentWatchFilter)) parent.reset();
         }
         if (!interested(state, serial)) return;
+        if (probe) {
+            DWORD missing{};
+            if (!directory_exists(path, missing)) { lose(missing); return; }
+            if (!batch.rows.empty() || !batch.removed.empty() || !batch.renamed.empty())
+                recovery = true; // a lookup raced the probe: reconcile instead
+        }
         if (recovery) {
-            // At most two consecutive loss recoveries without usable detail.
-            // A failing/deleted directory must not cause an endless rescan loop.
-            if (++recovery_scans > 2) {
-                publish(state, serial, {request, {}, Phase::complete, ERROR_NOTIFY_ENUM_DIR, Change::watch_error}); return;
-            }
-            { std::lock_guard lock(state->mutex); state->recovering = true; }
             old_name.clear();
+            settle.note();
+        }
+        if (settle.due(wake == WAIT_TIMEOUT)) {
+            // Before rescanning, make sure the folder itself is still there.
+            DWORD missing{};
+            if (!directory_exists(path, missing)) { lose(missing); return; }
+            settle = {};
+            { std::lock_guard lock(state->mutex); state->recovering = true; }
             if (!publish(state, serial, {request, {}, Phase::loading, 0, Change::rescan_begin})) return;
             enumerate(state, serial, request, true);
-            { std::lock_guard lock(state->mutex); state->recovering = false; }
-        } else if (!batch.rows.empty() || !batch.removed.empty()) {
-            recovery_scans = 0;
+            Phase scanned;
+            {
+                std::lock_guard lock(state->mutex);
+                state->recovering = false;
+                scanned = state->published_phase;
+            }
+            // The only bound: a rescan that cannot complete ends the watch.
+            // The UI keeps its rows and offers Refresh; no retry loop here.
+            if (scanned != Phase::complete && scanned != Phase::empty) return;
+        } else if (!settle.pending && (!batch.rows.empty() || !batch.removed.empty())) {
             if (!publish(state, serial, std::move(batch))) return;
         }
     }
@@ -912,7 +1150,8 @@ void run(std::shared_ptr<State> state) noexcept {
     }
 }
 std::shared_ptr<State> acquire(std::shared_ptr<testing::ReadGate> gate = {}) {
-    for (auto& slot : slots) {
+    for (std::size_t n = 0; n < kMaxSubscriptions; ++n) {
+        auto& slot = slots[n];
         if (!slot.expired()) continue;
         auto state = std::make_shared<State>();
         if (!state->ready || !state->control) return {};
@@ -953,6 +1192,21 @@ void invalidate(State& state, bool stop) noexcept {
     }
     state.changed.notify_all();
 }
+// UI STA only. Moves a stopped State out of its live slot into a free reserve
+// entry so a successor can acquire immediately. A full reserve leaves it in its
+// live slot (the pre-split behavior); it still exits after its OS call returns.
+void retire(const std::shared_ptr<State>& state) noexcept {
+    for (std::size_t live = 0; live < kMaxSubscriptions; ++live) {
+        if (slots[live].lock() != state) continue;
+        for (std::size_t n = kMaxSubscriptions; n < kMaxWorkers; ++n) {
+            if (!slots[n].expired()) continue;
+            slots[n] = std::move(slots[live]);
+            slots[live].reset();
+            return;
+        }
+        return;
+    }
+}
 class LocalSource final : public Source {
     std::shared_ptr<State> state_;
     std::shared_ptr<testing::ReadGate> gate_;
@@ -961,7 +1215,10 @@ class LocalSource final : public Source {
     ~LocalSource() override {
         // Never join an OS call. Worker owns State, handles and its STA COM resources, and
         // exits after its current OS call returns. State is freed on last use.
-        if (state_) { std::lock_guard lock(state_->mutex); invalidate(*state_, true); }
+        if (!state_) return;
+        bool busy;
+        { std::lock_guard lock(state_->mutex); busy = state_->running || state_->watch_open; invalidate(*state_, true); }
+        if (busy) retire(state_);
     }
     bool overflow(DWORD error = 0) noexcept {
         if (!state_) return false;
@@ -980,17 +1237,17 @@ class LocalSource final : public Source {
         const auto request_bytes = owned_location_bytes(request.location) +
             request.binding.group_id.capacity() + request.binding.tab_id.capacity();
         if (request_bytes > kMaxBatchOwnedBytes / 4) return false;
-        bool retire = false;
+        bool retiring = false;
         if (state_) {
             std::lock_guard lock(state_->mutex);
             // Never queue a successor behind an obsolete OS call. Retiring
-            // counts against the SAME four-slot cap, even after Pane dies.
+            // moves to the separate retired reserve, freeing the live slot.
             // Also retire an idle watch: its worker may be awaiting a broken
             // driver's asynchronous cancellation. Never queue navigation behind it.
-            retire = state_->running || state_->watch_open;
-            if (retire) invalidate(*state_, true);
+            retiring = state_->running || state_->watch_open;
+            if (retiring) invalidate(*state_, true);
         }
-        if (retire) state_.reset();
+        if (retiring) { retire(state_); state_.reset(); }
         if (!state_) state_ = acquire(gate_);
         if (!state_) return false;
         std::lock_guard lock(state_->mutex);
@@ -1066,8 +1323,8 @@ Counts counts() noexcept {
     return result;
 }
 struct ReadObservation final {
-    std::array<std::shared_ptr<State>, kMaxSubscriptions> states;
-    std::array<std::size_t, kMaxSubscriptions> cancel_requests{}, cancel_accepted{};
+    std::array<std::shared_ptr<State>, kMaxWorkers> states;
+    std::array<std::size_t, kMaxWorkers> cancel_requests{}, cancel_accepted{};
     DWORD count{};
 };
 std::shared_ptr<ReadObservation> observe_running_reads() noexcept try {
@@ -1088,7 +1345,7 @@ std::shared_ptr<ReadObservation> observe_running_reads() noexcept try {
 RetiredReadReport finish_read_observation(const std::shared_ptr<ReadObservation>& observation,
                                         DWORD timeout) noexcept {
     if (!observation) return {};
-    std::array<HANDLE, kMaxSubscriptions> handles{};
+    std::array<HANDLE, kMaxWorkers> handles{};
     RetiredReadReport report;
     DWORD count = 0;
     for (DWORD n = 0; n < observation->count; ++n) {
@@ -1116,8 +1373,8 @@ RetiredReadReport finish_read_observation(const std::shared_ptr<ReadObservation>
 bool wait_for_workers(DWORD timeout) noexcept {
     // Hold State until the thread signals: weak slots cannot expire before the
     // OS thread itself exits, and no test uses an arbitrary settling sleep.
-    std::array<std::shared_ptr<State>, kMaxSubscriptions> states;
-    std::array<HANDLE, kMaxSubscriptions> handles{};
+    std::array<std::shared_ptr<State>, kMaxWorkers> states;
+    std::array<HANDLE, kMaxWorkers> handles{};
     DWORD count = 0;
     for (auto& slot : slots) if (auto state = slot.lock()) {
         if (!state->thread) return false;

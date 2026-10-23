@@ -19,7 +19,8 @@ class Delivery final : public ml::Source {
         auto batch = std::move(batches.front()); batches.pop_front(); return batch;
     }
     HANDLE event() const noexcept override { return nullptr; }
-    void cancel() noexcept override {} // deliberately retain stale deliveries
+    void cancel() noexcept override { ++cancels; } // deliberately retain stale deliveries
+    int cancels{};
 };
 struct Fixture final {
     test::TestPaneHost host;
@@ -188,6 +189,13 @@ void real_local_changes_overflow_failure_retry_and_departure() {
         EXPECT(interaction.selected.size() == 1 && interaction.selected[0].name == renamed);
         EXPECT(interaction.focused && interaction.focused->name == renamed);
         EXPECT(interaction.anchor && interaction.anchor->name == renamed);
+        // Case-only rename: the notified old spelling resolves (case-
+        // insensitively) to the new file; no ghost row keeps the old one.
+        std::wstring upper = name(300);
+        CharUpperBuffW(upper.data(), static_cast<DWORD>(upper.size()));
+        std::filesystem::rename(root / name(300), root / upper);
+        await(f, [&] { return f.index(upper) >= 0 && f.index(name(300)) < 0; });
+        EXPECT(f.pane.list_snapshot().rows.size() == 401);
         std::ofstream(root / L"added") << "external";
         std::filesystem::remove(root / name(100));
         await(f, [&] { return f.index(L"added") >= 0 && f.index(name(100)) < 0; });
@@ -213,19 +221,19 @@ void real_local_changes_overflow_failure_retry_and_departure() {
         EXPECT(WaitForSingleObject(f.pane.content_event(), 0) == WAIT_TIMEOUT);
         f.pane.refresh_view();
         await(f, [&] { return f.pane.list_snapshot().watch == ml::WatchState::watching; });
-        // Repeated loss with no useful notification detail has a fixed retry
-        // budget. It must stop visibly instead of rescanning indefinitely.
-        for (int scan = 0; scan < 2; ++scan) {
+        // Repeated loss of notification detail is churn, not failure (a long
+        // copy overflows again and again). Each one coalesces into a rescan
+        // and the watch keeps running; there is no strike-out.
+        for (int scan = 0; scan < 4; ++scan) {
             EXPECT(ml::testing::inject_overflow(*f.source));
             await(f, [&] { return f.pane.list_snapshot().watch == ml::WatchState::recovering; });
             await(f, [&] { return f.pane.list_snapshot().watch == ml::WatchState::watching; });
         }
-        EXPECT(ml::testing::inject_overflow(*f.source));
-        await(f, [&] { return f.pane.list_snapshot().watch == ml::WatchState::failed; });
-        EXPECT(f.pane.list_snapshot().watch_error == ERROR_NOTIFY_ENUM_DIR);
-        EXPECT(WaitForSingleObject(f.pane.content_event(), 0) == WAIT_TIMEOUT);
-        f.pane.refresh_view();
-        await(f, [&] { return f.pane.list_snapshot().watch == ml::WatchState::watching; });
+        // A burst beyond the 128-name detail cap, like extracting an archive.
+        for (int i = 0; i < 1200; ++i) std::ofstream(root / (L"burst-" + std::to_wstring(i))) << i;
+        await(f, [&] { return f.pane.list_snapshot().rows.size() == 1600 &&
+            f.pane.list_snapshot().watch == ml::WatchState::watching; });
+        EXPECT(f.index(L"burst-0") >= 0 && f.index(L"burst-1199") >= 0);
         EXPECT(SUCCEEDED(f.pane.navigate_to({other.wstring(), {}, {}})));
         await(f, [&] { return f.pane.list_snapshot().watch == ml::WatchState::watching; });
         std::ofstream(root / L"old-location-change") << "ignored";
@@ -309,6 +317,111 @@ void local_recovery_and_notifications_preserve_exact_case_comparisons() {
     EXPECT(interaction.anchor && interaction.anchor->name == L"Leaf");
     EXPECT(f.pane.list_snapshot().rows[0].name == L"Same label");
 }
+
+HWND rename_edit(Fixture& f) { return FindWindowExW(f.list, nullptr, L"EDIT", nullptr); }
+void delta(Fixture& f, std::vector<ml::Row> rows, std::vector<std::wstring> removed = {}) {
+    ml::Batch batch{f.pane.list_snapshot().request, std::move(rows), ml::Phase::complete, 0, ml::Change::delta};
+    batch.removed = std::move(removed);
+    static_cast<Delivery&>(*f.source).batches.push_back(std::move(batch));
+    f.pane.process_content_results();
+}
+// A download landing in the folder must not kill an F2 edit: the edit
+// follows its row, and only the row's removal (or scrolling away) ends it.
+void rename_edit_follows_its_row_through_unrelated_batches() {
+    Fixture f(std::make_unique<Delivery>()); f.realize({L"C:\\synthetic", {}, {}});
+    // The fixture tab sorts by size, largest first.
+    deliver(f, ml::Change::none, ml::Phase::complete, {{L"b", 20, false}, {L"c", 10, false}});
+    f.select(L"c");
+    EXPECT(f.pane.begin_list_rename());
+    const HWND edit = rename_edit(f);
+    EXPECT(edit != nullptr);
+    const auto edit_top = [&] {
+        RECT rect{}; GetWindowRect(edit, &rect);
+        MapWindowPoints(nullptr, f.list, reinterpret_cast<POINT*>(&rect), 2);
+        return rect.top;
+    };
+    const auto label_top = [&](int index) {
+        RECT rect{}; ListView_GetItemRect(f.list, index, &rect, LVIR_LABEL);
+        return rect.top;
+    };
+    EXPECT(f.index(L"c") == 1 && edit_top() == label_top(1));
+    delta(f, {{L"a", 30, false}}); // sorts above the edited row
+    EXPECT(rename_edit(f) == edit && f.index(L"c") == 2);
+    EXPECT(edit_top() == label_top(2));
+    delta(f, {{L"b", 25, false}}); // another row changes
+    EXPECT(rename_edit(f) == edit);
+    const auto interaction = f.pane.list_interaction_snapshot();
+    EXPECT(interaction.selected.size() == 1 && interaction.selected[0].name == L"c");
+    delta(f, {}, {L"c"}); // the edited item itself is gone
+    EXPECT(rename_edit(f) == nullptr);
+}
+// Small deltas place changed rows into the existing order (sorted suffix +
+// merge) instead of re-sorting; the result must equal a full sort.
+void small_deltas_keep_the_list_sorted() {
+    Fixture f(std::make_unique<Delivery>()); f.realize({L"C:\\synthetic", {}, {}});
+    for (std::size_t begin = 0; begin < 300; begin += 100) {
+        std::vector<ml::Row> rows;
+        for (std::size_t i = begin; i < begin + 100; ++i) rows.push_back({name(i), 1000 + i * 3, false});
+        deliver(f, ml::Change::none, begin == 200 ? ml::Phase::complete : ml::Phase::loading, std::move(rows));
+    }
+    EXPECT(f.pane.list_snapshot().rows.size() == 300);
+    delta(f, {{name(0), 5000, false}, {name(299), 1, false}, {L"new-middle", 1450, false},
+              {name(150), 1450, false}}, {name(10), name(20)});
+    const auto& list = f.pane.list_snapshot().rows;
+    EXPECT(list.size() == 299);
+    EXPECT(list.front().identity.key == name(0) && list.back().identity.key == name(299));
+    EXPECT(std::is_sorted(list.begin(), list.end(), [](const auto& a, const auto& b) { return a.bytes > b.bytes; }));
+    EXPECT(f.index(name(10)) < 0 && f.index(name(20)) < 0 && f.index(L"new-middle") >= 0);
+}
+// A displayed folder that is gone sends the Pane elsewhere instead of
+// showing its stale rows; shutdown drops queued results instead of spinning.
+void lost_location_navigates_and_shutdown_drains() {
+    Fixture f(std::make_unique<Delivery>()); f.realize({L"C:\\synthetic", {}, {}});
+    deliver(f, ml::Change::none, ml::Phase::complete, {{L"stale", 1, false}});
+    ml::Batch lost{f.pane.list_snapshot().request, {}, ml::Phase::complete, 0, ml::Change::location_lost};
+    lost.parent_location = core::ShellLocation{L"C:\\", {}, {}};
+    lost.parent_outcome = ml::ParentOutcome::value;
+    static_cast<Delivery&>(*f.source).batches.push_back(std::move(lost));
+    f.pane.process_content_results();
+    EXPECT(f.pane.list_snapshot().request.location.parsing_name == L"C:\\");
+    EXPECT(f.pane.list_snapshot().rows.empty());
+    auto& source = static_cast<Delivery&>(*f.source);
+    const int cancels = source.cancels;
+    f.host.shutting_down = true;
+    f.pane.process_content_results();
+    EXPECT(source.cancels == cancels + 1);
+}
+// The real worker: a displayed folder renamed in place is followed; deleted,
+// the Pane moves to the nearest existing parent.
+void real_folder_loss_follows_rename_or_moves_to_parent() {
+    auto temp = std::filesystem::temp_directory_path().wstring();
+    std::wstring longer(32768, L'\0');
+    const DWORD length = GetLongPathNameW(temp.c_str(), longer.data(), static_cast<DWORD>(longer.size()));
+    if (length && length < longer.size()) temp.assign(longer.data(), length);
+    const auto root = std::filesystem::path(temp) /
+        (L"PaneDock-loss-" + std::to_wstring(GetCurrentProcessId()));
+    std::filesystem::remove_all(root);
+    const auto shown = root / L"shown";
+    std::filesystem::create_directories(shown);
+    std::ofstream(shown / L"file") << "x";
+    {
+        Fixture f(ml::make_local_source()); EXPECT(f.source != nullptr);
+        f.realize({shown.wstring(), {}, {}});
+        await(f, [&] { return f.pane.list_snapshot().watch == ml::WatchState::watching; });
+        EXPECT(f.pane.list_snapshot().rows.size() == 1);
+        const auto renamed = root / L"shown-renamed";
+        std::filesystem::rename(shown, renamed);
+        await(f, [&] { return f.pane.list_snapshot().request.location.parsing_name == renamed.wstring() &&
+            f.pane.list_snapshot().watch == ml::WatchState::watching; });
+        EXPECT(f.pane.list_snapshot().rows.size() == 1);
+        std::filesystem::remove_all(renamed);
+        await(f, [&] { return f.pane.list_snapshot().request.location.parsing_name == root.wstring() &&
+            f.pane.list_snapshot().watch == ml::WatchState::watching; });
+        EXPECT(f.pane.list_snapshot().rows.empty());
+    }
+    EXPECT(ml::testing::wait_for_workers(10000));
+    std::filesystem::remove_all(root);
+}
 } // namespace
 int main() {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
@@ -318,5 +431,9 @@ int main() {
     large_recovery_has_log_linear_work_and_one_snapshot();
     stale_events_and_reentry_cannot_change_a_new_binding();
     real_local_changes_overflow_failure_retry_and_departure();
+    rename_edit_follows_its_row_through_unrelated_batches();
+    small_deltas_keep_the_list_sorted();
+    lost_location_navigates_and_shutdown_drains();
+    real_folder_loss_follows_rename_or_moves_to_parent();
     return test::summary("managed_list_changes");
 }

@@ -11,17 +11,24 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 #include "core/model.h"
 #include "core/navigation.h"
 #include "managed_list/cloud_attributes.h"
 
 namespace panedock::managed_list {
-// Four worker slots process-wide, INCLUDING abandoned reads. Each has one
-// replaceable pending request and two queued batches. A successor may acquire
-// a free slot; exhaustion fails immediately until an explicit retry succeeds.
-// Pane separately caps retained rows at 100,000 / 24 MiB.
+// Four live worker slots process-wide (one per Pane in practice). Each has one
+// replaceable pending request and two queued batches. Pane separately caps
+// retained rows at 100,000 / 24 MiB.
 inline constexpr std::size_t kMaxSubscriptions = 4;
+// Separate reserve for retired/abandoned workers still exiting or blocked in an
+// OS call, so a successor can take the freed live slot at once. Retired workers
+// have no pending request or queued batch. A full reserve leaves the retiree in
+// its live slot; with both full, a successor fails immediately (no wait/timer)
+// until an explicit retry succeeds. At most 8 enumeration threads in total.
+inline constexpr std::size_t kMaxRetiredWorkers = 4;
 inline constexpr std::size_t kBatchRows = 128;
 inline constexpr std::size_t kQueuedBatches = 2;
 inline constexpr std::size_t kMaxRows = 100000;
@@ -30,8 +37,8 @@ inline constexpr std::size_t kMaxRows = 100000;
 // implementation-specific malloc bookkeeping is not retained row/index data.
 inline constexpr std::size_t kMaxIndexBytes = 4 * 1024 * 1024;
 inline constexpr std::size_t kMaxRowBytes = 24 * 1024 * 1024;
-// Eight queued batches across four slots fit the 16 MiB result budget.
-// A worker additionally owns one bounded batch under construction.
+// Eight queued batches across four live slots fit the 16 MiB result budget.
+// A worker (live or retired) additionally owns one bounded batch under construction.
 inline constexpr std::size_t kMaxBatchOwnedBytes = 2 * 1024 * 1024;
 inline constexpr std::size_t kMaxName = 255;
 inline constexpr std::size_t kMaxPath = 32760;
@@ -122,6 +129,17 @@ struct HiddenFilePolicy {
     }
 };
 HiddenFilePolicy read_hidden_file_policy() noexcept;
+// Display text for a local filesystem leaf when the Shell hides its extension
+// (Explorer's "File name extensions" option plus per-type NeverShowExt /
+// AlwaysShowExt, decided by the worker per extension). Folders and names that
+// would become empty (".gitignore") keep the full leaf. Display only: the
+// row's identity.key stays the real leaf for rename, file operations, deltas.
+inline std::wstring display_leaf(std::wstring_view leaf, bool directory, bool hide_extension) {
+    if (directory || !hide_extension) return std::wstring(leaf);
+    const auto dot = leaf.rfind(L'.');
+    if (dot == std::wstring_view::npos || dot == 0) return std::wstring(leaf);
+    return std::wstring(leaf.substr(0, dot));
+}
 inline std::size_t owned_row_bytes(const Row& row) noexcept {
     auto bytes = owned_string_bytes(row.name) + owned_string_bytes(row.identity.key);
     if (row.child_location) bytes += owned_location_bytes(*row.child_location);
@@ -153,7 +171,11 @@ inline bool prepare_row(Row& row) {
             child.navigation_parent->known_folder_identity,
             child.navigation_parent->fallback_path}));
 }
-enum class Change { none, delta, rescan_begin, rescan, watching, watch_error };
+// location_lost: the displayed filesystem folder no longer exists (deleted,
+// moved, renamed, or its volume removed). parent_location then carries where
+// the Pane goes instead: the renamed folder when only one path component
+// changed, else the nearest existing ancestor, else This PC.
+enum class Change { none, delta, rescan_begin, rescan, watching, watch_error, location_lost };
 enum class WatchState { inactive, watching, recovering, failed };
 enum class Phase { idle, loading, complete, empty, error, limited };
 enum class ParentOutcome { unresolved, root, value, failed };
@@ -174,6 +196,12 @@ struct Batch final {
     std::optional<core::ShellLocation> parent_location{};
     ParentOutcome parent_outcome{ParentOutcome::unresolved};
     NotificationCapability notification{NotificationCapability::filesystem_watch};
+    // Change::watching on a local volume only: a zero-access handle to that
+    // volume ("\.\E:"), opened on the worker and owned by this value. The UI
+    // registers it for DBT_DEVTYP_HANDLE notifications so the volume can be
+    // ejected; it closes on release or when the batch is dropped. Never a
+    // directory handle (that would keep a deleted folder delete-pending).
+    std::shared_ptr<void> device_handle{};
 };
 inline std::size_t owned_batch_bytes(const Batch& batch) noexcept {
     std::size_t bytes = sizeof(Batch) + batch.rows.capacity() * sizeof(Row) +

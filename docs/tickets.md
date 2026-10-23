@@ -298,6 +298,7 @@
 | PD-259 | Details 列高比照檔案總管，不再過密 | 8 | `in_progress` | PD-255 | [PD-259](tickets/PD-259-managed-list-details-row-height.md) |
 | PD-260 | 增量列舉時避免重排整份清單 | 8 | `done` | PD-251, PD-253 | [PD-260](tickets/PD-260-managed-list-incremental-sort.md) |
 | PD-261 | Group 切換重用有界列表快取 | 8 | `done` | PD-233, PD-260 | [PD-261](tickets/PD-261-managed-list-group-cache.md) |
+| PD-262 | 自建列表雙擊檔案呼叫 Shell 預設開啟動作 | 8 | `done` | PD-243, PD-246 | [PD-262](tickets/PD-262-managed-list-open-file-verb.md) |
 | PD-246 | PD-234 切片：Pane 虛擬導覽、預設位置與 session 還原 | 8 | `done` | PD-225, PD-244, PD-245 | [PD-246](tickets/PD-246-managed-list-virtual-navigation.md) |
 
 
@@ -388,6 +389,8 @@ rename 輪替在兩個 rename 之間存在「primary 暫時不存在」的視窗
 | 候選 | 觸發條件 |
 |---|---|
 | 以獨立 process 隔離第三方 shell extension | `docs/design-spec.md` §14 保留的方向,目前明確不在範圍。觸發條件不變:**先有實際的 extension 崩潰紀錄**。PD-024 的診斷模式正是產生那份紀錄(「一般模式崩潰、`--diagnostic` 不崩潰」)的工具;累積到具體案例再依 §已否決的方向 的規則開票。 |
+| 變更通知連續溢位後永久停用自動更新(rescan strike-out) | 2026-10-22 refresh audit | 大量複製／解壓縮時溢位是正常的持續變更而非故障;第三次 rescan 即判 `watch_error`,清單停在複製中途。改為 quiet-period 合併成一次 rescan(`list_worker.cpp` `RescanSettle`),只有 rescan 本身失敗才結束 watch。要重開需先提出一個持續溢位卻非變更的真實目錄案例。 |
+| 不監看 UNC／對應網路磁碟機,且不提示 | 2026-10-22 refresh audit | Explorer 會監看網路資料夾;舊行為靜默不更新且狀態列不提示。現以 `ReadDirectoryChangesW` 監看,伺服器拒絕時回報 `watch_error`(狀態列「Automatic refresh unavailable」)。要重開需先有網路監看造成可量測成本或錯誤的實例。 |
 | 崩潰迴圈的自動安全模式(連續 N 次不乾淨關閉即自動以 `--diagnostic` 啟動) | PD-025(2026-08-24)刻意排除:沒有真實崩潰資料前 N 是憑空調的,且自動重啟需要 `CreateProcess`,會在單一 process 架構上開一個口子。若使用者實際遇到崩潰迴圈再開票。 |
 | 縮圖 pipeline 的快取與尺寸上限 | 待 PD-003 量出縮圖對記憶體的實際貢獻後再開,避免憑估計調參數。PD-003 2026-08-29 的自動化量測跑出差值 0 bytes,但兩個組態都重用同一次 run 內已導覽過的資料夾(縮圖早已快取),不是有效讀數;要開票前需先用全新啟動的 process 分別量測純文字與縮圖資料夾。 |
 | `activate_group` 橫跨 Shell 重入持有 `GroupState&` | 2026-09-06 稽核發現：`activate_group`（`main.cpp`）取得 `auto& group = active_group(state);` 後，該參考跨越 `navigate_realized_panes()` 與 `apply_layout()`——兩者都會重入訊息迴圈——才被 `active_pane_index(group)` 使用；`navigate_realized_panes` 的 `const GroupState&` 參數同樣在每次 `ShellCallScope` 之後繼續解參考。若重入期間 `state.application.groups` 被新增或刪除而重新配置，該參考即懸空。**稽核未能證明可達路徑**：Group CRUD 走 `WM_COMMAND`，而 `defer_shell_reentry_mouse_message` 在 `shell_call_depth != 0` 時會把滑鼠訊息延後，`activate_group` 自身也有 closing/shutdown 閘。因此這是**間接**防護，不是這個函式自己的不變量。觸發條件：出現一次 Group 切換期間的崩潰或狀態錯亂回報，或有人要放寬滑鼠訊息延後機制時；屆時的修法是改持 index 或在重入後重新查找，而不是再加一層外部閘。 |

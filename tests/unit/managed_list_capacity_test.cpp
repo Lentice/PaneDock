@@ -34,6 +34,7 @@ struct Fixture {
         realized = SUCCEEDED(result);
     }
 };
+constexpr std::size_t kWorkers = ml::kMaxSubscriptions + ml::kMaxRetiredWorkers;
 const core::ShellLocation blocked{L"\\\\pd226-controlled\\share\\blocked", L"known-folder-identity", L"Z:\\fallback"};
 void complete(app_shell::Pane& pane) {
     const auto deadline = GetTickCount64() + 10000;
@@ -70,9 +71,10 @@ void saturation_and_shutdown() {
         Fixture slow(ml::testing::make_blocked_source(gates[0]));
         slow.navigate(blocked);
         EXPECT(WaitForSingleObject(gates[0]->entered, 10000) == WAIT_OBJECT_0);
-        // Each obsolete read remains genuinely blocked, consuming its old slot.
-        // Successors use the same production acquisition/cancellation path.
-        for (std::size_t i = 1; i < 4; ++i) {
+        // Each obsolete read remains genuinely blocked, first filling the
+        // retired reserve, then live slots. Successors use the same production
+        // acquisition/cancellation path; saturation needs live+retired exhaustion.
+        for (std::size_t i = 1; i < kWorkers; ++i) {
             // A shared gate can acknowledge successive worker entries by reset.
             ResetEvent(gates[0]->entered);
             slow.pane.refresh_view();
@@ -87,7 +89,7 @@ void saturation_and_shutdown() {
             EXPECT(slow.pane.list_snapshot().request.location == blocked);
         }
         auto counts = ml::testing::counts();
-        EXPECT(counts.workers == 4 && counts.running == 4);
+        EXPECT(counts.workers == kWorkers && counts.running == kWorkers);
         EXPECT(counts.pending == 0 && counts.batches == 0);
         std::cout << "saturation workers=" << counts.workers << " running=" << counts.running
                   << " pending=" << counts.pending << " batches=" << counts.batches << " retries=1000\n";
@@ -107,12 +109,12 @@ void saturation_and_shutdown() {
         EXPECT(slow.pane.list_snapshot().request.location.parsing_name == L"C:\\");
     }
     EXPECT(ml::testing::wait_for_workers(10000));
-    // Destruction must finish with all four OS-read substitutes still blocked.
+    // Destruction must finish with all eight OS-read substitutes still blocked.
     auto gate = std::make_shared<ml::testing::ReadGate>();
     {
         Fixture slow(ml::testing::make_blocked_source(gate)); slow.navigate(blocked);
         EXPECT(WaitForSingleObject(gate->entered, 10000) == WAIT_OBJECT_0);
-        for (int i = 1; i < 4; ++i) {
+        for (std::size_t i = 1; i < kWorkers; ++i) {
             ResetEvent(gate->entered); slow.pane.refresh_view();
             EXPECT(WaitForSingleObject(gate->entered, 10000) == WAIT_OBJECT_0);
         }
@@ -122,10 +124,10 @@ void saturation_and_shutdown() {
         EXPECT(GetTickCount64() - before < 1000);
         EXPECT(slow.pane.content_event() == nullptr);
         EXPECT(slow.pane.list_snapshot().phase == ml::Phase::idle);
-        EXPECT(ml::testing::counts().running == 4);
+        EXPECT(ml::testing::counts().running == kWorkers);
         const auto retained = ml::testing::finish_read_observation(observation, 0);
-        EXPECT(retained.observed == 4 && retained.exited == 0);
-        // Three older reads were already cancelled before capture; only the
+        EXPECT(retained.observed == kWorkers && retained.exited == 0);
+        // Older reads were already cancelled before capture; only the
         // current source receives new requests during destroy().
         EXPECT(retained.cancel_requests >= 1 && retained.reads_returned == 0);
         observation.reset();
@@ -133,6 +135,34 @@ void saturation_and_shutdown() {
                   << " destroy_ms=" << GetTickCount64()-before << " ui_event=null\n";
     }
     SetEvent(gate->release); EXPECT(ml::testing::wait_for_workers(10000));
+}
+// Quad layout: three idle subscriptions and one blocked read hold every live
+// slot. Leaving the blocked read retires it into the reserve, so the successor
+// still acquires the freed live slot instead of failing on capacity.
+void retired_read_frees_live_slot() {
+    auto gate = std::make_shared<ml::testing::ReadGate>();
+    wchar_t directory[MAX_PATH]{}; GetCurrentDirectoryW(MAX_PATH, directory);
+    const core::ShellLocation local{directory, {}, {}};
+    {
+        std::array<Fixture, ml::kMaxSubscriptions - 1> others;
+        for (auto& other : others) {
+            other.navigate(local); complete(other.pane);
+            EXPECT(other.pane.list_snapshot().phase == ml::Phase::complete);
+        }
+        Fixture slow(ml::testing::make_blocked_source(gate));
+        slow.navigate(blocked);
+        EXPECT(WaitForSingleObject(gate->entered, 10000) == WAIT_OBJECT_0);
+        EXPECT(ml::testing::counts().workers == ml::kMaxSubscriptions);
+        slow.navigate(local); complete(slow.pane);
+        EXPECT(slow.pane.list_snapshot().phase == ml::Phase::complete);
+        EXPECT(slow.pane.list_snapshot().error == 0);
+        EXPECT(slow.pane.list_snapshot().request.location == local);
+        const auto counts = ml::testing::counts();
+        EXPECT(counts.workers == ml::kMaxSubscriptions + 1 && counts.running >= 1);
+        std::cout << "retired_reserve workers=" << counts.workers << " running=" << counts.running << '\n';
+    }
+    SetEvent(gate->release);
+    EXPECT(ml::testing::wait_for_workers(10000));
 }
 void restored_identity_and_unc_parent() {
     auto gate = std::make_shared<ml::testing::ReadGate>();
@@ -152,7 +182,9 @@ void restored_identity_and_unc_parent() {
         EXPECT(f.state.tabs[0].history_index == original.history_index);
         EXPECT(SUCCEEDED(f.pane.navigate_up_one_level()));
         EXPECT(f.pane.list_snapshot().request.location.parsing_name == L"\\\\pd226-controlled\\share");
-        EXPECT(f.pane.navigate_up_one_level() == S_FALSE);
+        // Up from a share root now lists its server through the Shell
+        // namespace (managed_list_open_test), which would resolve this fake
+        // server name over the network on the real worker; not followed here.
     }
     EXPECT(ml::testing::wait_for_workers(10000));
 }
@@ -235,7 +267,7 @@ int main() {
         const int result = network_probe(argv[1]); LocalFree(argv); return result;
     }
     if (argv) LocalFree(argv);
-    saturation_and_shutdown(); restored_identity_and_unc_parent(); backpressure_and_late_failure();
+    saturation_and_shutdown(); retired_read_frees_live_slot(); restored_identity_and_unc_parent(); backpressure_and_late_failure();
     EXPECT(ml::testing::counts().workers == 0);
     std::cout << "cleanup workers=" << ml::testing::counts().workers << '\n';
     return test::summary("managed_list_capacity");

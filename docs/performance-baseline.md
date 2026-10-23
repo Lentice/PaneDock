@@ -39,9 +39,11 @@ The test corpus, environments, required sample counts, future command and PASS/F
 
 ## PD-224 implementation bounds (not performance measurements)
 
-The local-folder slice enforces at most four process-wide subscriptions/workers,
+The local-folder slice enforces at most four process-wide live subscriptions/workers,
 one replaceable pending request per subscription and two queued batches of at
-most 128 rows each. A worker may additionally hold one batch under construction;
+most 128 rows each. A separate reserve of four retired workers (see below) has no
+pending request or queued batch, so at most eight enumeration threads exist.
+A worker, live or retired, may additionally hold one batch under construction;
 UI consumption drains at most two batches before returning to input dispatch.
 Requests cap each location string at 32,760 characters, each Group/tab id at 256
 bytes, and item names at 255 characters. This enumeration slice has no property
@@ -50,7 +52,7 @@ These value bounds keep queued results below the 16 MiB target; actual process
 memory and allocator overhead still require the release measurements above.
 
 Each Pane retains at most 100,000 rows and 24 MiB of row-vector capacity plus
-owned name-string capacity (including terminators). Four slots therefore have a
+owned name-string capacity (including terminators). Four live slots therefore have a
 96 MiB accounted row ceiling, leaving headroom within the 128 MiB snapshot target
 for identities and allocator overhead. Rebinding, derealizing and destruction
 release rows; this slice does not retain inactive-tab lists. Exceeding either
@@ -60,16 +62,23 @@ These bounds are implementation choices, not a measured PASS for the budgets.
 Workers own only request/result values, their waitable event and their directory
 read handle; they have no HWND, Pane/AppState or COM pointer. Cancellation clears
 the pending request/results and invalidates the worker serial. Destruction signals
-stop without joining an OS call. A stuck abandoned worker retains its bounded slot
+stop without joining an OS call. A stuck abandoned worker retains a bounded entry
 and owned resources until it returns or the process exits; it cannot deliver to a
 destroyed UI or create unlimited replacements. PD-226 changes successor admission:
 a new destination reuses an idle worker or abandons the obsolete read and acquires a
-free slot under the same four-slot cap. All occupied means immediate recoverable
-`Worker capacity exhausted` error, not loading indefinitely behind an old call.
+free live slot. Because each Pane keeps its subscription for its lifetime, four
+realized Panes hold all four live slots; an abandoned (retiring or destroyed) worker
+that is still running or watching therefore moves into a separate four-entry
+retired reserve, freeing its live slot for the successor at once. If the reserve is
+full, the retiree stays in its live slot (the earlier behavior). Live and reserve
+both occupied means immediate recoverable `Worker capacity exhausted` error, not
+loading indefinitely behind an old call; at most eight enumeration threads exist.
 Refresh is an explicit bounded retry; no automatic retry or polling timer is added.
 Cancellation attempts `CancelSynchronousIo` on an owned thread handle without waiting;
-unsupported/racing cancellation retains the slot until the old call exits. This does
-not promise that Windows/provider calls can always be interrupted.
+unsupported/racing cancellation retains the entry until the old call exits. This does
+not promise that Windows/provider calls can always be interrupted. The live/retired
+split is an implementation bound; its effect on process memory and thread count
+under a real slow provider is unmeasured.
 
 ## PD-243 identity accounting (implementation bounds, not measurements)
 
@@ -158,6 +167,11 @@ For the managed-list implementation, use the explicit acceptance budgets above a
 
 ## PD-226 partial evidence (2026-10-16; not an acceptance PASS)
 
+These observations predate the live/retired worker split: they were recorded
+with four slots total, abandoned reads included. The controlled capacity check now
+saturates at eight blocked workers (four live plus four retired); no slow-provider
+evidence has been recorded for the split.
+
 LLVM-MinGW Release, `build/pd226`; no user app launch, session write, network setting
 change or mapping mutation. Public Pane/PaneHost checks use real source workers and
 bounded queues. The controlled read gate is not a network/provider measurement.
@@ -185,7 +199,8 @@ of those gaps. Full managed-list latency/memory/idle release targets remain unme
 still complete normally, fail or return ERROR_OPERATION_ABORTED. See the
 [Microsoft API contract](https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-cancelsynchronousio).
 Bounded retention until an old call returns (or process exit) is the fallback, with
-four slots total and no force termination or process isolation.
+four live slots plus a four-entry retired reserve (eight enumeration workers total)
+and no force termination or process isolation.
 
 ### PD-226 cancellation follow-up (2026-10-19; still INCOMPLETE)
 
@@ -277,9 +292,9 @@ The user authorized read-only probes of the existing
 
 ## PD-229 icon bounds (implementation limits, not desktop measurements)
 
-Icon enrichment has four process-wide slots **in addition to** the existing four
-unchanged enumeration slots: at most eight managed-list workers, including
-abandoned calls. The separate capacity prevents slow EXE/LNK/overlay providers
+Icon enrichment has four process-wide slots **in addition to** the enumeration
+workers (four live plus four retired): at most twelve managed-list workers,
+including abandoned calls. The separate capacity prevents slow EXE/LNK/overlay providers
 from blocking first operable enumeration batches. Each icon slot owns its STA,
 one provider call, at most 128 replaceable pending requests and two queued
 results (plus one result under construction). Queued inputs and identity keys use

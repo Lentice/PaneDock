@@ -143,20 +143,22 @@ void cancellation_and_capacity() {
     auto source = ml::testing::make_blocked_source(gate);
     EXPECT(source->submit(request()));
     EXPECT(WaitForSingleObject(gate->entered, 10000) == WAIT_OBJECT_0);
-    // Each navigation abandons a delayed provider in the existing four slots.
-    for (std::size_t n = 1; n < ml::kMaxSubscriptions; ++n) {
+    // Each navigation abandons a delayed provider into the retired reserve,
+    // then the live slots; saturation needs both exhausted.
+    constexpr auto workers = ml::kMaxSubscriptions + ml::kMaxRetiredWorkers;
+    for (std::size_t n = 1; n < workers; ++n) {
         ResetEvent(gate->entered);
         EXPECT(source->submit(request(n + 1)));
         EXPECT(WaitForSingleObject(gate->entered, 10000) == WAIT_OBJECT_0);
     }
     for (int n = 0; n < 1000; ++n) EXPECT(!source->submit(request(10 + n)));
     auto counts = ml::testing::counts();
-    EXPECT(counts.workers == 4 && counts.running == 4);
+    EXPECT(counts.workers == workers && counts.running == workers);
     EXPECT(counts.pending == 0 && counts.batches == 0);
     EXPECT(!ml::make_local_source()); // same pool, no separate namespace capacity
     const auto start = GetTickCount64(); source.reset();
     EXPECT(GetTickCount64() - start < 1000);
-    EXPECT(ml::testing::counts().workers == 4);
+    EXPECT(ml::testing::counts().workers == workers);
     SetEvent(gate->release); EXPECT(ml::testing::wait_for_workers(10000));
     EXPECT(ml::testing::counts().workers == 0);
     // Cancel while publishing is backpressured; no late batch survives cancel.

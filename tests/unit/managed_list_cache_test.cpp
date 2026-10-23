@@ -171,7 +171,11 @@ void binding_and_location_invalidation() {
     EXPECT(app_shell::Pane::list_cache_stats().entries == 1);
     EXPECT(SUCCEEDED(f.pane.navigate_to(f.pane.active_tab()->location)));
     EXPECT(f.pane.list_snapshot().rows.empty());
-    f.pane.unbind();
+    f.pane.unbind(); // hiding keeps snapshots; an incomplete list is not admitted
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 1);
+    app_shell::Pane::discard_group_list_cache("other-group");
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 1);
+    app_shell::Pane::discard_group_list_cache("group-a");
     EXPECT(app_shell::Pane::list_cache_stats().entries == 0);
 }
 void group_round_trip_refresh_and_teardown() {
@@ -226,21 +230,68 @@ void group_round_trip_refresh_and_teardown() {
     EXPECT(!f.pane.list_snapshot().updating);
     EXPECT(f.pane.list_snapshot().rows.size() == 2);
     EXPECT(f.pane.list_interaction_snapshot().selected[0].name == L"item-140");
-    // Group deletion unbinds every Pane before erasing the model. Numeric Group
-    // IDs can then be reused; no snapshot may survive that unbind.
+    // Unbinding hides the pane: it keeps B's snapshot and admits A's completed
+    // list. Deleting B discards B's snapshots, because numeric Group IDs can be
+    // reused and a reused ID must never hit the deleted Group's list.
     f.pane.unbind();
-    EXPECT(app_shell::Pane::list_cache_stats().bytes == 0);
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 2);
     EXPECT(!f.source->interested);
+    app_shell::Pane::discard_group_list_cache("group-b");
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 1);
     f.host.group_id = "group-b"; f.pane.bind(&other);
     EXPECT(SUCCEEDED(f.pane.navigate_to(other.tabs[0].location)));
     EXPECT(f.pane.list_snapshot().rows.empty());
     f.deliver({}, ml::Phase::empty);
     f.host.group_id = "group-a"; f.pane.bind(&f.state);
-    EXPECT(app_shell::Pane::list_cache_stats().entries == 1); // completed empty is admitted
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 2); // completed empty is admitted
     f.host.shutting_down = true;
     f.pane.destroy();
     EXPECT(app_shell::Pane::list_cache_stats().entries == 0);
     EXPECT(app_shell::Pane::list_cache_stats().bytes == 0);
+}
+void hidden_pane_rebind_hits_cache_and_teardown_clears_owner() {
+    Fixture f;
+    f.deliver({{L"kept", 1, false}});
+    // A layout or Group with fewer panes hides this one; that is not teardown.
+    f.pane.unbind();
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 1);
+    EXPECT(!f.source->interested);
+    const auto hits = app_shell::Pane::list_cache_stats().hits;
+    f.pane.bind(&f.state);
+    EXPECT(SUCCEEDED(f.pane.navigate_to(f.state.tabs[0].location)));
+    EXPECT(app_shell::Pane::list_cache_stats().hits == hits + 1);
+    EXPECT(f.pane.list_snapshot().updating);
+    EXPECT(f.pane.list_snapshot().rows.size() == 1 && f.pane.list_snapshot().rows[0].name == L"kept");
+    wchar_t status[256]{}; GetWindowTextW(f.pane.status_bar(), status, 256);
+    EXPECT(std::wstring(status).find(L"Updating") != std::wstring::npos);
+    f.deliver({{L"kept", 1, false}});
+    f.pane.switch_active_tab("1"); f.deliver({}, ml::Phase::empty);
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 1);
+    f.host.shutting_down = true;
+    f.pane.destroy();
+    EXPECT(app_shell::Pane::list_cache_stats().entries == 0);
+    EXPECT(app_shell::Pane::list_cache_stats().bytes == 0);
+}
+void cache_hit_adopts_worker_type_cells() {
+    Fixture f;
+    f.deliver({{L"a.txt", 1, false}});
+    f.pane.switch_active_tab("1"); f.deliver({}, ml::Phase::empty);
+    f.pane.switch_active_tab("0");
+    EXPECT(f.pane.list_snapshot().updating);
+    EXPECT(f.pane.list_snapshot().rows[0].properties[0].state == ml::PropertyState::unresolved);
+    // The worker fills Type and Duration's missing state while enumerating.
+    ml::Row fresh{L"a.txt", 1, false};
+    fresh.properties[0].state = ml::PropertyState::value;
+    fresh.properties[0].text = L"Text Document";
+    fresh.properties[1].state = ml::PropertyState::missing;
+    std::vector<ml::Row> rows; rows.push_back(std::move(fresh));
+    f.deliver(std::move(rows));
+    const auto& row = f.pane.list_snapshot().rows;
+    EXPECT(!f.pane.list_snapshot().updating && row.size() == 1);
+    EXPECT(row[0].properties[0].state == ml::PropertyState::value);
+    EXPECT(row[0].properties[0].text == L"Text Document");
+    EXPECT(row[0].properties[1].state == ml::PropertyState::missing);
+    EXPECT(row[0].properties[2].state == ml::PropertyState::unresolved);
 }
 void group_snapshots_share_global_lru() {
     Fixture f;
@@ -509,6 +560,8 @@ int main() {
     global_budget_and_lru(); binding_and_location_invalidation();
     group_round_trip_refresh_and_teardown(); group_partial_and_full_location_identity();
     group_snapshots_share_global_lru();
+    hidden_pane_rebind_hits_cache_and_teardown_clears_owner();
+    cache_hit_adopts_worker_type_cells();
     unwatched_cache_refresh_does_not_claim_subscription();
     viewport_and_refresh_failure();
     retained_capacity_includes_property_metadata();
