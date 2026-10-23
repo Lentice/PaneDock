@@ -1140,8 +1140,7 @@ void refresh_sidebar(AppState& state) {
 }
 
 void layout_sidebar(HWND window, AppState& state,
-                    WindowPositionBatch* batch = nullptr,
-                    RECT* list_rect_out = nullptr) noexcept {
+                    WindowPositionBatch* batch = nullptr) noexcept {
     const RECT client = client_rect(window);
     const int width = current_sidebar_width(window, state.application.sidebar_width);
     const int margin = scaled_value(window, kSpaceSnug);
@@ -1162,10 +1161,9 @@ void layout_sidebar(HWND window, AppState& state,
     RECT list_rect{margin, list_top, std::max(margin, width - margin),
                    std::max(list_top, static_cast<int>(client.bottom) - margin -
                                              controls_height - gap)};
-    if (list_rect_out != nullptr) *list_rect_out = list_rect;
-    state.sidebar.set_rect(
-        list_rect, GetDpiForWindow(window),
-        batch != nullptr ? batch->handle() : nullptr);
+    position_window(batch, state.sidebar.window(), list_rect,
+                    SWP_NOZORDER | SWP_NOACTIVATE);
+    state.sidebar.set_dpi(GetDpiForWindow(window));
     int y = list_rect.bottom + gap;
     for (HWND button : state.sidebar_buttons) {
         position_window(batch, button,
@@ -1582,8 +1580,7 @@ HRESULT apply_layout(HWND window, AppState& state,
         pane_positions;
     std::array<std::optional<WindowPositionBatch>, kExplorerCount>
         explorer_positions;
-    RECT sidebar_list_rect{};
-    layout_sidebar(window, state, &main_positions, &sidebar_list_rect);
+    layout_sidebar(window, state, &main_positions);
     layout_header(window, state, &main_positions, recompute_content);
     if (!has_active_group(state)) {
         for (std::size_t index = 0; index < state.panes.size(); ++index) {
@@ -1599,8 +1596,7 @@ HRESULT apply_layout(HWND window, AppState& state,
         ShowWindow(state.empty_message, SW_SHOW);
         for (auto& chrome : state.panes)
             chrome.laid_out_pane_rect().reset();
-        if (!main_positions.commit())
-            state.sidebar.set_rect(sidebar_list_rect, GetDpiForWindow(window));
+        (void)main_positions.commit();
         InvalidateRect(window, nullptr, FALSE);
         if (recompute_content) write_live_list_count(state.diagnostic_mode, state.panes);
         return S_OK;
@@ -1706,9 +1702,6 @@ HRESULT apply_layout(HWND window, AppState& state,
         if (state.is_shutting_down()) return E_ABORT;
     }
     const bool committed = main_positions.commit();
-    if (!committed) {
-        state.sidebar.set_rect(sidebar_list_rect, GetDpiForWindow(window));
-    }
     for (auto& pane_position : pane_positions) {
         if (pane_position.has_value()) (void)pane_position->commit();
     }

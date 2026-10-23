@@ -24,7 +24,6 @@ public:
     void position(HWND window, HWND insert_after, const RECT& rect,
                   UINT flags) noexcept;
     bool active() const noexcept { return handle_ != nullptr; }
-    HDWP* handle() noexcept { return handle_ == nullptr ? nullptr : &handle_; }
     bool commit() noexcept;
 
 private:

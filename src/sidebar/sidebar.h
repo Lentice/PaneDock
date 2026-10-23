@@ -51,7 +51,9 @@ class Sidebar final {
 public:
     bool create(HWND parent, int control_id, ::IDropTarget* drop_target) noexcept;
     void revoke_drag_drop() noexcept;
-    void set_rect(const RECT& rect, UINT dpi, HDWP* deferred = nullptr) noexcept;
+    // The list's row height and drawing follow the window's DPI. Its position
+    // is the caller's, batched with the other main-window children.
+    void set_dpi(UINT dpi) noexcept;
     void set_groups(const std::vector<GroupSummary>& groups);
     std::optional<std::size_t> selected_index() const noexcept;
     void set_selected_index(std::size_t index) noexcept;

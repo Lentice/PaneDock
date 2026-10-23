@@ -83,24 +83,10 @@ void Sidebar::revoke_drag_drop() noexcept {
     drag_drop_registered_ = false;
 }
 
-void Sidebar::set_rect(const RECT& rect, UINT dpi, HDWP* deferred) noexcept {
+void Sidebar::set_dpi(UINT dpi) noexcept {
     if (list_box_ == nullptr) return;
     const bool dpi_changed = dpi_ != dpi;
     dpi_ = dpi;
-    const UINT flags = SWP_NOZORDER | SWP_NOACTIVATE;
-    if (deferred != nullptr && *deferred != nullptr) {
-        const HDWP next = DeferWindowPos(
-            *deferred, list_box_, nullptr, rect.left, rect.top,
-            rect.right - rect.left, rect.bottom - rect.top, flags);
-        if (next != nullptr) *deferred = next;
-        else {
-            *deferred = nullptr;
-            deferred = nullptr;
-        }
-    }
-    if (deferred == nullptr)
-        SetWindowPos(list_box_, nullptr, rect.left, rect.top,
-                     rect.right - rect.left, rect.bottom - rect.top, flags);
     if (dpi_changed) {
         const int item_height =
             std::max(1, MulDiv(kGroupRowHeight, static_cast<int>(dpi), 96));
