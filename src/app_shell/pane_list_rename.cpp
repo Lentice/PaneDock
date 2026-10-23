@@ -303,6 +303,9 @@ void Pane::commit_list_rename(std::wstring name) noexcept try {
         SetWindowTextW(status_bar_, L"Rename failed or canceled. Press F2 to retry; Refresh to reconcile.");
         return;
     }
+    // Overflow recovery owns the row index until its terminal batch; the
+    // still-armed watch reports this rename once the folder is reconciled.
+    if (list_.watch == managed_list::WatchState::recovering) return;
     replacement.name = std::move(result.display_name);
     replacement.identity = old_identity.shell_item
         ? managed_list::ItemIdentity{result.parsing_name, true}

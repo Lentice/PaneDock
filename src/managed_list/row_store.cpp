@@ -75,6 +75,9 @@ RowStore::ChangeResult RowStore::apply(std::vector<Row>& rows, Batch& batch,
     };
     if (!batch_within_limits(batch)) return abort(ERROR_INVALID_DATA);
     const bool rescan = batch.change == Change::rescan;
+    // Recovery's index keys and seen marks stay valid only while nothing but
+    // rescan batches touch the rows until its terminal batch.
+    if (recovering && !rescan) return abort(ERROR_INVALID_STATE);
     auto& touched = result.touched;
     for (const auto& leaf : batch.removed) touched.push_back({leaf, false});
     for (const auto& [old_leaf, new_leaf] : batch.renamed) {

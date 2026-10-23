@@ -119,6 +119,20 @@ void bad_batches_abort_untouched() {
     EXPECT(result.aborted && result.watch_failed == std::optional<DWORD>{ERROR_INVALID_DATA});
 }
 
+// A local delta during recovery (a rename committed mid-rescan) fails the
+// watch instead of discarding the seen marks the next rescan batch writes.
+void delta_during_recovery_fails_the_watch() {
+    ml::RowStore store;
+    std::vector<ml::Row> rows{row(L"a"), row(L"b")};
+    store.recount(rows);
+    EXPECT(store.begin_recovery(rows) == 0);
+    auto local = change(ml::Change::delta, {row(L"c")});
+    const auto result = store.apply(rows, local, true);
+    EXPECT(result.aborted && result.watch_failed == std::optional<DWORD>{ERROR_INVALID_STATE});
+    EXPECT(rows.size() == 2);
+    EXPECT(store.index_bytes() == 0);
+}
+
 // A lowered index ceiling fails recovery cleanly instead of growing past it.
 void index_ceiling_fails_recovery() {
     ml::RowStore store;
@@ -136,6 +150,7 @@ int main() {
     complete_rescan_reconciles_unseen_rows();
     incomplete_rescan_keeps_rows_and_fails_the_watch();
     bad_batches_abort_untouched();
+    delta_during_recovery_fails_the_watch();
     index_ceiling_fails_recovery();
     return panedock::test::summary("managed_list_row_store");
 }
