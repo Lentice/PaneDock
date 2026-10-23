@@ -2,14 +2,22 @@
 
 ## Automated checks
 
-Keyboard routing (2026-09-08): the message loop's fall-through `if` chain is
-now a pure `core::resolve_key`, and `panedock_core_key_routing` asserts the
-precedence it encodes — plain Tab reaching pane navigation before the Shell
-accelerator, F6 sitting after it, Ctrl+V acting first and leaving a declined
-key to the Shell, and address-bar focus hiding every key from the Shell. This
+Keyboard routing (2026-09-08, list keys 2026-10-23): the message loop's
+fall-through `if` chain is a pure `core::resolve_key`, and
+`panedock_core_key_routing` asserts the precedence it encodes — the managed
+list's own keys (F2, Enter, Ctrl+A, Ctrl+Shift+N, Ctrl+C/X/V, Delete,
+Shift+Delete) only while the list has the key, plain Tab reaching pane
+navigation, and the address bar keeping its editing keys. The Shell
+accelerator precedence of the removed `IExplorerBrowser` host is gone. This
 replaces `panedock_tab_pane_priority`, which was a source-order scan and is
 deleted per the corollary below. `main.cpp` keeps only a `static_assert` per
 virtual-key code, so `core`'s restated `VK_*` values cannot drift.
+
+Window-free seams (2026-10-23): `panedock_managed_list_row_store` drives
+`managed_list::RowStore` — the row byte budget, delta and rescan merge and the
+bounded recovery index — without a Pane or HWND; `panedock_core_bounded_lru`
+covers the byte-bounded LRU behind the PD-261 list snapshot cache. The Pane
+suites still cover the same behaviour end to end.
 
 Desktop verification still remains, because none of this proves native focus
 behavior: in Details view, Tab moves directly to the next visible pane and
