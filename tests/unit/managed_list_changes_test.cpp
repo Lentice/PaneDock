@@ -410,7 +410,16 @@ void real_folder_loss_follows_rename_or_moves_to_parent() {
         await(f, [&] { return f.pane.list_snapshot().watch == ml::WatchState::watching; });
         EXPECT(f.pane.list_snapshot().rows.size() == 1);
         const auto renamed = root / L"shown-renamed";
-        std::filesystem::rename(shown, renamed);
+        // A scanner (Defender, the indexer) can hold the fresh file for a few
+        // milliseconds; retry briefly rather than fail on the test machine.
+        std::error_code rename_error;
+        for (int attempt = 0; attempt < 50; ++attempt) {
+            rename_error.clear();
+            std::filesystem::rename(shown, renamed, rename_error);
+            if (!rename_error) break;
+            Sleep(20);
+        }
+        EXPECT(!rename_error);
         await(f, [&] { return f.pane.list_snapshot().request.location.parsing_name == renamed.wstring() &&
             f.pane.list_snapshot().watch == ml::WatchState::watching; });
         EXPECT(f.pane.list_snapshot().rows.size() == 1);
