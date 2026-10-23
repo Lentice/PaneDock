@@ -204,7 +204,7 @@ void file_row_activation_is_not_ignored() {
     enter.hwnd = f.list;
     enter.message = WM_KEYDOWN;
     enter.wParam = VK_RETURN;
-    EXPECT(f.pane.translate_content_accelerator(&enter) == S_OK);
+    EXPECT(test::press_list_key(f.pane, enter));
     EXPECT(f.activation->requests.size() == 2);
     if (f.activation->requests.size() == 2) {
         EXPECT(f.activation->requests[1].folder == L"C:\\A");
@@ -237,7 +237,7 @@ void file_row_activation_is_not_ignored() {
         enter_folder_key.hwnd = enter_fixture.list;
         enter_folder_key.message = WM_KEYDOWN;
         enter_folder_key.wParam = VK_RETURN;
-        EXPECT(enter_fixture.pane.translate_content_accelerator(&enter_folder_key) == S_OK);
+        EXPECT(test::press_list_key(enter_fixture.pane, enter_folder_key));
         EXPECT(enter_fixture.pane.list_snapshot().request.location.parsing_name ==
                L"C:\\A\\child");
     }
@@ -319,26 +319,30 @@ void keyboard_routing_stays_in_content() {
     Fixture f;
     MSG message{};
     message.hwnd = f.list; message.message = WM_KEYDOWN;
-    for (const auto& [key, command] : std::array<std::pair<UINT, Command>, 3>{{
-            {'C', Command::copy}, {'X', Command::cut}, {'V', Command::paste}}}) {
+    using core::KeyAction;
+    const auto none = KeyAction::none;
+    for (const auto& [key, action] : std::array<std::pair<UINT, KeyAction>, 3>{{
+            {'C', KeyAction::copy}, {'X', KeyAction::cut}, {'V', KeyAction::paste}}}) {
         message.wParam = key;
-        EXPECT(f.pane.file_command_for_key(message, true, false, false) == command);
-        EXPECT(!f.pane.file_command_for_key(message, false, false, false));
-        EXPECT(!f.pane.file_command_for_key(message, true, true, false));
-        EXPECT(!f.pane.file_command_for_key(message, true, false, true));
+        EXPECT(test::route_list_key(f.pane, message, true) == action);
+        EXPECT(test::route_list_key(f.pane, message) == none);
+        EXPECT(test::route_list_key(f.pane, message, true, true, false) == none);
+        EXPECT(test::route_list_key(f.pane, message, true, false, true) == none);
+        // A file command is the host's to run; the pane never consumes it.
+        EXPECT(!f.pane.perform_list_key(action));
         message.hwnd = f.pane.address_bar();
-        EXPECT(!f.pane.file_command_for_key(message, true, false, false));
+        EXPECT(test::route_list_key(f.pane, message, true) == none);
         message.hwnd = f.list;
     }
     message.wParam = VK_DELETE;
-    EXPECT(f.pane.file_command_for_key(message, false, false, false) == Command::delete_items);
-    EXPECT(!f.pane.file_command_for_key(message, true, false, false));
+    EXPECT(test::route_list_key(f.pane, message) == KeyAction::delete_items);
+    EXPECT(test::route_list_key(f.pane, message, true) == none);
     // Explorer's Shift+Delete deletes permanently (the Shell still confirms).
-    EXPECT(f.pane.file_command_for_key(message, false, false, true) ==
-           Command::delete_permanently);
-    EXPECT(!f.pane.file_command_for_key(message, true, false, true));
+    EXPECT(test::route_list_key(f.pane, message, false, false, true) ==
+           KeyAction::delete_permanently);
+    EXPECT(test::route_list_key(f.pane, message, true, false, true) == none);
     message.message = WM_KEYUP;
-    EXPECT(!f.pane.file_command_for_key(message, false, false, false));
+    EXPECT(test::route_list_key(f.pane, message) == none);
 }
 } // namespace
 

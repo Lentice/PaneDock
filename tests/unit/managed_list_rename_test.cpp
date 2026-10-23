@@ -130,7 +130,7 @@ void enter_and_notification_converge() {
     Fixture f; setup(f);
     ListView_SetItemState(f.list, f.row(L"other.txt"), LVIS_FOCUSED, LVIS_FOCUSED);
     MSG key{}; key.hwnd = f.list; key.message = WM_KEYDOWN; key.wParam = VK_F2;
-    EXPECT(f.pane.handle_list_rename_key(key, false, false, false));
+    EXPECT(test::press_list_key(f.pane, key));
     EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) != nullptr);
     end_edit(f, L"requested.txt");
     EXPECT(f.host.calls == 1);
@@ -239,16 +239,16 @@ void focus_routing_and_virtual_identity() {
     Fixture f; setup(f);
     MSG message{}; message.hwnd = f.pane.address_bar();
     message.message = WM_KEYDOWN; message.wParam = VK_F2;
-    EXPECT(!f.pane.handle_list_rename_key(message, false, false, false));
+    EXPECT(!test::press_list_key(f.pane, message));
     message.hwnd = f.parent; // sidebar/other controls never rename a file
-    EXPECT(!f.pane.handle_list_rename_key(message, false, false, false));
+    EXPECT(!test::press_list_key(f.pane, message));
     message.hwnd = f.list;
-    EXPECT(!f.pane.handle_list_rename_key(message, true, false, false));
-    EXPECT(!f.pane.handle_list_rename_key(message, false, true, false));
-    EXPECT(!f.pane.handle_list_rename_key(message, false, false, true));
+    EXPECT(!test::press_list_key(f.pane, message, true, false, false));
+    EXPECT(!test::press_list_key(f.pane, message, false, true, false));
+    EXPECT(!test::press_list_key(f.pane, message, false, false, true));
     {
         app_shell::ShellCallScope nested(f.host.guard);
-        EXPECT(f.pane.handle_list_rename_key(message, false, false, false));
+        EXPECT(test::press_list_key(f.pane, message));
         EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) == nullptr);
     }
     core::KeyInput input{}; input.message = core::KeyMessage::key_down;
@@ -257,7 +257,7 @@ void focus_routing_and_virtual_identity() {
     EXPECT(f.pane.begin_list_rename());
     message.hwnd = FindWindowExW(f.list, nullptr, L"EDIT", nullptr);
     message.wParam = 'V';
-    EXPECT(!f.pane.file_command_for_key(message, true, false, false));
+    EXPECT(test::route_list_key(f.pane, message, true) != core::KeyAction::paste);
     input.sidebar_focused = false; input.address_bar_focused = true;
     input.control = true; input.virtual_key = 'V';
     EXPECT(core::resolve_key(input).action == core::KeyAction::none);
@@ -333,18 +333,18 @@ void hidden_extension_edits_display_name() {
 void new_folder_and_list_keys() {
     Fixture f; setup(f);
     MSG key{}; key.hwnd = f.list; key.message = WM_KEYDOWN; key.wParam = 'A';
-    EXPECT(f.pane.handle_list_key(key, true, false, false)); // Ctrl+A
+    EXPECT(test::press_list_key(f.pane, key, true)); // Ctrl+A
     EXPECT(f.pane.list_interaction_snapshot().selected.size() == 2);
-    EXPECT(!f.pane.handle_list_key(key, false, false, false));
-    EXPECT(!f.pane.handle_list_key(key, true, true, false));
+    EXPECT(!test::press_list_key(f.pane, key));
+    EXPECT(!test::press_list_key(f.pane, key, true, true, false));
     key.hwnd = f.pane.address_bar();
-    EXPECT(!f.pane.handle_list_key(key, true, false, false)); // address bar keeps Ctrl+A
+    EXPECT(!test::press_list_key(f.pane, key, true)); // address bar keeps Ctrl+A
     key.hwnd = f.list;
     // Ctrl+Shift+N: no host support reports, never throws or edits.
     key.wParam = 'N';
-    EXPECT(f.pane.handle_list_key(key, true, false, true));
+    EXPECT(test::press_list_key(f.pane, key, true, false, true));
     EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) == nullptr);
-    EXPECT(!f.pane.handle_list_key(key, true, false, false)); // Ctrl+N is not ours
+    EXPECT(!test::press_list_key(f.pane, key, true)); // Ctrl+N is not ours
 
     EXPECT(f.host.folder_calls == 1);
     // The new row is selected and edited once its batch arrives.

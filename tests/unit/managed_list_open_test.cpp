@@ -128,7 +128,7 @@ struct Fixture final {
     void enter() {
         MSG key{};
         key.hwnd = list; key.message = WM_KEYDOWN; key.wParam = VK_RETURN;
-        EXPECT(pane.translate_content_accelerator(&key) == S_OK);
+        EXPECT(test::press_list_key(pane, key));
     }
     void type_address(const wchar_t* text) {
         SetWindowTextW(pane.address_bar(), text);

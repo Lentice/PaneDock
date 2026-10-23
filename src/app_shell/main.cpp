@@ -76,6 +76,8 @@ using panedock::app_shell::scaled_value;
 // than the routing silently going to the wrong key.
 static_assert(panedock::core::kVirtualKeyBack == VK_BACK);
 static_assert(panedock::core::kVirtualKeyTab == VK_TAB);
+static_assert(panedock::core::kVirtualKeyReturn == VK_RETURN);
+static_assert(panedock::core::kVirtualKeyDelete == VK_DELETE);
 static_assert(panedock::core::kVirtualKeyLeft == VK_LEFT);
 static_assert(panedock::core::kVirtualKeyRight == VK_RIGHT);
 static_assert(panedock::core::kVirtualKeyF2 == VK_F2);
@@ -2946,6 +2948,19 @@ const wchar_t* file_command_failure_text(panedock::file_operations::Command comm
     return L"Copy to the clipboard failed.";
 }
 
+panedock::file_operations::Command file_command_for(
+    panedock::core::KeyAction action) noexcept {
+    using panedock::file_operations::Command;
+    switch (action) {
+    case panedock::core::KeyAction::cut: return Command::cut;
+    case panedock::core::KeyAction::delete_items: return Command::delete_items;
+    case panedock::core::KeyAction::delete_permanently:
+        return Command::delete_permanently;
+    case panedock::core::KeyAction::paste: return Command::paste;
+    default: return Command::copy;
+    }
+}
+
 bool perform_file_command(HWND window, AppState& state, Pane& pane,
                           panedock::file_operations::Command command) noexcept try {
     if (state.file_operation_call_active || state.is_shutting_down() ||
@@ -4379,40 +4394,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             input.active_pane = active;
             input.pane_count =
                 panedock::core::pane_count(group.layout_template);
-            // Pane-owned UI action runs before the legacy accelerator's outer
-            // ShellCallScope; nested Shell calls still reject beginning an edit.
-            if (state.panes[active].handle_list_rename_key(
-                    message, input.control, input.alt, input.shift)) continue;
-            if (state.panes[active].handle_list_key(
-                    message, input.control, input.alt, input.shift)) continue;
-            if (const auto command = state.panes[active].file_command_for_key(
-                    message, input.control, input.alt, input.shift)) {
-                (void)perform_file_command(window, state, state.panes[active], *command);
-                continue;
-            }
+            input.list_focused = state.panes[active].list_has_key(message);
             const auto routing = panedock::core::resolve_key(input);
 
-            // S_OK means the Shell view consumed the key; anything else
-            // leaves it to us. A shutdown during the call abandons the
-            // message either way.
-            enum class Accelerator { declined, consumed, shutting_down };
-            const auto offer_to_shell = [&]() -> Accelerator {
-                HRESULT result = S_FALSE;
-                {
-                    ShellCallScope shell_call(state.reentry_guard);
-                    result = state.panes[active].translate_content_accelerator(
-                        &message);
-                }
-                if (state.is_shutting_down())
-                    return Accelerator::shutting_down;
-                return result == S_OK ? Accelerator::consumed
-                                      : Accelerator::declined;
-            };
-
-            if (routing.shell ==
-                panedock::core::ShellAccelerator::before_action) {
-                if (offer_to_shell() != Accelerator::declined) continue;
+            // Enter opens the selection inside a Shell scope, as a verb
+            // invocation; F2, Ctrl+A and Ctrl+Shift+N reject a nested Shell
+            // call themselves.
+            if (routing.action == panedock::core::KeyAction::open_selection) {
+                ShellCallScope shell_call(state.reentry_guard);
+                (void)state.panes[active].perform_list_key(routing.action);
+                continue;
             }
+            if (state.panes[active].perform_list_key(routing.action)) continue;
 
             bool handled = true;
             switch (routing.action) {
@@ -4422,10 +4415,24 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             case panedock::core::KeyAction::begin_group_rename:
                 state.sidebar.begin_rename();
                 break;
-            case panedock::core::KeyAction::paste:
-                handled = perform_file_command(window, state, state.panes[active],
-                    panedock::file_operations::Command::paste);
+            case panedock::core::KeyAction::copy:
+            case panedock::core::KeyAction::cut:
+            case panedock::core::KeyAction::delete_items:
+            case panedock::core::KeyAction::delete_permanently:
+                (void)perform_file_command(window, state, state.panes[active],
+                    file_command_for(routing.action));
                 break;
+            case panedock::core::KeyAction::paste:
+                // The list keeps its Ctrl+V even when nothing is pastable.
+                handled = perform_file_command(window, state, state.panes[active],
+                    panedock::file_operations::Command::paste) ||
+                    input.list_focused;
+                break;
+            case panedock::core::KeyAction::begin_item_rename:
+            case panedock::core::KeyAction::select_all:
+            case panedock::core::KeyAction::new_folder:
+            case panedock::core::KeyAction::open_selection:
+                break; // performed by the pane above
             case panedock::core::KeyAction::focus_next_pane:
             case panedock::core::KeyAction::focus_previous_pane:
                 set_active_pane(window, state, routing.target_pane);
@@ -4460,11 +4467,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 break;
             }
             if (handled) continue;
-
-            if (routing.shell ==
-                panedock::core::ShellAccelerator::after_action) {
-                if (offer_to_shell() != Accelerator::declined) continue;
-            }
         }
         TranslateMessage(&message);
         DispatchMessageW(&message);

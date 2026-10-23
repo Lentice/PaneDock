@@ -109,7 +109,7 @@ struct Fixture final {
         message.hwnd = list;
         message.message = WM_KEYDOWN;
         message.wParam = key;
-        EXPECT(pane.translate_content_accelerator(&message) == S_FALSE);
+        EXPECT(!test::press_list_key(pane, message));
         SendMessageW(list, WM_KEYDOWN, key, modifiers);
         SendMessageW(list, WM_KEYUP, key, modifiers);
     }
@@ -244,23 +244,15 @@ void managed_list_yields_global_shortcut_precedence() {
         bool alt;
         bool shift;
         core::KeyAction expected;
-        core::ShellAccelerator shell;
     };
     const KeyCase cases[] = {
-        {core::kVirtualKeyTab, false, false, false,
-         core::KeyAction::focus_next_pane, core::ShellAccelerator::never},
-        {core::kVirtualKeyTab, false, false, true,
-         core::KeyAction::focus_previous_pane, core::ShellAccelerator::never},
-        {core::kVirtualKeyTab, true, false, false,
-         core::KeyAction::next_tab, core::ShellAccelerator::before_action},
-        {'T', true, false, false,
-         core::KeyAction::new_tab, core::ShellAccelerator::before_action},
-        {'W', true, false, false,
-         core::KeyAction::close_tab, core::ShellAccelerator::before_action},
-        {core::kVirtualKeyLeft, false, true, false,
-         core::KeyAction::history_back, core::ShellAccelerator::before_action},
-        {core::kVirtualKeyRight, false, true, false,
-         core::KeyAction::history_forward, core::ShellAccelerator::before_action},
+        {core::kVirtualKeyTab, false, false, false, core::KeyAction::focus_next_pane},
+        {core::kVirtualKeyTab, false, false, true, core::KeyAction::focus_previous_pane},
+        {core::kVirtualKeyTab, true, false, false, core::KeyAction::next_tab},
+        {'T', true, false, false, core::KeyAction::new_tab},
+        {'W', true, false, false, core::KeyAction::close_tab},
+        {core::kVirtualKeyLeft, false, true, false, core::KeyAction::history_back},
+        {core::kVirtualKeyRight, false, true, false, core::KeyAction::history_forward},
     };
     for (const auto& item : cases) {
         core::KeyInput input{};
@@ -270,15 +262,16 @@ void managed_list_yields_global_shortcut_precedence() {
         input.alt = item.alt;
         input.shift = item.shift;
         input.pane_count = 2;
-        const auto routing = core::resolve_key(input);
-        EXPECT(routing.action == item.expected);
-        EXPECT(routing.shell == item.shell);
+        // Pane-wide chords keep their action with the list focused too.
+        input.list_focused = true;
+        EXPECT(core::resolve_key(input).action == item.expected);
 
         MSG message{};
         message.hwnd = f.list;
         message.message = WM_KEYDOWN;
         message.wParam = item.virtual_key;
-        EXPECT(f.pane.translate_content_accelerator(&message) == S_FALSE);
+        EXPECT(!test::press_list_key(f.pane, message, item.control, item.alt,
+                                     item.shift));
     }
     core::KeyInput address_tab{};
     address_tab.message = core::KeyMessage::key_down;
@@ -286,23 +279,16 @@ void managed_list_yields_global_shortcut_precedence() {
     address_tab.address_bar_focused = true;
     address_tab.pane_count = 2;
     EXPECT(core::resolve_key(address_tab).action == core::KeyAction::none);
-    EXPECT(core::resolve_key(address_tab).shell == core::ShellAccelerator::never);
 
     // Ctrl+Backspace is ordinary list input; only unmodified Backspace is
     // the list's navigate-up accelerator.
-    BYTE keyboard_state[256]{};
-    EXPECT(GetKeyboardState(keyboard_state));
-    auto ctrl_state = std::array<BYTE, 256>{};
-    std::copy(std::begin(keyboard_state), std::end(keyboard_state), ctrl_state.begin());
-    ctrl_state[VK_CONTROL] |= 0x80;
-    EXPECT(SetKeyboardState(ctrl_state.data()));
     MSG ctrl_backspace{};
     ctrl_backspace.hwnd = f.list;
     ctrl_backspace.message = WM_KEYDOWN;
     ctrl_backspace.wParam = VK_BACK;
-    EXPECT(f.pane.translate_content_accelerator(&ctrl_backspace) == S_FALSE);
+    EXPECT(test::route_list_key(f.pane, ctrl_backspace, true) == core::KeyAction::none);
+    EXPECT(!test::press_list_key(f.pane, ctrl_backspace, true));
     EXPECT(f.pane.list_snapshot().request.location.parsing_name == unchanged_location);
-    EXPECT(SetKeyboardState(keyboard_state));
 }
 
 void display_text_drives_presentation_while_local_navigation_uses_leaf_key() {

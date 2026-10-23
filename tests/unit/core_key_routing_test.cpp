@@ -18,18 +18,16 @@ KeyInput key(unsigned virtual_key,
 }
 
 // This is the rule that regressed before: plain Tab must reach pane
-// navigation, not the Shell view's column header.
-void test_plain_tab_beats_the_shell_accelerator() {
+// navigation, not the list's column header.
+void test_plain_tab_is_pane_navigation() {
     const auto forward = resolve_key(key(kVirtualKeyTab));
     EXPECT(forward.action == KeyAction::focus_next_pane);
-    EXPECT(forward.shell == ShellAccelerator::never);
     EXPECT(forward.target_pane == 2);
 
     auto shifted = key(kVirtualKeyTab);
     shifted.shift = true;
     const auto backward = resolve_key(shifted);
     EXPECT(backward.action == KeyAction::focus_previous_pane);
-    EXPECT(backward.shell == ShellAccelerator::never);
     EXPECT(backward.target_pane == 0);
 
     // Alt+Tab and Ctrl+Tab are not pane navigation.
@@ -61,14 +59,7 @@ void test_pane_cycle_wraps_in_both_directions() {
     EXPECT(resolve_key(empty).action == KeyAction::none);
 }
 
-void test_address_bar_focus_hides_every_key_from_the_shell() {
-    for (const unsigned virtual_key :
-         {kVirtualKeyTab, kVirtualKeyBack, unsigned{'V'}, unsigned{'X'}}) {
-        auto input = key(virtual_key);
-        input.address_bar_focused = true;
-        EXPECT(resolve_key(input).shell == ShellAccelerator::never);
-    }
-
+void test_address_bar_keeps_its_editing_keys() {
     // Tab, Backspace and Ctrl+V belong to the address bar's own editing while
     // it has focus, so they resolve to no action at all.
     auto tab = key(kVirtualKeyTab);
@@ -84,20 +75,18 @@ void test_address_bar_focus_hides_every_key_from_the_shell() {
     paste.address_bar_focused = true;
     EXPECT(resolve_key(paste).action == KeyAction::none);
 
-    // Tab commands still work from the address bar; they never reach the Shell.
+    // Tab commands still work from the address bar.
     auto new_tab = key('T');
     new_tab.control = true;
     new_tab.address_bar_focused = true;
     EXPECT(resolve_key(new_tab).action == KeyAction::new_tab);
-    EXPECT(resolve_key(new_tab).shell == ShellAccelerator::never);
 }
 
-void test_paste_acts_first_and_leaves_a_declined_key_to_the_shell() {
+void test_paste_needs_plain_ctrl_v() {
     auto paste = key('V');
     paste.control = true;
     const auto routing = resolve_key(paste);
     EXPECT(routing.action == KeyAction::paste);
-    EXPECT(routing.shell == ShellAccelerator::after_action);
 
     // Ctrl+Shift+V is not our paste.
     paste.shift = true;
@@ -111,14 +100,13 @@ void test_group_rename_needs_the_sidebar() {
     f2.sidebar_focused = true;
     const auto routing = resolve_key(f2);
     EXPECT(routing.action == KeyAction::begin_group_rename);
-    EXPECT(routing.shell == ShellAccelerator::never);
 
     // Any modifier disqualifies it.
     f2.control = true;
     EXPECT(resolve_key(f2).action == KeyAction::none);
 }
 
-void test_tab_and_history_commands_yield_to_the_shell_first() {
+void test_tab_and_history_commands() {
     struct Case final {
         unsigned virtual_key;
         bool control;
@@ -146,16 +134,13 @@ void test_tab_and_history_commands_yield_to_the_shell_first() {
         input.shift = item.shift;
         const auto routing = resolve_key(input);
         EXPECT(routing.action == item.expected);
-        EXPECT(routing.shell == ShellAccelerator::before_action);
     }
 }
 
-void test_f6_cycles_panes_but_after_the_shell() {
+void test_f6_cycles_panes() {
     const auto routing = resolve_key(key(kVirtualKeyF6));
     EXPECT(routing.action == KeyAction::focus_next_pane);
     EXPECT(routing.target_pane == 2);
-    // Unlike plain Tab, a view that claims F6 keeps it.
-    EXPECT(routing.shell == ShellAccelerator::before_action);
 
     // F6 is a plain key-down only; WM_SYSKEYDOWN is not it.
     EXPECT(resolve_key(key(kVirtualKeyF6, KeyMessage::system_key_down))
@@ -190,7 +175,6 @@ void test_explorer_navigation_keys() {
             input.address_bar_focused = in_bar;
             const auto routing = resolve_key(input);
             EXPECT(routing.action == KeyAction::focus_address_bar);
-            EXPECT(routing.shell == ShellAccelerator::never);
         }
     }
     // Alt+F4 stays the window's close command.
@@ -205,33 +189,98 @@ void test_explorer_navigation_keys() {
     up.alt = true;
     EXPECT(resolve_key(up).action == KeyAction::navigate_up);
     EXPECT(resolve_key(key(kVirtualKeyUp)).action == KeyAction::none);
-    // F5 refreshes from the address bar too, without the Shell seeing it.
+    // F5 refreshes from the address bar too.
     auto f5 = key(kVirtualKeyF5);
     f5.address_bar_focused = true;
     EXPECT(resolve_key(f5).action == KeyAction::refresh);
-    EXPECT(resolve_key(f5).shell == ShellAccelerator::never);
     // Shift+F5 / Ctrl+Shift+R are not refresh chords here.
     f5.shift = true;
     EXPECT(resolve_key(f5).action == KeyAction::none);
 }
 
-void test_non_key_messages_still_reach_the_shell() {
+void test_non_key_messages_have_no_action() {
     const auto routing = resolve_key(key(0, KeyMessage::other));
     EXPECT(routing.action == KeyAction::none);
-    EXPECT(routing.shell == ShellAccelerator::before_action);
+}
+// The managed list's own keys win while the list has the key, and mean
+// nothing anywhere else.
+void test_list_keys_need_the_list() {
+    struct Case final {
+        unsigned virtual_key;
+        bool control;
+        bool shift;
+        KeyAction expected;
+    };
+    const Case cases[]{
+        {kVirtualKeyF2, false, false, KeyAction::begin_item_rename},
+        {kVirtualKeyReturn, false, false, KeyAction::open_selection},
+        {'A', true, false, KeyAction::select_all},
+        {'N', true, true, KeyAction::new_folder},
+        {'C', true, false, KeyAction::copy},
+        {'X', true, false, KeyAction::cut},
+        {'V', true, false, KeyAction::paste},
+        {kVirtualKeyDelete, false, false, KeyAction::delete_items},
+        {kVirtualKeyDelete, false, true, KeyAction::delete_permanently},
+    };
+    for (const auto& item : cases) {
+        auto input = key(item.virtual_key);
+        input.control = item.control;
+        input.shift = item.shift;
+        input.list_focused = true;
+        EXPECT(resolve_key(input).action == item.expected);
+        // Alt, or a key-up, is never a list key.
+        auto alt = input;
+        alt.alt = true;
+        EXPECT(resolve_key(alt).action != item.expected);
+        auto up = input;
+        up.message = KeyMessage::other;
+        EXPECT(resolve_key(up).action == KeyAction::none);
+        // Outside the list only Ctrl+V keeps a meaning: paste.
+        input.list_focused = false;
+        EXPECT(resolve_key(input).action ==
+               (item.expected == KeyAction::paste ? KeyAction::paste
+                                                  : KeyAction::none));
+    }
+
+    // A modifier the list key does not name disqualifies it.
+    auto f2 = key(kVirtualKeyF2);
+    f2.list_focused = true;
+    f2.shift = true;
+    EXPECT(resolve_key(f2).action == KeyAction::none);
+    auto enter = key(kVirtualKeyReturn);
+    enter.list_focused = true;
+    enter.control = true;
+    EXPECT(resolve_key(enter).action == KeyAction::none);
+    auto ctrl_n = key('N');
+    ctrl_n.list_focused = true;
+    ctrl_n.control = true;
+    EXPECT(resolve_key(ctrl_n).action == KeyAction::none);
+    auto ctrl_delete = key(kVirtualKeyDelete);
+    ctrl_delete.list_focused = true;
+    ctrl_delete.control = true;
+    EXPECT(resolve_key(ctrl_delete).action == KeyAction::none);
+
+    // Pane-wide chords keep working from the list.
+    auto tab = key(kVirtualKeyTab);
+    tab.list_focused = true;
+    EXPECT(resolve_key(tab).action == KeyAction::focus_next_pane);
+    auto back = key(kVirtualKeyBack);
+    back.list_focused = true;
+    EXPECT(resolve_key(back).action == KeyAction::history_back);
 }
 }  // namespace
 
 int main() {
-    test_plain_tab_beats_the_shell_accelerator();
+    test_plain_tab_is_pane_navigation();
     test_pane_cycle_wraps_in_both_directions();
-    test_address_bar_focus_hides_every_key_from_the_shell();
-    test_paste_acts_first_and_leaves_a_declined_key_to_the_shell();
+    test_address_bar_keeps_its_editing_keys();
+    test_paste_needs_plain_ctrl_v();
     test_group_rename_needs_the_sidebar();
-    test_tab_and_history_commands_yield_to_the_shell_first();
-    test_f6_cycles_panes_but_after_the_shell();
+    test_tab_and_history_commands();
+    test_f6_cycles_panes();
     test_alt_chords_arrive_as_system_key_down();
     test_explorer_navigation_keys();
-    test_non_key_messages_still_reach_the_shell();
+    test_non_key_messages_have_no_action();
+    test_list_keys_need_the_list();
     return panedock::test::summary("core_key_routing");
 }

@@ -10,12 +10,20 @@ bool Pane::list_edit_has_focus() const noexcept {
     return list_rename_edit_ && GetFocus() == list_rename_edit_;
 }
 
-bool Pane::handle_list_rename_key(const MSG& message, bool control, bool alt, bool shift) noexcept {
-    if (!active() || message.hwnd != list_window_ ||
-        message.message != WM_KEYDOWN || message.wParam != VK_F2 || control || alt || shift)
-        return false;
-    (void)begin_list_rename();
-    return true;
+bool Pane::list_has_key(const MSG& message) const noexcept {
+    return active() && list_window_ && message.hwnd == list_window_;
+}
+
+bool Pane::perform_list_key(core::KeyAction action) noexcept {
+    switch (action) {
+    case core::KeyAction::begin_item_rename: (void)begin_list_rename(); return true;
+    case core::KeyAction::select_all:
+        select_all_list_rows(); // comctl32's list view has no select-all key
+        return true;
+    case core::KeyAction::new_folder: (void)create_new_folder(); return true;
+    case core::KeyAction::open_selection: (void)open_list_selection(); return true;
+    default: return false;
+    }
 }
 
 bool Pane::begin_list_rename() noexcept try {
@@ -60,20 +68,6 @@ bool Pane::begin_list_rename() noexcept try {
             : text.size())); // no visible extension: Explorer selects it all
     return true;
 } catch (...) { cancel_list_rename(); return false; }
-
-bool Pane::handle_list_key(const MSG& message, bool control, bool alt, bool shift) noexcept {
-    if (!active() || message.hwnd != list_window_ || message.message != WM_KEYDOWN ||
-        !control || alt) return false;
-    if (message.wParam == 'A' && !shift) {
-        select_all_list_rows(); // comctl32's list view has no select-all key
-        return true;
-    }
-    if (message.wParam == 'N' && shift) {
-        (void)create_new_folder();
-        return true;
-    }
-    return false;
-}
 
 void Pane::select_all_list_rows() noexcept {
     if (!active() || !list_window_ || list_.rows.empty()) return;

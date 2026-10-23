@@ -151,7 +151,7 @@ void targets_and_routing() {
     EXPECT(f.presenter->requests.back().items[0] ==
         f.pane.list_snapshot().rows[1].identity.key);
     MSG key{}; key.hwnd = f.list; key.message = WM_KEYDOWN; key.wParam = VK_APPS;
-    EXPECT(f.pane.translate_content_accelerator(&key) == S_FALSE);
+    EXPECT(!test::press_list_key(f.pane, key));
     SendMessageW(f.list, WM_KEYUP, VK_APPS, 0);
     EXPECT(f.presenter->requests.size() == 3);
     EXPECT(f.presenter->requests.back().screen.x != -1);

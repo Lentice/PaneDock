@@ -32,6 +32,7 @@
 #include "app_shell/shell_reentry_guard.h"
 #include "core/model.h"
 #include "core/bounded_order.h"
+#include "core/key_routing.h"
 #include "core/navigation.h"
 #include "explorer_host/context_menu.h"
 #include "shell_core/shell_core.h"
@@ -269,25 +270,26 @@ class Pane final {
         core::ShellLocation folder;
         std::vector<std::wstring> items; // owned absolute parsing names
     };
-    std::optional<file_operations::Command> file_command_for_key(
-        const MSG& message, bool control, bool alt, bool shift) const noexcept;
     HRESULT file_command_snapshot(file_operations::Command command,
                                   FileCommandSnapshot& snapshot) const noexcept;
     bool file_command_is_current(const FileCommandSnapshot& snapshot) const noexcept;
     // Exactly one selected identity. Enter and focus loss commit through Shell
     // (Explorer parity; overrides PD-237's cancel on focus loss); Escape,
     // accepted batches, sort/geometry, navigation and shutdown cancel.
-    bool handle_list_rename_key(const MSG&, bool control, bool alt, bool shift) noexcept;
-    // Explorer list keys owned by this pane: Ctrl+A selects all rows,
-    // Ctrl+Shift+N creates a folder. False when the message is not one of them.
-    bool handle_list_key(const MSG&, bool control, bool alt, bool shift) noexcept;
+    bool begin_list_rename() noexcept;
+    // Whether a key message was sent to this active pane's managed list, the
+    // core::KeyInput::list_focused that core::resolve_key routes list keys by.
+    bool list_has_key(const MSG& message) const noexcept;
+    // Performs a routed list key this pane owns (F2, Ctrl+A, Ctrl+Shift+N,
+    // Enter) and consumes it. False for any other action, including the file
+    // commands, which run through the host's file-operation bracket.
+    bool perform_list_key(core::KeyAction action) noexcept;
     void select_all_list_rows() noexcept;
     // Creates "New folder" in the displayed folder through the host, then
     // selects it and begins rename once its row arrives, as Explorer does.
     bool create_new_folder() noexcept;
     void commit_list_rename_after_focus_loss() noexcept;
     void show_status_text(const wchar_t* text) noexcept;
-    bool begin_list_rename() noexcept;
     void cancel_list_rename() noexcept;
     void restore_posted_list_focus() noexcept;
     void note_list_focus_activation() noexcept;
@@ -318,7 +320,6 @@ class Pane final {
     // Escape in the address bar: show the current location again and
     // return focus to the list, as Explorer does.
     void cancel_address_edit() noexcept;
-    HRESULT translate_content_accelerator(MSG *message) noexcept;
     struct ContextMenuSnapshot final {
         FileCommandSnapshot target;
         explorer_host::ContextMenuRequest request;

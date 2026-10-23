@@ -699,21 +699,6 @@ bool Pane::content_request_is_current(
         tab->id);
 }
 
-std::optional<file_operations::Command> Pane::file_command_for_key(
-    const MSG& message, bool control, bool alt, bool shift) const noexcept {
-    if (!active() || message.hwnd != list_window_ ||
-        message.message != WM_KEYDOWN || alt) return {};
-    using file_operations::Command;
-    if (control && !shift) {
-        if (message.wParam == 'C') return Command::copy;
-        if (message.wParam == 'X') return Command::cut;
-        if (message.wParam == 'V') return Command::paste;
-    } else if (!control && message.wParam == VK_DELETE) {
-        return shift ? Command::delete_permanently : Command::delete_items;
-    }
-    return {};
-}
-
 HRESULT Pane::file_command_snapshot(file_operations::Command command,
                                    FileCommandSnapshot& snapshot) const noexcept try {
     snapshot = {};
@@ -786,25 +771,6 @@ void Pane::cancel_address_edit() noexcept try {
     refresh_navigation_chrome(); // the displayed location's text again
     if (active()) focus_content();
 } catch (...) {}
-
-HRESULT Pane::translate_content_accelerator(MSG *message) noexcept try {
-    if (!active() || active_tab() == nullptr || !list_window_) return S_FALSE;
-
-    if (message && message->message == WM_KEYDOWN && message->hwnd == list_window_) {
-        const bool control_down = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-        const bool alt_down = (GetKeyState(VK_MENU) & 0x8000) != 0;
-        const bool shift_down = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-        if (!control_down && !alt_down && !shift_down &&
-            message->wParam == VK_RETURN) {
-            (void)open_list_selection();
-            return S_OK;
-        }
-        // Backspace is Back (core::resolve_key), as in Windows 10/11 Explorer.
-    }
-    return S_FALSE;
-} catch (...) {
-    return S_OK;
-}
 
 bool Pane::register_window_class(HINSTANCE instance) noexcept {
     return register_simple_window_class(kWindowClassName, pane_window_proc,

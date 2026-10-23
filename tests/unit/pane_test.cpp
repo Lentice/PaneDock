@@ -330,7 +330,7 @@ void test_content_operations_without_a_live_view_preserve_model_and_windows() {
     MSG key{};
     key.message = WM_KEYDOWN;
     key.wParam = VK_RETURN;
-    EXPECT(pane.translate_content_accelerator(&key) == S_FALSE);
+    EXPECT(!panedock::test::press_list_key(pane, key));
     pane.focus_content();
     EXPECT(!pane.show_folder_context_menu(parent, {0, 0}));
 
@@ -348,7 +348,7 @@ void test_content_operations_without_a_live_view_preserve_model_and_windows() {
     EXPECT(pane.navigate_to(a) == E_ABORT);
     EXPECT(pane.navigate_up_one_level() == E_ABORT);
     EXPECT(pane.selection_snapshot(selection) == E_ABORT);
-    EXPECT(pane.translate_content_accelerator(&key) == S_FALSE);
+    EXPECT(!panedock::test::press_list_key(pane, key));
     pane.focus_content();
     EXPECT(!pane.show_folder_context_menu(parent, {0, 0}));
     EXPECT(state == original);
@@ -401,7 +401,7 @@ void test_local_content_queries_do_not_pump_deferred_commands() {
             if (accelerator) {
                 MSG key{};
                 key.message = WM_KEYDOWN;
-                EXPECT(pane.translate_content_accelerator(&key) == S_FALSE);
+                EXPECT(!panedock::test::press_list_key(pane, key));
             } else {
                 Pane::SelectionSnapshot snapshot{1, 1, 1, true};
                 EXPECT(pane.selection_snapshot(snapshot) == E_UNEXPECTED);

@@ -11,9 +11,11 @@ namespace panedock::core {
 // uppercase ASCII value.
 inline constexpr unsigned kVirtualKeyBack = 0x08;
 inline constexpr unsigned kVirtualKeyTab = 0x09;
+inline constexpr unsigned kVirtualKeyReturn = 0x0D;
 inline constexpr unsigned kVirtualKeyLeft = 0x25;
 inline constexpr unsigned kVirtualKeyUp = 0x26;
 inline constexpr unsigned kVirtualKeyRight = 0x27;
+inline constexpr unsigned kVirtualKeyDelete = 0x2E;
 inline constexpr unsigned kVirtualKeyF2 = 0x71;
 inline constexpr unsigned kVirtualKeyF4 = 0x73;
 inline constexpr unsigned kVirtualKeyF5 = 0x74;
@@ -28,6 +30,15 @@ enum class KeyMessage {
 enum class KeyAction {
     none,
     begin_group_rename,
+    // Managed-list keys: only while the active pane's list has the key.
+    begin_item_rename,
+    select_all,
+    new_folder,
+    open_selection,
+    copy,
+    cut,
+    delete_items,
+    delete_permanently,
     paste,
     focus_next_pane,
     focus_previous_pane,
@@ -42,16 +53,6 @@ enum class KeyAction {
     focus_address_bar,
 };
 
-// Where the Shell view's own accelerator sits relative to `action`. This is
-// the precedence the old fall-through chain encoded in source order alone,
-// and it is the part that has actually regressed before: plain Tab must reach
-// pane navigation before the Shell view can focus its column header.
-enum class ShellAccelerator {
-    never,          // PaneDock owns the key outright.
-    before_action,  // The Shell gets first refusal; act only if it declines.
-    after_action,   // PaneDock acts first; the Shell gets what the action declines.
-};
-
 struct KeyInput final {
     KeyMessage message{KeyMessage::other};
     unsigned virtual_key{};
@@ -59,6 +60,8 @@ struct KeyInput final {
     bool alt{};
     bool shift{};
     bool address_bar_focused{};
+    // The key was sent to the active pane's managed list itself.
+    bool list_focused{};
     bool sidebar_focused{};
     std::size_t active_pane{};
     std::size_t pane_count{};
@@ -66,7 +69,6 @@ struct KeyInput final {
 
 struct KeyRouting final {
     KeyAction action{KeyAction::none};
-    ShellAccelerator shell{ShellAccelerator::never};
     // Only meaningful for focus_next_pane / focus_previous_pane.
     std::size_t target_pane{};
 
