@@ -1143,11 +1143,7 @@ void Pane::submit_address() {
         !list_.updating && !list_navigation_pending_ &&
         (list_.phase == managed_list::Phase::complete ||
          list_.phase == managed_list::Phase::empty)) {
-        const auto request = list_.request;
-        save_list_cache(true);
-        const auto& entries = list_cache().entries;
-        if (!entries.empty() && entries.back().owner == this &&
-            entries.back().snapshot.request == request)
+        if (save_list_cache(true))
             list_ = {}; // moved into the cache; the navigation below replaces it
     }
     ShellCallScope shell_call(reentry_guard());

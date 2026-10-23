@@ -33,6 +33,7 @@
 #include "app_shell/shell_reentry_guard.h"
 #include "core/model.h"
 #include "core/bounded_order.h"
+#include "core/bounded_lru.h"
 #include "core/key_routing.h"
 #include "core/navigation.h"
 #include "explorer_host/context_menu.h"
@@ -180,9 +181,7 @@ class Pane final {
         managed_list::ParentOutcome parent_outcome{managed_list::ParentOutcome::unresolved};
         managed_list::NotificationCapability notification{managed_list::NotificationCapability::filesystem_watch};
     };
-    struct ListCacheStats final {
-        std::size_t bytes{}, entries{}, hits{}, evictions{}, limit{};
-    };
+    using ListCacheStats = core::LruStats;
     static ListCacheStats list_cache_stats() noexcept;
     static void limit_list_cache_bytes(std::size_t bytes) noexcept;
     // A deleted Group's id can be issued again by next_group_id.
@@ -471,17 +470,14 @@ class Pane final {
         const Pane* owner{};
         ListSnapshot snapshot;
         ManagedListInteraction interaction;
-        std::size_t bytes{};
     };
-    struct ListCache final {
-        // 4 visible lists * 24 MiB + 32 MiB inactive <= 128 MiB row target.
-        // STA-only process owner: independent of pane coordinator and images.
-        std::list<CachedList> entries;
-        ListCacheStats stats{0, 0, 0, 0, 32 * 1024 * 1024};
-    };
-    static ListCache& list_cache() noexcept;
+    // 4 visible lists * 24 MiB + 32 MiB inactive <= 128 MiB row target.
+    static constexpr std::size_t kListCacheBytes = 32 * 1024 * 1024;
+    // STA-only process owner: independent of pane coordinator and images.
+    static core::BoundedLru<CachedList>& list_cache() noexcept;
     void prune_list_cache(bool all = false) noexcept;
-    void save_list_cache(bool leaving_group = false) noexcept;
+    // True when the current list was admitted (and so moved out of list_).
+    bool save_list_cache(bool leaving_group = false) noexcept;
     std::optional<CachedList> take_list_cache(const managed_list::Request& request);
     void cancel_managed_list(bool discard_cache = true) noexcept;
     void clear_managed_list_interaction() noexcept;

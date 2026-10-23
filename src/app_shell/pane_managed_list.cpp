@@ -173,27 +173,18 @@ void Pane::use_managed_list(std::unique_ptr<managed_list::Source> source) {
 HANDLE Pane::content_event() const noexcept {
     return list_source_ ? list_source_->event() : nullptr;
 }
-Pane::ListCache& Pane::list_cache() noexcept {
-    static ListCache cache;
+core::BoundedLru<Pane::CachedList>& Pane::list_cache() noexcept {
+    static core::BoundedLru<CachedList> cache{kListCacheBytes};
     return cache;
 }
 Pane::ListCacheStats Pane::list_cache_stats() noexcept {
-    auto stats = list_cache().stats;
-    stats.entries = list_cache().entries.size();
-    return stats;
+    return list_cache().stats();
 }
 void Pane::limit_list_cache_bytes(std::size_t bytes) noexcept {
-    auto& cache = list_cache();
-    cache.stats.limit = std::min<std::size_t>(bytes, 32 * 1024 * 1024);
-    while (cache.stats.bytes > cache.stats.limit && !cache.entries.empty()) {
-        cache.stats.bytes -= cache.entries.front().bytes;
-        cache.entries.pop_front();
-        ++cache.stats.evictions;
-    }
+    list_cache().set_limit(std::min(bytes, kListCacheBytes));
 }
 void Pane::prune_list_cache(bool all) noexcept {
-    auto& cache = list_cache();
-    std::erase_if(cache.entries, [&](const auto& entry) {
+    list_cache().erase_if([&](const CachedList& entry) {
         if (entry.owner != this) return false;
         // PD-261: inactive Groups keep owned snapshots within the same global
         // LRU. Only the currently bound Group's tabs can invalidate its entries.
@@ -204,26 +195,21 @@ void Pane::prune_list_cache(bool all) noexcept {
                 return tab.id == entry.snapshot.request.binding.tab_id &&
                     tab.location == entry.snapshot.resolved_location.value_or(entry.snapshot.request.location);
             });
-        if (valid) return false;
-        cache.stats.bytes -= entry.bytes;
-        return true;
+        return !valid;
     });
 }
 void Pane::discard_group_list_cache(const std::string& group_id) noexcept {
-    auto& cache = list_cache();
-    std::erase_if(cache.entries, [&](const auto& entry) {
-        if (entry.snapshot.request.binding.group_id != group_id) return false;
-        cache.stats.bytes -= entry.bytes;
-        return true;
+    list_cache().erase_if([&](const CachedList& entry) {
+        return entry.snapshot.request.binding.group_id == group_id;
     });
 }
-void Pane::save_list_cache(bool leaving_group) noexcept try {
+bool Pane::save_list_cache(bool leaving_group) noexcept try {
     // Group activation changes the host ID before bind(); the old PaneState is
     // still alive here, and the snapshot's binding remains the outgoing ID.
     if (!leaving_group) prune_list_cache();
     if (!pane_state() || list_.updating ||
         (list_.phase != managed_list::Phase::complete && list_.phase != managed_list::Phase::empty) ||
-        (!leaving_group && list_.request.binding.group_id != pane_host()->active_group_id())) return;
+        (!leaving_group && list_.request.binding.group_id != pane_host()->active_group_id())) return false;
     // A Group departure also admits its completed active tab, never a partial
     // enumeration or a closed tab. Full location identity remains mandatory.
     const auto found = std::find_if(pane_state()->tabs.begin(), pane_state()->tabs.end(), [&](const auto& tab) {
@@ -231,8 +217,8 @@ void Pane::save_list_cache(bool leaving_group) noexcept try {
             (leaving_group || tab.id != pane_state()->active_tab_id) &&
             tab.location == list_.resolved_location.value_or(list_.request.location);
     });
-    if (found == pane_state()->tabs.end()) return;
-    CachedList entry{this, {}, capture_managed_list_interaction(), 0};
+    if (found == pane_state()->tabs.end()) return false;
+    CachedList entry{this, {}, capture_managed_list_interaction()};
     entry.snapshot = std::move(list_);
     // Account allocated capacities, including empty property strings, binding,
     // anchors and list nodes. Inline strings are conservatively overcounted;
@@ -240,42 +226,29 @@ void Pane::save_list_cache(bool leaving_group) noexcept try {
     const auto string_bytes = [](const auto& value) {
         return (value.capacity() + 1) * sizeof(typename std::decay_t<decltype(value)>::value_type);
     };
-    entry.bytes = sizeof(CachedList) + 2 * sizeof(void*) +
+    std::size_t bytes = sizeof(CachedList) + sizeof(std::size_t) + 2 * sizeof(void*) +
         entry.snapshot.rows.capacity() * sizeof(managed_list::Row);
     const auto& request = entry.snapshot.request;
     for (const auto* location : {&entry.snapshot.resolved_location, &entry.snapshot.parent_location})
-        if (*location) entry.bytes += managed_list::owned_location_bytes(**location);
-    entry.bytes += string_bytes(request.binding.group_id) + string_bytes(request.binding.tab_id) +
+        if (*location) bytes += managed_list::owned_location_bytes(**location);
+    bytes += string_bytes(request.binding.group_id) + string_bytes(request.binding.tab_id) +
         managed_list::owned_location_bytes(request.location);
     for (const auto& row : entry.snapshot.rows) {
-        entry.bytes += managed_list::owned_row_bytes(row);
+        bytes += managed_list::owned_row_bytes(row);
     }
     const auto& interaction = entry.interaction;
-    entry.bytes += interaction.selected_items.capacity() * sizeof(managed_list::ItemIdentity);
-    for (const auto& name : interaction.selected_items) entry.bytes += string_bytes(name.key);
+    bytes += interaction.selected_items.capacity() * sizeof(managed_list::ItemIdentity);
+    for (const auto& name : interaction.selected_items) bytes += string_bytes(name.key);
     for (const auto* name : {&interaction.focused_item, &interaction.anchor_item, &interaction.viewport_anchor_item})
-        if (*name) entry.bytes += string_bytes((**name).key);
-    auto& cache = list_cache();
-    if (entry.bytes > cache.stats.limit) return;
-    while (cache.stats.bytes + entry.bytes > cache.stats.limit && !cache.entries.empty()) {
-        cache.stats.bytes -= cache.entries.front().bytes;
-        cache.entries.pop_front(); ++cache.stats.evictions;
-    }
-    const auto bytes = entry.bytes;
-    cache.entries.push_back(std::move(entry));
-    cache.stats.bytes += bytes;
-} catch (...) { /* Cache admission failure never prevents navigation. */ }
+        if (*name) bytes += string_bytes((**name).key);
+    return list_cache().admit(std::move(entry), bytes);
+} catch (...) { return false; /* Cache admission failure never prevents navigation. */ }
 std::optional<Pane::CachedList> Pane::take_list_cache(const managed_list::Request& request) {
-    auto& cache = list_cache();
-    const auto found = std::find_if(cache.entries.begin(), cache.entries.end(), [&](const auto& entry) {
+    return list_cache().take([&](const CachedList& entry) {
         return entry.owner == this && entry.snapshot.request.binding.group_id == request.binding.group_id &&
-            entry.snapshot.request.binding.tab_id == request.binding.tab_id && entry.snapshot.resolved_location.value_or(entry.snapshot.request.location) == request.location;
+            entry.snapshot.request.binding.tab_id == request.binding.tab_id &&
+            entry.snapshot.resolved_location.value_or(entry.snapshot.request.location) == request.location;
     });
-    if (found == cache.entries.end()) return {};
-    auto entry = std::move(*found);
-    cache.stats.bytes -= entry.bytes;
-    cache.entries.erase(found); ++cache.stats.hits;
-    return entry;
 }
 void Pane::cancel_managed_list(bool discard_cache) noexcept {
     cancel_list_rename();
@@ -597,7 +570,7 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
         !list_.updating && (list_.phase == managed_list::Phase::complete ||
                            list_.phase == managed_list::Phase::empty)) {
         // Explicit Refresh retains the active snapshot just like a cache hit.
-        cached.emplace(CachedList{this, {}, capture_managed_list_interaction(), 0});
+        cached.emplace(CachedList{this, {}, capture_managed_list_interaction()});
         cached->snapshot = std::move(list_);
     }
     save_list_cache();

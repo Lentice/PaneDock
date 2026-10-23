@@ -22,6 +22,7 @@ set(PANEDOCK_TESTS
     "core_pane_address_stability|unit/core_pane_address_stability_test.cpp|panedock_core"
     "core_navigation|unit/core_navigation_test.cpp|panedock_core"
     "core_key_routing|unit/core_key_routing_test.cpp|panedock_core"
+    "core_bounded_lru|unit/core_bounded_lru_test.cpp|"
     "core_group_transition|unit/core_group_transition_test.cpp|panedock_core"
     "core_tab_drag|unit/core_tab_drag_test.cpp|panedock_core"
     "core_shutdown|unit/core_shutdown_test.cpp|panedock_core"
