@@ -116,9 +116,11 @@ std::optional<managed_list::IconKey> Pane::list_type_icon_key(std::size_t row) c
     if (item.identity.shell_item) return std::nullopt;
     std::wstring marker = L"~";
     if (!item.directory) {
-        const auto dot = item.name.rfind(L'.');
+        // The real leaf: display text may omit a hidden extension.
+        const auto& leaf = item.identity.key;
+        const auto dot = leaf.rfind(L'.');
         if (dot != std::wstring::npos) {
-            marker.append(item.name, dot, std::wstring::npos);
+            marker.append(leaf, dot, std::wstring::npos);
             CharLowerBuffW(marker.data() + 1, static_cast<DWORD>(marker.size() - 1));
         }
     }
@@ -438,6 +440,11 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
         return SendMessageW(pane->window(), message, wp, lp);
     }
     if (message == kColumnsChangedMessage) { pane->capture_list_columns(); return 0; }
+    if (message == kCommitListRenameMessage) { pane->commit_list_rename_after_focus_loss(); return 0; }
+    if (message == kSelectionStatusMessage) {
+        pane->selection_status_posted_ = false;
+        pane->update_managed_list(); return 0;
+    }
     if ((message == WM_KEYUP && wp == VK_APPS) ||
         (message == WM_KEYDOWN && wp == VK_F10)) {
         const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -464,8 +471,19 @@ LRESULT CALLBACK Pane::list_icon_subclass(HWND window, UINT message, WPARAM wp, 
         pane->icon_viewport_posted_ = false;
         pane->refresh_list_icon_viewport(); return 0;
     }
+    if (message == WM_CLIPBOARDUPDATE) { pane->list_clipboard_changed(); return 0; }
+    if (message == WM_DEVICECHANGE) return pane->list_device_change(wp, lp);
+    if (message == kListDeviceRefreshMessage) {
+        // Refresh pumps nothing, but never restart a list under a Shell call.
+        if (pane->reentry_guard_ && pane->reentry_guard().in_shell_call())
+            pane->reentry_guard().hold(window, message, 0, 0, true);
+        else try { pane->refresh_view(); } catch (...) {}
+        return 0;
+    }
     if (message == WM_NCDESTROY) {
+        RemoveClipboardFormatListener(window); // no-op unless a cut is shown
         pane->icon_viewport_posted_ = false;
+        pane->selection_status_posted_ = false;
         RemoveWindowSubclass(window, list_icon_subclass, id);
         return DefSubclassProc(window, message, wp, lp);
     }
@@ -562,7 +580,9 @@ std::optional<LRESULT> Pane::draw_list_card(NMHDR* notification) noexcept try {
     if (!ListView_GetItemRect(list_window_, static_cast<int>(index), &rect, LVIR_BOUNDS))
         return CDRF_DODEFAULT;
     const auto& row = list_.rows[index];
-    const bool selected = (ListView_GetItemState(list_window_, static_cast<int>(index), LVIS_SELECTED) != 0);
+    const UINT transfer = list_transfer_state(list_.rows[index]);
+    const bool selected = (transfer & LVIS_DROPHILITED) ||
+        (ListView_GetItemState(list_window_, static_cast<int>(index), LVIS_SELECTED) != 0);
     const HDC dc = draw->nmcd.hdc;
     const int saved = SaveDC(dc);
     struct DcState { HDC dc; int saved; ~DcState() { if (saved) RestoreDC(dc, saved); } } restore{dc, saved};
@@ -571,7 +591,8 @@ std::optional<LRESULT> Pane::draw_list_card(NMHDR* notification) noexcept try {
     SetBkMode(dc, TRANSPARENT);
     const int pad = MulDiv(6, static_cast<int>(paint_dpi_), 96);
     if (icon_images_) ImageList_Draw(icon_images_, list_item_image(index), dc,
-        rect.left + pad, rect.top + std::max(0L, (rect.bottom - rect.top - icon_size_) / 2), ILD_TRANSPARENT);
+        rect.left + pad, rect.top + std::max(0L, (rect.bottom - rect.top - icon_size_) / 2),
+        (transfer & LVIS_CUT) ? ILD_TRANSPARENT | ILD_BLEND50 : ILD_TRANSPARENT);
     rect.left += icon_size_ + pad * 2; rect.top += pad; rect.right -= pad;
     RECT title = rect;
     DrawTextW(dc, row.name.c_str(), -1, &title, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);

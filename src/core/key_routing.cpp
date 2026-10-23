@@ -55,9 +55,32 @@ KeyRouting resolve_key(const KeyInput& input) noexcept {
     if (key_down && input.alt && !input.control &&
         input.virtual_key == kVirtualKeyRight)
         return {KeyAction::history_forward, shell_default, 0};
+    if (key_down && input.alt && !input.control &&
+        input.virtual_key == kVirtualKeyUp)
+        return {KeyAction::navigate_up, shell_default, 0};
+    // Windows 10/11 Explorer: Backspace is Back, not Up. In an edit it is
+    // ordinary text editing.
     if (key_down && !input.control && !input.alt &&
         input.virtual_key == kVirtualKeyBack && !input.address_bar_focused)
-        return {KeyAction::navigate_up, shell_default, 0};
+        return {KeyAction::history_back, shell_default, 0};
+
+    // F5 and Ctrl+R refresh, from the list or the address bar, as in Explorer.
+    if (input.message == KeyMessage::key_down && !input.control &&
+        !input.alt && !input.shift && input.virtual_key == kVirtualKeyF5)
+        return {KeyAction::refresh, shell_default, 0};
+    if (key_down && input.control && !input.alt && !input.shift &&
+        input.virtual_key == 'R')
+        return {KeyAction::refresh, shell_default, 0};
+
+    // Ctrl+L, Alt+D and F4 move focus to the address bar and select its text.
+    // Alt+F4 is never ours: it stays the window close command.
+    if ((key_down && input.control && !input.alt && !input.shift &&
+         input.virtual_key == 'L') ||
+        (key_down && input.alt && !input.control && !input.shift &&
+         input.virtual_key == 'D') ||
+        (input.message == KeyMessage::key_down && !input.control &&
+         !input.alt && !input.shift && input.virtual_key == kVirtualKeyF4))
+        return {KeyAction::focus_address_bar, ShellAccelerator::never, 0};
 
     // F6 is the classic pane cycle. Unlike plain Tab it sits after the Shell
     // accelerator, so a view that claims F6 keeps it.

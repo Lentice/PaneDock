@@ -12,17 +12,19 @@ namespace panedock::core {
 // Details-view columns like Explorer's: the user picks which are shown, their order and
 // width (PD-257). A tab stores them as "id:width,id:width" in display order; an empty
 // string means the default set. Unknown ids survive a round trip so a newer build's
-// columns are not dropped by an older one.
+// columns are not dropped by an older one. Widths are 96-DPI pixels (DIPs); the list
+// scales them to the pane's DPI when it applies them.
 struct ColumnInfo final {
     std::string_view id;
     const wchar_t* label;
     int default_width;
     bool right_aligned;
 };
+// The index is the column's stable subitem: never reorder or remove entries, only append.
 inline constexpr std::array<ColumnInfo, 6> kKnownColumns{{
     {"name", L"Name", 320, false},
     {"size", L"Size", 160, true},
-    {"date", L"Date Modified", 180, false},
+    {"date", L"Date modified", 180, false},
     {"type", L"Type", 160, false},
     {"duration", L"Duration", 120, false},
     {"availability", L"Availability", 200, false},
@@ -36,6 +38,10 @@ struct ColumnSpec final {
     bool operator==(const ColumnSpec&) const = default;
 };
 
+// Explorer's Details defaults for a general folder, in its order. The other known
+// columns are offered by the header menu.
+inline constexpr std::array<std::string_view, 4> kDefaultColumnOrder{"name", "date", "type", "size"};
+
 inline const ColumnInfo* find_column(std::string_view id) noexcept {
     const auto found = std::find_if(kKnownColumns.begin(), kKnownColumns.end(),
                                     [&](const auto& info) { return info.id == id; });
@@ -44,7 +50,7 @@ inline const ColumnInfo* find_column(std::string_view id) noexcept {
 
 inline std::vector<ColumnSpec> default_columns() {
     std::vector<ColumnSpec> columns;
-    for (const auto& info : kKnownColumns) columns.push_back({std::string(info.id), info.default_width});
+    for (const auto id : kDefaultColumnOrder) columns.push_back({std::string(id), find_column(id)->default_width});
     return columns;
 }
 
@@ -83,6 +89,23 @@ inline std::string format_columns(const std::vector<ColumnSpec>& columns) {
         text += column.id + ':' + std::to_string(std::clamp(column.width, kMinColumnWidth, kMaxColumnWidth));
     }
     return text;
+}
+
+// Explorer's header menu order: the default columns first, then the rest.
+inline std::vector<const ColumnInfo*> column_menu_order() {
+    std::vector<const ColumnInfo*> order;
+    for (const auto id : kDefaultColumnOrder) order.push_back(find_column(id));
+    for (const auto& info : kKnownColumns)
+        if (std::find(order.begin(), order.end(), &info) == order.end()) order.push_back(&info);
+    return order;
+}
+
+// Stored widths are 96-DPI pixels; the header works in physical pixels.
+inline int column_width_to_pixels(int stored, unsigned dpi) noexcept {
+    return dpi == 0 ? stored : static_cast<int>((static_cast<long long>(stored) * dpi + 48) / 96);
+}
+inline int column_width_from_pixels(int pixels, unsigned dpi) noexcept {
+    return dpi == 0 ? pixels : static_cast<int>((static_cast<long long>(pixels) * 96 + dpi / 2) / dpi);
 }
 
 inline bool column_visible(const std::vector<ColumnSpec>& columns, std::string_view id) noexcept {

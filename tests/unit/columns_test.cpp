@@ -5,9 +5,18 @@ using namespace panedock;
 using namespace panedock::core;
 
 int main() {
-    // Empty means the default set, in the order the list always had.
+    // Empty means Explorer's default set and order: Name, Date modified, Type, Size.
     const auto defaults = parse_columns("");
-    EXPECT(defaults.size() == 6 && defaults[0].id == "name" && defaults[5].id == "availability");
+    EXPECT(defaults.size() == 4 && defaults[0].id == "name" && defaults[1].id == "date" &&
+           defaults[2].id == "type" && defaults[3].id == "size");
+    EXPECT(find_column("date") && std::wstring_view(find_column("date")->label) == L"Date modified");
+    // A layout persisted by an earlier build (all six columns) is kept as is.
+    const auto persisted = parse_columns("name:320,size:160,date:180,type:160,duration:120,availability:200");
+    EXPECT(persisted.size() == 6 && persisted[1].id == "size" && persisted[5].id == "availability");
+    // The header menu lists the defaults first, then every other known column once.
+    const auto menu = column_menu_order();
+    EXPECT(menu.size() == kKnownColumns.size() && menu[1]->id == "date" && menu[3]->id == "size" &&
+           menu[4]->id == "duration" && menu[5]->id == "availability");
     EXPECT(parse_columns(format_columns(defaults)) == defaults);
 
     // Order, widths and the visible set round-trip.
@@ -39,5 +48,15 @@ int main() {
     EXPECT(columns.size() == 2 && columns[1].id == "duration" && columns[1].width == 120);
     toggle_column(columns, "no-such-column");
     EXPECT(columns.size() == 2);
+
+    // Widths are stored as 96-DPI pixels and scaled to the pane's DPI; the round trip
+    // is stable so a capture right after an apply does not drift.
+    EXPECT(column_width_to_pixels(320, 96) == 320);
+    EXPECT(column_width_to_pixels(320, 144) == 480);
+    EXPECT(column_width_to_pixels(181, 120) == 226);
+    EXPECT(column_width_from_pixels(480, 144) == 320);
+    for (int width = kMinColumnWidth; width <= 1000; ++width)
+        for (const unsigned dpi : {96u, 120u, 144u, 168u, 192u, 288u})
+            EXPECT(column_width_from_pixels(column_width_to_pixels(width, dpi), dpi) == width);
     return test::summary("columns");
 }

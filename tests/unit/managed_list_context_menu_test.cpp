@@ -43,6 +43,8 @@ struct Fixture final {
         std::function<void()> pump;
         bool current_after{};
         bool guarded{};
+        std::wstring choose; // canonical verb the user "picks"
+        bool intercepted{};
         bool show(HWND, const explorer_host::ContextMenuRequest& request,
                   const explorer_host::MenuTargetCurrent& current) noexcept override {
             requests.push_back(request);
@@ -50,6 +52,8 @@ struct Fixture final {
             EXPECT(current());
             if (pump) pump();
             current_after = current();
+            if (!choose.empty() && request.intercept)
+                intercepted = request.intercept(choose);
             // Provider sees the same owned target after a sort/navigation pump.
             EXPECT(request.items == requests.back().items);
             return true;
@@ -158,8 +162,14 @@ void targets_and_routing() {
     shifted[VK_SHIFT] = 0x80;
     EXPECT(SetKeyboardState(shifted));
     SendMessageW(f.list, WM_KEYDOWN, VK_F10, 0);
-    EXPECT(SetKeyboardState(previous));
     EXPECT(f.presenter->requests.size() == 4);
+    EXPECT(!f.presenter->requests.back().extended); // Shift+F10 is the normal menu
+    EXPECT(f.pane.show_content_context_menu(f.list, point_at(f, 0)));
+    EXPECT(f.presenter->requests.back().extended); // Shift+right-click: extended verbs
+    EXPECT(SetKeyboardState(previous));
+    EXPECT(f.pane.show_content_context_menu(f.list, point_at(f, 0)));
+    EXPECT(!f.presenter->requests.back().extended);
+    f.presenter->requests.resize(4);
     EXPECT(f.pane.show_folder_context_menu(f.parent, {40, 50}));
     EXPECT(f.presenter->requests.back().items.empty());
     EXPECT(f.presenter->requests.back().align_above);
@@ -218,6 +228,47 @@ void namespace_and_modal_invalidation() {
     EXPECT(!f.presenter->current_after);
     EXPECT(f.pane.context_menu_snapshot({-1, -1}, false, snapshot) == E_ABORT);
 }
+void pane_performs_rename_open_and_new_folder() {
+    Fixture f;
+    managed_list::Row child{L"child", 0, true}; child.identity = {L"child", false};
+    f.deliver(LR"(C:\A)", managed_list::Phase::complete, {{L"file.txt", 1, false}, child});
+    const auto index = [&](const wchar_t* name) {
+        const auto& rows = f.pane.list_snapshot().rows;
+        return static_cast<int>(std::find_if(rows.begin(), rows.end(),
+            [&](const auto& row) { return row.name == name; }) - rows.begin());
+    };
+    // Other verbs are left to the Shell.
+    f.select_item(index(L"file.txt"));
+    f.presenter->choose = L"properties";
+    EXPECT(f.pane.show_content_context_menu(f.list, {-1, -1}));
+    EXPECT(!f.presenter->intercepted);
+    // A folder's open verb navigates the pane instead of opening Explorer.
+    f.presenter->choose = L"open";
+    EXPECT(f.pane.show_content_context_menu(f.list, {-1, -1}));
+    EXPECT(!f.presenter->intercepted); // a file keeps its own open verb
+    f.select_item(index(L"child"));
+    EXPECT(f.pane.show_content_context_menu(f.list, {-1, -1}));
+    EXPECT(f.presenter->intercepted);
+    EXPECT(f.pane.list_snapshot().request.location.parsing_name == LR"(C:\A\child)");
+    f.deliver(LR"(C:\A\child)", managed_list::Phase::complete, {{L"inner.txt", 1, false}});
+    // The menu's rename starts PaneDock's own label edit.
+    f.select_item(0);
+    f.presenter->choose = L"rename";
+    EXPECT(f.pane.show_content_context_menu(f.list, {-1, -1}));
+    EXPECT(f.presenter->intercepted);
+    EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) != nullptr);
+    f.pane.cancel_list_rename();
+    // Background New > Folder runs PaneDock's own new-folder path.
+    f.presenter->choose = L"NewFolder";
+    EXPECT(f.pane.show_folder_context_menu(f.parent, {40, 50}));
+    EXPECT(f.presenter->intercepted);
+    // A target that changed during the menu performs nothing.
+    f.select_item(0);
+    f.presenter->choose = L"rename";
+    f.presenter->pump = [&] { f.state.active_tab_id = "tab-b"; };
+    EXPECT(f.pane.show_content_context_menu(f.list, {-1, -1}));
+    EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) == nullptr);
+}
 } // namespace
 int main() {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
@@ -225,5 +276,6 @@ int main() {
     targets_and_routing();
     modal_selection_and_sort_keep_owned_targets();
     namespace_and_modal_invalidation();
+    pane_performs_rename_open_and_new_folder();
     return test::summary("managed_list_context_menu");
 }

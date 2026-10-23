@@ -4,6 +4,7 @@
 #include "managed_list/size_text.h"
 #include <windowsx.h>
 #include <shlwapi.h>
+#include <dbt.h>
 #include <algorithm>
 #include <cstdint>
 
@@ -15,6 +16,17 @@ std::size_t namespace_bytes(const Pane::ListSnapshot& snapshot) noexcept {
     for (const auto* location : {&snapshot.resolved_location, &snapshot.parent_location})
         if (*location) bytes += managed_list::owned_location_bytes(**location);
     return bytes;
+}
+// "Access is denied. (Error 5)". The UI is English: without English system text
+// installed, only the code is shown rather than a message in another language.
+std::wstring win32_error_text(DWORD error) {
+    const std::wstring code = L"(Error " + std::to_wstring(error) + L")";
+    wchar_t buffer[512]{};
+    DWORD length = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr,
+        error, MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), buffer, ARRAYSIZE(buffer), nullptr);
+    while (length > 0 && buffer[length - 1] <= L' ') // trailing CR/LF and spaces
+        --length;
+    return length == 0 ? code : std::wstring(buffer, length) + L" " + code;
 }
 bool bounded_shell_location(const core::ShellLocation& location) noexcept {
     return managed_list::valid_shell_location(location);
@@ -135,6 +147,7 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
     }
     ListView_SetExtendedListViewStyle(list_window_,
         LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_HEADERDRAGDROP);
+    ListView_SetCallbackMask(list_window_, LVIS_CUT | LVIS_DROPHILITED);
     SetWindowSubclass(ListView_GetHeader(list_window_), header_double_click_proc, 230, 0);
     column_ids_.clear(); applied_columns_.clear();
     apply_list_columns();
@@ -192,6 +205,14 @@ void Pane::prune_list_cache(bool all) noexcept {
                     tab.location == entry.snapshot.resolved_location.value_or(entry.snapshot.request.location);
             });
         if (valid) return false;
+        cache.stats.bytes -= entry.bytes;
+        return true;
+    });
+}
+void Pane::discard_group_list_cache(const std::string& group_id) noexcept {
+    auto& cache = list_cache();
+    std::erase_if(cache.entries, [&](const auto& entry) {
+        if (entry.snapshot.request.binding.group_id != group_id) return false;
         cache.stats.bytes -= entry.bytes;
         return true;
     });
@@ -258,6 +279,7 @@ std::optional<Pane::CachedList> Pane::take_list_cache(const managed_list::Reques
 }
 void Pane::cancel_managed_list(bool discard_cache) noexcept {
     cancel_list_rename();
+    release_list_device();
     if (discard_cache) prune_list_cache(true);
     if (list_source_) list_source_->cancel();
     cancel_list_icons();
@@ -384,8 +406,9 @@ void Pane::restore_managed_list_interaction(
     }
 }
 
+// Callers that reorder under an F2 edit cancel it themselves (sort change) or
+// keep it on its row (keep_list_rename_in_place after a batch).
 void Pane::sort_managed_list_rows(std::size_t sorted_prefix) noexcept {
-    cancel_list_rename();
     auto* tab = active_tab();
     if (tab == nullptr) return;
     const auto property = panedock::shell_core::parse_sort_property(tab->sort_column)
@@ -545,7 +568,9 @@ void Pane::set_managed_list_sort(
     } else {
         tab->sort_column = std::string(
             panedock::shell_core::sort_property_name(property));
-        tab->sort_ascending = true;
+        // Explorer's first click shows the newest and the largest first.
+        tab->sort_ascending = property != panedock::shell_core::SortProperty::size &&
+            property != panedock::shell_core::SortProperty::date_modified;
     }
     apply_managed_list_sort();
     if (pane_host()) pane_host()->schedule_session_save();
@@ -553,6 +578,8 @@ void Pane::set_managed_list_sort(
 HRESULT Pane::start_managed_list(const core::ShellLocation& location,
                                 NavigationGeneration generation) {
     if (!active() || !active_tab() || !navigation_request_is_current(generation)) return E_ABORT;
+    cancel_list_rename(); // Explorer ends a label edit on navigation and Refresh
+    release_list_device();
     if (!list_source_) list_source_ = managed_list::make_local_source();
     if (list_source_) list_source_->cancel();
     cancel_list_icons();
@@ -643,10 +670,33 @@ void Pane::resolve_list_navigation(bool success) {
     }
 }
 void Pane::process_content_results() noexcept try {
-    if (!list_source_ || !active() ||
-        (reentry_guard_ && reentry_guard().in_shell_call())) return;
+    if (!list_source_) return;
+    // Shutting down (or unhosted): nothing will consume these results. Drop
+    // interest so the signalled event cannot keep waking the message loop.
+    // A shutdown can still be called off (cancelled session end), so say
+    // that this list stopped refreshing instead of leaving it silently stale.
+    if (!active()) {
+        list_source_->cancel();
+        release_list_device();
+        clear_list_index();
+        if (list_.phase != managed_list::Phase::idle) {
+            list_.watch = managed_list::WatchState::failed;
+            list_.watch_error = ERROR_CANCELLED;
+            list_.updating = false;
+            if (list_.phase == managed_list::Phase::loading) {
+                list_.phase = managed_list::Phase::error;
+                list_.error = ERROR_CANCELLED;
+            }
+        }
+        return;
+    }
+    if (reentry_guard_ && reentry_guard().in_shell_call()) return;
     std::optional<ManagedListInteraction> interaction;
     bool rows_changed = false;
+    // Notification deltas place their own rows (apply_list_changes); every
+    // other row change re-sorts here.
+    bool full_sort = false;
+    std::optional<core::ShellLocation> lost_target;
     const std::size_t sorted_prefix = list_.rows.size();
     bool append_only = list_.watch != managed_list::WatchState::recovering &&
         !list_.updating;
@@ -657,7 +707,6 @@ void Pane::process_content_results() noexcept try {
         if (!batch) break;
         if (!active() || !content_request_is_current(batch->request.binding) ||
             !(batch->request == list_.request)) continue;
-        cancel_list_rename(); // accepted batches invalidate the native edit row
         if (!bounded_location(batch->resolved_location) || !bounded_location(batch->parent_location) ||
             (batch->parent_outcome == managed_list::ParentOutcome::value) != batch->parent_location.has_value()) {
             list_.phase = managed_list::Phase::error;
@@ -692,6 +741,11 @@ void Pane::process_content_results() noexcept try {
             list_.parent_outcome = batch->parent_outcome;
             list_.notification = batch->notification;
         }
+        if (batch->change == managed_list::Change::location_lost) {
+            // The folder itself is gone: never keep showing its rows as content.
+            if (batch->parent_location) lost_target = std::move(batch->parent_location);
+            break;
+        }
         if (batch->change != managed_list::Change::none) {
             if (batch->change != managed_list::Change::watching) append_only = false;
             if (list_.watch == managed_list::WatchState::failed &&
@@ -707,6 +761,7 @@ void Pane::process_content_results() noexcept try {
             ManagedListInteraction unused;
             apply_list_changes(*batch, interaction ? *interaction : unused);
             rows_changed = rows_changed || commit;
+            full_sort = full_sort || (commit && batch->change != managed_list::Change::delta);
             continue;
         }
         if (list_.phase != managed_list::Phase::loading) continue;
@@ -756,6 +811,7 @@ void Pane::process_content_results() noexcept try {
                     list_.watch = managed_list::WatchState::inactive;
             }
             rows_changed = rows_changed || terminal;
+            full_sort = full_sort || terminal;
             continue;
         }
         const auto count = std::min(batch->rows.size(), managed_list::kMaxRows-list_.rows.size());
@@ -782,15 +838,30 @@ void Pane::process_content_results() noexcept try {
             list_.rows.push_back(std::move(batch->rows[accepted]));
         }
         rows_changed = rows_changed || accepted != 0;
+        full_sort = full_sort || (accepted != 0 && !append_only);
         list_.phase = accepted < batch->rows.size() ? managed_list::Phase::limited : batch->phase;
         list_.error = batch->error;
         if (list_.phase == managed_list::Phase::error || list_.phase == managed_list::Phase::limited)
             list_source_->cancel();
     }
+    if (lost_target) {
+        // Explorer leaves a deleted or renamed folder for its new name or the
+        // nearest existing parent. The stale rows stay only if that fails.
+        release_list_device();
+        list_source_->cancel();
+        clear_list_index();
+        list_.watch = managed_list::WatchState::failed;
+        list_.watch_error = ERROR_PATH_NOT_FOUND;
+        list_.updating = false;
+        cancel_list_rename();
+        update_managed_list();
+        (void)navigate_to(*lost_target);
+        return;
+    }
     if (rows_changed) {
         cancel_list_icons();
-        if (list_.watch != managed_list::WatchState::recovering)
-            sort_managed_list_rows(append_only ? sorted_prefix : 0);
+        if (list_.watch != managed_list::WatchState::recovering && (full_sort || append_only))
+            sort_managed_list_rows(full_sort ? 0 : sorted_prefix);
     }
     update_managed_list();
     if (rows_changed) {
@@ -799,10 +870,13 @@ void Pane::process_content_results() noexcept try {
                 static_cast<int>(list_.rows.size()) - 1);
         if (interaction) restore_managed_list_interaction(*interaction);
     }
+    keep_list_rename_in_place();
     update_managed_list_sort_indicator();
     finish_property_batch();
     queue_list_icon_viewport();
+    if (rows_changed) rename_pending_new_item(); // Ctrl+Shift+N / New > Folder row arrived
 } catch (...) {
+    cancel_list_rename();
     if (list_source_) list_source_->cancel();
     clear_list_index();
     list_.phase = managed_list::Phase::error;
@@ -832,11 +906,14 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
     using managed_list::Change;
     using managed_list::WatchState;
     if (batch.change == Change::watch_error) {
+        release_list_device();
         list_.watch = WatchState::failed; list_.watch_error = batch.error;
         clear_list_index(); return;
     }
     if (batch.change == Change::watching) {
-        list_.watch = WatchState::watching; list_.watch_error = 0; return;
+        list_.watch = WatchState::watching; list_.watch_error = 0;
+        register_list_device(std::move(batch.device_handle));
+        return;
     }
     if (batch.change == Change::rescan_begin) {
         clear_list_index();
@@ -865,6 +942,13 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
     const auto translate = [&](std::optional<managed_list::ItemIdentity>& name, const auto& from, const auto& to) {
         if (name && *name == from) name = to;
     };
+    // Identities whose cached images may be stale; every other row keeps its icon.
+    std::vector<managed_list::ItemIdentity> touched;
+    for (const auto& leaf : batch.removed) touched.push_back({leaf, false});
+    for (const auto& [old_leaf, new_leaf] : batch.renamed) {
+        touched.push_back({old_leaf, false});
+        touched.push_back({new_leaf, false});
+    }
     for (const auto& [old_leaf, new_leaf] : batch.renamed) {
         const managed_list::ItemIdentity from{old_leaf, false}, to{new_leaf, false};
         // A rename is the only notification that transfers an interaction
@@ -893,6 +977,10 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
         for (std::size_t i = 0; i < list_.rows.size(); ++i)
             if (!index_list_row(i)) return;
     }
+    // A delta's updated rows (by index) and appended rows leave the order;
+    // the untouched rows remain one sorted run.
+    const std::size_t delta_base = list_.rows.size();
+    std::vector<std::size_t> delta_updated;
     for (auto& row : batch.rows) {
         if (!managed_list::prepare_row(row)) {
             list_.watch = WatchState::failed; list_.watch_error = ERROR_INVALID_DATA;
@@ -917,7 +1005,27 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
                     list_source_->cancel(); clear_list_index(); return;
                 }
                 list_name_bytes_ = list_name_bytes_ - old_bytes + new_bytes;
+                touched.push_back(row.identity);
+                if (batch.change == Change::delta) delta_updated.push_back(*match);
                 *found = std::move(row);
+            } else {
+                // A cache hit cleared the retained properties, but the worker
+                // already resolved Type and Duration's missing state while
+                // enumerating (PD-256). Adopt those instead of re-requesting
+                // them per row. Slot 2 belongs to the current sort key only.
+                for (std::size_t slot = 0; slot < 2; ++slot) {
+                    auto& target = found->properties[slot];
+                    auto& value = row.properties[slot];
+                    if (target.state != managed_list::PropertyState::unresolved ||
+                        value.state == managed_list::PropertyState::unresolved) continue;
+                    const auto old_bytes = managed_list::owned_string_bytes(target.text);
+                    const auto new_bytes = managed_list::owned_string_bytes(value.text);
+                    // Over budget: stay unresolved; on-demand requests apply the cap.
+                    if (list_name_bytes_ - old_bytes + new_bytes + list_.rows.capacity() * sizeof(managed_list::Row) >
+                        managed_list::kMaxRowBytes) continue;
+                    list_name_bytes_ = list_name_bytes_ - old_bytes + new_bytes;
+                    target = std::move(value);
+                }
             }
             if (batch.change == Change::rescan) recovery_seen_[*match] = 1;
         } else {
@@ -941,6 +1049,7 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
                 list_.rows.reserve(std::min(capacity, available));
             }
             list_name_bytes_ += bytes;
+            touched.push_back(row.identity);
             list_.rows.push_back(std::move(row));
             if (!index_list_row(list_.rows.size() - 1)) return;
             if (batch.change == Change::rescan) recovery_seen_[list_.rows.size() - 1] = 1;
@@ -965,26 +1074,80 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
         }
     }
     if (list_.watch != WatchState::recovering) clear_list_index();
+    if (batch.change == Change::delta && list_.watch != WatchState::recovering) {
+        // Move updated rows behind the untouched sorted run, after the
+        // appended ones, in one pass; then sort only that short suffix and
+        // merge (O(n + k log k)) instead of re-sorting the whole folder.
+        std::sort(delta_updated.begin(), delta_updated.end());
+        // A Source may update one identity more than once in a batch. Move
+        // each row once so the remaining prefix and its length stay valid.
+        delta_updated.erase(std::unique(delta_updated.begin(), delta_updated.end()),
+                            delta_updated.end());
+        std::vector<managed_list::Row> moved;
+        moved.reserve(delta_updated.size());
+        std::size_t write = 0, next = 0;
+        for (std::size_t read = 0; read < list_.rows.size(); ++read) {
+            if (read < delta_base && next < delta_updated.size() && delta_updated[next] == read) {
+                moved.push_back(std::move(list_.rows[read])); ++next; continue;
+            }
+            if (write != read) list_.rows[write] = std::move(list_.rows[read]);
+            ++write;
+        }
+        for (auto& row : moved) list_.rows[write++] = std::move(row);
+        sort_managed_list_rows(delta_base - delta_updated.size());
+    }
     list_.phase = list_.rows.empty() ? managed_list::Phase::empty : managed_list::Phase::complete;
     property_sort_pending_ = expensive_sort_slot() >= 0;
-    // Reuse image slots on the next visible demand, including overlay-only
-    // changes for which the basic size/time cache key did not change.
-    icon_cache_.clear();
-    if (icon_images_) ImageList_SetImageCount(icon_images_, 2);
+    // Only images of changed identities are reloaded (including overlay-only
+    // changes for which the basic size/time cache key did not change).
+    forget_list_icons(std::move(touched));
+}
+void Pane::forget_list_icons(std::vector<managed_list::ItemIdentity> identities) noexcept {
+    if (identities.empty() || icon_cache_.empty()) return;
+    try {
+        std::sort(identities.begin(), identities.end());
+        for (std::size_t i = 0; i < icon_cache_.size();) {
+            if (!std::binary_search(identities.begin(), identities.end(), icon_cache_[i].key.identity)) {
+                ++i; continue;
+            }
+            // Same slot repair as LRU eviction; placeholders 0/1 never move.
+            const int removed = icon_cache_[i].slot;
+            if (!icon_images_ || removed < 2 || !ImageList_Remove(icon_images_, removed)) throw std::bad_alloc();
+            icon_cache_.erase(icon_cache_.begin() + static_cast<std::ptrdiff_t>(i));
+            for (auto& entry : icon_cache_) if (entry.slot > removed) --entry.slot;
+        }
+    } catch (...) {
+        icon_cache_.clear();
+        if (icon_images_) ImageList_SetImageCount(icon_images_, 2);
+    }
 }
 void Pane::update_managed_list() noexcept try {
     if (list_window_ && ListView_GetItemCount(list_window_) !=
             static_cast<int>(list_.rows.size()))
         ListView_SetItemCountEx(list_window_, static_cast<int>(list_.rows.size()),
             LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
-    std::wstring text = std::to_wstring(list_.rows.size()) + L" items";
+    // Explorer: "12 items    3 items selected  1.50 MB"; the size only when no folder
+    // is selected. Runs once per posted selection burst, not per item notification.
+    std::wstring text = managed_list::item_count_text(list_.rows.size());
+    const int selected = list_window_ ? ListView_GetSelectedCount(list_window_) : 0;
+    if (selected > 0) {
+        std::optional<std::uint64_t> bytes{0};
+        for (int index = ListView_GetNextItem(list_window_, -1, LVNI_SELECTED); index >= 0;
+             index = ListView_GetNextItem(list_window_, index, LVNI_SELECTED)) {
+            if (static_cast<std::size_t>(index) >= list_.rows.size()) continue;
+            const auto& row = list_.rows[static_cast<std::size_t>(index)];
+            if (row.directory) { bytes.reset(); break; }
+            *bytes += row.bytes;
+        }
+        text += L"    " + managed_list::selection_status_text(static_cast<std::uint64_t>(selected), bytes);
+    }
     switch (list_.phase) {
     case managed_list::Phase::loading: text += list_.updating ? L" - Updating..." : L" - Loading..."; break;
-    case managed_list::Phase::empty: text = L"This folder is empty."; break;
+    case managed_list::Phase::empty: break; // "This folder is empty." is drawn in the list body
     case managed_list::Phase::error:
         text += list_.error == ERROR_NO_SYSTEM_RESOURCES
             ? L" - Worker capacity exhausted. Leave this location or Refresh to retry."
-            : L" - Cannot read this location. Refresh to retry. Error " + std::to_wstring(list_.error);
+            : L" - Cannot read this location: " + win32_error_text(list_.error) + L" Refresh to retry.";
         break;
     case managed_list::Phase::limited: text += L" - Row or memory limit reached (100,000 rows / 24 MiB). Open a subfolder to continue."; break;
     default: break;
@@ -993,11 +1156,17 @@ void Pane::update_managed_list() noexcept try {
         text += L" - Automatic refresh unavailable. Use Refresh to update.";
     if (list_.watch == managed_list::WatchState::recovering) text += L" - Recovering changes...";
     if (list_.watch == managed_list::WatchState::failed)
-        text += L" - Automatic refresh unavailable. Refresh to retry. Error " + std::to_wstring(list_.watch_error);
+        text += L" - Automatic refresh unavailable: " + win32_error_text(list_.watch_error) + L" Refresh to retry.";
     if (property_sort_pending_) text += L" - Sorting properties...";
     if (property_capacity_failed_) text += L" - Properties unavailable. Refresh to retry.";
     if (status_bar_) SetWindowTextW(status_bar_, text.c_str());
+    // The empty-folder text in the list body follows the phase.
+    if (list_window_ && list_.rows.empty()) InvalidateRect(list_window_, nullptr, TRUE);
 } catch (...) { if (status_bar_) SetWindowTextW(status_bar_, L"Cannot display folder status."); }
+void Pane::queue_selection_status() noexcept {
+    if (!list_window_ || selection_status_posted_) return;
+    selection_status_posted_ = PostMessageW(list_window_, kSelectionStatusMessage, 0, 0) != FALSE;
+}
 Pane::ListInteractionSnapshot Pane::list_interaction_snapshot() const {
     ListInteractionSnapshot snapshot;
     snapshot.viewport_anchor_clamped = last_viewport_anchor_clamped_;
@@ -1031,7 +1200,8 @@ Pane::ListInteractionSnapshot Pane::list_interaction_snapshot() const {
 }
 bool Pane::open_list_row(std::size_t row) {
     if (!active() || row >= list_.rows.size() ||
-        !content_request_is_current(list_.request.binding) || !list_.rows[row].directory) return false;
+        !content_request_is_current(list_.request.binding)) return false;
+    if (!list_.rows[row].directory) return invoke_default_list_row_verb(row);
     if (list_.rows[row].identity.shell_item) {
         if (!list_.rows[row].child_location) return false;
         const auto target = *list_.rows[row].child_location;
@@ -1046,10 +1216,21 @@ bool Pane::open_list_row(std::size_t row) {
 }
 std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try {
     if (!notification || !list_window_ || notification->hwndFrom != list_window_) return {};
-    if (notification->code == LVN_BEGINDRAG) { (void)begin_list_drag(); return 0; }
+    if (notification->code == LVN_BEGINDRAG || notification->code == LVN_BEGINRDRAG) {
+        const auto* begin = reinterpret_cast<const NMLISTVIEW*>(notification);
+        (void)begin_list_drag(begin->ptAction, notification->code == LVN_BEGINRDRAG);
+        return 0;
+    }
     if (auto card = draw_list_card(notification)) return card;
     if (notification->code == LVN_GETDISPINFOW) {
         auto* info = reinterpret_cast<NMLVDISPINFOW*>(notification);
+        // Owner-data lists keep only selection/focus; the callback mask asks for these.
+        if ((info->item.mask & LVIF_STATE) && info->item.iItem >= 0 &&
+            static_cast<std::size_t>(info->item.iItem) < list_.rows.size()) {
+            const UINT mask = info->item.stateMask & (LVIS_CUT | LVIS_DROPHILITED);
+            info->item.state = (info->item.state & ~mask) |
+                (list_transfer_state(list_.rows[info->item.iItem]) & mask);
+        }
         if (info->item.mask & LVIF_IMAGE)
             info->item.iImage = info->item.iItem < 0 ? 0 :
                 list_item_image(static_cast<std::size_t>(info->item.iItem));
@@ -1066,16 +1247,12 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
                 text = format_modified_time(row.date_modified);
             else if (sub == 5) text = row.cloud.text();
             else if (sub == 3 || sub == 4) {
+                // Explorer leaves pending and missing values blank; only a value shows.
                 const auto& value = row.properties[sub - 3];
-                if (value.state == managed_list::PropertyState::unresolved)
-                    text = property_capacity_failed_ ? L"Unavailable" : L"Loading...";
-                else if (value.state == managed_list::PropertyState::failed) text = L"Unavailable";
-                else if (value.state == managed_list::PropertyState::value) {
-                    if (sub == 4 && value.numeric) {
-                        const auto seconds = static_cast<std::uint64_t>(value.number / 10000000);
-                        text = std::to_wstring(seconds / 60) + L":" +
-                            (seconds % 60 < 10 ? L"0" : L"") + std::to_wstring(seconds % 60);
-                    } else text = value.numeric ? std::to_wstring(static_cast<double>(value.number)) : value.text;
+                if (value.state == managed_list::PropertyState::value) {
+                    if (sub == 4 && value.numeric)
+                        text = managed_list::duration_text(static_cast<std::uint64_t>(value.number));
+                    else text = value.numeric ? std::to_wstring(static_cast<double>(value.number)) : value.text;
                 }
             }
             if (info->item.cchTextMax > 0)
@@ -1133,6 +1310,27 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
         }
         return -1;
     }
+    // Selection changed (one item, all items, or an owner-data range): coalesce into
+    // one status update after the burst instead of rescanning per notification.
+    if (notification->code == LVN_ITEMCHANGED) {
+        const auto* change = reinterpret_cast<const NMLISTVIEW*>(notification);
+        if ((change->uChanged & LVIF_STATE) &&
+            ((change->uOldState ^ change->uNewState) & LVIS_SELECTED))
+            queue_selection_status();
+        return 0;
+    }
+    if (notification->code == LVN_ODSTATECHANGED) {
+        const auto* change = reinterpret_cast<const NMLVODSTATECHANGE*>(notification);
+        if ((change->uOldState ^ change->uNewState) & LVIS_SELECTED) queue_selection_status();
+        return 0;
+    }
+    if (notification->code == LVN_GETEMPTYMARKUP) {
+        if (list_.phase != managed_list::Phase::empty) return FALSE;
+        auto* markup = reinterpret_cast<NMLVEMPTYMARKUP*>(notification);
+        markup->dwFlags = EMF_CENTERED;
+        lstrcpynW(markup->szMarkup, L"This folder is empty.", ARRAYSIZE(markup->szMarkup));
+        return TRUE;
+    }
     if (notification->code == NM_DBLCLK) {
         const auto* click = reinterpret_cast<NMITEMACTIVATE*>(notification);
         if (click->iItem >= 0) open_list_row(static_cast<std::size_t>(click->iItem));
@@ -1142,4 +1340,88 @@ std::optional<LRESULT> Pane::list_notification(NMHDR* notification) noexcept try
     // snapshot instead of reentering the control during state notifications.
     return 0;
 } catch (...) { return 0; }
+void Pane::keep_list_rename_in_place() noexcept {
+    if (!list_rename_ || !list_rename_edit_ || !list_window_) return;
+    if (!file_command_is_current(list_rename_->snapshot)) { cancel_list_rename(); return; }
+    const auto found = std::find_if(list_.rows.begin(), list_.rows.end(),
+        [&](const auto& row) { return row.identity == list_rename_->identity; });
+    if (found == list_.rows.end()) { cancel_list_rename(); return; } // removed or renamed
+    const int index = static_cast<int>(found - list_.rows.begin());
+    const int top = ListView_GetTopIndex(list_window_);
+    RECT label{}, edit{};
+    if (index < top || index >= top + std::max(1, ListView_GetCountPerPage(list_window_)) ||
+        !ListView_GetItemRect(list_window_, index, &label, LVIR_LABEL) ||
+        !GetWindowRect(list_rename_edit_, &edit)) {
+        cancel_list_rename(); // shifted out of view: never edit a row the user cannot see
+        return;
+    }
+    MapWindowPoints(nullptr, list_window_, reinterpret_cast<POINT*>(&edit), 2);
+    if (edit.left != label.left || edit.top != label.top)
+        SetWindowPos(list_rename_edit_, nullptr, label.left, label.top, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+void Pane::release_list_device() noexcept {
+    if (list_device_notify_) UnregisterDeviceNotification(list_device_notify_);
+    list_device_notify_ = nullptr;
+    list_device_handle_.reset();
+}
+void Pane::register_list_device(std::shared_ptr<void> handle) noexcept {
+    release_list_device();
+    if (!handle || !list_window_) return;
+    DEV_BROADCAST_HANDLE filter{};
+    filter.dbch_size = sizeof(filter);
+    filter.dbch_devicetype = DBT_DEVTYP_HANDLE;
+    filter.dbch_handle = handle.get();
+    list_device_notify_ = RegisterDeviceNotificationW(list_window_, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
+    if (list_device_notify_) list_device_handle_ = std::move(handle);
+}
+LRESULT Pane::list_device_change(WPARAM event, LPARAM data) noexcept {
+    const auto* header = reinterpret_cast<const DEV_BROADCAST_HDR*>(data);
+    if (!header || header->dbch_devicetype != DBT_DEVTYP_HANDLE || !list_device_notify_ ||
+        reinterpret_cast<const DEV_BROADCAST_HANDLE*>(data)->dbch_hdevnotify != list_device_notify_)
+        return TRUE;
+    switch (event) {
+    case DBT_DEVICEQUERYREMOVE:
+        // Safely Remove / Eject: close every handle PaneDock holds on the
+        // volume. Cancel makes the worker close its directory watch; the
+        // registration stays to hear whether the removal went ahead. The
+        // rows remain, marked as no longer refreshing. No Shell call here.
+        list_device_handle_.reset();
+        if (list_source_) list_source_->cancel();
+        clear_list_index();
+        list_.watch = managed_list::WatchState::failed;
+        list_.watch_error = ERROR_DEVICE_REMOVED;
+        update_managed_list();
+        break;
+    case DBT_DEVICEQUERYREMOVEFAILED: // another program kept the volume: watch again
+        release_list_device();
+        if (list_window_) PostMessageW(list_window_, kListDeviceRefreshMessage, 0, 0);
+        break;
+    case DBT_DEVICEREMOVEPENDING:
+    case DBT_DEVICEREMOVECOMPLETE:
+        // The main window's volume broadcast moves this pane to This PC.
+        release_list_device();
+        break;
+    default: break;
+    }
+    return TRUE;
+}
+void Pane::refresh_unwatched_list() noexcept try {
+    if (!active() || !realized_ || !active_tab() || list_navigation_pending_ || list_.updating ||
+        list_.phase == managed_list::Phase::loading || list_.phase == managed_list::Phase::idle) return;
+    if (list_.notification == managed_list::NotificationCapability::manual_refresh ||
+        list_.watch == managed_list::WatchState::failed)
+        refresh_view();
+} catch (...) {}
+void Pane::volume_changed(DWORD units, bool removed) noexcept try {
+    if (!active() || !realized_ || !active_tab() || list_.phase == managed_list::Phase::idle) return;
+    const auto& location = list_.resolved_location.value_or(list_.request.location);
+    if (managed_list::is_this_pc_location(location)) { refresh_view(); return; }
+    const auto& path = location.parsing_name;
+    if (!removed || path.size() < 2 || path[1] != L':') return;
+    const wchar_t letter = static_cast<wchar_t>(towupper(path[0]));
+    if (letter < L'A' || letter > L'Z' || !(units & (1u << (letter - L'A')))) return;
+    release_list_device();
+    (void)navigate_to({L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", {}, {}}); // This PC
+} catch (...) {}
 } // namespace panedock::app_shell

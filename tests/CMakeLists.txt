@@ -34,6 +34,7 @@ set(PANEDOCK_TESTS
     "managed_list_drag_drop|unit/managed_list_drag_drop_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_file_commands|unit/managed_list_file_commands_test.cpp|panedock_file_operations panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_context_menu|unit/managed_list_context_menu_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
+    "managed_list_open|unit/managed_list_open_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_selection|unit/managed_list_selection_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_resize|unit/managed_list_resize_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_icons|unit/managed_list_icons_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
@@ -55,6 +56,7 @@ set(PANEDOCK_TESTS
     "deferred_messages|unit/deferred_messages_test.cpp|user32"
     "shell_reentry_guard|unit/shell_reentry_guard_test.cpp|panedock_core user32"
     "shell_core_view_mode|unit/shell_core_view_mode_test.cpp|panedock_shell_core"
+    "shell_core_icon_raster|unit/shell_core_icon_raster_test.cpp|panedock_shell_core ole32"
     "file_operation_effect|unit/file_operation_effect_test.cpp|panedock_file_operations"
 )
 
@@ -122,6 +124,20 @@ if(WIN32)
                 "${CMAKE_CURRENT_SOURCE_DIR}/release/launch_smoke.ps1"
                 -AppPath "$<TARGET_FILE:PaneDock>")
     set_tests_properties(panedock_launch_smoke PROPERTIES TIMEOUT 70)
+    # Opt-in: drives everyday flows in a visible window for several minutes,
+    # so the default ctest run never starts it. Configure with
+    # -DPANEDOCK_USER_FLOWS_SMOKE=ON and run `ctest -L user_flows`.
+    option(PANEDOCK_USER_FLOWS_SMOKE
+           "Register the visible-window user flows smoke test" OFF)
+    if(PANEDOCK_USER_FLOWS_SMOKE)
+        add_test(
+            NAME panedock_user_flows_smoke
+            COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+                    "${CMAKE_CURRENT_SOURCE_DIR}/release/user_flows_smoke.ps1"
+                    -AppPath "$<TARGET_FILE:PaneDock>")
+        set_tests_properties(panedock_user_flows_smoke PROPERTIES
+            TIMEOUT 900 LABELS user_flows SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+    endif()
     add_test(
         NAME panedock_no_compiler_runtime_dlls
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File

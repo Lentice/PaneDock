@@ -286,7 +286,7 @@ if ($timerBody -notmatch 'if \(state->reentry_guard\.in_shell_call\(\)\) return 
 # MessageBoxW pumps with no Shell call in progress, so queued deferred commands
 # replay inside the box and can delete or add Groups. delete_group therefore
 # must carry the Group id across the box, never the selected index.
-$deleteStart = $source.IndexOf('void delete_group(HWND window, AppState& state)')
+$deleteStart = $source.IndexOf('void delete_group(HWND window, AppState& state,')
 $deleteEnd = $source.IndexOf('void move_group(', $deleteStart)
 if ($deleteStart -lt 0 -or $deleteEnd -lt $deleteStart) {
     throw 'Shell re-entry invariant failed: delete_group body missing'

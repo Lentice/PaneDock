@@ -49,6 +49,14 @@ class RenameHost final : public test::TestPaneHost {
         if (shutdown_during_call) shutting_down = true;
         return answer;
     }
+    file_operations::RenameResult folder_answer{E_NOTIMPL};
+    int folder_calls{};
+    file_operations::RenameResult new_folder(app_shell::Pane&,
+        const app_shell::Pane::FileCommandSnapshot& snapshot) noexcept override {
+        ++folder_calls; captured = snapshot;
+        EXPECT(guard.in_shell_call());
+        return folder_answer;
+    }
 };
 struct Fixture final {
     RenameHost host;
@@ -142,16 +150,48 @@ void enter_and_notification_converge() {
     EXPECT(f.pane.list_snapshot().rows.size() == 2);
     EXPECT(f.pane.list_interaction_snapshot().selected[0].name == L"new.txt");
 }
+void pump(Fixture& f) {
+    MSG message{};
+    while (PeekMessageW(&message, f.list, 0, 0, PM_REMOVE)) DispatchMessageW(&message);
+}
+// Overrides PD-237's cancel on focus loss: Explorer commits the label edit
+// when focus moves elsewhere, after the focus change, not inside it.
+void focus_loss_commits_like_explorer() {
+    Fixture f; setup(f);
+    EXPECT(f.pane.begin_list_rename());
+    HWND edit = FindWindowExW(f.list, nullptr, L"EDIT", nullptr);
+    SetWindowTextW(edit, L"requested.txt");
+    SendMessageW(edit, WM_KILLFOCUS, reinterpret_cast<WPARAM>(f.list), 0);
+    EXPECT(f.host.calls == 0); // never a Shell call inside WM_KILLFOCUS
+    pump(f);
+    EXPECT(f.host.calls == 1 && f.host.new_name == L"requested.txt");
+    EXPECT(f.row(L"old.txt") == -1 && f.row(L"New display") >= 0);
+    EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) == nullptr);
+    // Focus that returns to the edit before the commit runs keeps editing.
+    ListView_SetItemState(f.list, -1, 0, LVIS_SELECTED);
+    f.select(f.row(L"other.txt"));
+    EXPECT(f.pane.begin_list_rename());
+    edit = FindWindowExW(f.list, nullptr, L"EDIT", nullptr);
+    SendMessageW(edit, WM_KILLFOCUS, reinterpret_cast<WPARAM>(f.list), 0);
+    SendMessageW(edit, WM_SETFOCUS, reinterpret_cast<WPARAM>(f.list), 0);
+    pump(f);
+    EXPECT(f.host.calls == 1 && FindWindowExW(f.list, nullptr, L"EDIT", nullptr) == edit);
+    end_edit(f, L"x", VK_ESCAPE);
+    pump(f);
+    EXPECT(f.host.calls == 1);
+}
 void cancel_focus_batch_sort_and_navigation() {
     Fixture f; setup(f);
     EXPECT(f.pane.begin_list_rename()); end_edit(f, L"ignored", VK_ESCAPE);
     EXPECT(f.host.calls == 0 && f.row(L"old.txt") >= 0);
     EXPECT(f.pane.begin_list_rename());
+    // Focus loss followed by a cancel (navigation, batch, shutdown) commits nothing.
     const HWND edit = FindWindowExW(f.list, nullptr, L"EDIT", nullptr);
     SetWindowTextW(edit, L"ignored");
     SendMessageW(edit, WM_KILLFOCUS, reinterpret_cast<WPARAM>(f.list), 0);
-    EXPECT(f.host.calls == 0);
     f.pane.cancel_list_rename();
+    pump(f);
+    EXPECT(f.host.calls == 0);
     EXPECT(f.pane.begin_list_rename());
     managed_list::Batch batch{f.pane.list_snapshot().request, {}, managed_list::Phase::complete};
     batch.change = managed_list::Change::delta; batch.removed = {L"old.txt"};
@@ -245,10 +285,12 @@ void binding_changes_and_batches_cancel_without_retargeting() {
         Fixture f; setup(f);
         EXPECT(f.pane.begin_list_rename());
         if (action == 0) {
-            // A progressive/notification batch cancels before rows reorder.
+            // A notification that removes the edited row cancels the edit
+            // (unrelated batches keep it: managed_list_changes_test).
             managed_list::Batch batch{f.pane.list_snapshot().request,
                 {{L"aaa", 0, false}}, managed_list::Phase::complete};
             batch.change = managed_list::Change::delta;
+            batch.removed = {L"old.txt"};
             f.source->deliver(std::move(batch)); f.pane.process_content_results();
         } else if (action == 1) {
             f.host.group_id = "replacement";
@@ -267,10 +309,100 @@ void binding_changes_and_batches_cancel_without_retargeting() {
     loading.select(0);
     EXPECT(!loading.pane.begin_list_rename()); // no stale enumeration echo after commit
 }
+void hidden_extension_edits_display_name() {
+    Fixture f;
+    managed_list::Row report{L"report", 7, false};
+    report.identity = {L"report.txt", false};
+    f.deliver(LR"(C:\A)", managed_list::Phase::complete, {report});
+    f.select(0);
+    f.host.answer.result = S_OK;
+    f.host.answer.parsing_name = LR"(C:\A\summary.txt)";
+    f.host.answer.leaf_name = L"summary.txt";
+    f.host.answer.display_name = L"summary";
+    EXPECT(f.pane.begin_list_rename());
+    wchar_t shown[64]{};
+    GetWindowTextW(FindWindowExW(f.list, nullptr, L"EDIT", nullptr), shown, 64);
+    EXPECT(std::wstring(shown) == L"report"); // Explorer hides the extension here too
+    end_edit(f, L"summary");
+    EXPECT(f.host.new_name == L"summary.txt"); // the hidden extension is kept
+    f.select(0);
+    EXPECT(f.pane.begin_list_rename());
+    end_edit(f, L"summary.TXT");
+    EXPECT(f.host.new_name == L"summary.TXT"); // typed by the user: not doubled
+}
+void new_folder_and_list_keys() {
+    Fixture f; setup(f);
+    MSG key{}; key.hwnd = f.list; key.message = WM_KEYDOWN; key.wParam = 'A';
+    EXPECT(f.pane.handle_list_key(key, true, false, false)); // Ctrl+A
+    EXPECT(f.pane.list_interaction_snapshot().selected.size() == 2);
+    EXPECT(!f.pane.handle_list_key(key, false, false, false));
+    EXPECT(!f.pane.handle_list_key(key, true, true, false));
+    key.hwnd = f.pane.address_bar();
+    EXPECT(!f.pane.handle_list_key(key, true, false, false)); // address bar keeps Ctrl+A
+    key.hwnd = f.list;
+    // Ctrl+Shift+N: no host support reports, never throws or edits.
+    key.wParam = 'N';
+    EXPECT(f.pane.handle_list_key(key, true, false, true));
+    EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) == nullptr);
+    EXPECT(!f.pane.handle_list_key(key, true, false, false)); // Ctrl+N is not ours
+
+    EXPECT(f.host.folder_calls == 1);
+    // The new row is selected and edited once its batch arrives.
+    f.host.folder_answer.result = S_OK;
+    f.host.folder_answer.parsing_name = LR"(C:\A\New folder (2))";
+    f.host.folder_answer.leaf_name = L"New folder (2)";
+    f.host.folder_answer.display_name = L"New folder (2)";
+    EXPECT(f.pane.create_new_folder());
+    EXPECT(f.host.folder_calls == 2 && f.host.captured.folder.parsing_name == LR"(C:\A)");
+    EXPECT(f.host.captured.items.empty());
+    EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) == nullptr);
+    managed_list::Batch other{f.pane.list_snapshot().request, {{L"unrelated", 0, false}},
+                              managed_list::Phase::complete};
+    other.change = managed_list::Change::delta;
+    f.source->deliver(std::move(other)); f.pane.process_content_results();
+    EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) == nullptr);
+    managed_list::Batch created{f.pane.list_snapshot().request, {{L"New folder (2)", 0, true}},
+                                managed_list::Phase::complete};
+    created.change = managed_list::Change::delta;
+    f.source->deliver(std::move(created)); f.pane.process_content_results();
+    EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) != nullptr);
+    const auto interaction = f.pane.list_interaction_snapshot();
+    EXPECT(interaction.selected.size() == 1 && interaction.selected[0].name == L"New folder (2)");
+    f.pane.cancel_list_rename();
+    // A failed creation leaves nothing pending and never edits.
+    f.host.folder_answer.result = E_ACCESSDENIED;
+    EXPECT(!f.pane.create_new_folder());
+    EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) == nullptr);
+}
 bool abort_setup(void*) noexcept { return true; }
+void renamed_namespace_folder_keeps_its_navigation_parent() {
+    Fixture f;
+    const core::ShellLocationParent desktop{
+        L"::{00021400-0000-0000-C000-000000000046}", {}, {}, true};
+    managed_list::Row row{L"Old folder", 0, true};
+    row.identity = {LR"(C:\Users\Public\Desktop\Old folder)", true};
+    row.child_location = core::ShellLocation{row.identity.key, {}, row.identity.key, desktop};
+    f.deliver(LR"(C:\A)", managed_list::Phase::complete, {row});
+    f.select(0);
+    f.host.answer = {S_OK, false, LR"(C:\Users\Public\Desktop\New folder)",
+                     L"New folder", L"New folder"};
+    EXPECT(f.pane.begin_list_rename());
+    end_edit(f, L"New folder");
+    EXPECT(f.host.calls == 1);
+    const auto child = f.pane.list_snapshot().rows.front().child_location;
+    EXPECT(child && child->navigation_parent == desktop);
+    EXPECT(child && child->fallback_path == f.host.answer.parsing_name);
+    EXPECT(f.pane.open_list_row(0));
+    f.deliver(f.host.answer.parsing_name.c_str(), managed_list::Phase::empty);
+    EXPECT(SUCCEEDED(f.pane.navigate_up_one_level()));
+    const auto target = f.pane.list_snapshot().request.location;
+    EXPECT(target.parsing_name == desktop.parsing_name && target.namespace_location);
+}
+
 void rejected_shell_setup_is_non_destructive() {
     file_operations::Callbacks callbacks{}; callbacks.abort_setup = abort_setup;
     EXPECT(file_operations::rename_item(nullptr, LR"(C:\unused)", L"unused", callbacks).result == E_ABORT);
+    EXPECT(file_operations::new_folder(nullptr, LR"(C:\unused)", callbacks).result == E_ABORT);
 }
 } // namespace
 int main() {
@@ -278,9 +410,13 @@ int main() {
     EXPECT(InitCommonControlsEx(&controls));
     enter_and_notification_converge();
     cancel_focus_batch_sort_and_navigation();
+    focus_loss_commits_like_explorer();
+    new_folder_and_list_keys();
+    hidden_extension_edits_display_name();
     errors_and_reentry_keep_target_safe();
     focus_routing_and_virtual_identity();
     binding_changes_and_batches_cancel_without_retargeting();
     rejected_shell_setup_is_non_destructive();
+    renamed_namespace_folder_keeps_its_navigation_parent();
     return test::summary("managed_list_rename");
 }

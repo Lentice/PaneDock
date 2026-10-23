@@ -12,8 +12,11 @@ namespace panedock::core {
 inline constexpr unsigned kVirtualKeyBack = 0x08;
 inline constexpr unsigned kVirtualKeyTab = 0x09;
 inline constexpr unsigned kVirtualKeyLeft = 0x25;
+inline constexpr unsigned kVirtualKeyUp = 0x26;
 inline constexpr unsigned kVirtualKeyRight = 0x27;
 inline constexpr unsigned kVirtualKeyF2 = 0x71;
+inline constexpr unsigned kVirtualKeyF4 = 0x73;
+inline constexpr unsigned kVirtualKeyF5 = 0x74;
 inline constexpr unsigned kVirtualKeyF6 = 0x75;
 
 enum class KeyMessage {
@@ -35,6 +38,8 @@ enum class KeyAction {
     history_back,
     history_forward,
     navigate_up,
+    refresh,
+    focus_address_bar,
 };
 
 // Where the Shell view's own accelerator sits relative to `action`. This is

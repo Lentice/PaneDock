@@ -36,6 +36,7 @@ public:
 
     std::optional<core::ApplicationState> take_result() noexcept;
     bool is_open() const noexcept { return window_ != nullptr; }
+    HWND window() const noexcept { return window_; }
 
 private:
     static LRESULT CALLBACK window_proc(HWND window, UINT message,

@@ -34,6 +34,14 @@ struct GroupSummary final {
 // A completed reorder gesture, waiting for the coordinator to apply it.
 // Sidebar owns the gesture; committing it to the model is coordinator work
 // (core::reorder_group plus the session save), so it is reported, not done.
+// A committed Group rename. The Group id is captured when editing begins, so
+// the commit applies to the row that was edited even if the selection (the
+// active Group) changed meanwhile.
+struct GroupRename final {
+    std::string group_id;
+    std::wstring name;
+};
+
 struct GroupReorder final {
     std::string group_id;
     std::size_t target_index{};
@@ -66,8 +74,12 @@ public:
     std::optional<GroupReorder> take_reorder_request() noexcept;
     void cancel_drag() noexcept;
 
+    // F2 path: the selected (active) row.
     bool begin_rename();
-    std::optional<std::wstring> take_rename_text() noexcept;
+    // Context-menu path: the row the user right-clicked.
+    bool begin_rename(std::size_t index);
+    std::optional<GroupRename> take_rename() noexcept;
+    HWND rename_editor() const noexcept { return editor_; }
     HWND window() const noexcept { return list_box_; }
 
 private:
@@ -96,7 +108,8 @@ private:
     bool drag_drop_registered_{false};
     std::vector<GroupSummary> groups_;
     std::optional<std::size_t> hover_index_;
-    std::optional<std::wstring> pending_rename_;
+    std::string editing_group_id_;
+    std::optional<GroupRename> pending_rename_;
     std::optional<Drag> drag_;
     std::optional<GroupReorder> pending_reorder_;
     UINT dpi_{};

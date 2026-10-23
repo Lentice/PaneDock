@@ -463,7 +463,41 @@ void test_next_tab_id_skips_taken_ids_across_panes() {
 
 }  // namespace
 
+void test_new_group_name_fills_lowest_gap() {
+    ApplicationState application{1, {group("group-1")}, "group-1", {},
+                                 kDefaultSidebarWidth, {}};
+    application.groups[0].name = L"Group 1";
+    EXPECT(next_group_name(application) == L"Group 2");
+    GroupState third = group("group-3");
+    third.name = L"Group 3";
+    application.groups.push_back(third);
+    // Deleting "Group 2" earlier must not make New Group repeat "Group 3".
+    EXPECT(next_group_name(application) == L"Group 2");
+    application.groups[0].name = L"Work";
+    EXPECT(next_group_name(application) == L"Group 1");
+}
+
+void test_group_name_normalization() {
+    EXPECT(normalize_group_name(L"  Work \t") == L"Work");
+    EXPECT(normalize_group_name(L"A  B") == L"A  B");
+    EXPECT(normalize_group_name(L"").empty());
+    EXPECT(normalize_group_name(L"   \t　").empty());
+}
+
+void test_same_layout_keeps_divider_ratios() {
+    GroupState value = group("group", LayoutTemplate::four_pane_grid);
+    value.divider_ratios = {0.3, 0.7};
+    EXPECT(switch_layout(value, LayoutTemplate::four_pane_grid, kDefault));
+    EXPECT(value.divider_ratios == std::vector<double>({0.3, 0.7}));
+    EXPECT(switch_layout(value, LayoutTemplate::single, kDefault));
+    EXPECT(switch_layout(value, LayoutTemplate::four_pane_grid, kDefault));
+    EXPECT(value.divider_ratios == std::vector<double>({0.5, 0.5}));
+}
+
 int main() {
+    test_new_group_name_fills_lowest_gap();
+    test_group_name_normalization();
+    test_same_layout_keeps_divider_ratios();
     test_next_group_id_never_collides();
     test_next_tab_id_skips_taken_ids_across_panes();
     test_layout_metadata();

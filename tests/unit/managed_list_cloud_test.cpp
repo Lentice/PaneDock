@@ -48,7 +48,8 @@ void controlled_attributes() {
 void pane_refresh_and_identity() {
     test::TestPaneHost host;
     core::PaneState state{"pane", {{"tab", {L"C:\\controlled-cloud", {}, {}},
-        "FVM_DETAILS", "System.ItemNameDisplay", true, {}, 0}}, "tab"};
+        "FVM_DETAILS", "System.ItemNameDisplay", true, {}, 0,
+        "name:320,size:160,date:180,type:160,duration:120,availability:200"}}, "tab"}; // Availability at position 5
     app_shell::Pane pane;
     pane.set_host(&host); pane.set_reentry_guard(&host.guard); pane.bind(&state);
     EXPECT(app_shell::Pane::register_window_class(GetModuleHandleW(nullptr)));

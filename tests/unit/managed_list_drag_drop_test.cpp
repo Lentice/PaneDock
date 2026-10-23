@@ -350,6 +350,117 @@ void source_cancel_and_aborted_setup() {
     EXPECT(file_operations::drag_selection(owned.Get(), callbacks, effect) == DRAGDROP_S_CANCEL);
     EXPECT(effect == DROPEFFECT_NONE);
 }
+// Rows and their transfer state, as the list asks for them through the callback mask.
+UINT transfer_state(Fixture& f, int index) {
+    NMLVDISPINFOW info{};
+    info.hdr.hwndFrom = f.list; info.hdr.code = LVN_GETDISPINFOW;
+    info.item.mask = LVIF_STATE; info.item.iItem = index;
+    info.item.stateMask = LVIS_CUT | LVIS_DROPHILITED;
+    EXPECT(f.pane.list_notification(&info.hdr).has_value());
+    return info.item.state & info.item.stateMask;
+}
+POINTL row_point(Fixture& f, int index) {
+    RECT rect{};
+    EXPECT(index >= 0 && ListView_GetItemRect(f.list, index, &rect, LVIR_LABEL));
+    POINT point{(rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2};
+    ClientToScreen(f.list, &point);
+    return {point.x, point.y};
+}
+std::vector<managed_list::Row> sample_rows() {
+    managed_list::Row folder{L"Folder", 0, true}; folder.identity = {L"Folder", false};
+    managed_list::Row doc{L"Doc.txt", 1, false}; doc.identity = {L"Doc.txt", false};
+    managed_list::Row note{L"Note.txt", 1, false}; note.identity = {L"Note.txt", false};
+    return {folder, doc, note};
+}
+// Row targets come from the Shell by row identity; other rows mean the background.
+class RowResolver final : public file_operations::DropTargetResolver {
+public:
+    Microsoft::WRL::ComPtr<Target> background, folder;
+    std::vector<std::wstring> asked;
+    RowResolver() { background.Attach(new Target); folder.Attach(new Target); }
+    HRESULT resolve(HWND, std::wstring_view value,
+                    Microsoft::WRL::ComPtr<IDropTarget>& out) noexcept override {
+        asked.emplace_back(value);
+        if (value == LR"(C:\A)") out = background;
+        else if (value == L"Folder") out = folder;
+        else return S_FALSE; // not a drop target
+        return S_OK;
+    }
+};
+void drop_onto_folder_row_targets_that_folder() {
+    auto owned = std::make_unique<RowResolver>();
+    auto* resolver = owned.get();
+    Setup s;
+    Fixture f(0, std::move(owned));
+    f.pane.use_list_icons(nullptr);
+    f.deliver(LR"(C:\A)", managed_list::Phase::complete, sample_rows());
+    const int folder = f.row(L"Folder"), doc = f.row(L"Doc.txt"), note = f.row(L"Note.txt");
+    auto ole = f.pane.list_drop_target();
+    DWORD effect = effects;
+    ole->DragEnter(s.data.Get(), 0, row_point(f, folder), &effect);
+    EXPECT(effect == DROPEFFECT_LINK && resolver->folder->enters == 1);
+    EXPECT(resolver->background->enters == 0);
+    EXPECT(transfer_state(f, folder) == LVIS_DROPHILITED && transfer_state(f, doc) == 0);
+    effect = effects;
+    ole->DragOver(0, row_point(f, folder), &effect);
+    EXPECT(resolver->folder->overs == 1 && resolver->folder->enters == 1);
+    // A plain file is not a target: the folder background takes it, unhighlighted.
+    effect = effects;
+    ole->DragOver(0, row_point(f, doc), &effect);
+    EXPECT(resolver->folder->leaves == 1 && resolver->background->enters == 1);
+    EXPECT(effect == DROPEFFECT_LINK && transfer_state(f, folder) == 0);
+    // Across further plain files the background session continues without churn.
+    effect = effects;
+    ole->DragOver(0, row_point(f, note), &effect);
+    EXPECT(resolver->background->enters == 1 && resolver->background->leaves == 0);
+    EXPECT(resolver->background->overs == 2);
+    resolver->folder->result = DROPEFFECT_COPY;
+    effect = effects;
+    ole->Drop(s.data.Get(), 0, row_point(f, folder), &effect);
+    EXPECT(effect == DROPEFFECT_COPY && resolver->folder->drops == 1);
+    EXPECT(resolver->background->drops == 0 && resolver->background->leaves == 1);
+    EXPECT(transfer_state(f, folder) == 0 && f.host.drags == 0);
+    // Leaving clears the highlight and ends the row session.
+    effect = effects;
+    ole->DragEnter(s.data.Get(), 0, row_point(f, folder), &effect);
+    EXPECT(transfer_state(f, folder) == LVIS_DROPHILITED);
+    ole->DragLeave();
+    EXPECT(transfer_state(f, folder) == 0 && resolver->folder->leaves == 2);
+    EXPECT(std::find(resolver->asked.begin(), resolver->asked.end(), L"Doc.txt") !=
+           resolver->asked.end()); // identity key, never display text or a path
+}
+void right_drag_continues_with_right_button() {
+    using app_shell::Pane;
+    EXPECT(Pane::list_drag_continue(true, false, MK_RBUTTON, false) == S_OK);
+    EXPECT(Pane::list_drag_continue(true, false, 0, false) == DRAGDROP_S_DROP);
+    EXPECT(Pane::list_drag_continue(true, false, MK_RBUTTON | MK_LBUTTON, false) == DRAGDROP_S_CANCEL);
+    EXPECT(Pane::list_drag_continue(true, true, MK_RBUTTON, false) == DRAGDROP_S_CANCEL);
+    EXPECT(Pane::list_drag_continue(true, false, MK_RBUTTON, true) == DRAGDROP_S_CANCEL);
+    EXPECT(Pane::list_drag_continue(false, false, MK_LBUTTON, false) == S_OK);
+    EXPECT(Pane::list_drag_continue(false, false, MK_RBUTTON, false) == DRAGDROP_S_DROP);
+}
+void cut_rows_are_dimmed_until_the_clipboard_changes() {
+    Fixture f;
+    f.pane.use_list_icons(nullptr);
+    f.deliver(LR"(C:\A)", managed_list::Phase::complete, sample_rows());
+    const int folder = f.row(L"Folder"), doc = f.row(L"Doc.txt");
+    f.select(doc);
+    app_shell::Pane::FileCommandSnapshot snapshot;
+    EXPECT(f.pane.file_command_snapshot(file_operations::Command::cut, snapshot) == S_OK);
+    f.pane.note_list_cut(snapshot);
+    EXPECT(transfer_state(f, doc) == LVIS_CUT && transfer_state(f, folder) == 0);
+    SendMessageW(f.list, WM_CLIPBOARDUPDATE, 0, 0); // same sequence: still cut
+    EXPECT(transfer_state(f, doc) == LVIS_CUT);
+    f.pane.switch_active_tab("tab-b"); // another folder never shows those marks
+    f.deliver(LR"(C:\B)", managed_list::Phase::complete, sample_rows());
+    EXPECT(transfer_state(f, f.row(L"Doc.txt")) == 0);
+    f.pane.switch_active_tab("tab-a");
+    f.deliver(LR"(C:\A)", managed_list::Phase::complete, sample_rows());
+    EXPECT(transfer_state(f, f.row(L"Doc.txt")) == LVIS_CUT);
+    snapshot.binding = {}; // a stale snapshot is refused
+    f.pane.note_list_cut(snapshot);
+    EXPECT(transfer_state(f, f.row(L"Doc.txt")) == 0);
+}
 } // namespace
 int main() {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
@@ -361,5 +472,8 @@ int main() {
     outer_reentry_and_shutdown_drop_finish_session();
     callbacks_after_host_lifetime();
     source_cancel_and_aborted_setup();
+    drop_onto_folder_row_targets_that_folder();
+    right_drag_continues_with_right_button();
+    cut_rows_are_dimmed_until_the_clipboard_changes();
     return test::summary("managed_list_drag_drop");
 }

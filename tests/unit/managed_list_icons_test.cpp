@@ -53,7 +53,10 @@ class Icons final : public ml::IconSource {
 };
 struct Fixture {
     test::TestPaneHost host;
-    core::PaneState state{"pane", {{"tab", {L"C:\\A", {}, {}}, {}, {}, true, {}, 0}}, "tab"};
+    // Earlier default layout: Type starts past the 640 px list, so the image
+    // expectations below see no Type property demand from the viewport.
+    core::PaneState state{"pane", {{"tab", {L"C:\\A", {}, {}}, {}, {}, true, {}, 0,
+        "name:320,size:160,date:180,type:160,duration:120,availability:200"}}, "tab"};
     app_shell::Pane pane;
     Rows* rows{};
     Icons* icons{};

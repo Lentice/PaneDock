@@ -1,4 +1,5 @@
 #include "app_shell/pane.h"
+#include "core/address_text.h"
 #include "app_shell/pane_chrome_palette.h"
 
 #include "app_shell/diagnostic_mode.h"
@@ -370,7 +371,12 @@ LRESULT CALLBACK address_edit_proc(HWND window, UINT message, WPARAM wparam,
         pane->submit_address();
         return 0;
     }
+    if (message == WM_KEYDOWN && wparam == VK_ESCAPE && pane != nullptr) {
+        pane->cancel_address_edit();
+        return 0;
+    }
     if (message == WM_CHAR && wparam == VK_RETURN) return 0;
+    if (message == WM_CHAR && wparam == VK_ESCAPE) return 0; // no beep
     if (message == WM_NCDESTROY) {
         RemoveWindowSubclass(window, address_edit_proc, subclass_id);
     }
@@ -484,6 +490,9 @@ LRESULT CALLBACK pane_window_proc(HWND window, UINT message, WPARAM wparam,
             if (handled) return *handled;
         }
         return SendMessageW(GetParent(window), message, wparam, lparam);
+    case kAddressFailedMessage:
+        if (pane != nullptr) pane->finish_failed_address();
+        return 0;
     case WM_DESTROY:
         if (pane != nullptr) {
             // Fail-safe for parent-chain destruction. The normal §9.4
@@ -693,13 +702,15 @@ bool Pane::content_request_is_current(
 std::optional<file_operations::Command> Pane::file_command_for_key(
     const MSG& message, bool control, bool alt, bool shift) const noexcept {
     if (!active() || message.hwnd != list_window_ ||
-        message.message != WM_KEYDOWN || alt || shift) return {};
+        message.message != WM_KEYDOWN || alt) return {};
     using file_operations::Command;
-    if (control) {
+    if (control && !shift) {
         if (message.wParam == 'C') return Command::copy;
         if (message.wParam == 'X') return Command::cut;
         if (message.wParam == 'V') return Command::paste;
-    } else if (message.wParam == VK_DELETE) return Command::delete_items;
+    } else if (!control && message.wParam == VK_DELETE) {
+        return shift ? Command::delete_permanently : Command::delete_items;
+    }
     return {};
 }
 
@@ -711,7 +722,12 @@ HRESULT Pane::file_command_snapshot(file_operations::Command command,
     snapshot.folder = content_location();
     if (!content_request_is_current(snapshot.binding)) return E_ABORT;
     if (snapshot.folder.parsing_name.empty()) return E_PENDING;
-    if (list_.phase == managed_list::Phase::idle || list_navigation_pending_) return E_PENDING;
+    // Rows restored from a PD-261 snapshot while they are re-validated belong
+    // to this exact request location (the cache is keyed by it), so they can
+    // be opened and acted on, as in Explorer. A plain load has no rows until
+    // its first batch commits the navigation.
+    if (list_.phase == managed_list::Phase::idle ||
+        (list_navigation_pending_ && !list_.updating)) return E_PENDING;
     if (command == file_operations::Command::paste) return S_OK;
     for (int index = ListView_GetNextItem(list_window_, -1, LVNI_SELECTED);
          index >= 0; index = ListView_GetNextItem(list_window_, index, LVNI_SELECTED)) {
@@ -734,7 +750,7 @@ HRESULT Pane::file_command_snapshot(file_operations::Command command,
 
 bool Pane::file_command_is_current(const FileCommandSnapshot& snapshot) const noexcept {
     return realized_ && content_request_is_current(snapshot.binding) &&
-        !list_navigation_pending_ && snapshot.folder ==
+        (!list_navigation_pending_ || list_.updating) && snapshot.folder ==
         list_.resolved_location.value_or(list_.request.location);
 }
 
@@ -759,6 +775,18 @@ void Pane::focus_content() noexcept {
     if (active() && active_tab() && list_window_) SetFocus(list_window_);
 }
 
+void Pane::focus_address_bar() noexcept {
+    if (!active() || !address_bar_) return;
+    SetFocus(address_bar_);
+    SendMessageW(address_bar_, EM_SETSEL, 0, -1);
+}
+
+void Pane::cancel_address_edit() noexcept try {
+    if (!active()) return;
+    refresh_navigation_chrome(); // the displayed location's text again
+    if (active()) focus_content();
+} catch (...) {}
+
 HRESULT Pane::translate_content_accelerator(MSG *message) noexcept try {
     if (!active() || active_tab() == nullptr || !list_window_) return S_FALSE;
 
@@ -768,15 +796,10 @@ HRESULT Pane::translate_content_accelerator(MSG *message) noexcept try {
         const bool shift_down = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
         if (!control_down && !alt_down && !shift_down &&
             message->wParam == VK_RETURN) {
-            const int row = ListView_GetNextItem(list_window_, -1, LVNI_FOCUSED);
-            if (row >= 0) open_list_row(static_cast<std::size_t>(row));
+            (void)open_list_selection();
             return S_OK;
         }
-        if (!control_down && !alt_down && !shift_down &&
-            message->wParam == VK_BACK) {
-            navigate_up();
-            return S_OK;
-        }
+        // Backspace is Back (core::resolve_key), as in Windows 10/11 Explorer.
     }
     return S_FALSE;
 } catch (...) {
@@ -886,6 +909,7 @@ Pane::NavigationGeneration Pane::begin_navigation() {
     if (tab == nullptr) return 0;
     list_history_target_.reset();
     list_retry_history_target_.reset();
+    typed_address_.reset();
     auto &request = pending_navigation_;
     request.generation = ++navigation_generation_;
     request.group_id = pane_host()->active_group_id();
@@ -930,6 +954,13 @@ HRESULT Pane::navigate_up_one_level() {
     auto path = list_.request.location.parsing_name;
     while (path.size() > 3 && path.back() == L'\\') path.pop_back();
     if (path.starts_with(L"\\\\")) {
+        // Up from \\server\share lists the server's shares, a Shell namespace
+        // folder (the filesystem reader has no server level).
+        if (auto server = core::unc_server_of_share_root(path); !server.empty()) {
+            core::ShellLocation target{std::move(server), {}, {}};
+            target.namespace_location = true;
+            return navigate_to(target);
+        }
         const auto server = path.find(L'\\', 2);
         if (server == std::wstring::npos || path.find(L'\\', server + 1) == std::wstring::npos)
             return S_FALSE;
@@ -959,6 +990,7 @@ void Pane::navigation_complete(
     if (!navigation_request_is_current(generation)) return;
     auto *tab = active_tab();
     if (tab == nullptr) return;
+    typed_address_.reset();
     if (list_history_target_) {
         if (!core::restore_tab_history_index(*tab, *list_history_target_)) return;
         list_history_target_.reset();
@@ -994,6 +1026,17 @@ void Pane::navigation_failed(NavigationGeneration generation) {
     // release the suppression flag, or those buttons stay disabled forever.
     set_suppress_history(false);
     refresh_navigation_buttons();
+    // A typed address that cannot be shown leaves the user where they were,
+    // as Explorer does. This runs inside batch processing or start_managed_list,
+    // so the restore and its message box run from the posted message.
+    // The batch's error phase is applied after this call; the posted handler
+    // checks it.
+    if (typed_address_ && typed_address_->generation == generation &&
+        window_ != nullptr) {
+        failed_address_ = std::move(typed_address_);
+        typed_address_.reset();
+        if (!PostMessageW(window_, kAddressFailedMessage, 0, 0)) failed_address_.reset();
+    }
 }
 
 void Pane::navigate_history(bool back) {
@@ -1003,10 +1046,11 @@ void Pane::navigate_history(bool back) {
     auto *tab = active_tab();
     if (tab == nullptr) return;
 
-    const bool available = back ? core::can_navigate_tab_back(*tab)
-                                : core::can_navigate_tab_forward(*tab);
-    if (!available) return;
-    const auto target_index = back ? tab->history_index - 1 : tab->history_index + 1;
+    // A press while an earlier Back/Forward is still loading steps from that
+    // target, so two quick Back presses go back two entries (Explorer).
+    const auto step = core::history_step_target(*tab, list_history_target_, back);
+    if (!step) return;
+    const auto target_index = *step;
     const auto target = tab->history[target_index];
     const auto generation = begin_navigation();
     list_history_target_ = target_index;
@@ -1108,15 +1152,125 @@ void Pane::show_view_mode_menu(POINT screen) {
 
 void Pane::submit_address() {
     if (!active()) return;
-    if (pane_state() == nullptr || address_bar_ == nullptr) return;
+    if (pane_state() == nullptr || address_bar_ == nullptr || !active_tab()) return;
     const int length = GetWindowTextLengthW(address_bar_);
     std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
     GetWindowTextW(address_bar_, text.data(), length + 1);
     text.resize(static_cast<std::size_t>(length));
-    const panedock::core::ShellLocation target{std::move(text), {}, {}};
+    // Explorer accepts surrounding blanks and quotes and %VARIABLES%.
+    text = core::trim_typed_address(text);
+    if (text.find(L'%') != std::wstring::npos) {
+        const DWORD size = ExpandEnvironmentStringsW(text.c_str(), nullptr, 0);
+        if (size > 0 && size <= managed_list::kMaxPath) {
+            std::wstring expanded(size, L'\0');
+            const DWORD written = ExpandEnvironmentStringsW(text.c_str(), expanded.data(), size);
+            if (written > 0 && written <= size) {
+                expanded.resize(written - 1);
+                text = core::trim_typed_address(expanded);
+            }
+        }
+    }
+    if (text.empty()) {
+        cancel_address_edit();
+        return;
+    }
+    panedock::core::ShellLocation target{std::move(text), {}, {}};
+    if (core::is_unc_server_root(target.parsing_name)) {
+        // \\server lists its shares through the Shell namespace (the
+        // filesystem reader only reads directories, which a server is not).
+        while (target.parsing_name.back() == L'\\') target.parsing_name.pop_back();
+        target.namespace_location = true;
+    }
+    // Keep the folder being left restorable with its selection and scroll if
+    // the typed location cannot be shown (finish_failed_address).
+    if (list_.request.binding.tab_id == active_tab()->id &&
+        list_.request.binding.group_id == pane_host()->active_group_id() &&
+        !list_.updating && !list_navigation_pending_ &&
+        (list_.phase == managed_list::Phase::complete ||
+         list_.phase == managed_list::Phase::empty)) {
+        const auto request = list_.request;
+        save_list_cache(true);
+        const auto& entries = list_cache().entries;
+        if (!entries.empty() && entries.back().owner == this &&
+            entries.back().snapshot.request == request)
+            list_ = {}; // moved into the cache; the navigation below replaces it
+    }
     ShellCallScope shell_call(reentry_guard());
-    (void)navigate_to(target);
+    if (!active() || !active_tab()) return;
+    const auto generation = begin_navigation();
+    typed_address_ = TypedAddress{generation, target.parsing_name};
+    (void)navigate_content(std::move(target), generation);
 }
+
+int Pane::show_message(const wchar_t* text, UINT type) noexcept {
+    // MessageBoxW pumps: hold the Shell call depth so input is deferred.
+    ShellCallScope shell_call(reentry_guard());
+    return context_menu_presenter_
+        ? context_menu_presenter_->message_box(window_, text, type)
+        : MessageBoxW(window_, text, L"PaneDock", type);
+}
+
+void Pane::finish_failed_address() noexcept try {
+    auto failed = std::move(failed_address_);
+    failed_address_.reset();
+    if (!failed || !active() || !realized_ || !active_tab()) return;
+    // A newer navigation, tab or Group switch supersedes the failed address.
+    if (!navigation_request_is_current(failed->generation) ||
+        list_.request.binding.generation != failed->generation ||
+        list_.phase != managed_list::Phase::error) return;
+    const DWORD error = list_.error;
+    const auto failed_location = list_.request.location;
+    // The failure committed nothing, so the tab still names the folder the
+    // user was in; going back there keeps the history cursor on it.
+    const auto previous = active_tab()->location;
+    if (!(previous == failed_location)) {
+        ShellCallScope shell_call(reentry_guard());
+        (void)navigate_to(previous);
+    }
+    if (!active()) return;
+    if (error == ERROR_DIRECTORY &&
+        managed_list::is_filesystem_location(failed_location.parsing_name)) {
+        // A typed file opens with its default verb, as in Explorer.
+        auto path = failed_location.parsing_name;
+        while (path.size() > 3 && path.back() == L'\\') path.pop_back();
+        const auto slash = path.find_last_of(L'\\');
+        if (slash == std::wstring::npos || slash < 2 || slash + 1 >= path.size()) return;
+        explorer_host::ContextMenuRequest request;
+        // "C:\file" keeps the root's backslash; "C:\dir\file" drops it.
+        request.folder = path.substr(0, slash == 2 && path[1] == L':' ? 3 : slash);
+        request.items.push_back(path.substr(slash + 1));
+        RECT rect{};
+        if (address_bar_ && GetWindowRect(address_bar_, &rect))
+            request.screen = {rect.left, rect.bottom};
+        ShellCallScope shell_call(reentry_guard());
+        const auto current = [this] { return active(); };
+        (void)(context_menu_presenter_
+            ? context_menu_presenter_->invoke_default(window_, request, current)
+            : explorer_host::invoke_default_shell_verb(window_, request, current));
+        return;
+    }
+    std::wstring text;
+    switch (error) {
+        case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: case ERROR_INVALID_DRIVE:
+        case ERROR_BAD_NETPATH: case ERROR_BAD_NET_NAME: case ERROR_INVALID_NAME:
+        case ERROR_BAD_PATHNAME: case ERROR_NOT_SUPPORTED: case ERROR_INVALID_DATA:
+            text = L"PaneDock can't find '" + failed->text +
+                   L"'. Check the spelling and try again.";
+            break;
+        default: {
+            wchar_t buffer[512]{};
+            DWORD size = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                nullptr, error, MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), buffer,
+                ARRAYSIZE(buffer), nullptr);
+            while (size > 0 && buffer[size - 1] <= L' ') --size;
+            text = L"PaneDock can't open '" + failed->text + L"'.\n\n" +
+                   std::wstring(buffer, size) + (size ? L" " : L"") +
+                   L"(Error " + std::to_wstring(error) + L")";
+        }
+    }
+    // Nothing is held across the box: the restored list carries on by itself.
+    (void)show_message(text.c_str(), MB_OK | MB_ICONERROR);
+} catch (...) {}
 
 void Pane::pin_current_folder() {
     if (!active()) return;

@@ -43,6 +43,16 @@ inline constexpr wchar_t kManagedListClassName[] = L"PaneDockManagedList";
 inline constexpr UINT kRestoreListFocusMessage = WM_APP + 230;
 // Posted by the list when the user resized or dragged a column: save the new layout.
 inline constexpr UINT kColumnsChangedMessage = WM_APP + 231;
+// Posted to the list on selection change: refresh the status bar once per burst.
+inline constexpr UINT kSelectionStatusMessage = WM_APP + 232;
+// Posted to the list when the rename edit lost focus: commit outside WM_KILLFOCUS.
+inline constexpr UINT kCommitListRenameMessage = WM_APP + 233;
+// Posted to the list when another program vetoed ejecting the displayed
+// volume: re-subscribe through Refresh, outside the WM_DEVICECHANGE send.
+inline constexpr UINT kListDeviceRefreshMessage = WM_APP + 234;
+// Posted to the pane when a typed address failed to load: put the previous
+// folder back and report, outside the batch that carried the failure.
+inline constexpr UINT kAddressFailedMessage = WM_APP + 240;
 inline constexpr UINT_PTR kListFocusRestoreTimerId = 0x5044;
 
 class PaneHost;
@@ -104,7 +114,14 @@ class Pane final {
         }
         bound_state_ = state;
     }
-    void unbind() noexcept { cancel_managed_list(); bound_state_ = nullptr; }
+    // Hiding a pane (fewer panes in the new layout or Group) keeps its PD-261
+    // snapshots, including the outgoing completed list; only destroy() and
+    // discard_group_list_cache() remove owner entries.
+    void unbind() noexcept {
+        save_list_cache(true);
+        cancel_managed_list(false);
+        bound_state_ = nullptr;
+    }
     panedock::core::PaneState *pane_state() const noexcept {
         return bound_state_;
     }
@@ -138,6 +155,14 @@ class Pane final {
     void navigate_history(bool back);
     void navigate_up();
     void refresh_view();
+    // After PaneDock's own file operation: a list with no live change watch
+    // (virtual location, failed or refused watch) reconciles once.
+    void refresh_unwatched_list() noexcept;
+    // A volume arrived or was removed (WM_DEVICECHANGE unit mask). This PC
+    // refreshes; a pane on a removed drive moves to This PC, like Explorer.
+    void volume_changed(DWORD units, bool removed) noexcept;
+    // DBT_DEVTYP_HANDLE notifications registered on the list window.
+    LRESULT list_device_change(WPARAM event, LPARAM data) noexcept;
 
     // Optional controlled Source; set before realize(). The source
     // seam accepts controlled owned batches in behavioral tests, never a Shell host.
@@ -161,6 +186,8 @@ class Pane final {
     };
     static ListCacheStats list_cache_stats() noexcept;
     static void limit_list_cache_bytes(std::size_t bytes) noexcept;
+    // A deleted Group's id can be issued again by next_group_id.
+    static void discard_group_list_cache(const std::string& group_id) noexcept;
     // Borrowed until the next Pane operation; never keep across a Shell pump.
     const ListSnapshot& list_snapshot() const noexcept { return list_; }
     struct ListItemIdentity final {
@@ -215,6 +242,9 @@ class Pane final {
     HANDLE content_event() const noexcept;
     void process_content_results() noexcept;
     bool open_list_row(std::size_t row);
+    // Enter: one row opens like a double-click; several selected rows get
+    // their default verb together through one Shell context menu.
+    bool open_list_selection();
     std::optional<LRESULT> list_notification(NMHDR* notification) noexcept;
     // Details columns (PD-257): shown set, order and widths live in the tab.
     void apply_list_columns() noexcept;
@@ -244,9 +274,19 @@ class Pane final {
     HRESULT file_command_snapshot(file_operations::Command command,
                                   FileCommandSnapshot& snapshot) const noexcept;
     bool file_command_is_current(const FileCommandSnapshot& snapshot) const noexcept;
-    // Exactly one selected identity. Enter commits through Shell; Escape,
-    // focus loss, accepted batches, sort/geometry and navigation cancel.
+    // Exactly one selected identity. Enter and focus loss commit through Shell
+    // (Explorer parity; overrides PD-237's cancel on focus loss); Escape,
+    // accepted batches, sort/geometry, navigation and shutdown cancel.
     bool handle_list_rename_key(const MSG&, bool control, bool alt, bool shift) noexcept;
+    // Explorer list keys owned by this pane: Ctrl+A selects all rows,
+    // Ctrl+Shift+N creates a folder. False when the message is not one of them.
+    bool handle_list_key(const MSG&, bool control, bool alt, bool shift) noexcept;
+    void select_all_list_rows() noexcept;
+    // Creates "New folder" in the displayed folder through the host, then
+    // selects it and begins rename once its row arrives, as Explorer does.
+    bool create_new_folder() noexcept;
+    void commit_list_rename_after_focus_loss() noexcept;
+    void show_status_text(const wchar_t* text) noexcept;
     bool begin_list_rename() noexcept;
     void cancel_list_rename() noexcept;
     void restore_posted_list_focus() noexcept;
@@ -259,10 +299,25 @@ class Pane final {
     void use_list_drop_resolver(std::unique_ptr<file_operations::DropTargetResolver> resolver) {
         if (!realized_) list_drop_resolver_ = std::move(resolver);
     }
-    HRESULT begin_list_drag() noexcept;
+    // client_point is NMLISTVIEW::ptAction; a right-button drag lets the Shell
+    // drop target show its Copy/Move/Create shortcut menu, as in Explorer.
+    HRESULT begin_list_drag(POINT client_point, bool right_button = false) noexcept;
+    static HRESULT list_drag_continue(bool right_button, bool escape, DWORD keys,
+                                      bool cancelled) noexcept;
+    // Ctrl+X from this list dims those rows (LVIS_CUT) until the clipboard
+    // sequence changes. Bounded by the cut selection; no timer.
+    void note_list_cut(const FileCommandSnapshot& snapshot) noexcept;
+    void list_clipboard_changed() noexcept;
+    // LVIS_CUT / LVIS_DROPHILITED for one row; supplied through the callback mask.
+    UINT list_transfer_state(const managed_list::Row& row) const noexcept;
     HRESULT selection_snapshot(SelectionSnapshot &snapshot) noexcept;
     panedock::core::ShellLocation content_location() const;
     void focus_content() noexcept;
+    // Ctrl+L / Alt+D / F4: focus the address bar with its text selected.
+    void focus_address_bar() noexcept;
+    // Escape in the address bar: show the current location again and
+    // return focus to the list, as Explorer does.
+    void cancel_address_edit() noexcept;
     HRESULT translate_content_accelerator(MSG *message) noexcept;
     struct ContextMenuSnapshot final {
         FileCommandSnapshot target;
@@ -282,6 +337,9 @@ class Pane final {
     void set_view_mode(const panedock::shell_core::ViewModeOption &option);
     void show_view_mode_menu(POINT screen);
     void submit_address();
+    // kAddressFailedMessage: restore the previous folder after a typed
+    // address failed, open it if it was a file, otherwise report the error.
+    void finish_failed_address() noexcept;
     void pin_current_folder();
     void show_pinned_locations_menu(POINT screen);
     void switch_active_tab(const std::string &tab_id);
@@ -365,6 +423,21 @@ class Pane final {
 
   private:
     bool present_context_menu(HWND owner, ContextMenuSnapshot snapshot) noexcept;
+    // Opens one non-directory row as Explorer does: a shortcut to a folder,
+    // or a file that is a Shell folder (.zip), navigates this pane instead
+    // of opening another Explorer window; anything else gets its default verb.
+    bool invoke_default_list_row_verb(std::size_t row) noexcept;
+    // One Shell context menu over several rows: their default verb together.
+    bool invoke_default_list_rows_verb(std::span<const std::size_t> rows) noexcept;
+    int show_message(const wchar_t* text, UINT type) noexcept;
+    struct TypedAddress final {
+        NavigationGeneration generation{};
+        std::wstring text;
+    };
+    // The user-typed navigation still waiting for its first batch, and the
+    // one that failed and waits for kAddressFailedMessage.
+    std::optional<TypedAddress> typed_address_;
+    std::optional<TypedAddress> failed_address_;
     std::unique_ptr<explorer_host::ContextMenuPresenter> context_menu_presenter_;
     bool context_menu_busy_{};
     friend class PaneListDropTarget;
@@ -373,6 +446,17 @@ class Pane final {
     Microsoft::WRL::ComPtr<IDropTarget> list_drop_target_;
     std::unique_ptr<file_operations::DropTargetResolver> list_drop_resolver_;
     bool list_source_drag_active_{};
+    // Identity-based so re-sorting or batches never move the mark to another row.
+    void set_list_drop_highlight(std::optional<managed_list::ItemIdentity> item,
+                                 int index_hint) noexcept;
+    void clear_list_cut() noexcept;
+    std::optional<managed_list::ItemIdentity> list_drop_highlight_;
+    int list_drop_highlight_index_{-1};
+    struct ListCut final {
+        core::ShellLocation folder;
+        std::vector<managed_list::ItemIdentity> items; // sorted
+        DWORD sequence{};
+    } list_cut_;
     struct ManagedListInteraction final {
         std::vector<managed_list::ItemIdentity> selected_items;
         std::optional<managed_list::ItemIdentity> focused_item;
@@ -412,7 +496,19 @@ class Pane final {
     HRESULT start_managed_list(const core::ShellLocation& location,
                                NavigationGeneration generation);
     void update_managed_list() noexcept;
+    void queue_selection_status() noexcept;
     void apply_list_changes(managed_list::Batch& batch, ManagedListInteraction& interaction);
+    // Drops cached images of these identities only; other rows keep theirs.
+    void forget_list_icons(std::vector<managed_list::ItemIdentity> identities) noexcept;
+    // An F2 edit survives unrelated batches: it follows its row, and is
+    // canceled only when that row is gone or scrolled out of view.
+    void keep_list_rename_in_place() noexcept;
+    // Eject support: the worker's zero-access volume handle, registered for
+    // DBT_DEVICEQUERYREMOVE. Released on navigation, watch end and eject.
+    void register_list_device(std::shared_ptr<void> handle) noexcept;
+    void release_list_device() noexcept;
+    std::shared_ptr<void> list_device_handle_;
+    HDEVNOTIFY list_device_notify_{};
     bool list_navigation_pending_{};
     // History cursor stays at the last success until this target is accepted.
     std::optional<std::size_t> list_history_target_;
@@ -470,8 +566,21 @@ class Pane final {
     struct ListRename final {
         FileCommandSnapshot snapshot;
         managed_list::ItemIdentity identity;
+        // Extension Explorer hides for this local file (e.g. L".txt"); the edit
+        // shows the display name and the commit restores it unless typed.
+        std::wstring hidden_extension;
     };
     std::optional<ListRename> list_rename_;
+    // Edit text captured at WM_KILLFOCUS; committed by kCommitListRenameMessage
+    // unless the edit regains focus or the rename is canceled first.
+    std::optional<std::wstring> list_rename_focus_commit_;
+    struct PendingNewItem final {
+        core::NavigationRequest binding;
+        std::wstring parsing_name, leaf_name;
+    };
+    // At most one; dropped on navigation or once its row has been found.
+    std::optional<PendingNewItem> pending_new_item_;
+    void rename_pending_new_item() noexcept;
     std::optional<core::NavigationRequest> pending_list_focus_restore_;
     bool list_focus_restore_posted_{};
     bool list_focus_restore_timer_used_{};
@@ -479,6 +588,8 @@ class Pane final {
     HWND list_rename_edit_{};
     std::vector<std::string> column_ids_;  // header position -> column id
     std::string applied_columns_;          // TabState::columns the header currently shows
+    UINT applied_columns_dpi_{};           // DPI the header widths were scaled for
+    bool selection_status_posted_{};       // one coalesced status update per selection burst
     bool list_rename_busy_{};
     HRESULT list_rename_result_{S_FALSE};
     void commit_list_rename(std::wstring name) noexcept;

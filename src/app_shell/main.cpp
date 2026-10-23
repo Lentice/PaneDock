@@ -7,6 +7,7 @@
 #define _WIN32_WINNT 0x0A00
 #include <windows.h>
 #include <commctrl.h>
+#include <dbt.h>
 
 #include <algorithm>
 #include <array>
@@ -30,6 +31,7 @@
 #include <ole2.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#include <sherrors.h>
 #include <windowsx.h>
 #include <wrl/client.h>
 
@@ -78,6 +80,9 @@ static_assert(panedock::core::kVirtualKeyLeft == VK_LEFT);
 static_assert(panedock::core::kVirtualKeyRight == VK_RIGHT);
 static_assert(panedock::core::kVirtualKeyF2 == VK_F2);
 static_assert(panedock::core::kVirtualKeyF6 == VK_F6);
+static_assert(panedock::core::kVirtualKeyUp == VK_UP);
+static_assert(panedock::core::kVirtualKeyF4 == VK_F4);
+static_assert(panedock::core::kVirtualKeyF5 == VK_F5);
 
 constexpr wchar_t kWindowClassName[] = L"PaneDockMainWindow";
 constexpr wchar_t kSingleInstanceMutexName[] =
@@ -108,6 +113,14 @@ constexpr UINT kDeferredLayoutMessage = WM_APP + 55;
 // PD-171: replay model-changing commands after an app-owned Shell call.
 constexpr UINT kDeferredCommandMessage = WM_APP + 56;
 constexpr UINT kDeferredListFocusRestoreMessage = WM_APP + 57;
+// Explorer folder options (hidden items, file name extensions) changed: one
+// coalesced refresh of the visible panes, posted from WM_SETTINGCHANGE.
+constexpr UINT kDeferredShellSettingsMessage = WM_APP + 59;
+// After a PaneDock file operation (posted on its completion) and after a volume
+// arrived or left (posted from WM_DEVICECHANGE): reconcile the visible panes
+// outside any Shell call. See Pane::refresh_unwatched_list / volume_changed.
+constexpr UINT kDeferredFileOperationRefreshMessage = WM_APP + 64;
+constexpr UINT kDeferredVolumeChangeMessage = WM_APP + 65;
 using panedock::core::kSidebarMaximumWidth;
 using panedock::core::kSidebarMinimumWidth;
 constexpr std::size_t kExplorerCount = 4;
@@ -451,6 +464,8 @@ private:
 struct AppState : public panedock::app_shell::PaneHost {
     panedock::file_operations::RenameResult rename_item(
         Pane&, const Pane::FileCommandSnapshot&, std::wstring_view) noexcept override;
+    panedock::file_operations::RenameResult new_folder(
+        Pane&, const Pane::FileCommandSnapshot&) noexcept override;
     void file_drag_changed(bool entering) noexcept override { shutdown_coordinator.drag_changed(entering); }
     bool is_shutting_down() const noexcept override;
     void schedule_session_save() noexcept override;
@@ -539,6 +554,7 @@ struct AppState : public panedock::app_shell::PaneHost {
     bool layout_in_progress{};
     bool layout_pending{};
     bool layout_message_queued{};
+    bool shell_settings_refresh_queued{};
     struct TabDrag final {
         // The window and the tab identity are the coordinator's; what the
         // gesture *means* lives in core::TabDragState, which is pure and
@@ -577,6 +593,11 @@ struct AppState : public panedock::app_shell::PaneHost {
     // Memoized ::{GUID} display names for the lifetime of the process
     // (PD-207). Never persisted.
     std::map<std::wstring, std::wstring> display_name_cache;
+    // The Group a sidebar context-menu command acts on: the right-clicked
+    // row, captured by id when the menu opens. The sidebar selection mirrors
+    // the active Group, so it cannot carry the target. Consumed by the
+    // command; empty for keyboard/footer paths, which act on the active Group.
+    std::optional<std::string> group_menu_target;
 };
 
 void drag_state_changed(AppState& state, bool entering) noexcept;
@@ -1078,9 +1099,22 @@ std::optional<Splitter> splitter_at_point(
 std::wstring tab_display_text(AppState& state,
                               std::wstring_view parsing_name) {
     const std::size_t separator = parsing_name.find_last_of(L"\\/");
-    if (separator == std::wstring::npos || separator + 1 == parsing_name.size())
-        return display_text_for_parsing_name(state, parsing_name);
-    return std::wstring(parsing_name.substr(separator + 1));
+    const std::wstring_view last_segment =
+        separator == std::wstring::npos ? parsing_name
+                                        : parsing_name.substr(separator + 1);
+    // A namespace parsing name ("::{GUID}", "::{GUID}\::{GUID}", a device
+    // path below This PC) has no readable last segment, so ask the Shell for
+    // the item's display name. display_text_for_parsing_name memoizes it for
+    // the process; it is display text only, never identity.
+    if (parsing_name.starts_with(L"::")) {
+        std::wstring text = display_text_for_parsing_name(state, parsing_name);
+        if (!text.empty() && text != parsing_name) return text;
+        if (!last_segment.empty() && !last_segment.starts_with(L"::"))
+            return std::wstring(last_segment);
+        return text.empty() ? std::wstring(parsing_name) : text;
+    }
+    if (last_segment.empty()) return std::wstring(parsing_name);
+    return std::wstring(last_segment);
 }
 
 void refresh_tab_strips(AppState& state) {
@@ -1786,8 +1820,7 @@ panedock::core::GroupState new_group_state(const AppState& state,
                                             std::string id) {
     auto group = default_application_state().groups.front();
     group.id = std::move(id);
-    group.name = L"Group " +
-                 std::to_wstring(state.application.groups.size() + 1);
+    group.name = panedock::core::next_group_name(state.application);
     const auto target = has_active_group(state)
                             ? active_group(state).layout_template
                             : group.layout_template;
@@ -1940,10 +1973,18 @@ void add_group(HWND window, AppState& state) {
     activate_group(window, state, state.application.groups.size() - 1);
 }
 
-void duplicate_group(HWND window, AppState& state) {
+std::optional<std::size_t> group_index_by_id(const AppState& state,
+                                             const std::string& id) noexcept {
+    const auto& groups = state.application.groups;
+    for (std::size_t index = 0; index < groups.size(); ++index)
+        if (groups[index].id == id) return index;
+    return std::nullopt;
+}
+
+void duplicate_group(HWND window, AppState& state, const std::string& target) {
     if (state.is_shutting_down()) return;
-    const auto selected = state.sidebar.selected_index();
-    if (!selected.has_value() || *selected >= state.application.groups.size()) return;
+    const auto selected = group_index_by_id(state, target);
+    if (!selected.has_value()) return;
     const auto& source = state.application.groups[*selected];
     const std::string id = panedock::core::next_group_id(state.application);
     if (!panedock::core::duplicate_group(state.application, source.id, id,
@@ -1951,9 +1992,9 @@ void duplicate_group(HWND window, AppState& state) {
     activate_group(window, state, state.application.groups.size() - 1);
 }
 
-void delete_group(HWND window, AppState& state) {
-    const auto selected = state.sidebar.selected_index();
-    if (!selected.has_value() || *selected >= state.application.groups.size()) return;
+void delete_group(HWND window, AppState& state, const std::string& target) {
+    const auto selected = group_index_by_id(state, target);
+    if (!selected.has_value()) return;
     // MessageBoxW pumps this thread's message loop with no Shell call in progress,
     // so every kDeferredCommandMessage still queued from a burst of clicks
     // replays *inside* the box -- including another add_group or delete_group.
@@ -1976,19 +2017,27 @@ void delete_group(HWND window, AppState& state) {
 
     capture_locations(state);
     const std::string previous = state.application.active_group_id;
-    // core::delete_group destroys PaneState objects. Drop every borrowed
-    // pointer before that erase; rebind only after the surviving Group is known.
-    for (auto& pane : state.panes) pane.unbind();
+    // core::delete_group destroys only the deleted Group's PaneStates; PD-184
+    // keeps every surviving PaneState address across the vector erase. The
+    // panes borrow the active Group's PaneStates, so only deleting the active
+    // Group must drop them first. Deleting an inactive Group leaves the live
+    // lists bound: that transition does not re-navigate, so unbinding would
+    // leave every visible pane empty.
+    if (id == previous)
+        for (auto& pane : state.panes) pane.unbind();
     if (!panedock::core::delete_group(state.application, id)) return;
+    // next_group_id can hand the same id to a later Group; its snapshots must
+    // never satisfy that Group's requests.
+    Pane::discard_group_list_cache(id);
     perform_group_transition(window, state,
                              panedock::core::GroupTransition::remove,
                              previous);
 }
 
 // No rebind: PD-184 guarantees group reorder preserves PaneState addresses.
-void move_group(AppState& state, bool down) {
-    const auto selected = state.sidebar.selected_index();
-    if (!selected.has_value() || *selected >= state.application.groups.size()) return;
+void move_group(AppState& state, const std::string& group_id, bool down) {
+    const auto selected = group_index_by_id(state, group_id);
+    if (!selected.has_value()) return;
     if ((!down && *selected == 0) ||
         (down && *selected + 1 >= state.application.groups.size())) return;
     const std::string id = state.application.groups[*selected].id;
@@ -2156,6 +2205,9 @@ void set_layout(HWND window, AppState& state,
     if (state.is_shutting_down()) return;
     if (!has_active_group(state)) return;
     auto& group = active_group(state);
+    // Clicking the layout that is already selected changes nothing: no
+    // splitter reset, no relayout, no session write.
+    if (group.layout_template == target) return;
     capture_locations(state);
 
     std::vector<std::string> pane_ids;
@@ -2239,10 +2291,17 @@ void capture_window_placement(HWND window, AppState& state) noexcept {
         OutputDebugStringW(L"PaneDock: GetWindowPlacement failed\n");
         return;
     }
+    // rcNormalPosition is in workspace coordinates (offset by a top/left
+    // taskbar). Startup restores it through SetWindowPlacement, which reads
+    // the same coordinate space, so the stored numbers keep their meaning.
     const RECT& normal = placement.rcNormalPosition;
     state.application.window_placement = {
         normal.left, normal.top, normal.right - normal.left,
-        normal.bottom - normal.top, placement.showCmd == SW_SHOWMAXIMIZED};
+        normal.bottom - normal.top,
+        panedock::app_shell::placement_reopens_maximized(
+            placement.showCmd == SW_SHOWMAXIMIZED,
+            placement.showCmd == SW_SHOWMINIMIZED,
+            (placement.flags & WPF_RESTORETOMAXIMIZED) != 0)};
 }
 
 const wchar_t* session_source_name(panedock::core::SessionSource source) {
@@ -2268,6 +2327,29 @@ bool address_bar_has_focus(
     for (const auto& chrome : panes)
         if (chrome.address_bar() == focused) return true;
     return false;
+}
+
+// Pane shortcuts (Backspace, Tab, Ctrl+V, Ctrl+W, ...) apply only to input
+// aimed at the main window, and never while a text box outside the panes --
+// the Group rename editor -- has focus. The panes' own edits (address bar,
+// list rename) keep their routing through KeyInput::address_bar_focused.
+bool pane_key_routing_applies(HWND window, const AppState& state,
+                              const MSG& message) noexcept {
+    if (message.hwnd == nullptr ||
+        GetAncestor(message.hwnd, GA_ROOT) != window)
+        return false;
+    const HWND focused = GetFocus();
+    if (focused == nullptr) return true;
+    if (focused == state.sidebar.rename_editor()) return false;
+    wchar_t class_name[16]{};
+    if (GetClassNameW(focused, class_name, 16) == 0 ||
+        _wcsicmp(class_name, L"Edit") != 0)
+        return true;
+    return std::any_of(state.panes.begin(), state.panes.end(),
+                       [focused](const auto& pane) {
+                           return pane.window() != nullptr &&
+                                  IsChild(pane.window(), focused);
+                       });
 }
 
 void cancel_tab_drag(AppState& state, HWND strip) noexcept {
@@ -2431,6 +2513,32 @@ LRESULT CALLBACK tab_strip_proc(HWND window, UINT message, WPARAM wparam,
             strip.paint(tab_strip_paint_state(*state, pane_index));
             return 0;
         }
+        // Per-tab close button: press arms it (no tab drag, no activation),
+        // release over the same button closes that tab by id through the
+        // normal close path. A quick second click arrives as a double-click.
+        if ((message == WM_LBUTTONDOWN || message == WM_LBUTTONDBLCLK) &&
+            state->panes[pane_index].pane_state() != nullptr) {
+            const auto close = strip.close_button_at(point_from_lparam(lparam));
+            const auto& tabs = state->panes[pane_index].pane_state()->tabs;
+            if (close.has_value() && *close < tabs.size()) {
+                if (state->tab_drag.has_value())
+                    cancel_tab_drag(*state, state->tab_drag->strip);
+                strip.press_close(*close, tabs[*close].id);
+                SetCapture(window);
+                return 0;
+            }
+        }
+        if (message == WM_LBUTTONUP && strip.pressed_close_index()) {
+            const auto pressed = strip.pressed_close_index();
+            const auto release = strip.close_button_at(point_from_lparam(lparam));
+            const std::string tab_id = strip.take_pressed_close();
+            if (GetCapture() == window) ReleaseCapture();
+            if (release == pressed && !tab_id.empty())
+                state->panes[pane_index].close_tab(tab_id);
+            return 0;
+        }
+        if (message == WM_CAPTURECHANGED && strip.pressed_close_index())
+            (void)strip.take_pressed_close();
         if (const auto handled = strip.handle_message(message, wparam, lparam))
             return *handled;
         if (message == WM_LBUTTONDOWN &&
@@ -2774,29 +2882,68 @@ bool file_command_cancel_requested(void* context) noexcept {
     return file_operation_cancel_requested(&static_cast<FileCommandContext*>(context)->state);
 }
 
-panedock::file_operations::RenameResult AppState::rename_item(
-    Pane& pane, const Pane::FileCommandSnapshot& snapshot, std::wstring_view name) noexcept try {
+// Shared gate for the Pane-driven single-item Shell operations (rename, new folder).
+template <class Operation>
+panedock::file_operations::RenameResult run_pane_item_operation(AppState& state,
+    Pane& pane, const Pane::FileCommandSnapshot& snapshot, Operation operation) noexcept try {
     panedock::file_operations::RenameResult result;
     result.result = E_ABORT;
-    if (file_operation_call_active || is_shutting_down() || snapshot.items.size() != 1) return result;
-    FileCommandContext context{*this, pane, snapshot, GetForegroundWindow()};
-    if (context.foreground != main_window || !context.current()) return result;
-    shutdown_coordinator.sequence().step(panedock::core::ShutdownEvent::file_operation_call_started);
+    if (state.file_operation_call_active || state.is_shutting_down()) return result;
+    FileCommandContext context{state, pane, snapshot, GetForegroundWindow()};
+    if (context.foreground != state.main_window || !context.current()) return result;
+    state.shutdown_coordinator.sequence().step(panedock::core::ShutdownEvent::file_operation_call_started);
     {
-        ShellCallScope shell_call(reentry_guard);
+        ShellCallScope shell_call(state.reentry_guard);
         const panedock::file_operations::Callbacks callbacks{
             &context, file_command_started, file_command_finished,
             file_command_cancel_requested, file_command_setup_aborted};
-        result = panedock::file_operations::rename_item(main_window, snapshot.items.front(), name, callbacks);
+        result = operation(callbacks);
     }
-    shutdown_coordinator.sequence().step(panedock::core::ShutdownEvent::file_operation_finished);
-    shutdown_coordinator.sequence().step(panedock::core::ShutdownEvent::file_operation_call_finished);
-    shutdown_coordinator.complete_deferred_close();
+    state.shutdown_coordinator.sequence().step(panedock::core::ShutdownEvent::file_operation_finished);
+    state.shutdown_coordinator.sequence().step(panedock::core::ShutdownEvent::file_operation_call_finished);
+    state.shutdown_coordinator.complete_deferred_close();
     return result;
 } catch (...) {
     panedock::file_operations::RenameResult result;
     result.result = E_OUTOFMEMORY;
     return result;
+}
+
+panedock::file_operations::RenameResult AppState::new_folder(
+    Pane& pane, const Pane::FileCommandSnapshot& snapshot) noexcept {
+    return run_pane_item_operation(*this, pane, snapshot, [&](const auto& callbacks) {
+        return panedock::file_operations::new_folder(
+            main_window, snapshot.folder.parsing_name, callbacks);
+    });
+}
+
+panedock::file_operations::RenameResult AppState::rename_item(
+    Pane& pane, const Pane::FileCommandSnapshot& snapshot, std::wstring_view name) noexcept {
+    if (snapshot.items.size() != 1) {
+        panedock::file_operations::RenameResult result;
+        result.result = E_ABORT;
+        return result;
+    }
+    return run_pane_item_operation(*this, pane, snapshot, [&](const auto& callbacks) {
+        return panedock::file_operations::rename_item(
+            main_window, snapshot.items.front(), name, callbacks);
+    });
+}
+
+// A failed paste or delete is never silent; a user cancel or abort says nothing.
+const wchar_t* file_command_failure_text(panedock::file_operations::Command command,
+    const panedock::file_operations::PasteResult& result) noexcept {
+    using panedock::file_operations::Command;
+    if (SUCCEEDED(result.result) || result.aborted || result.result == E_ABORT ||
+        result.result == HRESULT_FROM_WIN32(ERROR_CANCELLED) ||
+        result.result == COPYENGINE_E_USER_CANCELLED) return nullptr;
+    if (command == Command::paste)
+        return result.result == DV_E_FORMATETC
+            ? L"Nothing on the clipboard can be pasted here."
+            : L"Paste failed.";
+    if (command == Command::delete_items || command == Command::delete_permanently)
+        return L"Delete failed.";
+    return L"Copy to the clipboard failed.";
 }
 
 bool perform_file_command(HWND window, AppState& state, Pane& pane,
@@ -2820,9 +2967,11 @@ bool perform_file_command(HWND window, AppState& state, Pane& pane,
         if (command == Command::paste)
             result = panedock::file_operations::paste_from_clipboard(
                 window, context.snapshot.folder.parsing_name, callbacks);
-        else if (command == Command::delete_items)
+        else if (command == Command::delete_items ||
+                 command == Command::delete_permanently)
             result = panedock::file_operations::delete_selection(
-                window, context.snapshot.items, callbacks);
+                window, context.snapshot.items, callbacks,
+                command == Command::delete_items);
         else {
             result.result = panedock::file_operations::selection_to_clipboard(
                 context.snapshot.items, command == Command::cut, callbacks);
@@ -2834,6 +2983,13 @@ bool perform_file_command(HWND window, AppState& state, Pane& pane,
     state.shutdown_coordinator.sequence().step(
         panedock::core::ShutdownEvent::file_operation_call_finished);
     state.shutdown_coordinator.complete_deferred_close();
+    if (command == panedock::file_operations::Command::cut && SUCCEEDED(result.result) &&
+        !state.is_shutting_down())
+        pane.note_list_cut(context.snapshot); // Explorer dims cut rows; re-verifies itself
+    if (!state.is_shutting_down() && context.current()) {
+        if (const wchar_t* text = file_command_failure_text(command, result))
+            pane.show_status_text(text);
+    }
     return state.is_shutting_down() || !context.current() || result.handled;
 } catch (...) { return true; }
 
@@ -2903,7 +3059,7 @@ LRESULT create_main_window_children(HWND window, AppState& state) {
             return -1;
     }
     state.layout_tooltip = CreateWindowExW(
-        WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP,
+        WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, window,
         nullptr, GetModuleHandleW(nullptr), nullptr);
     if (state.layout_tooltip != nullptr) {
@@ -3018,13 +3174,24 @@ bool handle_sidebar_command(HWND window, AppState& state, int id) {
         return true;
     }
     if (command.kind != CommandKind::group_action) return false;
+    // A context-menu command acts on the right-clicked Group; any other
+    // source acts on the active Group. Resolved by id, never by row index.
+    std::string target = state.group_menu_target.has_value()
+                             ? std::exchange(*state.group_menu_target, {})
+                             : state.application.active_group_id;
+    state.group_menu_target.reset();
     switch (command.action) {
         case GroupAction::create: add_group(window, state); return true;
-        case GroupAction::duplicate: duplicate_group(window, state); return true;
-        case GroupAction::rename: state.sidebar.begin_rename(); return true;
-        case GroupAction::remove: delete_group(window, state); return true;
-        case GroupAction::move_up: move_group(state, false); return true;
-        case GroupAction::move_down: move_group(state, true); return true;
+        case GroupAction::duplicate:
+            duplicate_group(window, state, target);
+            return true;
+        case GroupAction::rename:
+            if (const auto index = group_index_by_id(state, target))
+                state.sidebar.begin_rename(*index);
+            return true;
+        case GroupAction::remove: delete_group(window, state, target); return true;
+        case GroupAction::move_up: move_group(state, target, false); return true;
+        case GroupAction::move_down: move_group(state, target, true); return true;
     }
     return false;
 }
@@ -3130,8 +3297,10 @@ bool handle_context_menu(HWND target, AppState& state, POINT screen) {
     if (HIWORD(hit) != 0 || index >= state.application.groups.size())
         return true;
 
-    state.sidebar.set_selected_index(index);
-    refresh_sidebar(state);
+    // The menu targets the right-clicked row by id. The selection is left
+    // alone: it mirrors the active Group, and refresh_sidebar restores it.
+    const std::string target_id = state.application.groups[index].id;
+    state.group_menu_target.reset();
 
     HMENU menu = CreatePopupMenu();
     if (menu == nullptr) return true;
@@ -3188,8 +3357,12 @@ bool handle_context_menu(HWND target, AppState& state, POINT screen) {
         if (bitmap != nullptr) DeleteObject(bitmap);
     }
     if (state.is_shutting_down()) return true;
-    if (command != 0)
+    if (command != 0) {
+        // The menu pumped; the Group may be gone. Each handler re-resolves
+        // the id and ignores a Group that no longer exists.
+        state.group_menu_target = target_id;
         SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+    }
     return true;
 }
 
@@ -3411,6 +3584,35 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                 }
             }
             return 0;
+        case WM_SETTINGCHANGE:
+            // SHGetSetSettings broadcasts "ShellState" when Explorer's folder
+            // options change. Post once; the refresh runs outside this
+            // broadcast and outside any Shell call that is pumping the loop.
+            if (state != nullptr && !state->is_shutting_down() && lparam != 0 &&
+                !state->shell_settings_refresh_queued &&
+                _wcsicmp(reinterpret_cast<LPCWSTR>(lparam), L"ShellState") == 0 &&
+                PostMessageW(window, kDeferredShellSettingsMessage, 0, 0))
+                state->shell_settings_refresh_queued = true;
+            break;
+        case kDeferredShellSettingsMessage:
+            if (state == nullptr) return 0;
+            state->shell_settings_refresh_queued = false;
+            if (state->reentry_guard.in_shell_call()) {
+                state->reentry_guard.hold(
+                    window, kDeferredShellSettingsMessage, 0, 0, true);
+                return 0;
+            }
+            // Visible panes re-enumerate through the Refresh path, which keeps
+            // the snapshot and reconciles names and hidden rows by identity.
+            // Inactive tabs and cached Group snapshots rescan on activation.
+            for (std::size_t index = 0; index < state->panes.size(); ++index) {
+                if (state->is_shutting_down()) return 0;
+                if (index >= panedock::core::pane_count(
+                                 active_group(*state).layout_template))
+                    break;
+                state->panes[index].refresh_view();
+            }
+            return 0;
         case kDeferredLayoutMessage:
             if (state != nullptr && state->layout_message_queued) {
                 state->layout_message_queued = false;
@@ -3554,13 +3756,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
         }
         case panedock::sidebar::kRenameCommitMessage:
             if (state != nullptr) {
-                const auto selected = state->sidebar.selected_index();
-                auto name = state->sidebar.take_rename_text();
-                if (selected.has_value() && name.has_value() &&
-                    *selected < state->application.groups.size()) {
-                    const std::string id = state->application.groups[*selected].id;
-                    if (panedock::core::rename_group(state->application, id,
-                                                     std::move(*name))) {
+                auto rename = state->sidebar.take_rename();
+                if (rename.has_value()) {
+                    // An empty or whitespace-only name is rejected and the
+                    // old name stays, as in Explorer.
+                    std::wstring name =
+                        panedock::core::normalize_group_name(rename->name);
+                    if (!name.empty() &&
+                        panedock::core::rename_group(state->application,
+                                                     rename->group_id,
+                                                     std::move(name))) {
                         refresh_sidebar(*state);
                         schedule_session_save(*state);
                     }
@@ -3670,8 +3875,39 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             break;
         }
         case kFileOperationFinishedMessage:
-            if (state != nullptr)
+            if (state != nullptr) {
                 state->shutdown_coordinator.complete_deferred_close();
+                if (!state->is_shutting_down())
+                    PostMessageW(window, kDeferredFileOperationRefreshMessage, 0, 0);
+            }
+            return 0;
+        case WM_DEVICECHANGE:
+            // Volume arrival/removal reaches top-level windows unregistered.
+            // The lparam struct dies with this send: post the unit mask.
+            if (state != nullptr && !state->is_shutting_down() && lparam != 0 &&
+                (wparam == DBT_DEVICEARRIVAL || wparam == DBT_DEVICEREMOVECOMPLETE) &&
+                reinterpret_cast<const DEV_BROADCAST_HDR*>(lparam)->dbch_devicetype == DBT_DEVTYP_VOLUME)
+                PostMessageW(window, kDeferredVolumeChangeMessage,
+                    reinterpret_cast<const DEV_BROADCAST_VOLUME*>(lparam)->dbcv_unitmask,
+                    wparam == DBT_DEVICEREMOVECOMPLETE);
+            break;
+        case kDeferredFileOperationRefreshMessage:
+        case kDeferredVolumeChangeMessage:
+            if (state == nullptr || state->is_shutting_down() || !has_active_group(*state)) return 0;
+            if (state->reentry_guard.in_shell_call()) {
+                state->reentry_guard.hold(window, message, wparam, lparam,
+                    message == kDeferredFileOperationRefreshMessage);
+                return 0;
+            }
+            for (std::size_t index = 0; index < state->panes.size(); ++index) {
+                if (state->is_shutting_down() || !has_active_group(*state) ||
+                    index >= panedock::core::pane_count(active_group(*state).layout_template))
+                    break;
+                if (message == kDeferredFileOperationRefreshMessage)
+                    state->panes[index].refresh_unwatched_list();
+                else
+                    state->panes[index].volume_changed(static_cast<DWORD>(wparam), lparam != 0);
+            }
             return 0;
         case panedock::app_shell::kTransferCloseDialogResultMessage:
             if (state != nullptr)
@@ -3970,7 +4206,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     const int virtual_y = GetSystemMetrics(SM_YVIRTUALSCREEN);
     const int virtual_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     const int virtual_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    if (virtual_width > 0 && virtual_height > 0 && !placement.maximized &&
+    if (virtual_width > 0 && virtual_height > 0 &&
+        placement.x != CW_USEDEFAULT &&
         panedock::app_shell::placement_is_offscreen(
             placement.x, placement.y, placement.width, placement.height,
             virtual_x, virtual_y, virtual_width, virtual_height)) {
@@ -4003,6 +4240,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         OleUninitialize();
         CloseHandle(single_instance_mutex);
         return exit_code;
+    }
+    // The saved rect is rcNormalPosition, in workspace coordinates, while
+    // CreateWindowExW takes screen coordinates: with a top or left taskbar
+    // the two differ and the window would drift on every restart. Apply it
+    // through SetWindowPlacement, which also gives a maximized window the
+    // right restore rect. SW_HIDE keeps the first show below.
+    if (placement.x != CW_USEDEFAULT && placement.y != CW_USEDEFAULT &&
+        placement.width > 0 && placement.height > 0) {
+        WINDOWPLACEMENT restored{};
+        restored.length = sizeof(restored);
+        restored.showCmd = SW_HIDE;
+        restored.rcNormalPosition = {placement.x, placement.y,
+                                     placement.x + placement.width,
+                                     placement.y + placement.height};
+        if (!SetWindowPlacement(window, &restored))
+            OutputDebugStringW(L"PaneDock: SetWindowPlacement failed\n");
     }
     ShowWindow(window, placement.maximized ? SW_SHOWMAXIMIZED : show_command);
     UpdateWindow(window);
@@ -4093,8 +4346,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         }
         result = GetMessageW(&message, nullptr, 0, 0);
         if (result <= 0) break;
+        // The pinned-locations manager is a modeless popup: Tab moves between
+        // its controls, Enter is OK and Esc is Cancel.
+        if (const HWND pinned = state.pinned_locations_dialog.window();
+            pinned != nullptr && IsDialogMessageW(pinned, &message)) {
+            apply_pinned_locations_dialog_result(state);
+            if (state.quit_requested) break;
+            continue;
+        }
         if (!state.is_shutting_down() &&
-            has_active_group(state)) {
+            has_active_group(state) &&
+            pane_key_routing_applies(window, state, message)) {
             // The routing rules themselves are pure and unit-tested
             // (core::resolve_key); this loop only reads the live Win32 state
             // they need and performs what comes back.
@@ -4120,6 +4382,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
             // Pane-owned UI action runs before the legacy accelerator's outer
             // ShellCallScope; nested Shell calls still reject beginning an edit.
             if (state.panes[active].handle_list_rename_key(
+                    message, input.control, input.alt, input.shift)) continue;
+            if (state.panes[active].handle_list_key(
                     message, input.control, input.alt, input.shift)) continue;
             if (const auto command = state.panes[active].file_command_for_key(
                     message, input.control, input.alt, input.shift)) {
@@ -4187,6 +4451,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 break;
             case panedock::core::KeyAction::navigate_up:
                 state.panes[active].navigate_up();
+                break;
+            case panedock::core::KeyAction::refresh:
+                state.panes[active].refresh_view();
+                break;
+            case panedock::core::KeyAction::focus_address_bar:
+                state.panes[active].focus_address_bar();
                 break;
             }
             if (handled) continue;

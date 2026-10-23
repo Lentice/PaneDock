@@ -24,5 +24,13 @@ int main() {
     const HiddenFilePolicy show_all{true, true};
     EXPECT(!show_all.hides(protected_file));
     EXPECT(!show_all.hides(hidden));
+    // "File name extensions" off: display text drops the extension, never a
+    // folder's suffix, and never leaves a dot-leading name empty.
+    EXPECT(display_leaf(L"report.docx", false, true) == L"report");
+    EXPECT(display_leaf(L"archive.tar.gz", false, true) == L"archive.tar");
+    EXPECT(display_leaf(L"report.docx", false, false) == L"report.docx");
+    EXPECT(display_leaf(L"v1.2", true, true) == L"v1.2");
+    EXPECT(display_leaf(L".gitignore", false, true) == L".gitignore");
+    EXPECT(display_leaf(L"README", false, true) == L"README");
     return test::summary("managed_list_hidden_policy");
 }

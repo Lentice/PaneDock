@@ -93,9 +93,11 @@ OwnedInteraction own(const app_shell::Pane::ListInteractionSnapshot& snapshot) {
 
 struct Fixture final {
     test::TestPaneHost host;
+    // A layout persisted by an earlier build (all six columns, Size second): the header
+    // positions below depend on it, and it must keep working after the defaults changed.
     core::PaneState state{"pane", {
         {"tab", {L"C:\\A", {}, {}}, "details", "System.ItemNameDisplay",
-         true, {}, 0}}, "tab"};
+         true, {}, 0, "name:320,size:160,date:180,type:160,duration:120,availability:200"}}, "tab"};
     app_shell::Pane pane;
     Controlled* source{};
     HWND parent{};
@@ -150,21 +152,9 @@ void basic_keys_group_directories_and_keep_deterministic_ties() {
         {L"alpha-folder", 0, true, 10}, {L"zero.txt", 0, false, 40},
         {L"missing-date.txt", 2, false, 0}, {L"dated.txt", 2, false, 50}});
 
-    f.click_column(1); // Size ascending; empty directory sizes remain last within the folder group.
-    const auto& ascending = f.pane.list_snapshot().rows;
-    EXPECT(ascending.size() == 8);
-    if (ascending.size() == 8) {
-        EXPECT(ascending[0].name == L"alpha-folder");
-        EXPECT(ascending[1].name == L"zeta-folder");
-        EXPECT(ascending[2].name == L"zero.txt"); // zero is a value, not empty
-        EXPECT(ascending[3].name == L"dated.txt");
-        EXPECT(ascending[4].name == L"missing-date.txt");
-        EXPECT(ascending[5].name == L"Alpha.txt");
-        EXPECT(ascending[6].name == L"alpha.txt");
-        EXPECT(ascending[7].name == L"beta.txt");
-    }
-
-    f.click_column(1); // Descending reverses the folder grouping (Explorer); name ties stay ascending.
+    f.click_column(1); // Explorer's first Size click is descending: largest first, folders
+                       // last (reversed grouping); name ties stay ascending.
+    EXPECT(!f.state.tabs.front().sort_ascending);
     const auto& descending = f.pane.list_snapshot().rows;
     EXPECT(descending.size() == 8);
     if (descending.size() == 8) {
@@ -178,7 +168,23 @@ void basic_keys_group_directories_and_keep_deterministic_ties() {
         EXPECT(descending[7].name == L"zeta-folder");
     }
 
-    f.click_column(2); // Date Modified ascending; missing timestamps sort last.
+    f.click_column(1); // same column again: Size ascending; empty directory sizes remain last within the folder group.
+    const auto& ascending = f.pane.list_snapshot().rows;
+    EXPECT(ascending.size() == 8);
+    if (ascending.size() == 8) {
+        EXPECT(ascending[0].name == L"alpha-folder");
+        EXPECT(ascending[1].name == L"zeta-folder");
+        EXPECT(ascending[2].name == L"zero.txt"); // zero is a value, not empty
+        EXPECT(ascending[3].name == L"dated.txt");
+        EXPECT(ascending[4].name == L"missing-date.txt");
+        EXPECT(ascending[5].name == L"Alpha.txt");
+        EXPECT(ascending[6].name == L"alpha.txt");
+        EXPECT(ascending[7].name == L"beta.txt");
+    }
+
+    f.click_column(2); // Explorer's first Date modified click is descending (newest first)
+    EXPECT(f.state.tabs.front().sort_column == "System.DateModified" && !f.state.tabs.front().sort_ascending);
+    f.click_column(2); // ascending; missing timestamps sort last.
     const auto& by_date = f.pane.list_snapshot().rows;
     EXPECT(by_date.size() == 8);
     if (by_date.size() == 8) {
@@ -396,6 +402,9 @@ void out_of_order_batches_and_sort_changes_preserve_item_and_viewport_identity()
         {L"item-00-new.txt", 0, false, 0}, {L"item-99-new.txt", 99, false, 99}});
     EXPECT(own(f.pane.list_interaction_snapshot()) == before);
 
+    // Make the next Size click ascending (a first click would be descending, as in Explorer).
+    f.state.tabs.front().sort_column = "System.Size";
+    f.state.tabs.front().sort_ascending = false;
     f.click_column(1);
     EXPECT(f.state.tabs.front().sort_column == "System.Size");
     EXPECT(f.state.tabs.front().sort_ascending);
@@ -586,12 +595,65 @@ std::wstring cell(Fixture& f, int row, int column) {
 std::wstring status(Fixture& f) {
     wchar_t buffer[512]{}; GetWindowTextW(f.pane.status_bar(), buffer, ARRAYSIZE(buffer)); return buffer;
 }
+void pump_list(Fixture& f) {
+    MSG message{};
+    while (PeekMessageW(&message, f.list, 0, 0, PM_REMOVE)) DispatchMessageW(&message);
+}
+bool starts_with(const std::wstring& text, std::wstring_view prefix) {
+    return text.compare(0, prefix.size(), prefix) == 0;
+}
+void status_bar_counts_items_and_selection_like_explorer() {
+    {
+        Fixture f;
+        f.deliver(managed_list::Phase::complete, {
+            {L"a.txt", 1536, false, 1}, {L"b.txt", 1024, false, 2}, {L"dir", 0, true, 3}});
+        EXPECT(starts_with(status(f), L"3 items") && status(f).find(L"selected") == std::wstring::npos);
+        // Selection notifications coalesce into one posted update.
+        ListView_SetItemState(f.list, f.row(L"a.txt"), LVIS_SELECTED, LVIS_SELECTED);
+        ListView_SetItemState(f.list, f.row(L"b.txt"), LVIS_SELECTED, LVIS_SELECTED);
+        pump_list(f);
+        EXPECT(starts_with(status(f), L"3 items    2 items selected  2.50 KB"));
+        // Explorer shows no size once a folder is part of the selection.
+        ListView_SetItemState(f.list, f.row(L"dir"), LVIS_SELECTED, LVIS_SELECTED);
+        pump_list(f);
+        EXPECT(starts_with(status(f), L"3 items    3 items selected") &&
+               status(f).find(L"KB") == std::wstring::npos);
+        ListView_SetItemState(f.list, -1, 0, LVIS_SELECTED);
+        pump_list(f);
+        EXPECT(status(f).find(L"selected") == std::wstring::npos);
+        ListView_SetItemState(f.list, f.row(L"b.txt"), LVIS_SELECTED, LVIS_SELECTED);
+        pump_list(f);
+        EXPECT(starts_with(status(f), L"3 items    1 item selected  1.00 KB"));
+    }
+    {
+        // Empty: the status bar counts, the list body says the folder is empty.
+        Fixture f;
+        f.deliver(managed_list::Phase::empty);
+        EXPECT(starts_with(status(f), L"0 items"));
+        NMLVEMPTYMARKUP markup{};
+        markup.hdr = {f.list, 0, LVN_GETEMPTYMARKUP};
+        const auto result = f.pane.list_notification(&markup.hdr);
+        EXPECT(result && *result == TRUE && std::wstring(markup.szMarkup) == L"This folder is empty.");
+    }
+    {
+        // A read error names the Win32 code (and its English text where available).
+        Fixture f;
+        f.source->deliver({f.pane.list_snapshot().request, {}, managed_list::Phase::error, ERROR_ACCESS_DENIED});
+        f.pane.process_content_results();
+        EXPECT(status(f).find(L"Cannot read this location: ") != std::wstring::npos);
+        EXPECT(status(f).find(L"(Error 5) Refresh to retry.") != std::wstring::npos);
+        NMLVEMPTYMARKUP markup{};
+        markup.hdr = {f.list, 0, LVN_GETEMPTYMARKUP};
+        const auto result = f.pane.list_notification(&markup.hdr);
+        EXPECT(result && *result == FALSE);
+    }
+}
 void property_cells_status_and_explicit_retry() {
     Fixture f;
     auto* source = use_properties(f);
     for (int column = 0; column < 5; ++column) ListView_SetColumnWidth(f.list, column, 100);
     f.deliver(managed_list::Phase::complete, {{L"a", 1, false}, {L"b", 2, false}});
-    EXPECT(cell(f, 0, 3) == L"Loading..."); EXPECT(cell(f, 0, 4) == L"Loading...");
+    EXPECT(cell(f, 0, 3).empty()); EXPECT(cell(f, 0, 4).empty()); // pending: blank, as in Explorer
     f.pane.set_list_icon_viewport(0, 2);
     auto requests = source->requests;
     for (const auto& r : requests) {
@@ -602,20 +664,20 @@ void property_cells_status_and_explicit_retry() {
         source->deliver(r, std::move(value));
     }
     while (!source->results.empty()) f.pane.process_icon_results();
-    EXPECT(cell(f, 0, 3) == L"Audio"); EXPECT(cell(f, 0, 4) == L"1:05");
-    EXPECT(cell(f, 1, 3) == L"Unavailable"); EXPECT(cell(f, 1, 4) == L"Unavailable");
+    EXPECT(cell(f, 0, 3) == L"Audio"); EXPECT(cell(f, 0, 4) == L"00:01:05");
+    EXPECT(cell(f, 1, 3).empty()); EXPECT(cell(f, 1, 4).empty()); // missing: blank
     f.pane.set_list_icon_viewport(0, 2);
     EXPECT(source->requests.empty()); // failures are terminal until explicit Refresh
     f.pane.refresh_view();
     f.deliver(managed_list::Phase::complete, {{L"a", 1, false}, {L"b", 2, false}});
     f.click_column(4); f.pane.set_list_icon_viewport(0, 2);
     EXPECT(status(f).find(L"Sorting properties...") != std::wstring::npos);
-    EXPECT(cell(f, 1, 4) == L"Loading...");
+    EXPECT(cell(f, 1, 4).empty());
     auto retry = source->requests; EXPECT(retry.size() == 2);
     for (const auto& r : retry) source->deliver(r, number(10000000));
     while (!source->results.empty()) f.pane.process_icon_results();
     EXPECT(status(f).find(L"Sorting properties...") == std::wstring::npos);
-    EXPECT(cell(f, 1, 4) == L"0:01");
+    EXPECT(cell(f, 1, 4) == L"00:00:01");
     // A delayed key does not trap the old tab, even with the same folder/name.
     f.pane.refresh_view();
     f.deliver(managed_list::Phase::complete, {{L"a", 1, false}});
@@ -626,7 +688,7 @@ void property_cells_status_and_explicit_retry() {
     EXPECT(f.state.active_tab_id == "second");
     f.deliver(managed_list::Phase::complete, {{L"a", 1, false}});
     source->deliver(old, number(990000000)); f.pane.process_icon_results();
-    EXPECT(cell(f, 0, 4) == L"Loading...");
+    EXPECT(cell(f, 0, 4).empty());
 }
 void exhausted_properties_degrade_without_blocking_navigation() {
     Fixture f;
@@ -647,7 +709,7 @@ void exhausted_properties_degrade_without_blocking_navigation() {
     auto retry = source->requests; EXPECT(retry.size() == 1);
     for (const auto& r : retry) source->deliver(r, number(10000000));
     while (!source->results.empty()) f.pane.process_icon_results();
-    EXPECT(cell(f, 0, 4) == L"0:01");
+    EXPECT(cell(f, 0, 4) == L"00:00:01");
     EXPECT(!f.pane.list_property_sort_pending());
     EXPECT(SUCCEEDED(f.pane.navigate_to({L"C:\\B", {}, {}})));
     EXPECT(!f.pane.list_property_capacity_failed());
@@ -693,10 +755,10 @@ void property_owned_bytes_limit_keeps_rows_usable() {
     source->deliver(request, std::move(oversized)); f.pane.process_icon_results();
     EXPECT(f.pane.list_property_capacity_failed()); EXPECT(!f.pane.list_property_sort_pending());
     EXPECT(f.pane.list_snapshot().rows.size() == 1);
-    EXPECT(cell(f, 0, 3) == L"Unavailable");
+    EXPECT(cell(f, 0, 3).empty());
     EXPECT(f.pane.list_snapshot().rows.front().properties[0].text.empty());
     source->deliver(request, {managed_list::PropertyState::value, L"late", 0, false});
-    f.pane.process_icon_results(); EXPECT(cell(f, 0, 3) == L"Unavailable");
+    f.pane.process_icon_results(); EXPECT(cell(f, 0, 3).empty());
 }
 void paused_worker_property_keeps_navigation_available() {
     auto gate = std::make_shared<managed_list::testing::IconGate>();
@@ -869,9 +931,86 @@ void quick_repeat_on_a_column_title_still_flips_the_sort() {
     EXPECT(f.state.tabs.front().sort_ascending == first);
 }
 
+void repeated_delta_identity_keeps_the_untouched_prefix_sorted() {
+    Fixture f;
+    f.deliver(managed_list::Phase::complete, {
+        {L"a", 1, false}, {L"b", 2, false}, {L"c", 3, false},
+        {L"d", 4, false}, {L"e", 5, false}, {L"f", 6, false}});
+    f.click_column(1); // descending
+    f.click_column(1); // ascending
+    const int selected = f.row(L"c");
+    ListView_SetItemState(f.list, selected, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    managed_list::Batch delta{f.pane.list_snapshot().request,
+        {{L"b", 9, false}, {L"b", 10, false}, {L"c", 11, false}},
+        managed_list::Phase::complete, 0, managed_list::Change::delta};
+    f.source->deliver(std::move(delta));
+    f.pane.process_content_results();
+    const auto& rows = f.pane.list_snapshot().rows;
+    EXPECT(rows.size() == 6);
+    EXPECT(std::is_sorted(rows.begin(), rows.end(),
+        [](const auto& a, const auto& b) { return a.bytes < b.bytes; }));
+    EXPECT(rows[f.row(L"b")].bytes == 10);
+    const auto interaction = f.pane.list_interaction_snapshot();
+    EXPECT(interaction.selected.size() == 1 && interaction.selected[0].name == L"c");
+    EXPECT(interaction.focused && interaction.focused->name == L"c");
+}
+
+struct ColumnMenuProbe {
+    Fixture* fixture{};
+    bool switch_tab{};
+    bool entered{};
+    bool guarded{};
+};
+
+LRESULT CALLBACK column_menu_probe(HWND window, UINT message, WPARAM wp, LPARAM lp,
+                                   UINT_PTR, DWORD_PTR data) {
+    auto& probe = *reinterpret_cast<ColumnMenuProbe*>(data);
+    if (message == WM_INITMENUPOPUP) {
+        probe.entered = true;
+        probe.guarded = probe.fixture->host.guard.in_shell_call();
+        if (probe.switch_tab) probe.fixture->state.active_tab_id = "other";
+        // Exercise the real popup loop: choose its last item (Availability).
+        PostMessageW(window, WM_CHAR, L'~', 0);
+    }
+    if (message == WM_MENUCHAR)
+        return MAKELRESULT(GetMenuItemCount(reinterpret_cast<HMENU>(lp)) - 1, MNC_EXECUTE);
+    return DefSubclassProc(window, message, wp, lp);
+}
+
+void column_menu_keeps_its_tab_identity_and_reentry_gate() {
+    Fixture f;
+    f.state.tabs.push_back({"other", {L"C:\\B", {}, {}}, {}, {}, true});
+    ColumnMenuProbe probe{&f};
+    EXPECT(SetWindowSubclass(f.list, column_menu_probe, 900,
+                            reinterpret_cast<DWORD_PTR>(&probe)));
+    // A one-shot escape prevents a broken menu harness from hanging the suite.
+    const auto timer = SetTimer(nullptr, 0, 1500,
+        [](HWND, UINT, UINT_PTR id, DWORD) { KillTimer(nullptr, id); EndMenu(); });
+    EXPECT(timer != 0);
+    f.pane.show_list_column_menu({20, 20});
+    KillTimer(nullptr, timer);
+    EXPECT(probe.entered && probe.guarded);
+    EXPECT(!core::column_visible(core::parse_columns(f.state.tabs[0].columns), "availability"));
+
+    const auto original = f.state.tabs[0].columns;
+    probe.switch_tab = true;
+    const auto second_timer = SetTimer(nullptr, 0, 1500,
+        [](HWND, UINT, UINT_PTR id, DWORD) { KillTimer(nullptr, id); EndMenu(); });
+    f.pane.show_list_column_menu({20, 20});
+    KillTimer(nullptr, second_timer);
+    EXPECT(f.state.active_tab_id == "other");
+    EXPECT(f.state.tabs[0].columns == original);
+    EXPECT(f.state.tabs[1].columns.empty());
+    EXPECT(!f.host.guard.in_shell_call());
+    RemoveWindowSubclass(f.list, column_menu_probe, 900);
+}
+
 int main() {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
     EXPECT(InitCommonControlsEx(&controls));
+    column_menu_keeps_its_tab_identity_and_reentry_gate();
+    repeated_delta_identity_keeps_the_untouched_prefix_sorted();
     shell_property_identity_reorder_and_completion();
     long_shell_property_batches_finish_within_byte_budget();
     duplicate_display_names_preserve_viewport_and_interaction_on_reorder();
@@ -886,6 +1025,7 @@ int main() {
     property_demand_is_bounded_and_stale_results_are_rejected();
     display_demand_and_custom_keys_use_the_same_bounded_boundary();
     exhausted_properties_degrade_without_blocking_navigation();
+    status_bar_counts_items_and_selection_like_explorer();
     property_cells_status_and_explicit_retry();
     bounded_order_yields_without_mutation_and_finishes_stably();
     property_owned_bytes_limit_keeps_rows_usable();

@@ -260,9 +260,15 @@ bool Sidebar::draw_item(const DRAWITEMSTRUCT* item) const noexcept {
 }
 
 bool Sidebar::begin_rename() {
-    if (editor_ != nullptr) return false;
     const auto selected = selected_index();
-    if (!selected.has_value() || *selected >= groups_.size()) return false;
+    if (!selected.has_value()) return false;
+    return begin_rename(*selected);
+}
+
+bool Sidebar::begin_rename(std::size_t index) {
+    if (editor_ != nullptr) return false;
+    if (index >= groups_.size()) return false;
+    const std::optional<std::size_t> selected = index;
 
     RECT rect{};
     if (SendMessageW(list_box_, LB_GETITEMRECT, *selected,
@@ -273,6 +279,7 @@ bool Sidebar::begin_rename() {
         rect.top, rect.right - rect.left, rect.bottom - rect.top, list_box_,
         nullptr, GetModuleHandleW(nullptr), nullptr);
     if (editor_ == nullptr) return false;
+    editing_group_id_ = groups_[*selected].id;
     SendMessageW(editor_, WM_SETFONT, SendMessageW(list_box_, WM_GETFONT, 0, 0),
                  TRUE);
     SetWindowLongPtrW(editor_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
@@ -283,7 +290,7 @@ bool Sidebar::begin_rename() {
     return true;
 }
 
-std::optional<std::wstring> Sidebar::take_rename_text() noexcept {
+std::optional<GroupRename> Sidebar::take_rename() noexcept {
     return std::exchange(pending_rename_, std::nullopt);
 }
 
@@ -438,8 +445,10 @@ LRESULT CALLBACK Sidebar::edit_proc(HWND window, UINT message, WPARAM wparam,
         self->close_editor(false);
         return 0;
     }
+    // Explorer commits a rename when the editor loses focus; only Esc
+    // abandons it.
     if (self != nullptr && message == WM_KILLFOCUS) {
-        self->close_editor(false);
+        self->close_editor(true);
         return 0;
     }
     return CallWindowProcW(self != nullptr ? self->original_edit_proc_
@@ -454,8 +463,9 @@ void Sidebar::close_editor(bool commit) {
         std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
         GetWindowTextW(editor_, text.data(), length + 1);
         text.resize(static_cast<std::size_t>(length));
-        pending_rename_ = std::move(text);
+        pending_rename_ = GroupRename{editing_group_id_, std::move(text)};
     }
+    editing_group_id_.clear();
     const HWND editor = std::exchange(editor_, nullptr);
     DestroyWindow(editor);
     original_edit_proc_ = nullptr;

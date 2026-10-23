@@ -31,9 +31,14 @@ bool Pane::begin_list_rename() noexcept try {
     ListView_EnsureVisible(list_window_, index, FALSE);
     RECT rect{};
     if (!ListView_GetItemRect(list_window_, index, &rect, LVIR_LABEL)) return false;
-    const std::wstring text = list_.rows[index].identity.shell_item
-        ? list_.rows[index].name : list_.rows[index].identity.key;
-    list_rename_ = ListRename{std::move(snapshot), list_.rows[index].identity};
+    const auto& row = list_.rows[index];
+    const auto hidden = managed_list::hidden_extension(row.name, row.identity.key,
+        row.identity.shell_item || row.directory);
+    // With extensions hidden, Explorer edits the display name ("report", not
+    // "report.txt"); otherwise the real leaf.
+    const std::wstring text = row.identity.shell_item ? row.name
+        : hidden.empty() ? row.identity.key : row.name;
+    list_rename_ = ListRename{std::move(snapshot), row.identity, std::wstring(hidden)};
     list_rename_result_ = S_FALSE;
     list_rename_edit_ = CreateWindowExW(0, L"EDIT", text.c_str(),
         WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
@@ -50,12 +55,92 @@ bool Pane::begin_list_rename() noexcept try {
     SetFocus(list_rename_edit_);
     // Like Explorer, preselect the name without its extension.
     SendMessageW(list_rename_edit_, EM_SETSEL, 0,
-        static_cast<LPARAM>(managed_list::rename_selection_length(text, list_.rows[index].directory)));
+        static_cast<LPARAM>(list_rename_->hidden_extension.empty()
+            ? managed_list::rename_selection_length(text, list_.rows[index].directory)
+            : text.size())); // no visible extension: Explorer selects it all
     return true;
 } catch (...) { cancel_list_rename(); return false; }
 
+bool Pane::handle_list_key(const MSG& message, bool control, bool alt, bool shift) noexcept {
+    if (!active() || message.hwnd != list_window_ || message.message != WM_KEYDOWN ||
+        !control || alt) return false;
+    if (message.wParam == 'A' && !shift) {
+        select_all_list_rows(); // comctl32's list view has no select-all key
+        return true;
+    }
+    if (message.wParam == 'N' && shift) {
+        (void)create_new_folder();
+        return true;
+    }
+    return false;
+}
+
+void Pane::select_all_list_rows() noexcept {
+    if (!active() || !list_window_ || list_.rows.empty()) return;
+    ListView_SetItemState(list_window_, -1, LVIS_SELECTED, LVIS_SELECTED);
+}
+
+void Pane::show_status_text(const wchar_t* text) noexcept {
+    if (status_bar_ && text) SetWindowTextW(status_bar_, text);
+}
+
+bool Pane::create_new_folder() noexcept try {
+    if (list_rename_busy_ || !active() || !list_window_ ||
+        (reentry_guard_ && reentry_guard().in_shell_call())) return false;
+    FileCommandSnapshot snapshot;
+    if (file_command_snapshot(file_operations::Command::paste, snapshot) != S_OK) return false;
+    cancel_list_rename();
+    pending_new_item_.reset();
+    list_rename_busy_ = true; // no edit can begin while the Shell pumps
+    file_operations::RenameResult result;
+    {
+        ShellCallScope shell_call(reentry_guard());
+        result = pane_host()->new_folder(*this, snapshot);
+    }
+    list_rename_busy_ = false;
+    if (!file_command_is_current(snapshot)) return false;
+    if (FAILED(result.result) || result.aborted || result.parsing_name.empty() ||
+        result.leaf_name.empty()) {
+        if (result.result != E_ABORT && !result.aborted &&
+            result.result != HRESULT_FROM_WIN32(ERROR_CANCELLED))
+            show_status_text(L"Could not create a new folder here.");
+        return false;
+    }
+    // The row arrives with the folder's change notification, never sooner.
+    pending_new_item_ = PendingNewItem{snapshot.binding, std::move(result.parsing_name),
+                                       std::move(result.leaf_name)};
+    rename_pending_new_item();
+    return true;
+} catch (...) { list_rename_busy_ = false; return false; }
+
+void Pane::rename_pending_new_item() noexcept {
+    if (!pending_new_item_) return;
+    if (!active() || !list_window_ || !content_request_is_current(pending_new_item_->binding)) {
+        pending_new_item_.reset();
+        return;
+    }
+    const auto same = [](std::wstring_view a, std::wstring_view b) {
+        return CompareStringOrdinal(a.data(), static_cast<int>(a.size()), b.data(),
+                                    static_cast<int>(b.size()), TRUE) == CSTR_EQUAL;
+    };
+    const auto found = std::find_if(list_.rows.begin(), list_.rows.end(), [&](const auto& row) {
+        return same(row.identity.key, row.identity.shell_item
+            ? pending_new_item_->parsing_name : pending_new_item_->leaf_name);
+    });
+    if (found == list_.rows.end()) return;
+    pending_new_item_.reset();
+    const int index = static_cast<int>(found - list_.rows.begin());
+    ListView_SetItemState(list_window_, -1, 0, LVIS_SELECTED);
+    ListView_SetItemState(list_window_, index, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetSelectionMark(list_window_, index);
+    ListView_EnsureVisible(list_window_, index, FALSE);
+    (void)begin_list_rename();
+}
+
 void Pane::cancel_list_rename() noexcept {
     list_rename_.reset();
+    list_rename_focus_commit_.reset();
     const HWND edit = std::exchange(list_rename_edit_, nullptr);
     const bool focused = edit && GetFocus() == edit;
     if (edit) DestroyWindow(edit);
@@ -125,10 +210,22 @@ LRESULT CALLBACK Pane::list_edit_subclass(HWND window, UINT message, WPARAM wp,
                                          LPARAM lp, UINT_PTR id, DWORD_PTR data) try {
     auto* pane = reinterpret_cast<Pane*>(data);
     if (message == WM_NCDESTROY) RemoveWindowSubclass(window, list_edit_subclass, id);
-    if (message == WM_KILLFOCUS && !pane->list_rename_busy_) {
-        pane->cancel_list_rename();
-        return 0;
+    // Overrides PD-237 (cancel on focus loss): Explorer commits a label edit
+    // when focus moves elsewhere. Escape, navigation, accepted batches and
+    // shutdown cancel first (cancel_list_rename clears the target), so they
+    // never reach this commit. The Shell call runs from a posted message,
+    // never inside the focus change.
+    if (message == WM_KILLFOCUS && !pane->list_rename_busy_ && pane->list_rename_ &&
+        pane->list_rename_edit_ == window) {
+        std::wstring text(managed_list::kMaxPath + 1, L'\0');
+        text.resize(static_cast<std::size_t>(
+            GetWindowTextW(window, text.data(), static_cast<int>(text.size()))));
+        pane->list_rename_focus_commit_ = std::move(text);
+        if (!PostMessageW(pane->list_window_, kCommitListRenameMessage, 0, 0))
+            pane->cancel_list_rename();
+        return DefSubclassProc(window, message, wp, lp);
     }
+    if (message == WM_SETFOCUS) pane->list_rename_focus_commit_.reset();
     if (message == WM_KEYDOWN && (wp == VK_RETURN || wp == VK_ESCAPE)) {
         if (wp == VK_ESCAPE) pane->cancel_list_rename();
         else {
@@ -146,6 +243,12 @@ LRESULT CALLBACK Pane::list_edit_subclass(HWND window, UINT message, WPARAM wp,
     return 0;
 }
 
+void Pane::commit_list_rename_after_focus_loss() noexcept {
+    auto text = std::exchange(list_rename_focus_commit_, std::nullopt);
+    if (!text || !list_rename_ || list_rename_busy_) return;
+    commit_list_rename(std::move(*text));
+}
+
 void Pane::commit_list_rename(std::wstring name) noexcept try {
     auto edit = std::exchange(list_rename_, {});
     cancel_list_rename();
@@ -157,8 +260,15 @@ void Pane::commit_list_rename(std::wstring name) noexcept try {
         return found == list_.rows.end() ? std::nullopt : std::optional{*found};
     }();
     if (!original) return;
+    name = managed_list::restore_hidden_extension(std::move(name), edit->hidden_extension);
     if (name.empty() || name.size() > managed_list::kMaxPath) {
         list_rename_result_ = E_INVALIDARG;
+        return;
+    }
+    // Explorer commits an unchanged name (Enter or focus loss) silently. The
+    // comparison is exact: a case-only change is a real rename.
+    if (name == (edit->identity.shell_item ? original->name : edit->identity.key)) {
+        list_rename_result_ = S_FALSE;
         return;
     }
     // Own row and interaction values before the first Shell pump. Never keep
@@ -203,8 +313,16 @@ void Pane::commit_list_rename(std::wstring name) noexcept try {
     replacement.identity = old_identity.shell_item
         ? managed_list::ItemIdentity{result.parsing_name, true}
         : managed_list::ItemIdentity{std::move(result.leaf_name), false};
-    if (replacement.child_location)
-        replacement.child_location = core::ShellLocation{std::move(result.parsing_name), {}, {}};
+    if (replacement.child_location) {
+        auto& location = *replacement.child_location;
+        // Rename changes the item name, not the namespace it was opened from.
+        // In particular, Up from a merged Desktop child must still reach Desktop.
+        // Only reuse a filesystem fallback when the Shell returned that identity;
+        // a different old fallback may be stale and will be resolved on navigation.
+        location.fallback_path = location.fallback_path == location.parsing_name
+            ? result.parsing_name : std::wstring{};
+        location.parsing_name = std::move(result.parsing_name);
+    }
     replacement.properties = {};
     if (!managed_list::prepare_row(replacement)) {
         list_rename_result_ = E_INVALIDARG;

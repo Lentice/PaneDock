@@ -4,8 +4,9 @@
 #include "shell_core/icon_image.h"
 
 namespace panedock::managed_list {
-// Separate from the four enumeration slots: at most eight list workers in
-// total, including abandoned calls. Properties share these same slots/queues.
+// Separate from the eight enumeration workers (four live, four retired): at
+// most twelve list workers in total, including abandoned calls. Properties
+// share these same icon slots/queues.
 // No offscreen image prefetch; only full-sort demand requests offscreen keys. Viewports exceeding
 // the interest cap retain placeholders for the excess until they scroll in.
 inline constexpr std::size_t kIconWorkers = 4;

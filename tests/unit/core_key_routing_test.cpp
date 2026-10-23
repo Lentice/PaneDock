@@ -133,7 +133,11 @@ void test_tab_and_history_commands_yield_to_the_shell_first() {
         {kVirtualKeyTab, true, false, true, KeyAction::previous_tab},
         {kVirtualKeyLeft, false, true, false, KeyAction::history_back},
         {kVirtualKeyRight, false, true, false, KeyAction::history_forward},
-        {kVirtualKeyBack, false, false, false, KeyAction::navigate_up},
+        // Windows 10/11 Explorer: Backspace goes Back, Alt+Up goes Up.
+        {kVirtualKeyBack, false, false, false, KeyAction::history_back},
+        {kVirtualKeyUp, false, true, false, KeyAction::navigate_up},
+        {kVirtualKeyF5, false, false, false, KeyAction::refresh},
+        {'R', true, false, false, KeyAction::refresh},
     };
     for (const auto& item : cases) {
         auto input = key(item.virtual_key);
@@ -168,6 +172,49 @@ void test_alt_chords_arrive_as_system_key_down() {
     EXPECT(resolve_key(back).action == KeyAction::none);
 }
 
+void test_explorer_navigation_keys() {
+    // Ctrl+L, Alt+D and F4 focus the address bar, from the list or the bar.
+    struct Case final {
+        unsigned virtual_key;
+        bool control;
+        bool alt;
+        KeyMessage message;
+    };
+    for (const auto& item : {Case{'L', true, false, KeyMessage::key_down},
+                             Case{'D', false, true, KeyMessage::system_key_down},
+                             Case{kVirtualKeyF4, false, false, KeyMessage::key_down}}) {
+        for (const bool in_bar : {false, true}) {
+            auto input = key(item.virtual_key, item.message);
+            input.control = item.control;
+            input.alt = item.alt;
+            input.address_bar_focused = in_bar;
+            const auto routing = resolve_key(input);
+            EXPECT(routing.action == KeyAction::focus_address_bar);
+            EXPECT(routing.shell == ShellAccelerator::never);
+        }
+    }
+    // Alt+F4 stays the window's close command.
+    auto alt_f4 = key(kVirtualKeyF4, KeyMessage::system_key_down);
+    alt_f4.alt = true;
+    EXPECT(resolve_key(alt_f4).action == KeyAction::none);
+    // Plain D and L are type-ahead in the list.
+    EXPECT(resolve_key(key('D')).action == KeyAction::none);
+    EXPECT(resolve_key(key('L')).action == KeyAction::none);
+    // Alt+Up arrives as WM_SYSKEYDOWN; plain Up moves the list focus.
+    auto up = key(kVirtualKeyUp, KeyMessage::system_key_down);
+    up.alt = true;
+    EXPECT(resolve_key(up).action == KeyAction::navigate_up);
+    EXPECT(resolve_key(key(kVirtualKeyUp)).action == KeyAction::none);
+    // F5 refreshes from the address bar too, without the Shell seeing it.
+    auto f5 = key(kVirtualKeyF5);
+    f5.address_bar_focused = true;
+    EXPECT(resolve_key(f5).action == KeyAction::refresh);
+    EXPECT(resolve_key(f5).shell == ShellAccelerator::never);
+    // Shift+F5 / Ctrl+Shift+R are not refresh chords here.
+    f5.shift = true;
+    EXPECT(resolve_key(f5).action == KeyAction::none);
+}
+
 void test_non_key_messages_still_reach_the_shell() {
     const auto routing = resolve_key(key(0, KeyMessage::other));
     EXPECT(routing.action == KeyAction::none);
@@ -184,6 +231,7 @@ int main() {
     test_tab_and_history_commands_yield_to_the_shell_first();
     test_f6_cycles_panes_but_after_the_shell();
     test_alt_chords_arrive_as_system_key_down();
+    test_explorer_navigation_keys();
     test_non_key_messages_still_reach_the_shell();
     return panedock::test::summary("core_key_routing");
 }

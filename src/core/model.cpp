@@ -106,6 +106,16 @@ bool restore_tab_history_index(TabState& tab, std::size_t index) noexcept {
     return true;
 }
 
+std::optional<std::size_t> history_step_target(
+    const TabState& tab, std::optional<std::size_t> pending, bool back) noexcept {
+    const std::size_t from =
+        pending && *pending < tab.history.size() ? *pending : tab.history_index;
+    if (tab.history.empty() || from >= tab.history.size()) return std::nullopt;
+    if (back) return from == 0 ? std::nullopt : std::optional<std::size_t>(from - 1);
+    return from + 1 < tab.history.size() ? std::optional<std::size_t>(from + 1)
+                                         : std::nullopt;
+}
+
 bool is_valid(const GroupState& group) noexcept {
     // Panes are stable identities (up to kMaxPaneCount) that persist across
     // layout switches; the template only decides which of them are visible,
@@ -230,6 +240,25 @@ bool add_group(ApplicationState& application, GroupState group) {
     return true;
 }
 
+std::wstring next_group_name(const ApplicationState& application) {
+    for (std::size_t number = 1;; ++number) {
+        std::wstring candidate = L"Group " + std::to_wstring(number);
+        if (std::none_of(application.groups.begin(), application.groups.end(),
+                         [&](const GroupState& group) {
+                             return group.name == candidate;
+                         }))
+            return candidate;
+    }
+}
+
+std::wstring normalize_group_name(std::wstring_view name) {
+    constexpr std::wstring_view kWhitespace = L" \t\r\n\v\f 　";
+    const std::size_t first = name.find_first_not_of(kWhitespace);
+    if (first == std::wstring_view::npos) return {};
+    const std::size_t last = name.find_last_not_of(kWhitespace);
+    return std::wstring(name.substr(first, last - first + 1));
+}
+
 bool rename_group(ApplicationState& application, const std::string& group_id,
                   std::wstring name) {
     const auto group = find_id(application.groups, group_id);
@@ -335,8 +364,11 @@ bool switch_layout(GroupState& group, LayoutTemplate layout_template,
     assert(new_count <= kMaxPaneCount);
 #endif
 
+    // Re-selecting the current template keeps the user's splitter positions;
+    // only a real template change resets them to the new template's defaults.
+    if (candidate.layout_template != layout_template)
+        candidate.divider_ratios = default_divider_ratios(layout_template);
     candidate.layout_template = layout_template;
-    candidate.divider_ratios = default_divider_ratios(layout_template);
     // The active pane must stay visible (index < visible count). If it landed
     // in the now-hidden region, fall back to the first visible pane.
     const auto active =

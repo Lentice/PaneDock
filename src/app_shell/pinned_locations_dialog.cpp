@@ -9,13 +9,16 @@ namespace panedock::app_shell {
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"PaneDockPinnedLocationsWindow";
-constexpr int kListId = 1;
-constexpr int kRemoveId = 2;
-constexpr int kMoveUpId = 3;
-constexpr int kMoveDownId = 4;
-constexpr int kApplyId = 5;
-constexpr int kOkId = 6;
-constexpr int kCancelId = 7;
+// IsDialogMessageW (main loop) turns Enter into WM_COMMAND IDOK (1) and Esc
+// into IDCANCEL (2), so no control may use those ids for anything else:
+// Esc must never arrive as "Remove".
+constexpr int kListId = 100;
+constexpr int kRemoveId = 101;
+constexpr int kMoveUpId = 102;
+constexpr int kMoveDownId = 103;
+constexpr int kApplyId = 104;
+constexpr int kOkId = IDOK;
+constexpr int kCancelId = IDCANCEL;
 constexpr int kButtonCount = 6;
 constexpr int kWindowWidth = 440;
 constexpr int kWindowHeight = 320;
@@ -219,7 +222,10 @@ LRESULT CALLBACK PinnedLocationsDialog::window_proc(HWND window, UINT message,
             for (std::size_t index = 0; index < kButtonLabels.size(); ++index) {
                 self->buttons[index] = CreateWindowExW(
                     0, L"BUTTON", kButtonLabels[index],
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                        (kButtonIds[index] == kOkId ? BS_DEFPUSHBUTTON
+                                                    : BS_PUSHBUTTON),
+                    0, 0,
                     0, 0, window,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(
                         kButtonIds[index])),
@@ -234,6 +240,8 @@ LRESULT CALLBACK PinnedLocationsDialog::window_proc(HWND window, UINT message,
         case WM_SIZE:
             if (self != nullptr) self->layout(window);
             return 0;
+        case DM_GETDEFID:
+            return MAKELRESULT(kOkId, DC_HASDEFID);
         case WM_DPICHANGED: {
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);
             if (suggested != nullptr)

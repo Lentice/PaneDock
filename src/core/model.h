@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -133,6 +134,12 @@ bool navigate_tab_forward(TabState& tab) noexcept;
 // navigation is attempted, so a failure has to put them back or the tab keeps
 // a location its view never showed -- and the session persists it.
 bool restore_tab_history_index(TabState& tab, std::size_t index) noexcept;
+// The history slot a Back/Forward press moves to, or nullopt at either end.
+// A press while an earlier history move is still loading (`pending`) steps
+// from that target, so two quick Back presses go back two entries, as in
+// Explorer, instead of reloading the same one.
+std::optional<std::size_t> history_step_target(
+    const TabState& tab, std::optional<std::size_t> pending, bool back) noexcept;
 
 bool is_valid(const GroupState& group) noexcept;
 bool is_valid(const ApplicationState& application) noexcept;
@@ -151,6 +158,14 @@ std::string next_group_id(const ApplicationState& application);
 // requires the retained placeholder id to be free across the whole Group.
 std::string next_tab_id(const GroupState& group,
                         std::size_t& candidate_index);
+
+// The lowest "Group N" (N >= 1) no Group is already named, so New Group
+// never shows two rows with the same name. Names are display text only;
+// identity stays the Group id.
+std::wstring next_group_name(const ApplicationState& application);
+// A name typed into the Group rename editor, with surrounding whitespace
+// removed. Empty means the edit must be rejected and the old name kept.
+std::wstring normalize_group_name(std::wstring_view name);
 
 bool add_group(ApplicationState& application, GroupState group);
 bool rename_group(ApplicationState& application, const std::string& group_id,
