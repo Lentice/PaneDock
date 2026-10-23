@@ -131,6 +131,21 @@ void test_round_trip_and_plain_json() {
     EXPECT(empty->clean_shutdown);
 }
 
+// NTFS names need not be valid UTF-16: an unpaired surrogate written to the
+// session must read back, or every later save is unreadable.
+void test_unpaired_surrogates_round_trip() {
+    auto application = sample();
+    auto& group = application.groups.front();
+    group.name += L'\xd800';
+    auto& tab = group.panes.front().tabs.front();
+    const std::wstring lone{L'\xdc00', L'x', L'\xd83d'};
+    tab.location.parsing_name += lone;
+    for (auto& entry : tab.history) entry.parsing_name += lone;
+    const auto restored = deserialize_session(serialize_session({application, {}}));
+    EXPECT(restored.has_value());
+    if (restored.has_value()) EXPECT(restored->application == application);
+}
+
 void test_optional_sidebar_width() {
     ApplicationState original = sample();
     original.sidebar_width = 320;
@@ -544,6 +559,7 @@ void test_interrupted_write_recovers_from_temporary() {
 
 int main() {
     test_round_trip_and_plain_json();
+    test_unpaired_surrogates_round_trip();
     test_optional_sidebar_width();
     test_optional_pinned_locations();
     test_two_over_one_round_trip();

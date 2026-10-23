@@ -274,7 +274,9 @@ std::optional<std::wstring> wide(std::string_view input) {
             if ((next & 0xc0) != 0x80) return std::nullopt;
             code = (code << 6) | (next & 0x3f);
         }
-        if (code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return std::nullopt;
+        // WTF-8: utf8() writes an unpaired surrogate (NTFS names need not be
+        // valid UTF-16) as its own 3-byte sequence, so it must read back.
+        if (code > 0x10ffff) return std::nullopt;
         if (code <= 0xffff) result += static_cast<wchar_t>(code);
         else {
             code -= 0x10000;
