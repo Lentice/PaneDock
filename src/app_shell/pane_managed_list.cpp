@@ -283,7 +283,7 @@ void Pane::cancel_managed_list(bool discard_cache) noexcept {
     if (discard_cache) prune_list_cache(true);
     if (list_source_) list_source_->cancel();
     cancel_list_icons();
-    clear_list_index();
+    row_store_.clear_index();
     list_ = {};
     property_sort_pending_ = false;
     property_capacity_failed_ = false;
@@ -291,7 +291,7 @@ void Pane::cancel_managed_list(bool discard_cache) noexcept {
     list_navigation_pending_ = false;
     list_history_target_.reset();
     list_retry_history_target_.reset();
-    list_name_bytes_ = 0;
+    row_store_.recount(list_.rows);
     if (list_window_) {
         clear_managed_list_interaction();
         ListView_SetItemCountEx(list_window_, 0, 0);
@@ -532,9 +532,10 @@ void Pane::apply_managed_list_sort() noexcept {
             property_sort_cursor_ = 0;
             property_capacity_failed_ = false;
             for (auto& row : list_.rows) {
-                list_name_bytes_ -= managed_list::owned_string_bytes(row.properties[2].text);
+                const auto old_bytes = managed_list::owned_string_bytes(row.properties[2].text);
                 row.properties[2] = {};
-                list_name_bytes_ += managed_list::owned_string_bytes(row.properties[2].text);
+                row_store_.account(old_bytes,
+                    managed_list::owned_string_bytes(row.properties[2].text));
             }
         }
         property_sort_pending_ = expensive_sort_slot() >= 0;
@@ -587,7 +588,7 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
     property_sort_key_ = active_tab()->sort_column;
     property_sort_pending_ = expensive_sort_slot() >= 0;
     property_capacity_failed_ = false;
-    clear_list_index();
+    row_store_.clear_index();
     auto cached = take_list_cache({content_request(), location});
     if (!content_request_is_current(list_.request.binding) &&
         list_.request.binding.group_id == pane_host()->active_group_id() &&
@@ -600,12 +601,12 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
         cached->snapshot = std::move(list_);
     }
     save_list_cache();
-    list_name_bytes_ = 0;
     list_ = { {content_request(), location}, {}, managed_list::Phase::loading, 0};
     list_.notification = managed_list::is_filesystem_location(location.parsing_name)
         ? managed_list::NotificationCapability::filesystem_watch
         : managed_list::NotificationCapability::manual_refresh;
     list_navigation_pending_ = true;
+    row_store_.recount(list_.rows);
     if (list_window_) {
         clear_managed_list_interaction();
         ListView_SetItemCountEx(list_window_, 0, 0);
@@ -618,10 +619,8 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
         // not evidence that optional properties or overlays are still current.
         icon_cache_.clear();
         if (icon_images_) ImageList_SetImageCount(icon_images_, 2);
-        for (auto& row : list_.rows) {
-            row.properties = {};
-            list_name_bytes_ += managed_list::owned_row_bytes(row);
-        }
+        for (auto& row : list_.rows) row.properties = {};
+        row_store_.recount(list_.rows);
         managed_list::Batch begin;
         begin.change = managed_list::Change::rescan_begin;
         ManagedListInteraction unused;
@@ -647,7 +646,7 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
         list_.phase = managed_list::Phase::error;
         list_.error = ERROR_NO_SYSTEM_RESOURCES;
         list_.updating = false;
-        clear_list_index();
+        row_store_.clear_index();
         resolve_list_navigation(false);
     }
     update_managed_list();
@@ -678,7 +677,7 @@ void Pane::process_content_results() noexcept try {
     if (!active()) {
         list_source_->cancel();
         release_list_device();
-        clear_list_index();
+        row_store_.clear_index();
         if (list_.phase != managed_list::Phase::idle) {
             list_.watch = managed_list::WatchState::failed;
             list_.watch_error = ERROR_CANCELLED;
@@ -712,7 +711,7 @@ void Pane::process_content_results() noexcept try {
             list_.phase = managed_list::Phase::error;
             list_.error = ERROR_INVALID_DATA;
             list_.updating = false;
-            clear_list_index();
+            row_store_.clear_index();
             list_source_->cancel();
             resolve_list_navigation(false);
             break;
@@ -726,16 +725,15 @@ void Pane::process_content_results() noexcept try {
                 return value ? managed_list::owned_location_bytes(*value) : 0;
             };
             const auto bytes = location_bytes(resolved) + location_bytes(parent);
-            if (list_name_bytes_ - old_bytes + bytes + list_.rows.capacity() * sizeof(managed_list::Row) >
-                managed_list::kMaxRowBytes) {
+            if (!row_store_.fits(list_.rows, old_bytes, bytes)) {
                 list_.phase = managed_list::Phase::limited;
                 list_.updating = false;
-                clear_list_index();
+                row_store_.clear_index();
                 list_source_->cancel();
                 resolve_list_navigation(false);
                 break;
             }
-            list_name_bytes_ = list_name_bytes_ - old_bytes + bytes;
+            row_store_.account(old_bytes, bytes);
             list_.resolved_location = std::move(resolved);
             list_.parent_location = std::move(parent);
             list_.parent_outcome = batch->parent_outcome;
@@ -772,7 +770,7 @@ void Pane::process_content_results() noexcept try {
             list_.phase = managed_list::Phase::error;
             list_.error = ERROR_INVALID_DATA;
             list_.updating = false;
-            clear_list_index();
+            row_store_.clear_index();
             list_source_->cancel();
             resolve_list_navigation(false);
             break;
@@ -801,7 +799,7 @@ void Pane::process_content_results() noexcept try {
                 list_.error = list_.watch_error;
                 list_source_->cancel();
                 list_.updating = false;
-                clear_list_index();
+                row_store_.clear_index();
             }
             if (terminal) {
                 list_.updating = false;
@@ -814,29 +812,14 @@ void Pane::process_content_results() noexcept try {
             full_sort = full_sort || terminal;
             continue;
         }
-        const auto count = std::min(batch->rows.size(), managed_list::kMaxRows-list_.rows.size());
-        if (count != 0 && !interaction)
+        if (!batch->rows.empty() && list_.rows.size() < managed_list::kMaxRows && !interaction)
             interaction.emplace(capture_managed_list_interaction());
-        const auto required = list_.rows.size() + count;
-        if (required > list_.rows.capacity()) {
-            auto capacity = std::min(managed_list::kMaxRows,
-                std::max(required, list_.rows.capacity()*2));
-            if (list_name_bytes_ + capacity*sizeof(managed_list::Row) > managed_list::kMaxRowBytes)
-                capacity = required;
-            if (list_name_bytes_ + capacity*sizeof(managed_list::Row) > managed_list::kMaxRowBytes) {
-                list_.phase = managed_list::Phase::limited;
-                list_source_->cancel(); break;
-            }
-            list_.rows.reserve(capacity);
+        const auto appended = row_store_.append(list_.rows, batch->rows);
+        if (!appended) {
+            list_.phase = managed_list::Phase::limited;
+            list_source_->cancel(); break;
         }
-        std::size_t accepted = 0;
-        for (; accepted < count; ++accepted) {
-            const auto bytes = managed_list::owned_row_bytes(batch->rows[accepted]);
-            if (list_name_bytes_ + bytes + list_.rows.capacity()*sizeof(managed_list::Row) >
-                managed_list::kMaxRowBytes) break;
-            list_name_bytes_ += bytes;
-            list_.rows.push_back(std::move(batch->rows[accepted]));
-        }
+        const std::size_t accepted = *appended;
         rows_changed = rows_changed || accepted != 0;
         full_sort = full_sort || (accepted != 0 && !append_only);
         list_.phase = accepted < batch->rows.size() ? managed_list::Phase::limited : batch->phase;
@@ -849,7 +832,7 @@ void Pane::process_content_results() noexcept try {
         // nearest existing parent. The stale rows stay only if that fails.
         release_list_device();
         list_source_->cancel();
-        clear_list_index();
+        row_store_.clear_index();
         list_.watch = managed_list::WatchState::failed;
         list_.watch_error = ERROR_PATH_NOT_FOUND;
         list_.updating = false;
@@ -878,25 +861,12 @@ void Pane::process_content_results() noexcept try {
 } catch (...) {
     cancel_list_rename();
     if (list_source_) list_source_->cancel();
-    clear_list_index();
+    row_store_.clear_index();
     list_.phase = managed_list::Phase::error;
     list_.error = ERROR_NOT_ENOUGH_MEMORY;
     list_.updating = false;
     resolve_list_navigation(false);
     update_managed_list();
-}
-void Pane::clear_list_index() noexcept {
-    recovery_index_.clear();
-    decltype(recovery_seen_) empty{IndexAllocator<unsigned char>{&index_memory_}};
-    recovery_seen_.swap(empty);
-}
-bool Pane::index_list_row(std::size_t index) noexcept try {
-    recovery_index_.insert(index);
-    return true;
-} catch (...) {
-    // The allocator rejects before exceeding its separate 4 MiB ceiling.
-    fail_list_watch(ERROR_NOT_ENOUGH_MEMORY);
-    return false;
 }
 // Keeps the sole row snapshot, stops automatic work and requires an explicit
 // Refresh: the one way a change notification or recovery gives up.
@@ -904,7 +874,7 @@ void Pane::fail_list_watch(DWORD error) noexcept {
     list_.watch = managed_list::WatchState::failed;
     list_.watch_error = error;
     if (list_source_) list_source_->cancel();
-    clear_list_index();
+    row_store_.clear_index();
 }
 void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction& interaction) {
     using managed_list::Change;
@@ -912,7 +882,7 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
     if (batch.change == Change::watch_error) {
         release_list_device();
         list_.watch = WatchState::failed; list_.watch_error = batch.error;
-        clear_list_index(); return;
+        row_store_.clear_index(); return;
     }
     if (batch.change == Change::watching) {
         list_.watch = WatchState::watching; list_.watch_error = 0;
@@ -920,180 +890,35 @@ void Pane::apply_list_changes(managed_list::Batch& batch, ManagedListInteraction
         return;
     }
     if (batch.change == Change::rescan_begin) {
-        clear_list_index();
-        recovery_work_ = {};
         list_.watch = WatchState::recovering;
-        try {
-            // Fixed mark storage shares the SAME 4 MiB allocator ceiling.
-            // No per-row padding is added to the authoritative row snapshot.
-            recovery_seen_.assign(managed_list::kMaxRows, 0);
-        } catch (...) { fail_list_watch(ERROR_NOT_ENOUGH_MEMORY); return; }
-        for (std::size_t i = 0; i < list_.rows.size(); ++i) {
-            if (!index_list_row(i)) return;
-            ++recovery_work_.indexed_rows;
-        }
+        if (const DWORD error = row_store_.begin_recovery(list_.rows)) fail_list_watch(error);
         return;
     }
-    if (batch.rows.size() > managed_list::kBatchRows ||
-        batch.removed.size() > managed_list::kBatchRows || batch.renamed.size() > managed_list::kBatchRows) {
+    if (!managed_list::batch_within_limits(batch)) {
         fail_list_watch(ERROR_INVALID_DATA); return;
     }
-    const auto row_bytes = managed_list::owned_row_bytes;
-    const auto translate = [&](std::optional<managed_list::ItemIdentity>& name, const auto& from, const auto& to) {
-        if (name && *name == from) name = to;
-    };
-    // Identities whose cached images may be stale; every other row keeps its icon.
-    std::vector<managed_list::ItemIdentity> touched;
-    for (const auto& leaf : batch.removed) touched.push_back({leaf, false});
-    for (const auto& [old_leaf, new_leaf] : batch.renamed) {
-        touched.push_back({old_leaf, false});
-        touched.push_back({new_leaf, false});
-    }
+    // A rename is the only notification that transfers an interaction
+    // identity. Deletes never implicitly select a different row.
     for (const auto& [old_leaf, new_leaf] : batch.renamed) {
         const managed_list::ItemIdentity from{old_leaf, false}, to{new_leaf, false};
-        // A rename is the only notification that transfers an interaction
-        // identity. Deletes never implicitly select a different row.
         for (auto& name : interaction.selected_items) if (name == from) name = to;
-        translate(interaction.focused_item, from, to);
-        translate(interaction.anchor_item, from, to);
-        translate(interaction.viewport_anchor_item, from, to);
-        std::erase_if(list_.rows, [&](const auto& row) {
-            if (row.identity != from) return false;
-            list_name_bytes_ -= row_bytes(row); return true;
-        });
+        for (auto* name : {&interaction.focused_item, &interaction.anchor_item,
+                           &interaction.viewport_anchor_item})
+            if (*name && **name == from) *name = to;
     }
     std::sort(interaction.selected_items.begin(), interaction.selected_items.end(),
         [](const auto& a, const auto& b) { return a < b; });
-    if (!batch.removed.empty()) std::erase_if(list_.rows, [&](const auto& row) {
-        if (row.identity.shell_item || std::find(batch.removed.begin(), batch.removed.end(),
-                row.identity.key) == batch.removed.end()) return false;
-        list_name_bytes_ -= row_bytes(row); return true;
-    });
-    // Recovery builds this index exactly once. No erasing/reordering until its
-    // terminal batch: stable integer keys survive row-vector reallocations.
-    // Ordinary deltas build once per coalesced batch, never once per row.
-    if (batch.change != Change::rescan) {
-        clear_list_index();
-        for (std::size_t i = 0; i < list_.rows.size(); ++i)
-            if (!index_list_row(i)) return;
-    }
-    // A delta's updated rows (by index) and appended rows leave the order;
-    // the untouched rows remain one sorted run.
-    const std::size_t delta_base = list_.rows.size();
-    std::vector<std::size_t> delta_updated;
-    for (auto& row : batch.rows) {
-        if (!managed_list::prepare_row(row)) { fail_list_watch(ERROR_INVALID_DATA); return; }
-        if (batch.change == Change::rescan) ++recovery_work_.lookups;
-        const auto match = recovery_index_.find(row.identity);
-        if (match != recovery_index_.end()) {
-            auto* found = &list_.rows[*match];
-            // Recovery can keep known metadata for unchanged rows; ordinary
-            // notifications invalidate properties even if size/time are equal.
-            const bool unchanged = batch.change == Change::rescan && found->bytes == row.bytes &&
-                found->date_modified == row.date_modified && found->directory == row.directory &&
-                found->name == row.name && found->child_location == row.child_location &&
-                found->cloud == row.cloud;
-            if (!unchanged) {
-                const auto old_bytes = row_bytes(*found);
-                const auto new_bytes = row_bytes(row);
-                if (list_name_bytes_ - old_bytes + new_bytes + list_.rows.capacity() * sizeof(managed_list::Row) >
-                    managed_list::kMaxRowBytes) {
-                    fail_list_watch(ERROR_NOT_ENOUGH_MEMORY); return;
-                }
-                list_name_bytes_ = list_name_bytes_ - old_bytes + new_bytes;
-                touched.push_back(row.identity);
-                if (batch.change == Change::delta) delta_updated.push_back(*match);
-                *found = std::move(row);
-            } else {
-                // A cache hit cleared the retained properties, but the worker
-                // already resolved Type and Duration's missing state while
-                // enumerating (PD-256). Adopt those instead of re-requesting
-                // them per row. Slot 2 belongs to the current sort key only.
-                for (std::size_t slot = 0; slot < 2; ++slot) {
-                    auto& target = found->properties[slot];
-                    auto& value = row.properties[slot];
-                    if (target.state != managed_list::PropertyState::unresolved ||
-                        value.state == managed_list::PropertyState::unresolved) continue;
-                    const auto old_bytes = managed_list::owned_string_bytes(target.text);
-                    const auto new_bytes = managed_list::owned_string_bytes(value.text);
-                    // Over budget: stay unresolved; on-demand requests apply the cap.
-                    if (list_name_bytes_ - old_bytes + new_bytes + list_.rows.capacity() * sizeof(managed_list::Row) >
-                        managed_list::kMaxRowBytes) continue;
-                    list_name_bytes_ = list_name_bytes_ - old_bytes + new_bytes;
-                    target = std::move(value);
-                }
-            }
-            if (batch.change == Change::rescan) recovery_seen_[*match] = 1;
-        } else {
-            const auto bytes = row_bytes(row);
-            if (list_.rows.size() == managed_list::kMaxRows ||
-                list_name_bytes_ + bytes + std::max(list_.rows.capacity(), list_.rows.size() + 1) *
-                    sizeof(managed_list::Row) > managed_list::kMaxRowBytes) {
-                list_.phase = managed_list::Phase::limited;
-                fail_list_watch(ERROR_NOT_ENOUGH_MEMORY); return;
-            }
-            if (list_.rows.size() == list_.rows.capacity()) {
-                const auto capacity = std::min(managed_list::kMaxRows, std::max<std::size_t>(
-                    list_.rows.size() + 1, list_.rows.capacity() * 2));
-                // Reserve headroom for owned strings as well as Row slots.
-                // Filling all remaining bytes with empty slots would make the
-                // very next recovery append fail despite ample usable budget.
-                const auto average = (list_name_bytes_ + bytes + list_.rows.size()) / (list_.rows.size() + 1);
-                const auto available = std::max(list_.rows.size() + 1,
-                    managed_list::kMaxRowBytes / (sizeof(managed_list::Row) + average));
-                list_.rows.reserve(std::min(capacity, available));
-            }
-            list_name_bytes_ += bytes;
-            touched.push_back(row.identity);
-            list_.rows.push_back(std::move(row));
-            if (!index_list_row(list_.rows.size() - 1)) return;
-            if (batch.change == Change::rescan) recovery_seen_[list_.rows.size() - 1] = 1;
-        }
-        if (batch.change == Change::rescan) ++recovery_work_.accounted_rows;
-    }
-    if (batch.change == Change::rescan && batch.phase != managed_list::Phase::loading) {
-        if (batch.phase == managed_list::Phase::complete || batch.phase == managed_list::Phase::empty) {
-            recovery_index_.clear(); // keys must be gone before compaction/sort
-            std::size_t index = 0;
-            std::erase_if(list_.rows, [&](const auto& row) {
-                ++recovery_work_.accounted_rows;
-                if (recovery_seen_[index++]) return false;
-                list_name_bytes_ -= row_bytes(row); return true;
-            });
-            list_.watch = WatchState::watching;
-        } else {
-            // Never purge unseen rows after an incomplete recovery.
-            fail_list_watch(batch.error ? batch.error : ERROR_BUFFER_OVERFLOW);
-        }
-    }
-    if (list_.watch != WatchState::recovering) clear_list_index();
-    if (batch.change == Change::delta && list_.watch != WatchState::recovering) {
-        // Move updated rows behind the untouched sorted run, after the
-        // appended ones, in one pass; then sort only that short suffix and
-        // merge (O(n + k log k)) instead of re-sorting the whole folder.
-        std::sort(delta_updated.begin(), delta_updated.end());
-        // A Source may update one identity more than once in a batch. Move
-        // each row once so the remaining prefix and its length stay valid.
-        delta_updated.erase(std::unique(delta_updated.begin(), delta_updated.end()),
-                            delta_updated.end());
-        std::vector<managed_list::Row> moved;
-        moved.reserve(delta_updated.size());
-        std::size_t write = 0, next = 0;
-        for (std::size_t read = 0; read < list_.rows.size(); ++read) {
-            if (read < delta_base && next < delta_updated.size() && delta_updated[next] == read) {
-                moved.push_back(std::move(list_.rows[read])); ++next; continue;
-            }
-            if (write != read) list_.rows[write] = std::move(list_.rows[read]);
-            ++write;
-        }
-        for (auto& row : moved) list_.rows[write++] = std::move(row);
-        sort_managed_list_rows(delta_base - delta_updated.size());
-    }
+    auto result = row_store_.apply(list_.rows, batch, list_.watch == WatchState::recovering);
+    if (result.limited) list_.phase = managed_list::Phase::limited;
+    if (result.watch_failed) fail_list_watch(*result.watch_failed);
+    if (result.aborted) return;
+    if (result.recovered) list_.watch = WatchState::watching;
+    if (result.sorted_prefix) sort_managed_list_rows(*result.sorted_prefix);
     list_.phase = list_.rows.empty() ? managed_list::Phase::empty : managed_list::Phase::complete;
     property_sort_pending_ = expensive_sort_slot() >= 0;
     // Only images of changed identities are reloaded (including overlay-only
     // changes for which the basic size/time cache key did not change).
-    forget_list_icons(std::move(touched));
+    forget_list_icons(std::move(result.touched));
 }
 void Pane::forget_list_icons(std::vector<managed_list::ItemIdentity> identities) noexcept {
     if (identities.empty() || icon_cache_.empty()) return;
@@ -1381,7 +1206,7 @@ LRESULT Pane::list_device_change(WPARAM event, LPARAM data) noexcept {
         // rows remain, marked as no longer refreshing. No Shell call here.
         list_device_handle_.reset();
         if (list_source_) list_source_->cancel();
-        clear_list_index();
+        row_store_.clear_index();
         list_.watch = managed_list::WatchState::failed;
         list_.watch_error = ERROR_DEVICE_REMOVED;
         update_managed_list();

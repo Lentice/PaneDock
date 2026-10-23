@@ -25,6 +25,7 @@
 #include "file_operations/file_operations.h"
 #include "managed_list/list_worker.h"
 #include "managed_list/icon_source.h"
+#include "managed_list/row_store.h"
 #include "app_shell/pane_chrome_geometry.h"
 #include "app_shell/pane_control_id.h"
 #include "app_shell/pane_tab_strip.h"
@@ -222,16 +223,14 @@ class Pane final {
             bytes += sizeof(CachedIcon) + managed_list::owned_icon_key_bytes(entry.key);
         return bytes;
     }
-    struct RecoveryWork final {
-        std::size_t indexed_rows{}, lookups{}, comparisons{}, accounted_rows{};
-    };
+    using RecoveryWork = managed_list::RowStore::RecoveryWork;
     // Deterministic recovery work evidence for the bounded list harness.
-    RecoveryWork list_recovery_work() const noexcept { return recovery_work_; }
-    std::size_t list_index_bytes() const noexcept { return index_memory_.used; }
-    std::size_t list_index_peak_bytes() const noexcept { return index_memory_.peak; }
+    RecoveryWork list_recovery_work() const noexcept { return row_store_.work(); }
+    std::size_t list_index_bytes() const noexcept { return row_store_.index_bytes(); }
+    std::size_t list_index_peak_bytes() const noexcept { return row_store_.index_peak_bytes(); }
     // Harness can lower, never raise, the production ceiling before realize.
     void limit_list_index_bytes(std::size_t bytes) noexcept {
-        if (!realized_) index_memory_.limit = std::min(bytes, managed_list::kMaxIndexBytes);
+        if (!realized_) row_store_.limit_index_bytes(bytes);
     }
     bool list_property_sort_pending() const noexcept { return property_sort_pending_; }
     bool list_property_capacity_failed() const noexcept { return property_capacity_failed_; }
@@ -520,51 +519,9 @@ class Pane final {
     void resolve_list_navigation(bool success);
     std::unique_ptr<managed_list::Source> list_source_;
     ListSnapshot list_;
-    mutable RecoveryWork recovery_work_;
-    struct RowIdentityLess final {
-        using is_transparent = void;
-        const Pane* pane{};
-        const managed_list::ItemIdentity& identity(std::size_t index) const { return pane->list_.rows[index].identity; }
-        const managed_list::ItemIdentity& identity(const managed_list::ItemIdentity& value) const { return value; }
-        template<class A, class B> bool operator()(const A& a, const B& b) const {
-            ++pane->recovery_work_.comparisons;
-            // Preserve PD-232's exact, case-sensitive leaf comparison. Display
-            // sorting's case folding must never merge distinct local keys.
-            return identity(a) < identity(b);
-        }
-    };
-    struct IndexMemory final {
-        std::size_t used{}, peak{}, limit{managed_list::kMaxIndexBytes};
-    } index_memory_;
-    template<class T> struct IndexAllocator final {
-        using value_type = T;
-        IndexMemory* memory{};
-        explicit IndexAllocator(IndexMemory* value) noexcept : memory(value) {}
-        template<class U> IndexAllocator(const IndexAllocator<U>& other) noexcept : memory(other.memory) {}
-        T* allocate(std::size_t n) {
-            if (memory->used > memory->limit || n > (memory->limit - memory->used) / sizeof(T))
-                throw std::bad_alloc();
-            auto* result = std::allocator<T>{}.allocate(n);
-            memory->used += n * sizeof(T);
-            memory->peak = std::max(memory->peak, memory->used);
-            return result;
-        }
-        void deallocate(T* value, std::size_t n) noexcept {
-            memory->used -= n * sizeof(T);
-            std::allocator<T>{}.deallocate(value, n);
-        }
-        template<class U> bool operator==(const IndexAllocator<U>& other) const noexcept {
-            return memory == other.memory;
-        }
-    };
-    // Indices survive vector reallocation. Both entry count and allocator node
-    // bytes are bounded; no duplicate row/property snapshot is retained.
-    std::set<std::size_t, RowIdentityLess, IndexAllocator<std::size_t>> recovery_index_{
-        RowIdentityLess{this}, IndexAllocator<std::size_t>{&index_memory_}};
-    std::vector<unsigned char, IndexAllocator<unsigned char>> recovery_seen_{
-        IndexAllocator<unsigned char>{&index_memory_}};
-    void clear_list_index() noexcept;
-    bool index_list_row(std::size_t index) noexcept;
+    // The rows' byte budget, recovery index and change merge; list_.rows is
+    // the vector it works on.
+    managed_list::RowStore row_store_;
     void fail_list_watch(DWORD error) noexcept;
     struct ListRename final {
         FileCommandSnapshot snapshot;
@@ -666,7 +623,6 @@ class Pane final {
     void destroy_list_icons() noexcept;
     bool ensure_list_icon_images(int size) noexcept;
     static LRESULT CALLBACK list_icon_subclass(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
-    std::size_t list_name_bytes_{};
     bool last_viewport_anchor_clamped_{};
     HRESULT realize_managed_list(const RECT& rect, const core::ShellLocation& location,
                                  NavigationGeneration generation);

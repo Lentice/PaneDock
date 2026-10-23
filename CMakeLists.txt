@@ -109,6 +109,7 @@ add_library(panedock_pane STATIC
     src/app_shell/pane_host.h
     src/app_shell/shell_reentry_guard.h
     src/managed_list/list_worker.cpp
+    src/managed_list/row_store.cpp
     src/app_shell/pane_context_menu.cpp
     src/app_shell/pane_list_drag_drop.cpp
     src/app_shell/pane_list_rename.cpp

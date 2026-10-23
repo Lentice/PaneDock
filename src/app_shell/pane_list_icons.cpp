@@ -93,7 +93,7 @@ Pane::ListGeometryScope::~ListGeometryScope() {
         pane_.list_.request.binding.generation != generation_ || !pane_.active() ||
         !pane_.content_request_is_current(pane_.list_.request.binding)) return;
     // Geometry never reorders rows. If nested work did, its own interaction
-    // restoration wins. recovery_index_ is row-backed and may be invalidated
+    // restoration wins. The RowStore index is row-backed and may be invalidated
     // by sorting/cache replacement: never use it as a general identity map.
     if (!identity_ || index_ < 0 || static_cast<std::size_t>(index_) >= pane_.list_.rows.size() ||
         pane_.list_.rows[index_].identity != *identity_) return;

@@ -335,10 +335,10 @@ void Pane::commit_list_rename(std::wstring name) noexcept try {
     // Use the notification merge's bounded admission and identity deduplication.
     // A later rename notification may remove the already absent old key and
     // replace the new row, but can never append a duplicate of this identity.
-    clear_list_index();
+    row_store_.clear_index();
     std::erase_if(list_.rows, [&](const auto& row) {
         if (row.identity != old_identity) return false;
-        list_name_bytes_ -= managed_list::owned_row_bytes(row);
+        row_store_.account(managed_list::owned_row_bytes(row), 0);
         return true;
     });
     managed_list::Batch batch;

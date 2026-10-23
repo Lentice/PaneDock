@@ -28,6 +28,7 @@ set(PANEDOCK_TESTS
     "core_shutdown_coordinator|unit/core_shutdown_coordinator_test.cpp|panedock_core"
     "session_writer|unit/session_writer_test.cpp|panedock_session_writer panedock_core"
     "managed_list|unit/managed_list_test.cpp|advapi32 panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
+    "managed_list_row_store|unit/managed_list_row_store_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_cache|unit/managed_list_cache_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_restore|unit/managed_list_restore_test.cpp|panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
     "managed_list_rename|unit/managed_list_rename_test.cpp|panedock_file_operations panedock_pane panedock_shell_menu panedock_session_writer panedock_core"
