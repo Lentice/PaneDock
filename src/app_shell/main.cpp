@@ -2230,6 +2230,20 @@ std::size_t pane_at_point(HWND window, const AppState& state,
                          active_group(state), point);
 }
 
+// Applies a committed sidebar Group rename; true when the model changed.
+bool apply_sidebar_rename(AppState& state) {
+    auto rename = state.sidebar.take_rename();
+    if (!rename.has_value()) return false;
+    // An empty or whitespace-only name is rejected and the old name stays,
+    // as in Explorer.
+    std::wstring name = panedock::core::normalize_group_name(rename->name);
+    if (name.empty() ||
+        !panedock::core::rename_group(state.application, rename->group_id,
+                                      std::move(name))) return false;
+    refresh_sidebar(state);
+    return true;
+}
+
 void capture_window_placement(HWND window, AppState& state) noexcept {
     WINDOWPLACEMENT placement{};
     placement.length = sizeof(placement);
@@ -2661,6 +2675,12 @@ void AppShutdownEffects::dismiss_transfer_prompt() noexcept {
 }
 
 bool AppShutdownEffects::save_session() noexcept {
+    // Closing by the caption or Alt+F4 leaves focus in an open Group rename,
+    // and the shutdown gate swallows its commit message: commit it here.
+    try {
+        state_.sidebar.commit_rename();
+        (void)apply_sidebar_rename(state_);
+    } catch (...) {}
     capture_window_placement(state_.main_window, state_);
     return save_now(state_);
 }
@@ -3701,22 +3721,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
             break;
         }
         case panedock::sidebar::kRenameCommitMessage:
-            if (state != nullptr) {
-                auto rename = state->sidebar.take_rename();
-                if (rename.has_value()) {
-                    // An empty or whitespace-only name is rejected and the
-                    // old name stays, as in Explorer.
-                    std::wstring name =
-                        panedock::core::normalize_group_name(rename->name);
-                    if (!name.empty() &&
-                        panedock::core::rename_group(state->application,
-                                                     rename->group_id,
-                                                     std::move(name))) {
-                        refresh_sidebar(*state);
-                        schedule_session_save(*state);
-                    }
-                }
-            }
+            if (state != nullptr && apply_sidebar_rename(*state))
+                schedule_session_save(*state);
             return 0;
         case WM_SIZE:
             if (state != nullptr) {

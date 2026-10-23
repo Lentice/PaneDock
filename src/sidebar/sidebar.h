@@ -81,6 +81,8 @@ public:
     // Context-menu path: the row the user right-clicked.
     bool begin_rename(std::size_t index);
     std::optional<GroupRename> take_rename() noexcept;
+    // Closes an open editor as a commit, leaving the text for take_rename.
+    void commit_rename() { close_editor(true); }
     HWND rename_editor() const noexcept { return editor_; }
     HWND window() const noexcept { return list_box_; }
 
