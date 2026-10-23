@@ -111,11 +111,9 @@ void test_the_ordering_invariants_hold_for_every_plan() {
     }
 }
 
-// PD-206 rebinds the panes at rebind_panes but the live views only follow at
-// navigate_realized_panes, so the coordinator suppresses location capture from
-// the first step. If rebind ever stopped preceding navigate, that suppression
-// would be guarding the wrong window.
-void test_rebind_precedes_navigation_so_the_capture_guard_covers_the_gap() {
+// The panes must be bound to the incoming Group before they are re-navigated,
+// and the save comes last so it writes the finished transition.
+void test_rebind_precedes_navigation_and_save_is_last() {
     for (const bool has_group : {true, false}) {
         for (const bool changed : {true, false}) {
             for (const auto transition :
@@ -131,8 +129,6 @@ void test_rebind_precedes_navigation_so_the_capture_guard_covers_the_gap() {
                 }
                 EXPECT(rebind != steps.size());
                 EXPECT(navigate == steps.size() || rebind < navigate);
-                // save_session is last, so releasing the suppression there
-                // cannot leave a later step unguarded.
                 if (!steps.empty())
                     EXPECT(steps.back() == Step::save_session);
             }
@@ -165,7 +161,6 @@ class RecordingEffects final : public GroupTransitionEffects {
     void apply_layout() override { record("layout"); }
     void focus_active_pane() override { record("focus"); }
     void refresh_sidebar() override { record("sidebar"); }
-    void release_capture_suppression() noexcept override { record("release"); }
     void schedule_session_save() noexcept override { record("save"); }
 
   private:
@@ -178,20 +173,20 @@ class RecordingEffects final : public GroupTransitionEffects {
 
 using Log = std::vector<std::string>;
 
-void test_a_switch_runs_every_effect_and_releases_before_the_save() {
+void test_a_switch_runs_every_effect_and_saves_last() {
     RecordingEffects effects;
     run_group_transition(GroupTransition::activate, "group-a", "group-b",
                          effects);
     EXPECT((effects.log == Log{"rebind", "tabs", "navigate", "layout", "focus",
-                               "sidebar", "release", "save"}));
+                               "sidebar", "save"}));
 }
 
-void test_a_shutdown_inside_a_step_stops_the_rest_and_still_releases() {
+void test_a_shutdown_inside_a_step_stops_the_rest() {
     RecordingEffects effects;
     effects.shutdown_after = "tabs";
     run_group_transition(GroupTransition::activate, "group-a", "group-b",
                          effects);
-    EXPECT((effects.log == Log{"rebind", "tabs", "release"}));
+    EXPECT((effects.log == Log{"rebind", "tabs"}));
 }
 
 void test_a_failed_navigation_aborts_before_the_layout() {
@@ -199,26 +194,25 @@ void test_a_failed_navigation_aborts_before_the_layout() {
     effects.navigation_succeeds = false;
     run_group_transition(GroupTransition::activate, "group-a", "group-b",
                          effects);
-    // The refused save is owed; SessionWriter reschedules it on release.
-    EXPECT((effects.log == Log{"rebind", "tabs", "navigate", "release"}));
+    EXPECT((effects.log == Log{"rebind", "tabs", "navigate"}));
 }
 
-void test_a_transition_that_starts_during_shutdown_does_nothing_but_release() {
+void test_a_transition_that_starts_during_shutdown_does_nothing() {
     RecordingEffects effects;
     effects.shutting_down = true;
     run_group_transition(GroupTransition::activate, "group-a", "group-b",
                          effects);
-    EXPECT((effects.log == Log{"release"}));
+    EXPECT(effects.log.empty());
 }
 
 void test_the_changed_group_is_derived_from_the_ids() {
     RecordingEffects kept;
     run_group_transition(GroupTransition::remove, "group-a", "group-a", kept);
     EXPECT((kept.log == Log{"rebind", "tabs", "layout", "focus", "sidebar",
-                            "release", "save"}));
+                            "save"}));
     RecordingEffects moved;
     run_group_transition(GroupTransition::remove, "group-a", "group-b", moved);
-    EXPECT(moved.log.size() == 8 && moved.log[2] == "navigate");
+    EXPECT(moved.log.size() == 7 && moved.log[2] == "navigate");
 }
 
 void test_a_group_removed_mid_transition_skips_navigation_and_focus() {
@@ -227,15 +221,15 @@ void test_a_group_removed_mid_transition_skips_navigation_and_focus() {
     run_group_transition(GroupTransition::activate, "group-a", "group-b",
                          effects);
     EXPECT((effects.log ==
-            Log{"rebind", "tabs", "layout", "sidebar", "release", "save"}));
+            Log{"rebind", "tabs", "layout", "sidebar", "save"}));
 }
 }  // namespace
 
 int main() {
-    test_a_switch_runs_every_effect_and_releases_before_the_save();
-    test_a_shutdown_inside_a_step_stops_the_rest_and_still_releases();
+    test_a_switch_runs_every_effect_and_saves_last();
+    test_a_shutdown_inside_a_step_stops_the_rest();
     test_a_failed_navigation_aborts_before_the_layout();
-    test_a_transition_that_starts_during_shutdown_does_nothing_but_release();
+    test_a_transition_that_starts_during_shutdown_does_nothing();
     test_the_changed_group_is_derived_from_the_ids();
     test_a_group_removed_mid_transition_skips_navigation_and_focus();
     test_activating_a_group_runs_the_full_script();
@@ -244,6 +238,6 @@ int main() {
     test_deleting_the_active_group_re_navigates_but_an_inactive_one_does_not();
     test_the_empty_state_still_saves_and_refreshes();
     test_the_ordering_invariants_hold_for_every_plan();
-    test_rebind_precedes_navigation_so_the_capture_guard_covers_the_gap();
+    test_rebind_precedes_navigation_and_save_is_last();
     return panedock::test::summary("core_group_transition");
 }

@@ -51,13 +51,7 @@ void SessionWriter::schedule() noexcept {
     (void)save_now();
 }
 
-bool SessionWriter::save_now(bool clean_shutdown,
-                             bool force_during_capture_suppression) noexcept {
-    if (gate_.suppressed() && !force_during_capture_suppression) {
-        mark_dirty();
-        save_refused_ = true;
-        return false;
-    }
+bool SessionWriter::save_now(bool clean_shutdown) noexcept {
     if (application_ == nullptr) return false;
     mark_dirty();
     return write(*application_, clean_shutdown, timer_owner_);

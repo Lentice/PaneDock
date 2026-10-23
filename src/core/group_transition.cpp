@@ -31,36 +31,10 @@ std::vector<GroupTransitionStep> plan_group_transition(
     return steps;
 }
 
-namespace {
-
-class SuppressionRelease final {
-  public:
-    explicit SuppressionRelease(GroupTransitionEffects &effects) noexcept
-        : effects_(effects) {}
-    ~SuppressionRelease() { release(); }
-    SuppressionRelease(const SuppressionRelease &) = delete;
-    SuppressionRelease &operator=(const SuppressionRelease &) = delete;
-    void release() noexcept {
-        if (released_) return;
-        released_ = true;
-        effects_.release_capture_suppression();
-    }
-
-  private:
-    GroupTransitionEffects &effects_;
-    bool released_{};
-};
-
-}  // namespace
-
 void run_group_transition(GroupTransition transition,
                           std::string_view previous_active_group_id,
                           std::string_view active_group_id,
                           GroupTransitionEffects &effects) {
-    // Held across every step, including the early returns: the panes are
-    // bound to the incoming Group from rebind_panes onwards, so no capture
-    // may read a live view until the navigations have been issued (PD-206).
-    SuppressionRelease suppression(effects);
     const bool changed = previous_active_group_id != active_group_id;
     for (const GroupTransitionStep step : plan_group_transition(
              transition, effects.has_active_group(), changed)) {
@@ -87,10 +61,6 @@ void run_group_transition(GroupTransition transition,
                 effects.refresh_sidebar();
                 break;
             case GroupTransitionStep::save_session:
-                // Released first so the save captures the incoming Group's
-                // live locations; a save refused while it was held is
-                // rescheduled by SessionWriter on release (PD-215).
-                suppression.release();
                 effects.schedule_session_save();
                 break;
         }

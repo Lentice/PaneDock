@@ -50,9 +50,9 @@ Assert-Source 'session\.dirty\(\)\s*&&\s*!state->shutdown_save_attempted' `
 # an explicit No, a session end inside the prompt winning -- is executed by
 # core_shutdown_coordinator_test against ShutdownCoordinator. What is left here
 # is what the Win32 adapter itself must do inside each effect.
-Assert-Source 'bool AppShutdownEffects::save_session\(\) noexcept \{[\s\S]*?capture_window_placement\(state_\.main_window, state_\);[\s\S]*?return save_now\(state_, false, true\);' `
-    'the shutdown save captures placement and overrides capture suppression'
-Assert-Source 'ShutdownEvent::window_destroyed[\s\S]*?ShutdownEvent::save_started[\s\S]*?save_now\(\*state, false, true\)' `
+Assert-Source 'bool AppShutdownEffects::save_session\(\) noexcept \{[\s\S]*?capture_window_placement\(state_\.main_window, state_\);[\s\S]*?return save_now\(state_\);' `
+    'the shutdown save captures placement'
+Assert-Source 'ShutdownEvent::window_destroyed[\s\S]*?ShutdownEvent::save_started[\s\S]*?save_now\(\*state\)' `
     'unexpected destroy fallback keeps marker false'
 Assert-Shutdown 'case ShutdownEvent::save_prompt_finished:[\s\S]*?state_\.end_session_pending\s*\?\s*ShutdownAction::destroy_views' `
     'nested confirmed shutdown is remembered'

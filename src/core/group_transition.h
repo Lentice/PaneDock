@@ -52,9 +52,6 @@ class GroupTransitionEffects {
     virtual void apply_layout() = 0;
     virtual void focus_active_pane() = 0;
     virtual void refresh_sidebar() = 0;
-    // Ends the PD-206 capture suppression the caller took for this
-    // transition. Called exactly once, on every exit, and before the save.
-    virtual void release_capture_suppression() noexcept = 0;
     virtual void schedule_session_save() noexcept = 0;
 };
 

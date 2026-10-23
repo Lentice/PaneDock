@@ -21,27 +21,6 @@ namespace panedock::app_shell {
 // AppState fields plus a timer constant, and the rule tying them together --
 // dirty means a write is owed; a successful write clears both the flag and
 // the pending timer -- was re-stated at every call site.
-//
-// PD-214/PD-215: it also owns the Group-switch save deferral, because "a save
-// refused while a Group transition runs is still owed" is a rule about when to
-// write. The shutdown reducer events stay with the coordinator.
-//
-// The "capture" names are historical: the deferral once also kept PaneDock
-// from reading the legacy Shell views' live locations mid-transition. Since
-// PD-242 removed that host, accepted navigation writes TabState directly and
-// nothing is captured; only the save deferral remains.
-
-// Whether a Group transition is running (PD-206). Only
-// SessionWriter::CaptureSuppression changes it.
-class LocationCaptureGate final {
-public:
-    bool suppressed() const noexcept { return depth_ != 0; }
-
-private:
-    friend class SessionWriter;
-    unsigned depth_{};
-};
-
 class SessionWriter final {
 public:
     static constexpr UINT_PTR kTimerId = 0xD050;
@@ -81,39 +60,11 @@ public:
     // The window that owns the debounce timer; nullptr until it exists.
     void set_timer_owner(HWND owner) noexcept { timer_owner_ = owner; }
 
-    const LocationCaptureGate& capture_gate() const noexcept { return gate_; }
-
-    // Held across a Group transition: no save is written while the panes point
-    // at a Group their lists do not show yet. A save refused while it is held
-    // is rescheduled when the outermost one is released, so releasing it
-    // before the transition's own save is no longer load-bearing.
-    class CaptureSuppression final {
-    public:
-        explicit CaptureSuppression(SessionWriter& writer) noexcept
-            : writer_(writer) {
-            ++writer_.gate_.depth_;
-        }
-        ~CaptureSuppression() noexcept {
-            if (--writer_.gate_.depth_ != 0 || !writer_.save_refused_) return;
-            writer_.save_refused_ = false;
-            writer_.schedule();
-        }
-        CaptureSuppression(const CaptureSuppression&) = delete;
-        CaptureSuppression& operator=(const CaptureSuppression&) = delete;
-
-    private:
-        SessionWriter& writer_;
-    };
-
     // A model change: a write is owed, debounced by the timer. If the timer
     // cannot be armed the write happens now instead.
     void schedule() noexcept;
-    // Writes the bound model. While a transition holds CaptureSuppression it
-    // refuses -- the save stays owed -- unless
-    // `force_during_capture_suppression`, which shutdown uses to write the
-    // model as it stands.
-    bool save_now(bool clean_shutdown = false,
-                  bool force_during_capture_suppression = false) noexcept;
+    // Writes the bound model.
+    bool save_now(bool clean_shutdown = false) noexcept;
 
     // Arms the debounce timer. Returns false when the timer could not be set,
     // which is the caller's signal to fall back to an immediate write.
@@ -153,8 +104,6 @@ private:
     std::filesystem::path directory_;
     const core::ApplicationState* application_{nullptr};
     HWND timer_owner_{nullptr};
-    LocationCaptureGate gate_;
-    bool save_refused_{};
     ULONGLONG dirty_since_{};
     bool dirty_{};
     bool armed_{};

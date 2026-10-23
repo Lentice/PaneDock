@@ -22,8 +22,8 @@ class ShutdownEffects {
     virtual bool post_deferred_shutdown() noexcept = 0;
     virtual void show_transfer_prompt() noexcept = 0;
     virtual void dismiss_transfer_prompt() noexcept = 0;
-    // Captures window placement and writes the session, overriding capture
-    // suppression. True if the write succeeded.
+    // Captures window placement and writes the session. True if the write
+    // succeeded.
     virtual bool save_session() noexcept = 0;
     // The OS session-end checkpoint: placement plus a write that reaches no
     // Shell and no COM (PD-203). True if the write succeeded.

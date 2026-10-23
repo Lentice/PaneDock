@@ -87,35 +87,11 @@ if ($navigationHelperStart -lt 0 -or $navigationHelperEnd -lt 0) {
 }
 $navigationHelperBody = $source.Substring(
     $navigationHelperStart, $navigationHelperEnd - $navigationHelperStart)
-if ($navigationHelperBody -notmatch 'LocationCaptureSuppression suppression\(state\.session\)' -or
-    $navigationHelperBody -notmatch 'ShellCallScope shell_call\(state\.reentry_guard\)' -or
+if ($navigationHelperBody -notmatch 'ShellCallScope shell_call\(state\.reentry_guard\)' -or
         $navigationHelperBody -notmatch 'state\.panes\[pane\]\.navigate_to\(') {
     throw 'Shell re-entry invariant failed: realized-pane navigation helper is incomplete'
 }
 
-# PD-206: the panes are bound to the incoming Group from rebind_panes onwards,
-# so the suppression has to be held by perform_group_transition itself. Holding
-# it only inside navigate_realized_panes leaves refresh_tab_strips -- which
-# pumps the loop for virtual-folder display names -- able to reach a save
-# with the panes already rebound.
-$writerHeader = Get-Content -LiteralPath (
-    Join-Path $PSScriptRoot '..\..\src\app_shell\session_writer.h') -Raw
-if ($writerHeader -notmatch '--writer_\.gate_\.depth_ != 0') {
-    throw 'Shell re-entry invariant failed: location capture suppression nests and restores on scope exit'
-}
-$transitionStart = $source.IndexOf('void perform_group_transition(HWND window, AppState& state,')
-$transitionEnd = $source.IndexOf('void activate_group(HWND window, AppState& state,', $transitionStart)
-if ($transitionStart -lt 0 -or $transitionEnd -lt 0) {
-    throw 'Shell re-entry invariant failed: group transition script body missing'
-}
-$transitionBody = $source.Substring($transitionStart, $transitionEnd - $transitionStart)
-# When the suppression ends -- on every exit, and before the save -- is
-# executed by core_group_transition_test (PD-217); the adapter must take it
-# for the whole run and end it only where the runner says.
-if ($transitionBody -notmatch 'suppression_\.emplace\(state\.session\)' -or
-    $transitionBody -notmatch 'void release_capture_suppression\(\) noexcept override \{\s*suppression_\.reset\(\);') {
-    throw 'Shell re-entry invariant failed: group transition does not suppress location capture for the whole script'
-}
 $navigationCallSiteSource = $source.Remove(
     $navigationHelperStart, $navigationHelperEnd - $navigationHelperStart)
 # Both Group transitions now reach the helper through the single

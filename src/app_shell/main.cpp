@@ -606,15 +606,6 @@ void AppReentryEffects::begin_shutdown_now() noexcept {
         state_.shutdown_coordinator.request_close();
 }
 
-// PD-206: activate_group writes active_group_id, then rebind_panes points the
-// panes at the incoming Group's PaneState -- but the live lists still show
-// the outgoing Group until navigate_realized_panes runs, and
-// refresh_tab_strips in that window pumps the loop. A transition holds this
-// for its whole run so no scheduled save is written in between; the name
-// dates from the legacy host, whose live locations were also read here.
-using LocationCaptureSuppression =
-    panedock::app_shell::SessionWriter::CaptureSuppression;
-
 void defer_shell_reentry_message(HWND window, AppState& state, UINT message,
                                  WPARAM wparam, LPARAM lparam) noexcept {
     // kDragHoverMessage is ours, so this header cannot classify it; its lparam
@@ -786,9 +777,6 @@ bool navigate_realized_panes(
         panedock::core::RealizationMode::group_switch);
     panedock::app_shell::ScopedTiming timing(state.diagnostic_mode,
                                              "group_switch_navigate_ms");
-    // Nested inside perform_group_transition's own suppression; kept here so
-    // any other caller is covered too.
-    LocationCaptureSuppression suppression(state.session);
     for (const std::size_t pane : plan.navigate) {
         {
             ShellCallScope shell_call(state.reentry_guard);
@@ -1468,9 +1456,8 @@ void report_shell_failure(const AppState& state, const wchar_t* site,
 
 // The call-site vocabulary the release checks police (which paths may write
 // synchronously and which only schedule); SessionWriter owns the rules.
-bool save_now(AppState& state, bool clean_shutdown = false,
-              bool force_during_transition = false) noexcept {
-    return state.session.save_now(clean_shutdown, force_during_transition);
+bool save_now(AppState& state, bool clean_shutdown = false) noexcept {
+    return state.session.save_now(clean_shutdown);
 }
 
 void schedule_session_save(AppState& state) noexcept {
@@ -1813,13 +1800,10 @@ void perform_group_transition(HWND window, AppState& state,
                               const std::string& previous_active_group_id) {
     panedock::app_shell::ScopedTiming timing(state.diagnostic_mode, "group_switch_ms");
     // The Win32 side of each step; core::run_group_transition owns the loop,
-    // the per-step shutdown gate, the navigate-failure abort and when the
-    // capture suppression ends (PD-217).
+    // the per-step shutdown gate and the navigate-failure abort (PD-217).
     struct Effects final : panedock::core::GroupTransitionEffects {
         Effects(HWND window, AppState& state) noexcept
-            : window_(window), state_(state) {
-            suppression_.emplace(state.session);
-        }
+            : window_(window), state_(state) {}
         bool is_shutting_down() const noexcept override {
             return state_.is_shutting_down();
         }
@@ -1855,9 +1839,6 @@ void perform_group_transition(HWND window, AppState& state,
             state_.panes[active].focus_content();
         }
         void refresh_sidebar() override { ::refresh_sidebar(state_); }
-        void release_capture_suppression() noexcept override {
-            suppression_.reset();
-        }
         void schedule_session_save() noexcept override {
             // Group switches can be triggered from the OLE drag-hover
             // message. Keep the session flush out of that interaction path;
@@ -1869,7 +1850,6 @@ void perform_group_transition(HWND window, AppState& state,
     private:
         HWND window_;
         AppState& state_;
-        std::optional<LocationCaptureSuppression> suppression_;
     } effects(window, state);
     panedock::core::run_group_transition(
         transition, previous_active_group_id,
@@ -2678,7 +2658,7 @@ void AppShutdownEffects::dismiss_transfer_prompt() noexcept {
 
 bool AppShutdownEffects::save_session() noexcept {
     capture_window_placement(state_.main_window, state_);
-    return save_now(state_, false, true);
+    return save_now(state_);
 }
 
 bool AppShutdownEffects::ask_keep_open_after_save_failure() noexcept {
@@ -3899,7 +3879,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                     state->shutdown_coordinator.sequence().step(
                         panedock::core::ShutdownEvent::save_started);
                     capture_window_placement(window, *state);
-                    (void)save_now(*state, false, true);
+                    (void)save_now(*state);
                 }
             }
             Pane::release_navigation_icon_font();
