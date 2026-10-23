@@ -2,7 +2,7 @@
 
 ## Project intent
 
-PaneDock is a Windows desktop file manager built around one abstraction: a **Group** is a named, saved working context that restores an entire pane arrangement in one click. The right side hosts 1–4 file panes. The current implementation hosts the Windows Shell folder view through `IExplorerBrowser`; the approved Phase 8 direction is a PaneDock-managed list that keeps Shell namespace identity, native file operations and the existing native context-menu experience. The current Shell view remains the default until the measured compatibility and performance gate in PD-241 passes; its removal is a later, separate PD-242 change.
+PaneDock is a Windows desktop file manager built around one abstraction: a **Group** is a named, saved working context that restores an entire pane arrangement in one click. The right side hosts 1–4 file panes. Each pane shows a PaneDock-managed list that keeps Shell namespace identity, native file operations and the native context-menu experience. PD-241's gate was waived and PD-242 removed the legacy `IExplorerBrowser` host from the code; `docs/tickets.md` tracks what PD-242 still owes.
 
 Platform baseline is Windows 10 22H2 / Windows 11 x64, C++20, native Win32, Shell COM via `Microsoft::WRL::ComPtr`. The design specification in `docs/design-spec.md` is the product source of truth. Do not add features that are listed as out of scope there.
 
@@ -19,9 +19,9 @@ Platform baseline is Windows 10 22H2 / Windows 11 x64, C++20, native Win32, Shel
 - Prefer the smallest working change. Reuse existing code before adding helpers or abstractions.
 - Reach for the standard library and Win32 before adding a dependency.
 - **Keep `src/core` free of HWND, COM and `windows.h`.** It is the primary pure-model test seam; other public units that can be driven without a live Shell are tested too (`docs/testing.md`).
-- While the legacy `IExplorerBrowser` host remains in use, every instance that was `Initialize`d must have `Destroy` called on it, or the instance leaks. Never destroy a parent HWND while a view is alive; on shutdown destroy all views before the message loop exits. The managed-list migration does not weaken this lifetime rule before PD-242 removes that host.
-- In the legacy host, Group switching keeps live views alive and re-navigates them. Do not destroy and recreate pane HWNDs to switch Groups — that is both the crash surface and a CPU/disk spike from simultaneous folder enumerations.
-- In the legacy host, only the visible pane's active tab holds a live `IExplorerBrowser`; inactive tabs remain data and are realized on activation. The managed-list path must also bound retained rows, queued batches, metadata and image caches across panes and tabs; its target budgets are in `docs/performance-baseline.md`. Do not treat legacy memory measurements as managed-list evidence.
+- Never destroy a parent HWND while a child list is alive; on shutdown tear down every pane before the message loop exits.
+- Group switching keeps the live pane HWNDs and re-navigates them, rather than destroying and recreating them — recreation is both a crash surface and a CPU/disk spike from simultaneous folder enumerations.
+- Only the visible pane's active tab enumerates; inactive tabs remain data (plus a bounded snapshot) and are realized on activation. Bound retained rows, queued batches, metadata and image caches across panes and tabs; the budgets are in `docs/performance-baseline.md`. Legacy `IExplorerBrowser` memory measurements are not managed-list evidence.
 - **A `pane_index` parameter is a signal that the function belongs to that pane.** Before adding one, ask whether the function can simply be a member of `app_shell::Pane`. It can when all three hold: it touches exactly one pane; it needs no coordinator service (`ShellCallScope`, session save scheduling, shutdown gates, cross-pane layout); and it is not shared state that is a singleton by nature. When a coordinator service is genuinely needed, keep it a free function but narrow the signature to `Pane&` rather than the whole `AppState&`. The coordinator owns what spans panes — cross-pane tab drag, splitter drag, active-pane selection, layout rects, whole-window painting; `Pane` owns what is its own.
 - Event-driven idle path only. No busy loops, no polling timers. The application must be measurably at 0% CPU and doing no disk I/O when the user is not interacting with it.
 - File operations go through Shell `IDataObject` and `IFileOperation`. Never assemble a path string and call the filesystem directly — that loses virtual items, progress UI and conflict handling.
@@ -56,7 +56,7 @@ Tickets live in `docs/tickets/` and are tracked in `docs/tickets.md`.
 
 ## Current baseline
 
-The application and its automated test suite exist; the normal pane path currently uses `IExplorerBrowser`. `docs/roadmap.md` is the authoritative phase status. The approved Phase 8 managed-list migration starts with the PD-222 product contract and remains opt-in until PD-241 records a passing compatibility and performance gate. PD-242 is the later removal of the legacy view. Historical NFR-001 evidence and current legacy-view measurements remain in `docs/release-evidence.md` and `docs/performance-baseline.md`; none is evidence that the managed list passed. Managed-list targets are explicitly marked unmeasured until tested on the required desktop, Shell namespace and OneDrive environments.
+The application and its automated test suite exist; the managed list is the only pane view. `docs/roadmap.md` is the authoritative phase status. The Phase 8 migration started with the PD-222 product contract; PD-241's gate was waived (2026-10-21) and PD-242 removed the legacy view. Historical NFR-001 evidence and legacy-view measurements remain in `docs/release-evidence.md` and `docs/performance-baseline.md`; none is evidence that the managed list passed. Managed-list targets are explicitly marked unmeasured until tested on the required desktop, Shell namespace and OneDrive environments.
 
 ## Validation
 
@@ -80,7 +80,7 @@ ctest --test-dir build --output-on-failure
 - If the launched window is absent from a fresh window list, inspect that same PID's responsiveness and captured output, then do one bounded wait and re-list. Use `sky.activate_window` only with a currently listed window object. If the window remains unavailable or a single-instance warning appears, stop GUI verification and report the process IDs and evidence; do not launch another copy to recover.
 - Close only the known test instance through its normal window close path or `CloseMainWindow()`, then wait for it to exit. If it does not respond, stop and report; never use `Stop-Process`, `taskkill`, or another forced termination path.
 - If `node_repl` reports `failed to start Node runtime` or `os error 3`, reset and retry once; after a second failure, stop UI automation and use non-UI checks.
-- `panedock_launch_smoke` tests the real `build\PaneDock.exe`. A restricted `%LOCALAPPDATA%\PaneDock` save failure can leave its intentional `MessageBoxW` open; verify with writable session storage before treating a timeout as a shutdown bug, and never force-kill or bypass `IExplorerBrowser::Destroy`.
+- `panedock_launch_smoke` tests the real `build\PaneDock.exe`. A restricted `%LOCALAPPDATA%\PaneDock` save failure can leave its intentional `MessageBoxW` open; verify with writable session storage before treating a timeout as a shutdown bug, and let the normal shutdown path finish rather than force-killing it.
 
 ## Safety boundaries
 

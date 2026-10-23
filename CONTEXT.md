@@ -39,7 +39,7 @@ _Avoid_: group switch (that is only one of the four kinds), refresh, update
 ## Shell terms
 
 **Shell view**:
-The legacy Windows-supplied folder view hosted inside a realized tab through `IExplorerBrowser`. In this path Windows draws icons, thumbnails, columns and selection. It remains the default until the managed-list release gate passes and is removed only by the later contract step.
+The legacy Windows-supplied folder view once hosted inside a realized tab through `IExplorerBrowser`, where Windows drew icons, thumbnails, columns and selection. PD-242 removed it; the term survives in historical tickets and measurements.
 _Avoid_: explorer control
 
 **managed list**:
@@ -50,7 +50,7 @@ A stable value used to keep selection and the visible anchor attached to the sam
 _Avoid_: row index (as a persistent identity)
 
 **realized**:
-A tab is **realized** in the legacy implementation when it holds a live `IExplorerBrowser` instance with an HWND. An unrealized legacy tab exists only as persisted state. This term describes that host lifecycle and does not define the future managed-list lifecycle.
+A pane is **realized** while its active tab has a live managed list window enumerating its location (`Pane::realize` / `derealize`). An unrealized pane's tabs exist only as state, plus any bounded list snapshot. In the legacy host the same word meant holding a live `IExplorerBrowser`.
 _Avoid_: loaded, opened, instantiated, live (as a verb)
 
 **Shell location**:
