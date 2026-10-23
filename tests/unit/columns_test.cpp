@@ -58,5 +58,18 @@ int main() {
     for (int width = kMinColumnWidth; width <= 1000; ++width)
         for (const unsigned dpi : {96u, 120u, 144u, 168u, 192u, 288u})
             EXPECT(column_width_from_pixels(column_width_to_pixels(width, dpi), dpi) == width);
+    // Capturing the header keeps a newer build's column after the shown ones.
+    {
+        const std::vector<ColumnSpec> shown{{"name", 300}, {"size", 150}};
+        EXPECT(captured_columns("name:320,future:90,size:160", shown) ==
+               std::optional<std::string>{"name:300,size:150,future:90"});
+        // A known column the user hid is not resurrected.
+        EXPECT(captured_columns("name:320,size:160,type:160", shown) ==
+               std::optional<std::string>{"name:300,size:150"});
+        // No change, and the default set under an empty setting, write nothing.
+        EXPECT(!captured_columns("name:300,size:150", shown));
+        EXPECT(!captured_columns("", default_columns()));
+        EXPECT(captured_columns("", shown) == std::optional<std::string>{"name:300,size:150"});
+    }
     return test::summary("columns");
 }

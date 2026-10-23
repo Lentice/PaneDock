@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -119,6 +120,21 @@ inline void toggle_column(std::vector<ColumnSpec>& columns, std::string_view id)
     if (found != columns.end()) { columns.erase(found); return; }
     const auto* info = find_column(id);
     if (info) columns.push_back({std::string(id), info->default_width});
+}
+
+// The setting for the columns the list shows now (`shown`, in display order).
+// Columns this build does not know stay in it, after the shown ones, so an
+// older build never drops a newer build's columns. nullopt when the setting
+// would not change, including an empty (default) setting the shown set equals.
+inline std::optional<std::string> captured_columns(std::string_view previous,
+                                                   std::vector<ColumnSpec> shown) {
+    for (const auto& column : parse_columns(previous))
+        if (!column_visible(shown, column.id) && !find_column(column.id))
+            shown.push_back(column);
+    auto text = format_columns(shown);
+    if (text == previous || (previous.empty() && text == format_columns(default_columns())))
+        return std::nullopt;
+    return text;
 }
 
 } // namespace panedock::core

@@ -66,13 +66,9 @@ void Pane::capture_list_columns() noexcept try {
     for (const int index : order)
         layout.push_back({column_ids_[index],
             core::column_width_from_pixels(ListView_GetColumnWidth(list_window_, index), applied_columns_dpi_)});
-    // Columns this build does not know stay in the setting, after the ones it shows.
-    for (const auto& previous : core::parse_columns(tab->columns))
-        if (!core::column_visible(layout, previous.id) && !core::find_column(previous.id))
-            layout.push_back(previous);
-    const auto text = core::format_columns(layout);
-    if (text == tab->columns || (tab->columns.empty() && text == core::format_columns(core::default_columns())))
-        return;
+    auto captured = core::captured_columns(tab->columns, std::move(layout));
+    if (!captured) return;
+    const auto text = std::move(*captured);
     tab->columns = text;
     applied_columns_ = text; // already on screen
     if (pane_host()) pane_host()->schedule_session_save();
