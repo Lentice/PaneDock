@@ -186,8 +186,27 @@ void Pane::destroy_list_icons() noexcept {
     icon_images_ = nullptr;
     icon_cache_.clear();
 }
+int Pane::list_text_height() const noexcept {
+    if (!list_window_) return 0;
+    const HDC dc = GetDC(list_window_);
+    if (!dc) return 0;
+    const auto font = reinterpret_cast<HFONT>(SendMessageW(list_window_, WM_GETFONT, 0, 0));
+    const auto previous = font ? SelectObject(dc, font) : nullptr;
+    TEXTMETRICW metrics{};
+    GetTextMetricsW(dc, &metrics);
+    if (previous) SelectObject(dc, previous);
+    ReleaseDC(list_window_, dc);
+    return metrics.tmHeight;
+}
 bool Pane::ensure_list_icon_images(int size) noexcept try {
-    if (icon_images_ && size == icon_size_) return true;
+    // Content cards need two text lines; report rows retain their 26-DIP minimum.
+    const auto mode = effective_list_view_selection(active_tab());
+    const int padding = MulDiv(6, static_cast<int>(icon_dpi_), 96);
+    const int cell_height = mode.mode == FVM_CONTENT
+        ? std::max(size, 2 * list_text_height() + 3 * padding)
+        : icon_thumbnail_ ? size : std::max({size, list_text_height() + padding,
+            MulDiv(26, static_cast<int>(icon_dpi_), 96)});
+    if (icon_images_ && size == icon_size_ && cell_height == icon_cell_height_) return true;
     cancel_list_icons();
     if (list_window_) {
         ListView_SetImageList(list_window_, nullptr, LVSIL_SMALL);
@@ -198,8 +217,7 @@ bool Pane::ensure_list_icon_images(int size) noexcept try {
     icon_cache_.clear();
     icon_size_ = size;
     // Details/List rows (16 logical px icons) get Explorer's roomier spacing.
-    constexpr int kDetailsRowDip = 26;
-    icon_cell_height_ = icon_thumbnail_ ? size : std::max(size, MulDiv(kDetailsRowDip, static_cast<int>(icon_dpi_), 96));
+    icon_cell_height_ = cell_height;
     icon_images_ = ImageList_Create(size, icon_cell_height_, ILC_COLOR32 | ILC_MASK,
         static_cast<int>(managed_list::image_capacity(size) + 2), 1);
     if (!icon_images_) return false;
@@ -562,8 +580,11 @@ void Pane::apply_managed_list_view_mode() noexcept {
     ListView_SetView(list_window_, view);
     if (view == LV_VIEW_ICON) {
         const int size = mode.mode == FVM_TILE ? 48 : std::clamp(mode.image_size, 16, 512);
-        ListView_SetIconSpacing(list_window_, scale(mode.mode == FVM_TILE ? 300 : size + 40),
-            scale(mode.mode == FVM_TILE ? 80 : size + 52));
+        const int text_height = list_text_height();
+        const int height = mode.mode == FVM_TILE
+            ? std::max(scale(80), 2 * text_height + scale(this_pc_cards() ? 34 : 18))
+            : std::max(scale(size + 52), scale(size + 16) + 2 * text_height);
+        ListView_SetIconSpacing(list_window_, scale(mode.mode == FVM_TILE ? 300 : size + 40), height);
     }
     queue_list_icon_viewport();
     InvalidateRect(list_window_, nullptr, TRUE);
@@ -591,7 +612,7 @@ std::optional<LRESULT> Pane::draw_list_card(NMHDR* notification) noexcept try {
     SetBkMode(dc, TRANSPARENT);
     const int pad = MulDiv(6, static_cast<int>(paint_dpi_), 96);
     if (icon_images_) ImageList_Draw(icon_images_, list_item_image(index), dc,
-        rect.left + pad, rect.top + std::max(0L, (rect.bottom - rect.top - icon_size_) / 2),
+        rect.left + pad, rect.top + std::max(0L, (rect.bottom - rect.top - icon_cell_height_) / 2),
         (transfer & LVIS_CUT) ? ILD_TRANSPARENT | ILD_BLEND50 : ILD_TRANSPARENT);
     rect.left += icon_size_ + pad * 2; rect.top += pad; rect.right -= pad;
     RECT title = rect;

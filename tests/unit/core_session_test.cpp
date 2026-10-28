@@ -146,6 +146,31 @@ void test_unpaired_surrogates_round_trip() {
     if (restored.has_value()) EXPECT(restored->application == application);
 }
 
+void test_optional_list_font_points() {
+    for (const int points : kListFontPointSizes) {
+        auto original = sample();
+        original.list_font_points = points;
+        const auto restored = deserialize_session(serialize_session({original, {}}));
+        EXPECT(restored.has_value());
+        if (restored) EXPECT(restored->application == original);
+    }
+    const std::string json = serialize_session({sample(), {}});
+    const std::string field = "\"list_font_points\":0,";
+    const auto position = json.find(field);
+    EXPECT(position != std::string::npos);
+    if (position == std::string::npos) return;
+    auto legacy = json;
+    legacy.erase(position, field.size());
+    const auto restored = deserialize_session(legacy);
+    EXPECT(restored && restored->application.list_font_points == 0);
+    for (const auto invalid : {"-1", "1000", "12.5", "\"large\"", "null"}) {
+        auto bad = json;
+        bad.replace(position, field.size(), "\"list_font_points\":" + std::string(invalid) + ",");
+        const auto recovered = deserialize_session(bad);
+        EXPECT(recovered && recovered->application.list_font_points == 0);
+    }
+}
+
 void test_optional_sidebar_width() {
     ApplicationState original = sample();
     original.sidebar_width = 320;
@@ -561,6 +586,7 @@ int main() {
     test_round_trip_and_plain_json();
     test_unpaired_surrogates_round_trip();
     test_optional_sidebar_width();
+    test_optional_list_font_points();
     test_optional_pinned_locations();
     test_two_over_one_round_trip();
     test_new_three_pane_layout_round_trips();

@@ -520,6 +520,7 @@ Json encode(const ApplicationState& application, Json root,
     placement["maximized"] = Json{application.window_placement.maximized};
     result["window_placement"] = Json{std::move(placement)};
     result["sidebar_width"] = Json{static_cast<double>(application.sidebar_width)};
+    result["list_font_points"] = Json{static_cast<double>(application.list_font_points)};
     return Json{std::move(result)};
 }
 
@@ -549,6 +550,9 @@ std::optional<ApplicationState> decode(const Json& root) {
     application.schema_version = kSessionSchemaVersion;
     application.active_group_id = *active_group;
     application.sidebar_width = *sidebar_width;
+    // A bad optional appearance setting must not discard the user's session.
+    if (const auto points = integer(*value, "list_font_points");
+        points && valid_list_font_points(*points)) application.list_font_points = *points;
     if (pinned_locations != nullptr) {
         for (const auto& pinned_json : *pinned_locations) {
             const auto* pinned_object = object(pinned_json);

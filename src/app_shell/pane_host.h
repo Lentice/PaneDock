@@ -59,6 +59,9 @@ class PaneHost {
     // Shell name resolution uses the coordinator's re-entry gate.
     virtual std::wstring tab_display_text(std::wstring_view parsing_name) = 0;
     virtual HFONT chrome_font() const noexcept = 0;
+    virtual HFONT list_font() const noexcept { return chrome_font(); }
+    virtual int list_font_points() const noexcept { return 0; }
+    virtual void set_list_font_points(int) noexcept {}
     virtual HWND tooltip() const noexcept = 0;
     // PD-189: a pane's own proc handles the notifications its child controls
     // raise. Acting on them needs the coordinator (global commands, the

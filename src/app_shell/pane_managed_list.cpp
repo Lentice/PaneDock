@@ -151,7 +151,7 @@ HRESULT Pane::realize_managed_list(const RECT& rect, const core::ShellLocation& 
     SetWindowSubclass(ListView_GetHeader(list_window_), header_double_click_proc, 230, 0);
     column_ids_.clear(); applied_columns_.clear();
     apply_list_columns();
-    SendMessageW(list_window_, WM_SETFONT, reinterpret_cast<WPARAM>(pane_host()->chrome_font()), FALSE);
+    SendMessageW(list_window_, WM_SETFONT, reinterpret_cast<WPARAM>(pane_host()->list_font()), FALSE);
     // STATIC containers do not route list notifications by themselves.
     if (!SetWindowSubclass(explorer_container_,
         [](HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR) -> LRESULT {

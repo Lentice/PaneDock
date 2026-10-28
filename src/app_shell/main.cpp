@@ -472,6 +472,9 @@ struct AppState : public panedock::app_shell::PaneHost {
     bool diagnostic_timing_enabled() const noexcept override;
     std::wstring tab_display_text(std::wstring_view parsing_name) override;
     HFONT chrome_font() const noexcept override;
+    HFONT list_font() const noexcept override;
+    int list_font_points() const noexcept override;
+    void set_list_font_points(int points) noexcept override;
     HWND tooltip() const noexcept override;
     std::optional<LRESULT>
     handle_pane_control_message(Pane &pane, UINT message, WPARAM wparam,
@@ -559,6 +562,7 @@ struct AppState : public panedock::app_shell::PaneHost {
     std::array<HWND, kButtonIds.size()> sidebar_buttons{};
     HWND group_label{nullptr};
     HFONT chrome_font_{nullptr};
+    HFONT list_font_{nullptr};
     std::array<HWND, kLayoutButtonIds.size()> layout_buttons{};
     HWND owner_draw_hovered_button{nullptr};
     HWND layout_tooltip{nullptr};
@@ -1266,7 +1270,7 @@ void apply_ui_font(AppState& state) noexcept {
     for (HWND button : state.layout_buttons) set_ui_font(button, font);
     set_ui_font(state.empty_message, font);
     for (auto& chrome : state.panes) {
-        chrome.apply_font(font);
+        chrome.apply_font(font, state.list_font_);
     }
     state.pinned_locations_dialog.apply_font(font);
     state.startup_notification.apply_font(font);
@@ -1275,13 +1279,27 @@ void apply_ui_font(AppState& state) noexcept {
 void refresh_ui_font(HWND window, AppState& state) noexcept {
     const HFONT next = ui_font(window);
     if (next == nullptr) return;
+    LOGFONTW spec{};
+    if (!GetObjectW(next, sizeof(spec), &spec)) { DeleteObject(next); return; }
+    if (state.application.list_font_points != 0)
+        spec.lfHeight = -MulDiv(state.application.list_font_points,
+            static_cast<int>(GetDpiForWindow(window)), 72);
+    const HFONT next_list = CreateFontIndirectW(&spec);
+    if (next_list == nullptr) { DeleteObject(next); return; }
     const HFONT previous = state.chrome_font_;
+    const HFONT previous_list = state.list_font_;
     state.chrome_font_ = next;
+    state.list_font_ = next_list;
     apply_ui_font(state);
     if (previous != nullptr) DeleteObject(previous);
+    if (previous_list != nullptr) DeleteObject(previous_list);
 }
 
 void release_ui_font(AppState& state) noexcept {
+    if (state.list_font_ != nullptr) {
+        DeleteObject(state.list_font_);
+        state.list_font_ = nullptr;
+    }
     if (state.chrome_font_ != nullptr) {
         DeleteObject(state.chrome_font_);
         state.chrome_font_ = nullptr;
@@ -2057,6 +2075,22 @@ std::wstring AppState::tab_display_text(std::wstring_view parsing_name) {
 
 HFONT AppState::chrome_font() const noexcept {
     return chrome_font_;
+}
+
+HFONT AppState::list_font() const noexcept {
+    return list_font_ ? list_font_ : chrome_font_;
+}
+
+int AppState::list_font_points() const noexcept {
+    return application.list_font_points;
+}
+
+void AppState::set_list_font_points(int points) noexcept {
+    if (is_shutting_down() || !panedock::core::valid_list_font_points(points) ||
+        points == application.list_font_points) return;
+    application.list_font_points = points;
+    refresh_ui_font(main_window, *this);
+    schedule_session_save();
 }
 
 HWND AppState::tooltip() const noexcept {

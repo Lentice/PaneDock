@@ -120,10 +120,23 @@ void test_parent_batches_dpi_font_and_anchor() {
         HFONT font = CreateFontW(-MulDiv(12, static_cast<int>(dpi), 96), 0, 0, 0,
             FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, 0, 0, L"Segoe UI");
         EXPECT(font != nullptr);
-        pane.apply_font(font);
+        pane.apply_font(host.chrome_font(), font);
         EXPECT(reinterpret_cast<HFONT>(SendMessageW(list, WM_GETFONT, 0, 0)) == font);
+        EXPECT(reinterpret_cast<HFONT>(SendMessageW(pane.address_bar(), WM_GETFONT, 0, 0)) == host.chrome_font());
         check_identity();
         pane.apply_font(host.chrome_font()); DeleteObject(font);
+    }
+    for (const int points : {9, 16, 24}) {
+        HFONT font = CreateFontW(-MulDiv(points, 96, 72), 0, 0, 0,
+            FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, 0, 0, L"Segoe UI");
+        EXPECT(font != nullptr);
+        pane.apply_font(host.chrome_font(), font);
+        RECT row{};
+        EXPECT(ListView_GetItemRect(list, 100, &row, LVIR_BOUNDS));
+        EXPECT(row.bottom - row.top >= MulDiv(points, 96, 72));
+        check_identity();
+        pane.apply_font(host.chrome_font());
+        DeleteObject(font);
     }
     // An unchanged pane rect still has a real DPI-only chrome/content update.
     const RECT fixed{20, 30, 700, 500};
@@ -176,6 +189,25 @@ void test_parent_batches_dpi_font_and_anchor() {
         EXPECT(after_finish.viewport_anchor && after_finish.viewport_anchor->name == new_anchor);
         EXPECT(after_finish.viewport_offset == before_finish.viewport_offset);
     }
+    // Large fonts must also leave room for both lines of custom cards.
+    HFONT large = CreateFontW(-32, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, 0, 0, 0, 0, L"Segoe UI");
+    EXPECT(large != nullptr);
+    pane.apply_font(host.chrome_font(), large);
+    for (const auto& option : shell_core::kViewModeOptions) {
+        pane.set_view_mode(option);
+        if (option.selection.mode == FVM_CONTENT) {
+            RECT rect{};
+            EXPECT(ListView_GetItemRect(list, 0, &rect, LVIR_BOUNDS));
+            EXPECT(rect.bottom - rect.top >= 2 * 32 + 18);
+        }
+        if (option.selection.mode == FVM_TILE) {
+            const auto spacing = SendMessageW(list, LVM_GETITEMSPACING, FALSE, 0);
+            EXPECT(HIWORD(spacing) >= 2 * 32 + 18);
+        }
+    }
+    pane.apply_font(host.chrome_font());
+    DeleteObject(large);
     pane.destroy(); DestroyWindow(parent);
 }
 }

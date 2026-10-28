@@ -1045,12 +1045,35 @@ void Pane::show_view_mode_menu(POINT screen) {
                 static_cast<int>(panedock::shell_core::kViewModeOptions.size()) -
                 1,
             checked_id, MF_BYCOMMAND);
+    HMENU sizes = CreatePopupMenu();
+    constexpr int font_id_base = 100;
+    if (sizes != nullptr) {
+        const int points = pane_host()->list_font_points();
+        UINT checked_font = font_id_base;
+        for (std::size_t index = 0; index < core::kListFontPointSizes.size(); ++index) {
+            const int size = core::kListFontPointSizes[index];
+            const std::wstring label = size == 0 ? L"System Default" : std::to_wstring(size) + L" pt";
+            AppendMenuW(sizes, MF_STRING, font_id_base + index, label.c_str());
+            if (size == points) checked_font = font_id_base + static_cast<UINT>(index);
+        }
+        CheckMenuRadioItem(sizes, font_id_base,
+            font_id_base + static_cast<UINT>(core::kListFontPointSizes.size()) - 1,
+            checked_font, MF_BYCOMMAND);
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sizes), L"File List Font Size");
+    }
     SetForegroundWindow(window_);
     const int command = track_popup_menu(reentry_guard(), menu, screen, window_);
     DestroyMenu(menu);
     // The menu opens only from a deferred-safe click, so no outer Shell call
     // is pumping here; the menu itself may have switched Group or tab.
-    if (!active() || command < menu_id_base ||
+    if (!active() || pane_state() == nullptr || pane_host()->is_shutting_down()) return;
+    if (command >= font_id_base &&
+        command < font_id_base + static_cast<int>(core::kListFontPointSizes.size())) {
+        pane_host()->set_list_font_points(core::kListFontPointSizes[command - font_id_base]);
+        return;
+    }
+    if (command < menu_id_base ||
         command >= menu_id_base + static_cast<int>(panedock::shell_core::kViewModeOptions.size()))
         return;
     set_view_mode(panedock::shell_core::kViewModeOptions[
@@ -1782,7 +1805,7 @@ void Pane::set_visible(bool visible) noexcept {
     if (!visible) EnableWindow(folder_context_button_, FALSE);
 }
 
-void Pane::apply_font(HFONT font) noexcept {
+void Pane::apply_font(HFONT font, HFONT list_font) noexcept {
     ListGeometryScope geometry(*this);
     set_font(tab_strip(), font);
     set_font(back_button_, font);
@@ -1794,7 +1817,8 @@ void Pane::apply_font(HFONT font) noexcept {
     set_font(address_bar_, font);
     set_font(status_bar_, font);
     set_font(folder_context_button_, font);
-    set_font(list_window_, font);
+    set_font(list_window_, list_font ? list_font : font);
+    if (list_window_) apply_managed_list_view_mode();
 }
 
 } // namespace panedock::app_shell

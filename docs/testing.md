@@ -660,6 +660,15 @@ font/header metric changes preserve the top item rather than promising an
 unrepresentable pixel offset. This Win32 viewport/child-batch logic cannot live in
 core; pure layout arithmetic remains independently tested.
 
+File-list font size: `panedock_core_session` checks every supported point size,
+legacy sessions without the optional field, and invalid-value fallback.
+`panedock_managed_list_resize` checks separate chrome/list font delivery, larger
+row heights at 9/16/24 pt, and preserved selection/focus/top item without new
+enumeration. Desktop check: choose View > File List Font Size in two/four panes,
+check Details/List/Content/Tiles and This PC cards, switch tabs/Groups, restart,
+and move between monitors with different DPI. Confirm the checked size persists,
+text stays readable, chrome is unchanged, and System Default restores the default.
+
 LLVM-MinGW Release configure/build succeeded (elevated build/test execution after
 the restricted Ninja build stalled). Reproduction:
 

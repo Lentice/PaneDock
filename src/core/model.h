@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -11,6 +12,12 @@ namespace panedock::core {
 
 inline constexpr int kDefaultSidebarWidth = 194;
 inline constexpr std::size_t kMaxPaneCount = 4;
+// Zero follows the system message font. Other values are typographic points.
+inline constexpr std::array kListFontPointSizes{0, 9, 10, 11, 12, 14, 16, 18, 20, 24};
+constexpr bool valid_list_font_points(int points) noexcept {
+    for (const int size : kListFontPointSizes) if (points == size) return true;
+    return false;
+}
 
 struct ShellLocationParent final {
     std::wstring parsing_name;
@@ -116,6 +123,7 @@ struct ApplicationState final {
     WindowPlacement window_placement;
     int sidebar_width{kDefaultSidebarWidth};
     std::vector<ShellLocation> pinned_locations;
+    int list_font_points{};
 
     bool operator==(const ApplicationState&) const = default;
 };

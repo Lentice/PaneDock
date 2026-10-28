@@ -195,6 +195,8 @@ PaneDock-managed list 顯示 Shell namespace item，漸進更新可操作的列�
 
 Group 與其狀態自動儲存,無需使用者手動存檔。視窗位置、大小與狀態一併儲存。
 
+每個 pane 的檢視選單提供 `File List Font Size`，可選 `System Default` 或 9、10、11、12、14、16、18、20、24 pt。這是全域設定，只調整檔案列表（含欄位標題及卡片文字），立即套用所有 pane，並於重開及切換 Group／tab 後保留；chrome 字型不變。預設沿用系統字型大小，實際像素隨視窗 DPI 調整。變更字級保留選取及 top-item identity，不重新列舉資料夾。session schema v1 新增 optional `list_font_points`（0 代表系統預設）；舊 session 缺少欄位或值不合法時使用系統預設，其他未知欄位維持既有保留規則。
+
 ### FR-012 不可解析的 location
 
 無法解析的 Shell location 在 tab 內顯示可復原錯誤,保留設定,並可重試。不得因此刪除任何已儲存的設定。

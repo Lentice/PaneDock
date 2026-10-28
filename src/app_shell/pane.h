@@ -381,7 +381,7 @@ class Pane final {
     void set_shell_visible(bool visible) noexcept;
     HRESULT configure_realized_view() noexcept;
     void set_visible(bool visible) noexcept;
-    void apply_font(HFONT font) noexcept;
+    void apply_font(HFONT font, HFONT list_font = nullptr) noexcept;
 
     HWND window() const noexcept { return window_; }
     HWND explorer_container() const noexcept { return explorer_container_; }
@@ -621,6 +621,7 @@ class Pane final {
     void cancel_list_icons() noexcept;
     void destroy_list_icons() noexcept;
     bool ensure_list_icon_images(int size) noexcept;
+    int list_text_height() const noexcept;
     static LRESULT CALLBACK list_icon_subclass(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
     bool last_viewport_anchor_clamped_{};
     HRESULT realize_managed_list(const RECT& rect, const core::ShellLocation& location,
