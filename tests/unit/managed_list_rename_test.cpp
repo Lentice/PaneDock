@@ -126,6 +126,30 @@ void setup(Fixture& f) {
     f.host.answer.leaf_name = L"new.txt";
     f.host.answer.display_name = L"New display";
 }
+void editor_font_and_vertical_alignment() {
+    Fixture f; setup(f);
+    EXPECT(f.pane.begin_list_rename());
+    const HWND edit = FindWindowExW(f.list, nullptr, L"EDIT", nullptr);
+    const auto font = SendMessageW(edit, WM_GETFONT, 0, 0);
+    LOGFONTW list_spec{}, edit_spec{};
+    EXPECT(GetObjectW(reinterpret_cast<HFONT>(SendMessageW(f.list, WM_GETFONT, 0, 0)),
+                      sizeof(list_spec), &list_spec));
+    EXPECT(GetObjectW(reinterpret_cast<HFONT>(font), sizeof(edit_spec), &edit_spec));
+    EXPECT(std::abs(edit_spec.lfHeight) > std::abs(list_spec.lfHeight));
+    EXPECT(std::wstring(edit_spec.lfFaceName) == list_spec.lfFaceName);
+    HDC dc = GetDC(edit);
+    const auto old = SelectObject(dc, reinterpret_cast<HFONT>(font));
+    TEXTMETRICW metrics{};
+    EXPECT(GetTextMetricsW(dc, &metrics));
+    SelectObject(dc, old);
+    ReleaseDC(edit, dc);
+    RECT client{}, text{};
+    GetClientRect(edit, &client);
+    SendMessageW(edit, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&text));
+    EXPECT(text.bottom - text.top == metrics.tmHeight);
+    EXPECT(std::abs((client.bottom - text.bottom) - text.top) <= 1);
+    f.pane.cancel_list_rename();
+}
 void enter_and_notification_converge() {
     Fixture f; setup(f);
     ListView_SetItemState(f.list, f.row(L"other.txt"), LVIS_FOCUSED, LVIS_FOCUSED);
@@ -408,6 +432,7 @@ void rejected_shell_setup_is_non_destructive() {
 int main() {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
     EXPECT(InitCommonControlsEx(&controls));
+    editor_font_and_vertical_alignment();
     enter_and_notification_converge();
     cancel_focus_batch_sort_and_navigation();
     focus_loss_commits_like_explorer();

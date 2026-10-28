@@ -49,16 +49,44 @@ bool Pane::begin_list_rename() noexcept try {
     list_rename_ = ListRename{std::move(snapshot), row.identity, std::wstring(hidden)};
     list_rename_result_ = S_FALSE;
     list_rename_edit_ = CreateWindowExW(0, L"EDIT", text.c_str(),
-        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOHSCROLL,
         rect.left, rect.top, std::max(100L, rect.right - rect.left),
-        std::max(22L, rect.bottom - rect.top), list_window_, nullptr,
+        std::max(MulDiv(22, static_cast<int>(paint_dpi_), 96),
+            static_cast<int>(rect.bottom - rect.top)), list_window_, nullptr,
         GetModuleHandleW(nullptr), nullptr);
     if (!list_rename_edit_ || !SetWindowSubclass(list_rename_edit_, list_edit_subclass,
                                                 237, reinterpret_cast<DWORD_PTR>(this))) {
         cancel_list_rename(); return false;
     }
+    const auto list_font = SendMessageW(list_window_, WM_GETFONT, 0, 0);
+    LOGFONTW font_spec{};
+    if (GetObjectW(reinterpret_cast<HFONT>(list_font), sizeof(font_spec), &font_spec)) {
+        const int extra = std::max(1, MulDiv(1, static_cast<int>(paint_dpi_), 72));
+        font_spec.lfHeight += font_spec.lfHeight > 0 ? extra : -extra;
+        list_rename_font_ = CreateFontIndirectW(&font_spec);
+    }
     SendMessageW(list_rename_edit_, WM_SETFONT,
-        SendMessageW(list_window_, WM_GETFONT, 0, 0), FALSE);
+        list_rename_font_ ? reinterpret_cast<WPARAM>(list_rename_font_) : list_font, FALSE);
+    // Single-line EDIT owns its vertical layout. Use a one-line formatting
+    // rectangle instead so the enlarged font is centered at every DPI.
+    HDC dc = GetDC(list_rename_edit_);
+    if (dc) {
+        const auto font = SendMessageW(list_rename_edit_, WM_GETFONT, 0, 0);
+        const auto old = SelectObject(dc, reinterpret_cast<HFONT>(font));
+        TEXTMETRICW metrics{};
+        if (GetTextMetricsW(dc, &metrics)) {
+            RECT client{}, text_rect{};
+            GetClientRect(list_rename_edit_, &client);
+            SendMessageW(list_rename_edit_, EM_GETRECT, 0,
+                         reinterpret_cast<LPARAM>(&text_rect));
+            text_rect.top = std::max(0L, (client.bottom - metrics.tmHeight) / 2);
+            text_rect.bottom = text_rect.top + metrics.tmHeight;
+            SendMessageW(list_rename_edit_, EM_SETRECT, 0,
+                         reinterpret_cast<LPARAM>(&text_rect));
+        }
+        SelectObject(dc, old);
+        ReleaseDC(list_rename_edit_, dc);
+    }
     SendMessageW(list_rename_edit_, EM_SETLIMITTEXT, managed_list::kMaxPath, 0);
     SetFocus(list_rename_edit_);
     // Like Explorer, preselect the name without its extension.
@@ -138,6 +166,7 @@ void Pane::cancel_list_rename() noexcept {
     const HWND edit = std::exchange(list_rename_edit_, nullptr);
     const bool focused = edit && GetFocus() == edit;
     if (edit) DestroyWindow(edit);
+    if (const auto font = std::exchange(list_rename_font_, nullptr)) DeleteObject(font);
     if (focused && active() && list_window_) SetFocus(list_window_);
 }
 

@@ -544,6 +544,7 @@ class Pane final {
     bool list_focus_restore_timer_used_{};
     bool list_focus_restore_activation_seen_{};
     HWND list_rename_edit_{};
+    HFONT list_rename_font_{};
     std::vector<std::string> column_ids_;  // header position -> column id
     std::string applied_columns_;          // TabState::columns the header currently shows
     UINT applied_columns_dpi_{};           // DPI the header widths were scaled for

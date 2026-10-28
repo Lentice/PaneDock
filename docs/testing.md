@@ -683,3 +683,7 @@ OneDrive compatibility; sustained process GDI/handle/memory growth and idle
 CPU/I/O/wakeups. Hidden-control and geometry results do not imply these pass.
 Interactive acceptance evidence remains outstanding; PD-241's compatibility/
 performance gate and the legacy default are unchanged.
+
+The managed-list rename test also measures the real Edit control: its font must
+keep the list typeface at one point larger and its formatting rectangle must be vertically
+centered (within one pixel). The editor uses a DPI-scaled minimum height.
