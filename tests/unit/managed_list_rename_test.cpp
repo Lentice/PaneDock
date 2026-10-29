@@ -392,11 +392,113 @@ void new_folder_and_list_keys() {
     EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) != nullptr);
     const auto interaction = f.pane.list_interaction_snapshot();
     EXPECT(interaction.selected.size() == 1 && interaction.selected[0].name == L"New folder (2)");
+    EXPECT(f.row(L"New folder (2)") == 3); // after files too, regardless of folder grouping
+    f.host.answer = {S_OK, false, LR"(C:\A\AAA)", L"AAA", L"AAA"};
+    end_edit(f, L"AAA");
+    EXPECT(f.row(L"AAA") == 3);
+    // The eventual provider update must retain the new item's position.
+    managed_list::Batch renamed{f.pane.list_snapshot().request, {{L"AAA", 0, true}},
+                                managed_list::Phase::complete};
+    renamed.change = managed_list::Change::delta;
+    renamed.renamed = {{L"New folder (2)", L"AAA"}};
+    f.source->deliver(std::move(renamed)); f.pane.process_content_results();
+    EXPECT(f.row(L"AAA") == 3);
+    f.pane.apply_sort();
+    EXPECT(f.row(L"AAA") == 0);
     f.pane.cancel_list_rename();
     // A failed creation leaves nothing pending and never edits.
     f.host.folder_answer.result = E_ACCESSDENIED;
     EXPECT(!f.pane.create_new_folder());
     EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) == nullptr);
+}
+void new_folder_tail_survives_updates_and_refresh_restores_sort() {
+    for (const bool ascending : {true, false}) {
+        Fixture f;
+        f.state.tabs.front().sort_ascending = ascending;
+        f.deliver(LR"(C:\A)", managed_list::Phase::complete,
+                  {{L"middle", 0, true}, {L"file.txt", 1, false}});
+        const auto delta = [&](std::vector<managed_list::Row> rows,
+                               std::vector<std::pair<std::wstring, std::wstring>> renamed = {}) {
+            managed_list::Batch batch{f.pane.list_snapshot().request, std::move(rows),
+                                      managed_list::Phase::complete};
+            batch.change = managed_list::Change::delta;
+            batch.renamed = std::move(renamed);
+            f.source->deliver(std::move(batch)); f.pane.process_content_results();
+        };
+        for (const auto* name : {L"zzz", L"aaa"}) {
+            f.host.folder_answer = {S_OK, false, std::wstring(LR"(C:\A\)") + name, name, name};
+            EXPECT(f.pane.create_new_folder());
+            delta({{name, 0, true}});
+            EXPECT(f.pane.list_snapshot().rows.back().name == name);
+            end_edit(f, name, VK_ESCAPE); // cancel naming, retain the created folder
+        }
+        EXPECT(f.row(L"zzz") == 2 && f.row(L"aaa") == 3);
+        delta({{L"ordinary", 0, true}, {L"zzz", 0, true}});
+        EXPECT(f.row(L"zzz") == 3 && f.row(L"aaa") == 4);
+        delta({{L"renamed", 0, true}}, {{L"zzz", L"renamed"}});
+        EXPECT(f.row(L"renamed") == 3 && f.row(L"aaa") == 4);
+        // Recovery must also preserve temporary positions through row replacement.
+        managed_list::Batch begin; begin.request = f.pane.list_snapshot().request;
+        begin.change = managed_list::Change::rescan_begin;
+        f.source->deliver(std::move(begin)); f.pane.process_content_results();
+        managed_list::Batch scan{f.pane.list_snapshot().request,
+            {{L"middle", 0, true}, {L"file.txt", 1, false}, {L"ordinary", 0, true},
+             {L"renamed", 0, true}, {L"aaa", 0, true}}, managed_list::Phase::complete};
+        scan.change = managed_list::Change::rescan;
+        f.source->deliver(std::move(scan)); f.pane.process_content_results();
+        EXPECT(f.row(L"renamed") == 3 && f.row(L"aaa") == 4);
+        f.pane.refresh_view();
+        f.deliver(LR"(C:\A)", managed_list::Phase::complete,
+            {{L"middle", 0, true}, {L"file.txt", 1, false}, {L"ordinary", 0, true},
+             {L"renamed", 0, true}, {L"aaa", 0, true}});
+        EXPECT(f.row(L"aaa") == (ascending ? 0 : 4));
+        EXPECT(f.row(L"renamed") == (ascending ? 3 : 1));
+    }
+}
+void delayed_new_folder_notifications_keep_creation_order() {
+    for (int mode = 0; mode < 4; ++mode) {
+        Fixture f; setup(f);
+        if (mode == 3) {
+            managed_list::Batch begin; begin.request = f.pane.list_snapshot().request;
+            begin.change = managed_list::Change::rescan_begin;
+            f.source->deliver(std::move(begin)); f.pane.process_content_results();
+        }
+        for (const auto* name : {L"zzz", L"aaa"}) {
+            f.host.folder_answer = {S_OK, false, std::wstring(LR"(C:\A\)") + name, name, name};
+            EXPECT(f.pane.create_new_folder());
+        }
+        if (mode >= 2) {
+            managed_list::Batch batch{f.pane.list_snapshot().request,
+                {{L"aaa", 0, true}, {L"old.txt", 7, false}, {L"zzz", 0, true}, {L"other.txt", 9, false}},
+                managed_list::Phase::complete};
+            batch.change = mode == 3 ? managed_list::Change::rescan : managed_list::Change::delta;
+            f.source->deliver(std::move(batch)); f.pane.process_content_results();
+        } else for (const auto* name : mode == 1 ? std::array{L"aaa", L"zzz"} : std::array{L"zzz", L"aaa"}) {
+            managed_list::Batch batch{f.pane.list_snapshot().request, {{name, 0, true}},
+                                      managed_list::Phase::complete};
+            batch.change = managed_list::Change::delta;
+            f.source->deliver(std::move(batch)); f.pane.process_content_results();
+        }
+        EXPECT(f.row(L"zzz") == 2 && f.row(L"aaa") == 3);
+        const auto edit = FindWindowExW(f.list, nullptr, L"EDIT", nullptr);
+        wchar_t text[32]{};
+        GetWindowTextW(edit, text, 32);
+        EXPECT(std::wstring(text) == L"aaa"); // an older arrival never steals the latest edit
+    }
+}
+void pending_new_folder_creation_is_bounded_and_reset_on_refresh() {
+    Fixture f; setup(f);
+    for (int i = 0; i < 16; ++i) {
+        const auto name = L"created-" + std::to_wstring(i);
+        f.host.folder_answer = {S_OK, false, std::wstring(LR"(C:\A\)") + name, name, name};
+        EXPECT(f.pane.create_new_folder());
+    }
+    EXPECT(!f.pane.create_new_folder());
+    EXPECT(f.host.folder_calls == 16); // the bound is checked before the Shell operation
+    f.pane.refresh_view();
+    f.deliver(LR"(C:\A)", managed_list::Phase::complete, {{L"old.txt", 7, false}});
+    EXPECT(f.pane.create_new_folder());
+    EXPECT(f.host.folder_calls == 17);
 }
 bool abort_setup(void*) noexcept { return true; }
 void renamed_namespace_folder_keeps_its_navigation_parent() {
@@ -437,6 +539,9 @@ int main() {
     cancel_focus_batch_sort_and_navigation();
     focus_loss_commits_like_explorer();
     new_folder_and_list_keys();
+    new_folder_tail_survives_updates_and_refresh_restores_sort();
+    delayed_new_folder_notifications_keep_creation_order();
+    pending_new_folder_creation_is_bounded_and_reset_on_refresh();
     hidden_extension_edits_display_name();
     errors_and_reentry_keep_target_safe();
     focus_routing_and_virtual_identity();

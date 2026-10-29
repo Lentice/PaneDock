@@ -3225,14 +3225,7 @@ bool handle_global_command(HWND window, AppState& state, int id,
         set_active_pane(state.main_window, state, pane.index());
         if (state.is_shutting_down()) return true;
         if (active_pane_index(active_group(state)) != pane.index()) return true;
-        RECT button_rect{};
-        if (!GetWindowRect(folder_context_button, &button_rect))
-            return true;
-        const POINT anchor{button_rect.left, button_rect.top};
-        ShellCallScope shell_call(state.reentry_guard);
-        (void)pane.show_folder_context_menu(
-            state.main_window, anchor);
-        return true;
+        return pane.handle_command(id);
     }
     if (command.kind == CommandKind::layout_template) {
         set_layout(window, state, kLayoutTemplates[command.index]);
@@ -4486,9 +4479,9 @@ std::optional<LRESULT> AppState::handle_pane_control_message(
                 panedock::app_shell::decode_pane_control(static_cast<int>(LOWORD(wparam)));
             if (!control.has_value()) return std::nullopt;
             const int id = static_cast<int>(LOWORD(wparam));
-            if (!chrome.handle_command(id))
-                (void)handle_global_command(state->main_window, *state, id,
-                                             &chrome);
+            // The coordinator activates the footer's pane before its local command.
+            if (!handle_global_command(state->main_window, *state, id, &chrome))
+                (void)chrome.handle_command(id);
             return LRESULT{0};
         }
         case WM_DRAWITEM: {

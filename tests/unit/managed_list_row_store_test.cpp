@@ -47,6 +47,22 @@ void append_accounts_bytes() {
     EXPECT(store.fits(rows, 0, 0));
     EXPECT(!store.fits(rows, 0, ml::kMaxRowBytes));
 }
+void rename_chain_transfers_new_folder_order_to_final_identity() {
+    ml::RowStore store;
+    std::vector<ml::Row> rows{row(L"A"), row(L"ordinary")};
+    rows.front().new_folder_order = 7;
+    store.recount(rows);
+    auto batch = change(ml::Change::delta, {row(L"C")});
+    batch.renamed = {{L"A", L"B"}, {L"unrelated", L"other"}, {L"B", L"C"}};
+    batch.removed = {L"A", L"B", L"unrelated"}; // the worker reports missing intermediate names
+    const auto result = store.apply(rows, batch, false);
+    EXPECT(!result.aborted);
+    EXPECT(rows.size() == 2);
+    const auto found = std::find_if(rows.begin(), rows.end(),
+        [](const auto& value) { return value.identity.key == L"C"; });
+    EXPECT(found != rows.end() && found->new_folder_order == 7);
+    EXPECT(store.name_bytes() == counted(rows));
+}
 
 // A delta updates, renames, removes and appends; the changed rows are moved
 // behind the untouched sorted run for the caller to sort and merge.
@@ -145,6 +161,7 @@ void index_ceiling_fails_recovery() {
 }  // namespace
 
 int main() {
+    rename_chain_transfers_new_folder_order_to_final_identity();
     append_accounts_bytes();
     delta_moves_changed_rows_behind_the_sorted_run();
     complete_rescan_reconciles_unseen_rows();

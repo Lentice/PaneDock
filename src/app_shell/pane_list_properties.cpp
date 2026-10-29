@@ -103,11 +103,12 @@ void Pane::finish_property_batch() noexcept try {
             update_managed_list();
             return;
         }
-        cancel_list_rename();
         const auto interaction = capture_managed_list_interaction();
         property_sort_pending_ = false;
         property_order_.apply(list_.rows);
         restore_managed_list_interaction(interaction);
+        // Background property completion must not discard a name being typed.
+        keep_list_rename_in_place();
         if (list_window_) InvalidateRect(list_window_, nullptr, FALSE);
         // Reordered indices invalidate all previous viewport lookups.
         cancel_list_icons();

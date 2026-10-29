@@ -74,6 +74,8 @@ RowStore::ChangeResult RowStore::apply(std::vector<Row>& rows, Batch& batch,
         return result;
     };
     if (!batch_within_limits(batch)) return abort(ERROR_INVALID_DATA);
+    for (auto& row : batch.rows)
+        if (!prepare_row(row)) return abort(ERROR_INVALID_DATA);
     const bool rescan = batch.change == Change::rescan;
     // Recovery's index keys and seen marks stay valid only while nothing but
     // rescan batches touch the rows until its terminal batch.
@@ -84,11 +86,22 @@ RowStore::ChangeResult RowStore::apply(std::vector<Row>& rows, Batch& batch,
         touched.push_back({old_leaf, false});
         touched.push_back({new_leaf, false});
     }
-    // A rename removes the old identity here; the new one arrives as a row.
-    for (const auto& [old_leaf, new_leaf] : batch.renamed) {
+    // A rename removes the old identity here; the final name arrives as a row.
+    for (std::size_t rename = 0; rename < batch.renamed.size(); ++rename) {
+        const auto& [old_leaf, new_leaf] = batch.renamed[rename];
+        std::wstring_view final_leaf = new_leaf;
+        // Kernel order may contain A->B->C while only C still exists when
+        // enumerated. Follow later pairs, including cycles, in event order.
+        for (std::size_t next = rename + 1; next < batch.renamed.size(); ++next)
+            if (batch.renamed[next].first == final_leaf) final_leaf = batch.renamed[next].second;
         const ItemIdentity from{old_leaf, false};
         std::erase_if(rows, [&](const auto& row) {
             if (row.identity != from) return false;
+            if (row.new_folder_order) {
+                for (auto& incoming : batch.rows)
+                    if (!incoming.identity.shell_item && incoming.identity.key == final_leaf)
+                        incoming.new_folder_order = row.new_folder_order;
+            }
             name_bytes_ -= owned_row_bytes(row);
             return true;
         });
@@ -112,11 +125,11 @@ RowStore::ChangeResult RowStore::apply(std::vector<Row>& rows, Batch& batch,
     const std::size_t delta_base = rows.size();
     std::vector<std::size_t> delta_updated;
     for (auto& row : batch.rows) {
-        if (!prepare_row(row)) return abort(ERROR_INVALID_DATA);
         if (rescan) ++work_.lookups;
         const auto match = index_.find(row.identity);
         if (match != index_.end()) {
             auto* found = &rows[*match];
+            row.new_folder_order = std::max(row.new_folder_order, found->new_folder_order);
             // Recovery can keep known metadata for unchanged rows; ordinary
             // notifications invalidate properties even if size/time are equal.
             const bool unchanged = rescan && found->bytes == row.bytes &&

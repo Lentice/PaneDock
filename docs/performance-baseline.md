@@ -80,6 +80,17 @@ not promise that Windows/provider calls can always be interrupted. The live/reti
 split is an implementation bound; its effect on process memory and thread count
 under a real slow provider is unmeasured.
 
+## New-folder notification lag (implementation bounds, not measurements)
+
+New-folder notification lag (2026-10-29): each Pane retains at most 16 pending
+successful-creation records, each with one navigation binding, parsing name,
+leaf name and creation sequence. Both names are limited to `kMaxPath` characters.
+The entry vector reserves at most 16 slots; matched records release their
+strings, and explicit sort or navigation/Refresh clears all pending records.
+When all slots are occupied, creation is rejected before the next Shell call
+and the status bar asks the user to wait or Refresh. There is no polling or
+new worker. These are implementation bounds, not measured desktop evidence.
+
 ## PD-243 identity accounting (implementation bounds, not measurements)
 
 The 24 MiB active-row budget includes Row-vector capacity and the capacities

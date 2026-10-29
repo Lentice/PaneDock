@@ -557,6 +557,18 @@ bool Pane::handle_command(int id) {
                     show_pinned_locations_menu({rect.left, rect.bottom});
             }
             return true;
+        case PaneControl::folder_context:
+            {
+                RECT rect{};
+                if (active() && realized() &&
+                    GetWindowRect(folder_context_button(), &rect)) {
+                    // present_context_menu owns the Shell scope: NewFolder
+                    // must run after that scope ends, just like empty-space right-click.
+                    (void)show_folder_context_menu(GetAncestor(window(), GA_ROOT),
+                                                  {rect.left, rect.top});
+                }
+            }
+            return true;
         default: return false;
     }
 }

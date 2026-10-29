@@ -179,6 +179,8 @@ PaneDock-managed list 顯示 Shell namespace item，漸進更新可操作的列�
 
 複製、移動、刪除、重新命名經由 Shell `IFileOperation`,含原生進度對話框與衝突提示。剪貼簿操作經由 Shell `IDataObject`。
 
+由 PaneDock 建立的新資料夾先放在目前列表末尾並開始 inline rename；完成或取消命名後仍保持在末尾，連續建立時依建立順序排列。通知更新、復原掃描與背景屬性排序保留此暫時順序；使用者重新整理、變更排序或重新進入 location 時恢復一般排序。此順序只屬於目前檢視，不持久化；其他新增或變更的項目沿用既有排序行為。
+
 ### FR-008 拖放
 
 支援 pane 之間、以及與其他應用程式之間的拖放,經由 OLE drag and drop 與 Shell `IDataObject`。

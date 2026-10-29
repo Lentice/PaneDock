@@ -31,7 +31,15 @@ class Controlled final : public managed_list::Source {
 };
 
 struct Fixture final {
-    test::TestPaneHost host;
+    struct Host final : test::TestPaneHost {
+        int folder_calls{};
+        file_operations::RenameResult new_folder(app_shell::Pane&,
+            const app_shell::Pane::FileCommandSnapshot&) noexcept override {
+            EXPECT(guard.in_shell_call());
+            ++folder_calls;
+            return {E_ABORT};
+        }
+    } host;
     core::PaneState state{"pane", {
         {"tab-a", {L"C:\\A", {}, {}}, "details", {}, true, {}, 0},
         {"tab-b", {L"C:\\B", {}, {}}, "details", {}, true, {}, 0}}, "tab-a"};
@@ -262,6 +270,27 @@ void pane_performs_rename_open_and_new_folder() {
     f.presenter->choose = L"NewFolder";
     EXPECT(f.pane.show_folder_context_menu(f.parent, {40, 50}));
     EXPECT(f.presenter->intercepted);
+    EXPECT(f.host.folder_calls == 1);
+    // The footer command must leave the menu's Shell scope before creating.
+    EXPECT(f.pane.handle_command(app_shell::encode_pane_control(
+        app_shell::PaneControl::folder_context)));
+    EXPECT(f.host.folder_calls == 2);
+    EXPECT(!f.host.guard.in_shell_call());
+    // Empty-space right-click performs the same operation despite a selection.
+    f.select_item(0);
+    RECT bounds{};
+    GetClientRect(f.list, &bounds);
+    POINT empty{bounds.right - 8, bounds.bottom - 8};
+    ClientToScreen(f.list, &empty);
+    EXPECT(f.pane.show_content_context_menu(f.list, empty));
+    EXPECT(f.host.folder_calls == 3);
+    // A tab change while the footer menu pumps must not create in either folder.
+    f.presenter->pump = [&] { f.state.active_tab_id = "tab-b"; };
+    EXPECT(f.pane.handle_command(app_shell::encode_pane_control(
+        app_shell::PaneControl::folder_context)));
+    EXPECT(f.host.folder_calls == 3);
+    f.state.active_tab_id = "tab-a";
+    f.presenter->pump = {};
     // A target that changed during the menu performs nothing.
     f.select_item(0);
     f.presenter->choose = L"rename";

@@ -105,6 +105,10 @@ struct Row final {
     // Local drive size for the This PC cards. capacity_bytes == 0 means unknown.
     std::uint64_t capacity_bytes{};
     std::uint64_t free_bytes{};
+    // UI-only transient order for folders created here: nonzero rows stay at
+    // the end until explicit sort/Refresh/navigation. Included in row budgets;
+    // workers leave it zero and provider updates must preserve the UI value.
+    std::uint64_t new_folder_order{};
 };
 // Shared by initial enumeration, notification deltas and recovery rescans.
 inline Row basic_row(const WIN32_FIND_DATAW& data, std::wstring name) {

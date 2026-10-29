@@ -393,6 +393,8 @@ void Pane::sort_managed_list_rows(std::size_t sorted_prefix) noexcept {
 
     const auto less = [property, ascending](const managed_list::Row& left,
                                             const managed_list::Row& right) noexcept {
+        if (left.new_folder_order != right.new_folder_order)
+            return left.new_folder_order < right.new_folder_order;
         // Explorer keeps folders and files apart and reverses that grouping with the
         // direction, so a descending sort lists folders last (PD-253).
         if (left.directory != right.directory) return ascending ? left.directory : right.directory;
@@ -446,6 +448,8 @@ void Pane::sort_managed_list_rows(std::size_t sorted_prefix) noexcept {
 bool Pane::property_row_less(std::size_t left_index, std::size_t right_index) const noexcept {
     const auto& left = list_.rows[left_index];
     const auto& right = list_.rows[right_index];
+    if (left.new_folder_order != right.new_folder_order)
+        return left.new_folder_order < right.new_folder_order;
     const bool ascending = active_tab()->sort_ascending;
     if (left.directory != right.directory) return ascending ? left.directory : right.directory;
     const int slot = expensive_sort_slot();
@@ -497,6 +501,9 @@ void Pane::update_managed_list_sort_indicator() noexcept {
 void Pane::apply_managed_list_sort() noexcept {
     cancel_list_rename();
     if (!list_window_ || !active()) return;
+    pending_new_items_.clear();
+    new_folder_sequence_ = 0;
+    for (auto& row : list_.rows) row.new_folder_order = 0;
     try {
         const auto* tab = active_tab();
         if (tab && property_sort_key_ != tab->sort_column) {
@@ -553,6 +560,8 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
                                 NavigationGeneration generation) {
     if (!active() || !active_tab() || !navigation_request_is_current(generation)) return E_ABORT;
     cancel_list_rename(); // Explorer ends a label edit on navigation and Refresh
+    pending_new_items_.clear();
+    new_folder_sequence_ = 0;
     release_list_device();
     if (!list_source_) list_source_ = managed_list::make_local_source();
     if (list_source_) list_source_->cancel();
@@ -592,7 +601,10 @@ HRESULT Pane::start_managed_list(const core::ShellLocation& location,
         // not evidence that optional properties or overlays are still current.
         icon_cache_.clear();
         if (icon_images_) ImageList_SetImageCount(icon_images_, 2);
-        for (auto& row : list_.rows) row.properties = {};
+        for (auto& row : list_.rows) {
+            row.properties = {};
+            row.new_folder_order = 0;
+        }
         row_store_.recount(list_.rows);
         managed_list::Batch begin;
         begin.change = managed_list::Change::rescan_begin;

@@ -535,9 +535,13 @@ class Pane final {
     struct PendingNewItem final {
         core::NavigationRequest binding;
         std::wstring parsing_name, leaf_name;
+        std::uint64_t order{};
     };
-    // At most one; dropped on navigation or once its row has been found.
-    std::optional<PendingNewItem> pending_new_item_;
+    // Provider notifications may lag behind repeated creation. Never drop a
+    // successful creation to admit another: stop before the next Shell call.
+    static constexpr std::size_t kMaxPendingNewItems = 16;
+    std::vector<PendingNewItem> pending_new_items_;
+    std::uint64_t new_folder_sequence_{};
     void rename_pending_new_item() noexcept;
     std::optional<core::NavigationRequest> pending_list_focus_restore_;
     bool list_focus_restore_posted_{};

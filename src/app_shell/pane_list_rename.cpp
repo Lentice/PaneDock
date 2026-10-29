@@ -111,8 +111,12 @@ bool Pane::create_new_folder() noexcept try {
         (reentry_guard_ && reentry_guard().in_shell_call())) return false;
     FileCommandSnapshot snapshot;
     if (file_command_snapshot(file_operations::Command::paste, snapshot) != S_OK) return false;
+    if (pending_new_items_.size() >= kMaxPendingNewItems) {
+        show_status_text(L"Wait for created folders to appear, or Refresh before creating another.");
+        return false;
+    }
+    pending_new_items_.reserve(kMaxPendingNewItems);
     cancel_list_rename();
-    pending_new_item_.reset();
     list_rename_busy_ = true; // no edit can begin while the Shell pumps
     file_operations::RenameResult result;
     {
@@ -122,43 +126,75 @@ bool Pane::create_new_folder() noexcept try {
     list_rename_busy_ = false;
     if (!file_command_is_current(snapshot)) return false;
     if (FAILED(result.result) || result.aborted || result.parsing_name.empty() ||
-        result.leaf_name.empty()) {
+        result.leaf_name.empty() || result.parsing_name.size() > managed_list::kMaxPath ||
+        result.leaf_name.size() > managed_list::kMaxPath) {
         if (result.result != E_ABORT && !result.aborted &&
             result.result != HRESULT_FROM_WIN32(ERROR_CANCELLED))
             show_status_text(L"Could not create a new folder here.");
         return false;
     }
     // The row arrives with the folder's change notification, never sooner.
-    pending_new_item_ = PendingNewItem{snapshot.binding, std::move(result.parsing_name),
-                                       std::move(result.leaf_name)};
+    pending_new_items_.push_back({std::move(snapshot.binding), std::move(result.parsing_name),
+                                  std::move(result.leaf_name), ++new_folder_sequence_});
     rename_pending_new_item();
     return true;
 } catch (...) { list_rename_busy_ = false; return false; }
 
-void Pane::rename_pending_new_item() noexcept {
-    if (!pending_new_item_) return;
-    if (!active() || !list_window_ || !content_request_is_current(pending_new_item_->binding)) {
-        pending_new_item_.reset();
+void Pane::rename_pending_new_item() noexcept try {
+    if (pending_new_items_.empty()) return;
+    if (!active() || !list_window_) {
+        pending_new_items_.clear();
         return;
     }
+    std::erase_if(pending_new_items_, [&](const auto& item) {
+        return !content_request_is_current(item.binding);
+    });
+    // Recovery holds an index into the row vector until its terminal batch.
+    if (list_.updating || list_.watch == managed_list::WatchState::recovering) return;
     const auto same = [](std::wstring_view a, std::wstring_view b) {
         return CompareStringOrdinal(a.data(), static_cast<int>(a.size()), b.data(),
                                     static_cast<int>(b.size()), TRUE) == CSTR_EQUAL;
     };
-    const auto found = std::find_if(list_.rows.begin(), list_.rows.end(), [&](const auto& row) {
-        return same(row.identity.key, row.identity.shell_item
-            ? pending_new_item_->parsing_name : pending_new_item_->leaf_name);
+    std::optional<ManagedListInteraction> interaction;
+    bool rename_latest = false;
+    std::erase_if(pending_new_items_, [&](const auto& item) {
+        const auto found = std::find_if(list_.rows.begin(), list_.rows.end(), [&](const auto& row) {
+            return same(row.identity.key, row.identity.shell_item ? item.parsing_name : item.leaf_name);
+        });
+        if (found == list_.rows.end()) return false;
+        if (!interaction) {
+            interaction.emplace(capture_managed_list_interaction());
+            row_store_.clear_index();
+            cancel_list_icons(); // indices and partial property-sort permutations changed
+        }
+        found->new_folder_order = item.order;
+        const auto next = std::find_if(list_.rows.begin(), list_.rows.end(),
+            [&](const auto& row) { return row.new_folder_order > item.order; });
+        // Notifications can arrive in either order. Insert among the already
+        // marked tail by creation sequence, without disturbing ordinary rows.
+        if (found < next) std::rotate(found, found + 1, next);
+        else if (next < found) std::rotate(next, found, found + 1);
+        rename_latest = rename_latest || item.order == new_folder_sequence_;
+        return true;
     });
-    if (found == list_.rows.end()) return;
-    pending_new_item_.reset();
-    const int index = static_cast<int>(found - list_.rows.begin());
-    ListView_SetItemState(list_window_, -1, 0, LVIS_SELECTED);
-    ListView_SetItemState(list_window_, index, LVIS_SELECTED | LVIS_FOCUSED,
-                          LVIS_SELECTED | LVIS_FOCUSED);
-    ListView_SetSelectionMark(list_window_, index);
-    ListView_EnsureVisible(list_window_, index, FALSE);
-    (void)begin_list_rename();
-}
+    if (!interaction) return;
+    ListView_RedrawItems(list_window_, 0, static_cast<int>(list_.rows.size() - 1));
+    restore_managed_list_interaction(*interaction);
+    keep_list_rename_in_place();
+    if (rename_latest) {
+        cancel_list_rename();
+        const auto found = std::find_if(list_.rows.begin(), list_.rows.end(),
+            [&](const auto& row) { return row.new_folder_order == new_folder_sequence_; });
+        const int index = static_cast<int>(found - list_.rows.begin());
+        ListView_SetItemState(list_window_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(list_window_, index, LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetSelectionMark(list_window_, index);
+        ListView_EnsureVisible(list_window_, index, FALSE);
+        (void)begin_list_rename();
+    }
+    queue_list_icon_viewport();
+} catch (...) { show_status_text(L"Refresh to reconcile created folders."); }
 
 void Pane::cancel_list_rename() noexcept {
     list_rename_.reset();

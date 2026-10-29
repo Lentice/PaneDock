@@ -24,6 +24,33 @@ behavior: in Details view, Tab moves directly to the next visible pane and
 Shift+Tab to the previous pane, including wraparound; address bar Tab and
 Ctrl+Tab retain their existing behavior.
 
+Footer New Folder regression (2026-10-29):
+`panedock_managed_list_context_menu` drives the footer's `Pane::handle_command`
+entry and empty-space right-click with a controlled presenter. Both must reach
+the new-folder operation after the menu's Shell scope ends; a tab change during
+the menu must prevent creation. The coordinator activates the target pane before
+dispatching its footer command and must not add an enclosing Shell scope.
+This verifies command dispatch, not real Shell menu interaction or disk creation.
+
+New-folder placement (2026-10-29): `panedock_managed_list_rename` covers
+creation-order placement after all existing items, retention after inline rename,
+Escape, provider updates/renames and recovery rescan, and normal sorting after
+explicit sort or Refresh. `panedock_managed_list_sort` covers ascending and
+descending Type, Duration and custom-property completion without moving a new
+folder away from the end or discarding its active rename edit. Temporary order
+is stored in each bounded row, cleared on explicit sort or navigation/Refresh,
+and never persisted. Desktop verification still needs both menu entries and
+Ctrl+Shift+N, consecutive creation, typing while properties arrive, and F5/header
+sorting in Details and icon views.
+
+Delayed-creation regressions (2026-10-29): the rename suite also creates twice
+before delivering either notification, then checks forward/reverse arrival,
+one combined delta, and a terminal recovery rescan. Creation order is assigned
+when the Shell operation succeeds; only the latest creation starts a rename.
+A full 16-entry pending list rejects the next operation before calling the
+Shell, and Refresh clears it. The row-store suite covers A → B → C within one
+batch containing only C, with removed intermediate names and an unrelated rename.
+
 ```powershell
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
@@ -284,7 +311,7 @@ The smoke cannot honestly fake these; run them by hand on a Release build.
 2. **Clipboard copy/paste.** Select a file in pane 1, `Ctrl+C`; click pane 2 showing another folder, `Ctrl+V`. Expected: the copy appears in pane 2's folder with native progress; the source is intact. Repeat with `Ctrl+X` (move).
 3. **Delete.** Select a disposable file, press `Delete`, then `Shift+Delete` on another. Expected: native confirmation; Recycle Bin and permanent delete respectively; the list updates without Refresh.
 4. **Drag and drop.** Drag a file from one pane to another on the same volume (move), and across volumes (copy); drag to and from Windows File Explorer. Expected: Explorer-equivalent default effect and result.
-5. **Native context menus.** Right-click a file, a folder and empty list space; use Open, Copy, Paste, Rename and a third-party entry. Expected: the standard Windows menus with installed extensions, acting on the clicked item or folder.
+5. **Native context menus.** Right-click a file, a folder and empty list space; use Open, Copy, Paste, Rename and a third-party entry. Use New > Folder from both empty space and the footer folder-context button, including a button in an inactive pane. Expected: the standard Windows menus with installed extensions, acting on the clicked item or folder; both New > Folder entries create in the target pane and begin inline rename.
 6. **Opening documents.** Double-click a `.docx` and a `.txt`. Expected: Word (or the associated app) and the text editor open the file; PaneDock stays responsive.
 7. **Mouse tab and Group gestures.** Middle-click a tab, drag a tab within and between panes, drag a Group row to reorder, double-click empty tab strip space. Expected: close, reorder/move, reorder, new tab.
 8. **Splitter and sidebar resize.** Drag both splitters in Four Panes and the sidebar edge. Expected: live resize without blank frames.

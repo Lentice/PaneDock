@@ -473,8 +473,8 @@ void test_navigation_completion_rejects_stale_results_and_refreshes_chrome() {
     EXPECT(pane.tab_strip_ui().tab_visuals().front().text == L"restored");
     EXPECT(host.session_saves == 2);
 
-    // Coordinator-only and unknown IDs must remain available to the caller.
-    EXPECT(!pane.handle_command(panedock::app_shell::encode_pane_control(
+    // The footer command belongs to the pane; unknown IDs stay available.
+    EXPECT(pane.handle_command(panedock::app_shell::encode_pane_control(
         panedock::app_shell::PaneControl::folder_context)));
     EXPECT(!pane.handle_command(-1));
 }

@@ -92,7 +92,12 @@ OwnedInteraction own(const app_shell::Pane::ListInteractionSnapshot& snapshot) {
 }
 
 struct Fixture final {
-    test::TestPaneHost host;
+    struct Host final : test::TestPaneHost {
+        file_operations::RenameResult new_folder(app_shell::Pane&,
+            const app_shell::Pane::FileCommandSnapshot&) noexcept override {
+            return {S_OK, false, LR"(C:\A\created)", L"created", L"created"};
+        }
+    } host;
     // A layout persisted by an earlier build (all six columns, Size second): the header
     // positions below depend on it, and it must keep working after the defaults changed.
     core::PaneState state{"pane", {
@@ -452,6 +457,37 @@ std::vector<std::wstring> order(const Fixture& f) {
 Properties* use_properties(Fixture& f) {
     auto source = std::make_unique<Properties>();
     auto* result = source.get(); f.pane.use_list_icons(std::move(source)); return result;
+}
+void new_folder_stays_last_during_property_sort_and_edit() {
+    for (const auto* key : {"System.ItemTypeText", "System.Media.Duration", "System.Comment"}) {
+        for (const bool ascending : {true, false}) {
+            Fixture f;
+            auto* source = use_properties(f);
+            f.deliver(managed_list::Phase::complete, {{L"middle", 0, true}, {L"file", 1, false}});
+            f.state.tabs.front().sort_column = key;
+            f.state.tabs.front().sort_ascending = ascending;
+            f.pane.apply_sort();
+            EXPECT(f.pane.create_new_folder());
+            managed_list::Batch batch{f.pane.list_snapshot().request, {{L"created", 0, true}},
+                                      managed_list::Phase::complete};
+            batch.change = managed_list::Change::delta;
+            f.source->deliver(std::move(batch)); f.pane.process_content_results();
+            const auto edit = FindWindowExW(f.list, nullptr, L"EDIT", nullptr);
+            EXPECT(edit != nullptr);
+            SetWindowTextW(edit, L"still typing");
+            for (int round = 0; round < 8 && f.pane.list_property_sort_pending(); ++round) {
+                f.pane.set_list_icon_viewport(0, 3);
+                const auto requests = source->requests;
+                for (const auto& request : requests)
+                    source->deliver(request, number(1));
+                f.pane.process_icon_results();
+            }
+            EXPECT(!f.pane.list_property_sort_pending());
+            EXPECT(f.row(L"created") == 2);
+            EXPECT(FindWindowExW(f.list, nullptr, L"EDIT", nullptr) == edit);
+            f.pane.cancel_list_rename();
+        }
+    }
 }
 void expensive_sort_commits_once_and_preserves_interaction() {
     Fixture f;
@@ -1022,6 +1058,7 @@ int main() {
     columns_can_be_hidden_and_keep_clicks_and_cell_text_correct();
     out_of_order_batches_and_sort_changes_preserve_item_and_viewport_identity();
     expensive_sort_commits_once_and_preserves_interaction();
+    new_folder_stays_last_during_property_sort_and_edit();
     property_demand_is_bounded_and_stale_results_are_rejected();
     display_demand_and_custom_keys_use_the_same_bounded_boundary();
     exhausted_properties_degrade_without_blocking_navigation();
